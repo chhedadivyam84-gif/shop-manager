@@ -68,6 +68,9 @@ button, input, select{font-family:inherit;}
 }
 #pinpad button:active{background:var(--gold);color:var(--navy);}
 #login-error{color:oklch(0.75 0.15 25);font-size:12.5px;font-weight:600;min-height:16px;}
+#login-step-staff{width:100%;max-width:300px;display:flex;flex-direction:column;align-items:center;gap:14px;}
+#staff-picker{display:flex;flex-direction:column;gap:10px;width:100%;}
+#staff-picker .qa-btn{width:100%;flex-direction:row;justify-content:flex-start;gap:10px;padding:10px 14px;}
 
 /* ---------- Header ---------- */
 header.topbar{
@@ -180,7 +183,8 @@ nav.bottom .tab.active{color:var(--navy);}
 .fs-close{background:rgba(255,255,255,.15);border:none;color:#fff;width:30px;height:30px;border-radius:50%;font-size:14px;}
 
 /* Invoice preview page */
-.invoice-page{background:#fff;color:#111;margin:0 16px 16px;border-radius:10px;padding:16px;font-size:11.5px;flex:1;overflow-y:auto;}
+.invoice-page{background:#fff;color:#111;margin-top:0;margin-right:16px;margin-bottom:16px;margin-left:16px;border-radius:10px;padding:16px;font-size:11.5px;flex:1;overflow-y:auto;}
+.invoice-page.size-a5{max-width:340px;margin-left:auto;margin-right:auto;}
 .invoice-page h2{font-size:15px;margin:0 0 2px;}
 .invoice-page .addr{font-size:9.5px;color:#555;line-height:1.4;}
 .inv-rule{border:none;border-top:1.5px solid var(--navy);margin:8px 0;}

@@ -1152,7 +1152,7 @@ function renderInvoicePageContent(){
   const cfg = state.settings;
   const cust = state.customers.find(c=>c.id===inv.customer_id);
   const isA4 = state.paperSize==="A4";
-  document.getElementById("invoice-page-content").style.aspectRatio = isA4 ? "210/297" : "148/210";
+  document.getElementById("invoice-page-content").classList.toggle("size-a5", !isA4);
   const taxRows = inv.tax_type==="IGST"
     ? `<div class="tr"><span>IGST</span><span>${fmt(inv.igst)}</span></div>`
     : `<div class="tr"><span>CGST</span><span>${fmt(inv.cgst)}</span></div><div class="tr"><span>SGST</span><span>${fmt(inv.sgst)}</span></div>`;

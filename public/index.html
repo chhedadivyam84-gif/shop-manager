@@ -18,9 +18,19 @@
   <div id="login">
     <div class="logo" id="login-logo">SP</div>
     <h1 id="login-title">Shop Manager</h1>
-    <p>Staff access only. Enter the shop PIN to open the app.</p>
-    <div id="pin-dots"></div>
-    <div id="pinpad"></div>
+
+    <div id="login-step-staff">
+      <p>Staff access only. Select your name to continue.</p>
+      <div id="staff-picker"></div>
+    </div>
+
+    <div id="login-step-pin" style="display:none;">
+      <p id="login-pin-prompt">Enter your PIN.</p>
+      <div id="pin-dots"></div>
+      <div id="pinpad"></div>
+      <a href="#" id="login-back-link">&larr; Not you? Choose someone else</a>
+    </div>
+
     <div id="login-error"></div>
   </div>
 
@@ -165,6 +175,9 @@
   <div class="sheet" id="sheet-add-product"></div>
   <div class="sheet" id="sheet-add-customer"></div>
   <div class="sheet" id="sheet-settings"></div>
+  <div class="sheet" id="sheet-staff"></div>
+  <div class="sheet" id="sheet-add-staff"></div>
+  <div class="sheet" id="sheet-audit-log"></div>
 
   <!-- ============ FULLSCREEN: INVOICE PREVIEW ============ -->
   <div class="fullscreen" id="fs-invoice">

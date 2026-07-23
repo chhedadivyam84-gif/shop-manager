@@ -1,6 +1,7 @@
 const express = require("express");
 const db = require("../db");
-const { uid, todayStr, round2 } = require("../util");
+const { uid, todayStr, round2, logAction } = require("../util");
+const { requireRole } = require("../auth");
 
 const router = express.Router();
 
@@ -131,12 +132,13 @@ router.post("/", (req, res) => {
     if (customerId && totals.balanceDue > 0) bumpDue.run(totals.balanceDue, customerId);
   })();
 
+  logAction(req, "invoice.create", `${challanNo} — ${totals.total}`);
   const invoice = db.prepare("SELECT * FROM invoices WHERE id = ?").get(id);
   const savedItems = db.prepare("SELECT * FROM invoice_items WHERE invoice_id = ?").all(id);
   res.status(201).json({ ...invoice, items: savedItems });
 });
 
-router.post("/:id/void", (req, res) => {
+router.post("/:id/void", requireRole("owner"), (req, res) => {
   const inv = db.prepare("SELECT * FROM invoices WHERE id = ?").get(req.params.id);
   if (!inv) return res.status(404).json({ error: "Invoice not found." });
   if (inv.voided) return res.status(400).json({ error: "Invoice already voided." });
@@ -152,6 +154,7 @@ router.post("/:id/void", (req, res) => {
     voidInvoice.run(inv.id);
   })();
 
+  logAction(req, "invoice.void", `${inv.challan_no}`);
   res.json({ ok: true });
 });
 

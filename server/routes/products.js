@@ -1,6 +1,7 @@
 const express = require("express");
 const db = require("../db");
-const { uid } = require("../util");
+const { uid, logAction } = require("../util");
+const { requireRole } = require("../auth");
 
 const router = express.Router();
 
@@ -49,6 +50,7 @@ router.post("/", (req, res) => {
     validSizes.forEach((s, i) => insertSize.run(id, String(s.label).trim(), parseFloat(s.price), i));
   })();
 
+  logAction(req, "product.create", name.trim());
   const p = db.prepare("SELECT * FROM products WHERE id = ?").get(id);
   res.status(201).json(serialize(p));
 });
@@ -77,6 +79,7 @@ router.put("/:id", (req, res) => {
     }
   })();
 
+  logAction(req, "product.update", p.name);
   const updated = db.prepare("SELECT * FROM products WHERE id = ?").get(p.id);
   res.json(serialize(updated));
 });
@@ -90,13 +93,15 @@ router.patch("/:id/stock", (req, res) => {
   else return res.status(400).json({ error: "Provide stock or delta." });
   newStock = Math.max(0, newStock);
   db.prepare("UPDATE products SET stock = ? WHERE id = ?").run(newStock, p.id);
+  logAction(req, "product.stock_adjust", `${p.name}: ${p.stock} → ${newStock}`);
   res.json(serialize(db.prepare("SELECT * FROM products WHERE id = ?").get(p.id)));
 });
 
-router.delete("/:id", (req, res) => {
+router.delete("/:id", requireRole("owner"), (req, res) => {
   const p = db.prepare("SELECT * FROM products WHERE id = ?").get(req.params.id);
   if (!p) return res.status(404).json({ error: "Product not found." });
   db.prepare("DELETE FROM products WHERE id = ?").run(p.id);
+  logAction(req, "product.delete", p.name);
   res.json({ ok: true });
 });
 

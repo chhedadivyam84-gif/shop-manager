@@ -5,7 +5,7 @@ const express = require("express");
 const session = require("express-session");
 
 const db = require("./db");
-const { requireAuth } = require("./auth");
+const { requireAuth, requireRole } = require("./auth");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -46,6 +46,8 @@ app.use("/api/products", requireAuth, require("./routes/products"));
 app.use("/api/customers", requireAuth, require("./routes/customers"));
 app.use("/api/invoices", requireAuth, require("./routes/invoices"));
 app.use("/api/reports", requireAuth, require("./routes/reports"));
+app.use("/api/staff", requireAuth, requireRole("owner"), require("./routes/staff"));
+app.use("/api/audit", requireAuth, requireRole("owner"), require("./routes/audit"));
 
 app.use(express.static(path.join(__dirname, "..", "public")));
 

@@ -39,8 +39,10 @@ let state = {
   discountType: "pct", discountValue: 0, advance: 0, paymentMethod: "Cash",
   invBrandFilter: "All", reportType: "Sales",
   paperSize: "A5",
+  me: { staffName: "", role: "" },
   ctx: {}
 };
+function isOwner(){ return state.me.role === "owner"; }
 
 function fmt(n){
   n = Math.round(n||0);
@@ -68,22 +70,38 @@ function initials(name){
 async function boot(){
   const sess = await fetch("/api/auth/session").then(r=>r.json()).catch(()=>({loggedIn:false}));
   if(sess.loggedIn){
+    state.me = { staffName: sess.staffName, role: sess.role };
     document.getElementById("login").style.display="none";
     document.getElementById("app").style.display="block";
     await initApp();
   } else {
     document.getElementById("login-title").textContent = sess.businessName || "Shop Manager";
     document.getElementById("login-logo").textContent = initials(sess.businessName||"Shop Manager");
-    initLogin();
+    await initLogin();
   }
 }
 boot();
 
 let pinEntry = "";
-function initLogin(){
-  const dotsWrap = document.getElementById("pin-dots");
-  dotsWrap.innerHTML = "";
-  for(let i=0;i<4;i++){ const s=document.createElement("span"); dotsWrap.appendChild(s); }
+let staffList = [];
+let selectedStaff = null;
+async function initLogin(){
+  document.getElementById("login-step-pin").style.display = "none";
+  document.getElementById("login-step-staff").style.display = "block";
+  document.getElementById("login-error").textContent = "";
+  try{
+    staffList = await fetch("/api/auth/staff-list").then(r=>r.json());
+  }catch(e){ staffList = []; }
+
+  const wrap = document.getElementById("staff-picker");
+  wrap.innerHTML = staffList.length ? staffList.map(s=>`
+    <button class="qa-btn" data-staff="${s.id}">
+      <span class="ic avatar" style="width:28px;height:28px;font-size:11px;display:inline-flex;">${initials(s.name)}</span>
+      ${escapeHtml(s.name)}${s.role==="owner" ? " (Owner)" : ""}
+    </button>`).join("") : `<div class="empty-hint">Couldn't reach the server. Check the app is running.</div>`;
+  wrap.querySelectorAll("[data-staff]").forEach(b=>{
+    b.addEventListener("click", ()=>selectStaff(b.dataset.staff));
+  });
 
   const pad = document.getElementById("pinpad");
   pad.innerHTML = "";
@@ -94,6 +112,20 @@ function initLogin(){
     b.addEventListener("click", ()=>handleKey(k));
     pad.appendChild(b);
   });
+  document.getElementById("login-back-link").addEventListener("click", (e)=>{ e.preventDefault(); initLogin(); });
+}
+function selectStaff(staffId){
+  selectedStaff = staffList.find(s=>s.id===staffId);
+  if(!selectedStaff) return;
+  pinEntry = "";
+  document.getElementById("login-pin-prompt").textContent = "Enter PIN for "+selectedStaff.name+".";
+  document.getElementById("login-error").textContent = "";
+  document.getElementById("login-step-staff").style.display = "none";
+  document.getElementById("login-step-pin").style.display = "block";
+  const dotsWrap = document.getElementById("pin-dots");
+  dotsWrap.innerHTML = "";
+  for(let i=0;i<4;i++){ const s=document.createElement("span"); dotsWrap.appendChild(s); }
+  renderDots();
 }
 function renderDots(){
   const dots = document.querySelectorAll("#pin-dots span");
@@ -102,16 +134,18 @@ function renderDots(){
 async function handleKey(k){
   const errEl = document.getElementById("login-error");
   if(k==="⌫"){ pinEntry = pinEntry.slice(0,-1); errEl.textContent=""; renderDots(); return; }
-  if(k==="" || pinEntry.length>=4) return;
+  if(k==="" || pinEntry.length>=4 || !selectedStaff) return;
   pinEntry += k;
   renderDots();
   if(pinEntry.length===4){
     try{
       const res = await fetch("/api/auth/login", {
-        method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({pin:pinEntry})
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({staffId: selectedStaff.id, pin:pinEntry})
       });
       const data = await res.json();
       if(res.ok){
+        state.me = { staffName: data.staffName, role: data.role };
         document.getElementById("login").style.display="none";
         document.getElementById("app").style.display="block";
         pinEntry="";
@@ -126,11 +160,12 @@ async function handleKey(k){
     }
   }
 }
-function showLogin(){
+async function showLogin(){
   document.getElementById("app").style.display="none";
   document.getElementById("login").style.display="flex";
   appInited = false;
-  pinEntry=""; renderDots();
+  pinEntry=""; selectedStaff=null;
+  await initLogin();
 }
 
 /* ============================================================
@@ -146,6 +181,7 @@ async function initApp(){
   appInited = true;
 
   document.getElementById("hdr-main").textContent = greeting();
+  document.getElementById("hdr-sub").textContent = isOwner()?"Owner Dashboard":"Staff Dashboard";
   document.getElementById("avatar-btn").addEventListener("click", openSettings);
   document.getElementById("refresh-btn").addEventListener("click", async ()=>{ await renderAll(); toast("Refreshed", "ok"); });
 
@@ -223,7 +259,7 @@ async function switchTab(tab){
   document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));
   document.getElementById("screen-"+tab).classList.add("active");
   document.querySelectorAll("nav.bottom .tab").forEach(t=>t.classList.toggle("active", t.dataset.tab===tab));
-  const subMap = {home:"Owner Dashboard",billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports"};
+  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports"};
   document.getElementById("hdr-sub").textContent = subMap[tab];
   document.getElementById("hdr-main").textContent = tab==="home" ? greeting() : subMap[tab];
   if(tab==="billing") await renderBilling();
@@ -544,9 +580,9 @@ function renderProductDetailSheet(context){
 
     ${context==="billing" ? `<button class="btn btn-gold" id="add-to-invoice-btn" style="margin-top:14px;" ${p.stock<=0?"disabled":""}>${p.stock<=0?"Out of stock":"Add to Invoice"}</button>` : ""}
 
-    <div style="margin-top:16px;text-align:center;">
+    ${isOwner() ? `<div style="margin-top:16px;text-align:center;">
       <a href="#" id="delete-product-link" class="btn-danger-link">Delete this product</a>
-    </div>
+    </div>` : ""}
   `;
   const stockArea = sheet.querySelector("#stock-editor-area");
   if(context==="inventory"){
@@ -584,7 +620,8 @@ function renderProductDetailSheet(context){
       else toast("Can't add more — that's all the stock we have.");
     });
   }
-  sheet.querySelector("#delete-product-link").addEventListener("click", async (e)=>{
+  const deleteProductLink = sheet.querySelector("#delete-product-link");
+  if(deleteProductLink) deleteProductLink.addEventListener("click", async (e)=>{
     e.preventDefault();
     if(confirm("Delete "+p.name+"? This can't be undone.")){
       try{
@@ -615,15 +652,16 @@ async function openCustomerDetail(customerId){
     <div class="card">${detail.history.length ? detail.history.map(h=>`
       <div class="list-row" data-open-invoice="${h.id}" style="cursor:pointer;"><div><div class="row-title">${h.challan_no}</div><div class="row-sub">${h.date}</div></div><div class="row-right row-title">${fmt(h.total)}</div></div>
     `).join("") : `<div class="empty-hint">No purchases yet.</div>`}</div>
-    <div style="margin-top:16px;text-align:center;">
+    ${isOwner() ? `<div style="margin-top:16px;text-align:center;">
       <a href="#" id="delete-cust-link" class="btn-danger-link">Delete this customer</a>
-    </div>
+    </div>` : ""}
   `;
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
   sheet.querySelectorAll("[data-open-invoice]").forEach(el=>{
     el.addEventListener("click", ()=>{ closeAllSheets(); openExistingInvoice(el.dataset.openInvoice); });
   });
-  sheet.querySelector("#delete-cust-link").addEventListener("click", async (e)=>{
+  const deleteCustLink = sheet.querySelector("#delete-cust-link");
+  if(deleteCustLink) deleteCustLink.addEventListener("click", async (e)=>{
     e.preventDefault();
     if(confirm("Delete "+detail.name+"? Past invoices will show as Walk-in.")){
       try{
@@ -750,25 +788,34 @@ function openAddCustomer(){
 function openSettings(){
   const sheet = document.getElementById("sheet-settings");
   const cfg = state.settings;
+  const owner = isOwner();
   sheet.innerHTML = `
     <div class="sheet-handle"></div>
     <button class="sheet-close" data-sheetclose>✕</button>
     <div class="sheet-title">Settings</div>
-    <label class="field-label">Business name</label><input type="text" id="st-name" value="${escapeHtml(cfg.business_name)}">
-    <label class="field-label">Tagline</label><input type="text" id="st-tagline" value="${escapeHtml(cfg.tagline||"")}">
-    <label class="field-label">Address</label><input type="text" id="st-address" value="${escapeHtml(cfg.address||"")}">
-    <label class="field-label">Phone(s)</label><input type="text" id="st-phones" value="${escapeHtml(cfg.phones||"")}">
-    <label class="field-label">GSTIN</label><input type="text" id="st-gstin" value="${escapeHtml(cfg.gstin||"")}">
-    <label class="field-label">Shop State (for CGST/SGST vs IGST)</label>
-    <select id="st-state"><option value="">Select state</option>${INDIAN_STATES.map(s=>`<option value="${s}" ${cfg.state===s?"selected":""}>${s}</option>`).join("")}</select>
-    <label class="field-label">UPI ID</label><input type="text" id="st-upi" value="${escapeHtml(cfg.upi_id||"")}">
-    <label class="field-label">Change Shop PIN (leave blank to keep current)</label><input type="text" id="st-pin" maxlength="6" placeholder="4-6 digits">
-    <button class="btn btn-primary" id="st-save" style="margin-top:16px;">Save Settings</button>
-    <p class="muted" style="font-size:11px;margin-top:10px;">Anyone with this PIN can open the app. Share it only with shop staff.</p>
-    <button class="btn btn-outline" id="st-logout" style="margin-top:10px;">Log out of this device</button>
+    <p class="muted" style="font-size:12px;margin-top:-6px;">Logged in as <strong>${escapeHtml(state.me.staffName||"")}</strong> (${owner?"Owner":"Staff"})</p>
+
+    ${owner ? `
+      <label class="field-label">Business name</label><input type="text" id="st-name" value="${escapeHtml(cfg.business_name)}">
+      <label class="field-label">Tagline</label><input type="text" id="st-tagline" value="${escapeHtml(cfg.tagline||"")}">
+      <label class="field-label">Address</label><input type="text" id="st-address" value="${escapeHtml(cfg.address||"")}">
+      <label class="field-label">Phone(s)</label><input type="text" id="st-phones" value="${escapeHtml(cfg.phones||"")}">
+      <label class="field-label">GSTIN</label><input type="text" id="st-gstin" value="${escapeHtml(cfg.gstin||"")}">
+      <label class="field-label">Shop State (for CGST/SGST vs IGST)</label>
+      <select id="st-state"><option value="">Select state</option>${INDIAN_STATES.map(s=>`<option value="${s}" ${cfg.state===s?"selected":""}>${s}</option>`).join("")}</select>
+      <label class="field-label">UPI ID</label><input type="text" id="st-upi" value="${escapeHtml(cfg.upi_id||"")}">
+      <button class="btn btn-primary" id="st-save" style="margin-top:16px;">Save Settings</button>
+
+      <div class="section-title">Staff Access</div>
+      <button class="btn btn-outline" id="st-manage-staff">Manage Staff &amp; PINs</button>
+      <button class="btn btn-outline" id="st-audit-log" style="margin-top:8px;">Activity Log</button>
+    ` : `<div class="card"><div class="empty-hint">Business details and staff accounts can only be changed by the owner.</div></div>`}
+
+    <button class="btn btn-outline" id="st-logout" style="margin-top:16px;">Log out of this device</button>
   `;
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
-  sheet.querySelector("#st-save").addEventListener("click", async ()=>{
+  const saveBtn = sheet.querySelector("#st-save");
+  if(saveBtn) saveBtn.addEventListener("click", async ()=>{
     try{
       state.settings = await api("PUT","/settings", {
         businessName: document.getElementById("st-name").value.trim(),
@@ -777,20 +824,139 @@ function openSettings(){
         phones: document.getElementById("st-phones").value.trim(),
         gstin: document.getElementById("st-gstin").value.trim(),
         state: document.getElementById("st-state").value,
-        upiId: document.getElementById("st-upi").value.trim(),
-        newPin: document.getElementById("st-pin").value.trim() || undefined
+        upiId: document.getElementById("st-upi").value.trim()
       });
       document.getElementById("avatar-btn").textContent = initials(state.settings.business_name);
       closeAllSheets();
       toast("Settings saved.", "ok");
     }catch(err){ toast(err.message); }
   });
+  const manageStaffBtn = sheet.querySelector("#st-manage-staff");
+  if(manageStaffBtn) manageStaffBtn.addEventListener("click", openStaffManage);
+  const auditLogBtn = sheet.querySelector("#st-audit-log");
+  if(auditLogBtn) auditLogBtn.addEventListener("click", openAuditLog);
   sheet.querySelector("#st-logout").addEventListener("click", async ()=>{
     await api("POST","/auth/logout");
     closeAllSheets();
-    showLogin();
+    await showLogin();
   });
   showSheet("sheet-settings");
+}
+
+/* ============================================================
+   SHEET: Manage Staff (owner only)
+   ============================================================ */
+async function openStaffManage(){
+  const staff = await api("GET", "/staff");
+  const sheet = document.getElementById("sheet-staff");
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">Manage Staff</div>
+    <div class="card" id="staff-list-area">${staff.map(s=>`
+      <div class="list-row">
+        <div class="avatar" style="width:32px;height:32px;font-size:11px;">${initials(s.name)}</div>
+        <div><div class="row-title">${escapeHtml(s.name)}${!s.active?" (Inactive)":""}</div><div class="row-sub">${s.role==="owner"?"Owner":"Staff"}</div></div>
+        <div class="row-right">
+          <a href="#" data-edit-staff="${s.id}" style="font-size:12px;font-weight:700;">Edit</a>
+        </div>
+      </div>`).join("") || `<div class="empty-hint">No staff yet.</div>`}
+    </div>
+    <button class="btn btn-primary" id="staff-add-btn" style="margin-top:14px;">+ Add Staff Member</button>
+  `;
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  sheet.querySelector("#staff-add-btn").addEventListener("click", ()=>openAddStaff(null));
+  sheet.querySelectorAll("[data-edit-staff]").forEach(a=>{
+    a.addEventListener("click", (e)=>{ e.preventDefault(); openAddStaff(staff.find(s=>s.id===a.dataset.editStaff)); });
+  });
+  showSheet("sheet-staff");
+}
+function openAddStaff(existing){
+  const sheet = document.getElementById("sheet-add-staff");
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">${existing ? "Edit Staff Member" : "Add Staff Member"}</div>
+    <label class="field-label">Name</label><input type="text" id="ns-name" value="${existing?escapeHtml(existing.name):""}">
+    <label class="field-label">Role</label>
+    <div class="chip-row" id="ns-role-chips">
+      <button class="chip ${(!existing||existing.role==="staff")?"selected":""}" data-role="staff">Staff</button>
+      <button class="chip ${existing&&existing.role==="owner"?"selected":""}" data-role="owner">Owner</button>
+    </div>
+    <label class="field-label">${existing ? "New PIN (leave blank to keep current)" : "PIN (4-6 digits)"}</label>
+    <input type="text" id="ns-pin" maxlength="6" placeholder="4-6 digits">
+    ${existing ? `
+      <label class="field-label">Status</label>
+      <div class="chip-row" id="ns-active-chips">
+        <button class="chip ${existing.active?"selected":""}" data-active="1">Active</button>
+        <button class="chip ${!existing.active?"selected":""}" data-active="0">Inactive</button>
+      </div>` : ""}
+    <button class="btn btn-primary" id="ns-save" style="margin-top:16px;">${existing?"Save Changes":"Add Staff Member"}</button>
+    ${existing ? `<div style="margin-top:16px;text-align:center;"><a href="#" id="ns-delete" class="btn-danger-link">Remove this staff member</a></div>` : ""}
+  `;
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  sheet.querySelectorAll("[data-role]").forEach(b=>b.addEventListener("click", ()=>{
+    sheet.querySelectorAll("[data-role]").forEach(x=>x.classList.remove("selected")); b.classList.add("selected");
+  }));
+  const activeChips = sheet.querySelectorAll("[data-active]");
+  activeChips.forEach(b=>b.addEventListener("click", ()=>{
+    activeChips.forEach(x=>x.classList.remove("selected")); b.classList.add("selected");
+  }));
+  sheet.querySelector("#ns-save").addEventListener("click", async ()=>{
+    const name = document.getElementById("ns-name").value.trim();
+    const pin = document.getElementById("ns-pin").value.trim();
+    if(!name){ toast("Enter a name."); return; }
+    if(!existing && !/^\d{4,6}$/.test(pin)){ toast("Enter a 4-6 digit PIN."); return; }
+    if(pin && !/^\d{4,6}$/.test(pin)){ toast("PIN must be 4-6 digits."); return; }
+    const role = sheet.querySelector("[data-role].selected").dataset.role;
+    try{
+      if(existing){
+        const active = sheet.querySelector("[data-active].selected").dataset.active === "1";
+        await api("PUT", `/staff/${existing.id}`, { name, role, active, pin: pin || undefined });
+      } else {
+        await api("POST", "/staff", { name, role, pin });
+      }
+      closeAllSheets();
+      await openStaffManage();
+      toast("Staff saved.", "ok");
+    }catch(err){ toast(err.message); }
+  });
+  const deleteLink = sheet.querySelector("#ns-delete");
+  if(deleteLink) deleteLink.addEventListener("click", async (e)=>{
+    e.preventDefault();
+    if(confirm("Remove "+existing.name+"? They will no longer be able to log in.")){
+      try{
+        await api("DELETE", `/staff/${existing.id}`);
+        closeAllSheets();
+        await openStaffManage();
+        toast("Staff member removed.", "ok");
+      }catch(err){ toast(err.message); }
+    }
+  });
+  showSheet("sheet-add-staff");
+}
+
+/* ============================================================
+   SHEET: Activity Log (owner only)
+   ============================================================ */
+async function openAuditLog(){
+  const rows = await api("GET", "/audit?limit=200");
+  const sheet = document.getElementById("sheet-audit-log");
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">Activity Log</div>
+    <div class="card">${rows.length ? rows.map(r=>{
+      const dt = new Date(r.at);
+      return `<div class="list-row">
+        <div><div class="row-title">${escapeHtml(r.staff_name)} <span class="muted" style="font-weight:400;">(${r.role})</span></div>
+        <div class="row-sub">${escapeHtml(r.action)}${r.details?" — "+escapeHtml(r.details):""}</div></div>
+        <div class="row-right muted" style="font-size:11px;">${dt.toLocaleDateString("en-IN")}<br>${dt.toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"})}</div>
+      </div>`;
+    }).join("") : `<div class="empty-hint">No activity recorded yet.</div>`}</div>
+  `;
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  showSheet("sheet-audit-log");
 }
 
 /* ============================================================
@@ -831,7 +997,7 @@ function openInvoicePreview(existingInvoice){
     };
   }
   const voidBtn = document.getElementById("inv-void");
-  if(existingInvoice && existingInvoice.id){
+  if(existingInvoice && existingInvoice.id && isOwner()){
     if(!voidBtn){
       const b = document.createElement("button");
       b.id = "inv-void"; b.textContent = "Void Invoice";

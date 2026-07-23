@@ -47,10 +47,21 @@ Shop Manager running on port 3000
 Open http://localhost:3000
 ```
 
-Open that address in a browser on the same computer. The default PIN is
-**1234** — change it immediately from the profile icon (top right) →
-Settings, and fill in the shop's name, address, GSTIN and state there too
-(the state is what decides CGST/SGST vs IGST on invoices).
+Open that address in a browser on the same computer. There's one built-in
+account, **Owner**, with the default PIN **1234** — log in as Owner, then
+from the profile icon (top right) → Settings → **Manage Staff & PINs**,
+change that PIN immediately and add an account for each staff member who
+needs access (each gets their own name + PIN). Also fill in the shop's name,
+address, GSTIN and state in Settings (the state is what decides CGST/SGST
+vs IGST on invoices).
+
+Every login is tied to a staff account: the login screen lists staff by
+name, then asks for that person's PIN. Only Owner accounts can edit shop
+settings, manage other staff, void invoices, or delete products/customers —
+regular Staff accounts can bill, manage stock, and add customers. Every
+sensitive action is recorded in Settings → **Activity Log** (who did what,
+and when). Five wrong PINs in a row locks that device out of logging in
+for 15 minutes.
 
 ## Using it from phones in the shop
 
@@ -59,7 +70,7 @@ Settings, and fill in the shop's name, address, GSTIN and state there too
    like `192.168.1.23`.
 2. Make sure the PC and the phone are on the same WiFi.
 3. On the phone's browser, go to `http://192.168.1.23:3000` (use the PC's
-   actual IP). Enter the shop PIN.
+   actual IP). Pick your name and enter your PIN.
 4. Optional: use the browser's "Add to Home Screen" to get an app icon.
 
 The app keeps running only while `npm start` is running on the PC. Leave
@@ -82,7 +93,8 @@ becomes both the server and the device you use it on.
    dependencies, and starts it — all in one step. The first run takes a
    few minutes (mostly the `pkg update`/`upgrade` step).
 3. On that same phone, open a browser and go to `http://localhost:3000`.
-   Log in with PIN **1234**, then change it from Settings right away.
+   Log in as **Owner** with PIN **1234**, then change it from Settings →
+   Manage Staff right away.
 4. For other phones/tablets in the shop to reach it, they need the
    Termux phone's WiFi IP address (inside Termux: `ip addr` or install
    `pkg install net-tools` then `ifconfig`), and all devices must be on
@@ -175,9 +187,10 @@ filesystem on every deploy, which would silently lose invoices).
 Costs roughly $2-5/month for the smallest always-on machine + volume.
 Redeploy any future code changes with `fly deploy` from this folder.
 
-**Security note:** the app is protected only by the shared 4-6 digit PIN.
-That's fine on a private shop WiFi, but once it's on the public internet
-anyone who finds the URL can try to guess it. Use a 6-digit PIN (Settings)
+**Security note:** the app is protected only by each staff member's 4-6
+digit PIN (5 wrong attempts locks out for 15 minutes). That's fine on a
+private shop WiFi, but once it's on the public internet anyone who finds
+the URL can try to guess it. Use 6-digit PINs (Settings → Manage Staff)
 and don't share the `.fly.dev` URL publicly.
 
 ## Project layout

@@ -94,12 +94,34 @@ CREATE TABLE IF NOT EXISTS counters (
   value INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS staff (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  pin_hash TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'staff' CHECK (role IN ('owner', 'staff')),
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at INTEGER NOT NULL,
+  staff_id TEXT,
+  staff_name TEXT NOT NULL,
+  role TEXT NOT NULL,
+  action TEXT NOT NULL,
+  details TEXT DEFAULT ''
+);
+
 CREATE INDEX IF NOT EXISTS idx_invoices_date ON invoices(date);
 CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice ON invoice_items(invoice_id);
 CREATE INDEX IF NOT EXISTS idx_product_sizes_product ON product_sizes(product_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_at ON audit_log(at);
 `);
 
-// First-run seed: create settings row with default PIN 1234 if none exists.
+// First-run seed: create settings row if none exists. The PIN itself now lives
+// on the owner's staff account (below) — settings.pin_hash is unused but kept
+// as a NOT NULL column so we don't need a migration to drop it.
 const settingsRow = db.prepare("SELECT * FROM settings WHERE id = 1").get();
 if (!settingsRow) {
   db.prepare(`
@@ -115,6 +137,20 @@ if (!settingsRow) {
     "",
     hashPin("1234")
   );
+}
+
+// First-run seed: one Owner staff account with the default PIN 1234, so a
+// freshly-installed shop always has exactly one way in. Also covers upgrading
+// from a pre-staff-accounts database (no staff rows yet even though settings
+// already exists) by carrying the old shared PIN over to the new Owner account
+// instead of silently resetting everyone's login to 1234.
+const staffCount = db.prepare("SELECT COUNT(*) AS n FROM staff").get().n;
+if (staffCount === 0) {
+  const priorPinHash = settingsRow ? settingsRow.pin_hash : null;
+  db.prepare(`
+    INSERT INTO staff (id, name, pin_hash, role, active, created_at)
+    VALUES (?, 'Owner', ?, 'owner', 1, ?)
+  `).run("STAFF_owner", priorPinHash || hashPin("1234"), Date.now());
 }
 
 // node:sqlite has no built-in transaction wrapper the way better-sqlite3 does;

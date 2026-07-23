@@ -1,6 +1,7 @@
 const express = require("express");
 const db = require("../db");
-const { uid } = require("../util");
+const { uid, logAction } = require("../util");
+const { requireRole } = require("../auth");
 
 const router = express.Router();
 
@@ -29,6 +30,7 @@ router.post("/", (req, res) => {
     INSERT INTO customers (id, name, type, phone, gst, state, credit_limit, due, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
   `).run(id, name.trim(), type || "Retail Customer", phone.trim(), (gst || "").trim(), (state || "").trim(), Number(creditLimit) || 0, Date.now());
+  logAction(req, "customer.create", name.trim());
   res.status(201).json(db.prepare("SELECT * FROM customers WHERE id = ?").get(id));
 });
 
@@ -42,13 +44,15 @@ router.put("/:id", (req, res) => {
     (name || c.name).trim(), type ?? c.type, (phone ?? c.phone), (gst ?? c.gst),
     (state ?? c.state), creditLimit !== undefined ? Number(creditLimit) : c.credit_limit, c.id
   );
+  logAction(req, "customer.update", c.name);
   res.json(db.prepare("SELECT * FROM customers WHERE id = ?").get(c.id));
 });
 
-router.delete("/:id", (req, res) => {
+router.delete("/:id", requireRole("owner"), (req, res) => {
   const c = db.prepare("SELECT * FROM customers WHERE id = ?").get(req.params.id);
   if (!c) return res.status(404).json({ error: "Customer not found." });
   db.prepare("DELETE FROM customers WHERE id = ?").run(c.id);
+  logAction(req, "customer.delete", c.name);
   res.json({ ok: true });
 });
 

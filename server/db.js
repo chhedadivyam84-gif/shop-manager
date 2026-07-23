@@ -113,10 +113,33 @@ CREATE TABLE IF NOT EXISTS audit_log (
   details TEXT DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS payments (
+  id TEXT PRIMARY KEY,
+  customer_id TEXT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  amount REAL NOT NULL,
+  method TEXT NOT NULL DEFAULT 'Cash',
+  note TEXT DEFAULT '',
+  voided INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS stock_ins (
+  id TEXT PRIMARY KEY,
+  product_id TEXT REFERENCES products(id) ON DELETE SET NULL,
+  product_name TEXT NOT NULL,
+  qty REAL NOT NULL,
+  cost_price REAL NOT NULL DEFAULT 0,
+  supplier TEXT DEFAULT '',
+  note TEXT DEFAULT '',
+  created_at INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_invoices_date ON invoices(date);
 CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice ON invoice_items(invoice_id);
 CREATE INDEX IF NOT EXISTS idx_product_sizes_product ON product_sizes(product_id);
 CREATE INDEX IF NOT EXISTS idx_audit_log_at ON audit_log(at);
+CREATE INDEX IF NOT EXISTS idx_payments_customer ON payments(customer_id);
+CREATE INDEX IF NOT EXISTS idx_stock_ins_product ON stock_ins(product_id);
 `);
 
 // First-run seed: create settings row if none exists. The PIN itself now lives

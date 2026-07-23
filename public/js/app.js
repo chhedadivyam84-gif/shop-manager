@@ -577,6 +577,11 @@ function renderProductDetailSheet(context){
     </div>
 
     <div id="stock-editor-area" style="margin-top:14px;"></div>
+    ${context==="inventory" ? `
+      <button class="btn btn-outline" id="stock-in-btn" style="margin-top:10px;">+ Record Stock In (Purchase)</button>
+      <div class="section-title">Recent Purchases</div>
+      <div class="card" id="stock-in-history"><div class="empty-hint">Loading…</div></div>
+    ` : ""}
 
     ${context==="billing" ? `<button class="btn btn-gold" id="add-to-invoice-btn" style="margin-top:14px;" ${p.stock<=0?"disabled":""}>${p.stock<=0?"Out of stock":"Add to Invoice"}</button>` : ""}
 
@@ -605,6 +610,8 @@ function renderProductDetailSheet(context){
       const updated = await api("PATCH", `/products/${p.id}/stock`, {stock: parseInt(e.target.value)||0});
       Object.assign(p, updated); renderInventoryList();
     });
+    sheet.querySelector("#stock-in-btn").addEventListener("click", ()=>openStockIn(p));
+    loadStockInHistory(p.id);
   } else {
     stockArea.innerHTML = `<div class="muted" style="font-size:11.5px;">${p.stock} ${escapeHtml(p.unit||"")} available · edit stock levels from Inventory</div>`;
   }
@@ -632,6 +639,55 @@ function renderProductDetailSheet(context){
     }
   });
 }
+async function loadStockInHistory(productId){
+  const area = document.getElementById("stock-in-history");
+  if(!area) return;
+  try{
+    const rows = await api("GET", `/products/${productId}/stock-in`);
+    if(!area.isConnected) return;
+    area.innerHTML = rows.length ? rows.map(r=>{
+      const dt = new Date(r.created_at);
+      return `<div class="list-row"><div><div class="row-title">+${r.qty} received${r.supplier?" from "+escapeHtml(r.supplier):""}</div><div class="row-sub">${dt.toLocaleDateString("en-IN")}${r.cost_price?" · Cost "+fmt(r.cost_price)+" each":""}${r.note?" · "+escapeHtml(r.note):""}</div></div></div>`;
+    }).join("") : `<div class="empty-hint">No purchases recorded yet.</div>`;
+  }catch(e){ if(area.isConnected) area.innerHTML = `<div class="empty-hint">Couldn't load purchase history.</div>`; }
+}
+function openStockIn(p){
+  const sheet = document.getElementById("sheet-stock-in");
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">Record Stock In</div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px;">${escapeHtml(p.name)} · Current stock: ${p.stock} ${escapeHtml(p.unit||"")}</div>
+    <label class="field-label">Quantity received</label>
+    <input type="number" id="si-qty" min="0" value="1">
+    <label class="field-label">Cost price per unit (₹, optional)</label>
+    <input type="number" id="si-cost" min="0" value="0">
+    <label class="field-label">Supplier (optional)</label>
+    <input type="text" id="si-supplier" placeholder="e.g. Century Ply Distributor">
+    <label class="field-label">Note (optional)</label>
+    <input type="text" id="si-note" placeholder="e.g. Invoice / LR number">
+    <button class="btn btn-primary" id="si-save" style="margin-top:16px;">Save</button>
+  `;
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  sheet.querySelector("#si-save").addEventListener("click", async ()=>{
+    const qty = parseFloat(document.getElementById("si-qty").value);
+    if(!qty || qty<=0){ toast("Enter a valid quantity."); return; }
+    try{
+      const updated = await api("POST", `/products/${p.id}/stock-in`, {
+        qty, costPrice: parseFloat(document.getElementById("si-cost").value)||0,
+        supplier: document.getElementById("si-supplier").value.trim(),
+        note: document.getElementById("si-note").value.trim()
+      });
+      Object.assign(p, updated);
+      await loadProducts();
+      closeAllSheets();
+      openProductDetail(p.id, "inventory");
+      renderInventoryList();
+      toast("Stock updated.", "ok");
+    }catch(err){ toast(err.message); }
+  });
+  showSheet("sheet-stock-in");
+}
 
 /* ============================================================
    SHEETS: Customer Detail
@@ -648,10 +704,18 @@ async function openCustomerDetail(customerId){
       <div class="stat-card plain"><div class="label">Credit Limit</div><div class="value">${fmt(detail.credit_limit)}</div></div>
       <div class="stat-card plain"><div class="label">Outstanding Due</div><div class="value red">${fmt(detail.due)}</div></div>
     </div>
-    <div class="section-title">Purchase History</div>
-    <div class="card">${detail.history.length ? detail.history.map(h=>`
-      <div class="list-row" data-open-invoice="${h.id}" style="cursor:pointer;"><div><div class="row-title">${h.challan_no}</div><div class="row-sub">${h.date}</div></div><div class="row-right row-title">${fmt(h.total)}</div></div>
-    `).join("") : `<div class="empty-hint">No purchases yet.</div>`}</div>
+    ${detail.due>0 ? `<button class="btn btn-gold" id="record-payment-btn" style="margin-top:10px;">Record Payment</button>` : ""}
+    <div class="section-title">Ledger</div>
+    <div class="card">${detail.ledger.length ? detail.ledger.map(l=>{
+      if(l.type==="invoice"){
+        return `<div class="list-row" data-open-invoice="${l.id}" style="cursor:pointer;"><div><div class="row-title">${escapeHtml(l.label)}</div><div class="row-sub">${l.date} · Invoice</div></div><div class="row-right row-title" style="color:var(--danger);">+${fmt(l.amount)}</div></div>`;
+      }
+      return `<div class="list-row"><div><div class="row-title">Payment received${l.note?" — "+escapeHtml(l.note):""}</div><div class="row-sub">${l.date} · ${escapeHtml(l.label)}</div></div>
+        <div class="row-right" style="display:flex;align-items:center;gap:8px;">
+          <span class="row-title" style="color:var(--ok);">${fmt(l.amount)}</span>
+          ${isOwner() ? `<a href="#" data-void-payment="${l.id}" class="btn-danger-link" style="font-size:11px;">Void</a>` : ""}
+        </div></div>`;
+    }).join("") : `<div class="empty-hint">No activity yet.</div>`}</div>
     ${isOwner() ? `<div style="margin-top:16px;text-align:center;">
       <a href="#" id="delete-cust-link" class="btn-danger-link">Delete this customer</a>
     </div>` : ""}
@@ -659,6 +723,21 @@ async function openCustomerDetail(customerId){
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
   sheet.querySelectorAll("[data-open-invoice]").forEach(el=>{
     el.addEventListener("click", ()=>{ closeAllSheets(); openExistingInvoice(el.dataset.openInvoice); });
+  });
+  const recordPaymentBtn = sheet.querySelector("#record-payment-btn");
+  if(recordPaymentBtn) recordPaymentBtn.addEventListener("click", ()=>openRecordPayment(detail));
+  sheet.querySelectorAll("[data-void-payment]").forEach(a=>{
+    a.addEventListener("click", async (e)=>{
+      e.preventDefault();
+      if(confirm("Void this payment? The customer's due will go back up.")){
+        try{
+          await api("POST", `/customers/${detail.id}/payments/${a.dataset.voidPayment}/void`);
+          await loadCustomers();
+          await openCustomerDetail(detail.id);
+          toast("Payment voided.", "ok");
+        }catch(err){ toast(err.message); }
+      }
+    });
   });
   const deleteCustLink = sheet.querySelector("#delete-cust-link");
   if(deleteCustLink) deleteCustLink.addEventListener("click", async (e)=>{
@@ -672,6 +751,50 @@ async function openCustomerDetail(customerId){
     }
   });
   showSheet("sheet-customer-detail");
+}
+
+/* ============================================================
+   SHEET: Record Payment (against customer due)
+   ============================================================ */
+function openRecordPayment(customer){
+  const sheet = document.getElementById("sheet-record-payment");
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">Record Payment</div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px;">${escapeHtml(customer.name)} · Due: ${fmt(customer.due)}</div>
+    <label class="field-label">Amount received (₹)</label>
+    <input type="number" id="rp-amount" min="0" value="${customer.due}">
+    <label class="field-label">Method</label>
+    <div class="chip-row" id="rp-method-chips">
+      <button class="chip selected" data-method="Cash">Cash</button>
+      <button class="chip" data-method="UPI">UPI</button>
+      <button class="chip" data-method="Card">Card</button>
+      <button class="chip" data-method="Bank Transfer">Bank Transfer</button>
+    </div>
+    <label class="field-label">Note (optional)</label>
+    <input type="text" id="rp-note" placeholder="e.g. Cheque no., reference">
+    <button class="btn btn-primary" id="rp-save" style="margin-top:16px;">Save Payment</button>
+  `;
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  sheet.querySelectorAll("[data-method]").forEach(b=>b.addEventListener("click", ()=>{
+    sheet.querySelectorAll("[data-method]").forEach(x=>x.classList.remove("selected")); b.classList.add("selected");
+  }));
+  sheet.querySelector("#rp-save").addEventListener("click", async ()=>{
+    const amount = parseFloat(document.getElementById("rp-amount").value);
+    if(!amount || amount<=0){ toast("Enter a valid amount."); return; }
+    try{
+      await api("POST", `/customers/${customer.id}/payments`, {
+        amount, method: sheet.querySelector("[data-method].selected").dataset.method,
+        note: document.getElementById("rp-note").value.trim()
+      });
+      await loadCustomers();
+      closeAllSheets();
+      await openCustomerDetail(customer.id);
+      toast("Payment recorded.", "ok");
+    }catch(err){ toast(err.message); }
+  });
+  showSheet("sheet-record-payment");
 }
 
 /* ============================================================

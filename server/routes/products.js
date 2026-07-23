@@ -97,6 +97,35 @@ router.patch("/:id/stock", (req, res) => {
   res.json(serialize(db.prepare("SELECT * FROM products WHERE id = ?").get(p.id)));
 });
 
+router.post("/:id/stock-in", (req, res) => {
+  const p = db.prepare("SELECT * FROM products WHERE id = ?").get(req.params.id);
+  if (!p) return res.status(404).json({ error: "Product not found." });
+  const qty = Number(req.body.qty);
+  if (!qty || qty <= 0) return res.status(400).json({ error: "Enter a valid quantity received." });
+  const costPrice = Number(req.body.costPrice) || 0;
+  const supplier = (req.body.supplier || "").trim();
+  const note = (req.body.note || "").trim();
+
+  const id = uid("SI");
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO stock_ins (id, product_id, product_name, qty, cost_price, supplier, note, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, p.id, p.name, qty, costPrice, supplier, note, Date.now());
+    db.prepare("UPDATE products SET stock = stock + ? WHERE id = ?").run(qty, p.id);
+  })();
+
+  logAction(req, "product.stock_in", `${p.name}: +${qty}${supplier ? " from " + supplier : ""}`);
+  res.status(201).json(serialize(db.prepare("SELECT * FROM products WHERE id = ?").get(p.id)));
+});
+
+router.get("/:id/stock-in", (req, res) => {
+  const p = db.prepare("SELECT * FROM products WHERE id = ?").get(req.params.id);
+  if (!p) return res.status(404).json({ error: "Product not found." });
+  const rows = db.prepare("SELECT * FROM stock_ins WHERE product_id = ? ORDER BY created_at DESC LIMIT 20").all(p.id);
+  res.json(rows);
+});
+
 router.delete("/:id", requireRole("owner"), (req, res) => {
   const p = db.prepare("SELECT * FROM products WHERE id = ?").get(req.params.id);
   if (!p) return res.status(404).json({ error: "Product not found." });

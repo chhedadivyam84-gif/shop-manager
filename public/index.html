@@ -102,6 +102,24 @@
           <input type="number" id="discount-value" placeholder="0" min="0" value="0">
         </div>
 
+        <div class="section-title">Transport &amp; Loading</div>
+        <div class="card">
+          <div class="charge-grid">
+            <label class="dim">
+              <span>Transport <em>(₹)</em></span>
+              <input type="number" inputmode="decimal" step="any" min="0" id="transport-input" value="0" placeholder="0">
+            </label>
+            <label class="dim">
+              <span>Loading / Labour <em>(₹)</em></span>
+              <input type="number" inputmode="decimal" step="any" min="0" id="loading-input" value="0" placeholder="0">
+            </label>
+          </div>
+          <label class="check-row">
+            <input type="checkbox" id="roundoff-toggle" checked>
+            <span>Round off the grand total to the nearest rupee</span>
+          </label>
+        </div>
+
         <div class="section-title">Totals</div>
         <div class="card" id="totals-card"></div>
 
@@ -203,6 +221,10 @@
 
 <script src="/vendor/html2canvas.min.js"></script>
 <script src="/vendor/jspdf.umd.min.js"></script>
+<!-- Shared with the server (server/routes/invoices.js requires this same file),
+     so the browser's arithmetic and the stored invoice can never disagree.
+     Must load before app.js, which uses window.Pricing at startup. -->
+<script src="/js/pricing.js"></script>
 <script src="/js/app.js"></script>
 </body>
 </html>

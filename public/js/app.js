@@ -37,6 +37,7 @@ let state = {
   products: [], customers: [], invoices: [], settings: null, dashboard: null,
   cart: [], selectedCustomerId: null,
   discountType: "pct", discountValue: 0, advance: 0, paymentMethod: "Cash",
+  transport: 0, loading: 0, roundOff: true,
   invBrandFilter: "All", reportType: "Sales",
   paperSize: "A5",
   me: { staffName: "", role: "" },
@@ -47,6 +48,13 @@ function isOwner(){ return state.me.role === "owner"; }
 function fmt(n){
   n = Math.round(n||0);
   return "₹" + n.toLocaleString("en-IN");
+}
+/* Rupees WITH paise, for line amounts and invoice totals — an area calculation
+   rarely lands on a whole rupee, and hiding the paise makes the printed column
+   fail to add up to the printed total. */
+function fmtPaise(n){
+  const v = Math.round(((n||0) + Number.EPSILON) * 100) / 100;
+  return "₹" + v.toLocaleString("en-IN", {minimumFractionDigits:2, maximumFractionDigits:2});
 }
 function stockLevel(stock){
   if(stock<=0) return "danger";
@@ -59,6 +67,16 @@ function stockLabel(stock){
   if(stock<5) return "Low: "+stock;
   if(stock<15) return "Medium: "+stock;
   return "In stock: "+stock;
+}
+/* Rounding comes from the shared pricing module rather than a local copy, so
+   the browser and the server round identically at every step. */
+const round2 = Pricing.round2;
+
+/* Reads an optional input that may not be in the DOM at all — the dimension
+   boxes are rendered per mode, so Rft genuinely has no width field. */
+function val(id){
+  const el = document.getElementById(id);
+  return el && el.value !== "" ? el.value : "";
 }
 function initials(name){
   return (name||"?").split(" ").map(w=>w[0]).filter(Boolean).slice(0,2).join("").toUpperCase();
@@ -210,6 +228,15 @@ async function initApp(){
   });
   document.getElementById("advance-input").addEventListener("input", (e)=>{
     state.advance = parseFloat(e.target.value)||0; renderTotals();
+  });
+  document.getElementById("transport-input").addEventListener("input", (e)=>{
+    state.transport = Math.max(0, parseFloat(e.target.value)||0); renderTotals();
+  });
+  document.getElementById("loading-input").addEventListener("input", (e)=>{
+    state.loading = Math.max(0, parseFloat(e.target.value)||0); renderTotals();
+  });
+  document.getElementById("roundoff-toggle").addEventListener("change", (e)=>{
+    state.roundOff = e.target.checked; renderTotals();
   });
   document.querySelectorAll('[data-pay]').forEach(b=>{
     b.addEventListener("click", ()=>{
@@ -369,61 +396,150 @@ function renderBillingProducts(){
     b.addEventListener("click", (e)=>{ e.stopPropagation(); openProductDetail(b.dataset.quickadd, "billing"); });
   });
 }
+/* A cart line mirrors what the server stores: geometry + pieces + rate, with
+   the billed quantity always DERIVED (never typed), so the screen can't drift
+   from the invoice. `pieces` is the physical count that leaves stock. */
 function addToCart(productId, sizeIdx){
   const p = state.products.find(x=>x.id===productId);
   if(!p) return false;
   const size = p.sizes[sizeIdx];
   const existing = state.cart.find(c=>c.productId===productId && c.sizeIdx===sizeIdx);
-  const totalQtyForProduct = state.cart.filter(c=>c.productId===productId).reduce((s,c)=>s+c.qty,0);
-  if(totalQtyForProduct >= p.stock){ return false; }
-  if(existing){ existing.qty += 1; }
-  else{ state.cart.push({productId, sizeIdx, name:p.name+(p.sizes.length>1?" ("+size.label+")":""), price:size.price, gstRate:p.gst, qty:1}); }
+  const piecesForProduct = state.cart.filter(c=>c.productId===productId).reduce((s,c)=>s+(c.pieces||0),0);
+  if(piecesForProduct >= p.stock){ return false; }
+  if(existing){ existing.pieces += 1; }
+  else{
+    state.cart.push({
+      productId, sizeIdx,
+      name: p.name + (p.sizes.length>1 ? " ("+size.label+")" : ""),
+      // Pre-fill the size the product master was set up with — counter staff
+      // shouldn't retype 8 × 4 on every sale — but leave every field editable.
+      mode: Pricing.normaliseMode(p.default_mode),
+      lengthFt: p.length_ft || "",
+      widthVal: p.width_val || "",
+      thicknessIn: p.thickness_in || "",
+      pieces: 1,
+      rate: size.price,
+      gstRate: p.gst
+    });
+  }
   renderCart(); renderTotals();
   return true;
 }
+
+/** Live figures for a cart line, straight from the shared pricing module. */
+function lineCalc(c){
+  return Pricing.computeLine({
+    mode:c.mode, lengthFt:c.lengthFt, widthVal:c.widthVal,
+    thicknessIn:c.thicknessIn, pieces:c.pieces, rate:c.rate
+  });
+}
 function renderCart(){
   const wrap = document.getElementById("cart-list");
-  if(!state.cart.length){ wrap.innerHTML = `<div class="empty-hint">No items yet. Add products above.</div>`; return; }
+  if(!state.cart.length){
+    wrap.innerHTML = `<div class="empty-hint">No items yet. Add products above.</div>`;
+    return;
+  }
   wrap.innerHTML = state.cart.map((c,idx)=>{
-    return `<div class="list-row">
-      <div style="flex:1;">
-        <div class="row-title">${escapeHtml(c.name)}</div>
-        <div class="row-sub">Line total: ${fmt(c.qty*c.price)}</div>
-        <div style="display:flex;gap:10px;margin-top:6px;align-items:center;flex-wrap:wrap;">
-          <div class="qty-step">
-            <button data-qty-dec="${idx}">−</button>
-            <input type="number" value="${c.qty}" data-qty-input="${idx}">
-            <button data-qty-inc="${idx}">+</button>
-          </div>
-          <div style="display:flex;align-items:center;gap:4px;">
-            <span class="row-sub">Rate ₹</span>
-            <input type="number" value="${c.price}" data-rate-input="${idx}" style="width:70px;padding:5px 6px;">
-          </div>
-        </div>
+    const m = Pricing.MODES[Pricing.normaliseMode(c.mode)];
+    const r = lineCalc(c);
+    const stock = (state.products.find(p=>p.id===c.productId)||{}).stock;
+
+    // Only the dimensions this mode actually uses are shown. Rft has no width,
+    // and only CFT asks for thickness — showing dead inputs invites wrong data.
+    const dim = (label, unit, key, val) => `
+      <label class="dim">
+        <span>${label}${unit?` <em>(${unit})</em>`:""}</span>
+        <input type="number" inputmode="decimal" step="any" min="0"
+               value="${val===0||val?val:""}" data-line-field="${key}" data-line="${idx}" placeholder="0">
+      </label>`;
+
+    return `<div class="bill-line" data-line-row="${idx}">
+      <div class="bill-line-head">
+        <div class="bill-line-name">${escapeHtml(c.name)}</div>
+        <a href="#" data-remove="${idx}" class="btn-danger-link">Remove</a>
       </div>
-      <div class="row-right"><a href="#" data-remove="${idx}" class="btn-danger-link">Remove</a></div>
+
+      <div class="mode-row">
+        ${Pricing.MODE_KEYS.map(k=>`
+          <button class="chip sm ${k===m.key?'selected':''}" data-line-mode="${k}" data-line="${idx}"
+                  title="${Pricing.MODES[k].formula}">${Pricing.MODES[k].unit}</button>
+        `).join("")}
+      </div>
+
+      <div class="dim-grid">
+        ${m.needsThickness ? dim("Thickness", m.thicknessUnit, "thicknessIn", c.thicknessIn) : ""}
+        ${m.needsWidth ? dim("Width", m.widthUnit, "widthVal", c.widthVal) : ""}
+        ${m.needsLength ? dim("Length", m.lengthUnit, "lengthFt", c.lengthFt) : ""}
+        ${dim("Qty", "pcs", "pieces", c.pieces)}
+        ${dim("Rate", "₹/"+m.unit, "rate", c.rate)}
+      </div>
+
+      <div class="line-calc">
+        <div class="line-calc-formula">
+          ${r.sizeLabel ? `<strong>${escapeHtml(r.sizeLabel)}</strong> · ` : ""}
+          ${m.key!=="UNIT" ? `${Pricing.formatQty(r.perPiece, r.mode)}/pc × ${r.pieces} pcs = ` : ""}
+          <strong>${Pricing.formatQty(r.billedQty, r.mode)}</strong>
+          × ${Pricing.formatRate(r.rate, r.mode)}
+        </div>
+        <div class="line-calc-amount">${fmtPaise(r.amount)}</div>
+      </div>
+      ${stock!==undefined && r.pieces>stock
+        ? `<div class="line-warn">Only ${stock} in stock — this line needs ${r.pieces}.</div>` : ""}
     </div>`;
   }).join("");
 
-  wrap.querySelectorAll("[data-qty-dec]").forEach(b=>b.addEventListener("click", ()=>{
-    const i=b.dataset.qtyDec; if(state.cart[i].qty>1) state.cart[i].qty--; renderCart(); renderTotals();
+  // Switching unit re-prices the line rather than silently changing the amount:
+  // Sq.ft <-> Sq.m carries the rate across so the customer pays the same.
+  wrap.querySelectorAll("[data-line-mode]").forEach(b=>b.addEventListener("click", ()=>{
+    const c = state.cart[b.dataset.line];
+    const next = b.dataset.lineMode;
+    if(c.mode === next) return;
+    // Sq.ft <-> Sq.m carries the rate across so the customer pays the same.
+    // Any other switch measures a different thing entirely (₹322/Sq.m is not
+    // ₹322/CFT), so the rate is CLEARED rather than silently reused — a blank
+    // box and a ₹0.00 line are obvious; a plausible-looking wrong rate is not.
+    c.rate = Pricing.isRateConvertible(c.mode, next)
+      ? Pricing.convertLineRate({mode:c.mode, lengthFt:c.lengthFt, widthVal:c.widthVal,
+                                 thicknessIn:c.thicknessIn, pieces:c.pieces, rate:c.rate}, next)
+      : "";
+    c.mode = next;
+    renderCart(); renderTotals();
   }));
-  wrap.querySelectorAll("[data-qty-inc]").forEach(b=>b.addEventListener("click", ()=>{
-    const i=b.dataset.qtyInc; const c=state.cart[i]; const p=state.products.find(x=>x.id===c.productId);
-    const totalQty = state.cart.filter(x=>x.productId===c.productId).reduce((s,x)=>s+x.qty,0);
-    if(!p || totalQty < p.stock) c.qty++; renderCart(); renderTotals();
-  }));
-  wrap.querySelectorAll("[data-qty-input]").forEach(inp=>inp.addEventListener("change", ()=>{
-    const i=inp.dataset.qtyInput; const c=state.cart[i]; const p=state.products.find(x=>x.id===c.productId);
-    let v = parseInt(inp.value)||1; v = Math.max(1,v);
-    c.qty=v; renderCart(); renderTotals();
-  }));
-  wrap.querySelectorAll("[data-rate-input]").forEach(inp=>inp.addEventListener("change", ()=>{
-    const i=inp.dataset.rateInput; state.cart[i].price = parseFloat(inp.value)||0; renderCart(); renderTotals();
-  }));
+
+  wrap.querySelectorAll("[data-line-field]").forEach(inp=>{
+    // `input` (not `change`) so every totals figure updates as it is typed.
+    inp.addEventListener("input", ()=>{
+      const c = state.cart[inp.dataset.line];
+      const v = inp.value === "" ? "" : Math.max(0, parseFloat(inp.value)||0);
+      c[inp.dataset.lineField] = v;
+      renderLineCalc(inp.dataset.line);
+      renderTotals();
+    });
+    // Re-render fully on blur so cleared fields settle back to a real number.
+    inp.addEventListener("blur", ()=>{ renderCart(); renderTotals(); });
+  });
+
   wrap.querySelectorAll("[data-remove]").forEach(a=>a.addEventListener("click", (e)=>{
     e.preventDefault(); state.cart.splice(a.dataset.remove,1); renderCart(); renderTotals();
   }));
+}
+
+/* Repaint just one line's derived figures while typing. Re-rendering the whole
+   cart on every keystroke would tear the focused input out from under the
+   caret, so the inputs are deliberately left untouched here. */
+function renderLineCalc(idx){
+  const row = document.querySelector(`[data-line-row="${idx}"]`);
+  if(!row) return;
+  const c = state.cart[idx];
+  const m = Pricing.MODES[Pricing.normaliseMode(c.mode)];
+  const r = lineCalc(c);
+  const f = row.querySelector(".line-calc-formula");
+  const a = row.querySelector(".line-calc-amount");
+  if(f) f.innerHTML =
+    (r.sizeLabel ? `<strong>${escapeHtml(r.sizeLabel)}</strong> · ` : "") +
+    (m.key!=="UNIT" ? `${Pricing.formatQty(r.perPiece, r.mode)}/pc × ${r.pieces} pcs = ` : "") +
+    `<strong>${Pricing.formatQty(r.billedQty, r.mode)}</strong> × ${Pricing.formatRate(r.rate, r.mode)}`;
+  if(a) a.textContent = fmtPaise(r.amount);
 }
 function currentTaxType(){
   const cust = state.customers.find(c=>c.id===state.selectedCustomerId);
@@ -432,55 +548,94 @@ function currentTaxType(){
   if(custState && shopState && custState !== shopState) return "IGST";
   return "CGST_SGST";
 }
+/* Mirrors computeTotals() in server/routes/invoices.js exactly, including the
+   order of rounding — the preview must match what the server will store. */
 function computeTotals(){
-  const subtotal = state.cart.reduce((s,c)=>s+c.qty*c.price,0);
+  const lines = state.cart.map(lineCalc);
+  const subtotal = round2(lines.reduce((s,r)=>s+r.amount,0));
   let discount = 0;
   if(state.discountType==="pct") discount = subtotal * (Math.min(100,Math.max(0,state.discountValue))/100);
   else discount = state.discountValue;
-  discount = Math.min(Math.max(0,discount), subtotal);
+  discount = round2(Math.min(Math.max(0,discount), subtotal));
+
   const taxType = currentTaxType();
   let totalTax = 0;
-  state.cart.forEach(c=>{
-    const lineTotal = c.qty*c.price;
-    const share = subtotal>0 ? (lineTotal/subtotal)*discount : 0;
-    const taxable = Math.max(0, lineTotal-share);
-    totalTax += taxable * ((c.gstRate||18)/100);
+  lines.forEach((r,i)=>{
+    const share = subtotal>0 ? (r.amount/subtotal)*discount : 0;
+    const taxable = Math.max(0, r.amount-share);
+    totalTax += taxable * ((state.cart[i].gstRate||18)/100);
   });
+  totalTax = round2(totalTax);
+
   let cgst=0, sgst=0, igst=0;
-  if(taxType==="IGST") igst = totalTax; else { cgst = totalTax/2; sgst = totalTax/2; }
-  const total = subtotal - discount + cgst + sgst + igst;
-  const advance = Math.min(Math.max(0,state.advance), total) || 0;
-  const balanceDue = total - advance;
-  return {subtotal, discount, taxType, cgst, sgst, igst, total, advance, balanceDue};
+  if(taxType==="IGST") igst = totalTax; else { cgst = round2(totalTax/2); sgst = round2(totalTax-cgst); }
+
+  // Freight and labour sit outside the taxable value — added after GST.
+  const transport = round2(Math.max(0, state.transport||0));
+  const loading = round2(Math.max(0, state.loading||0));
+
+  const preRound = subtotal - discount + cgst + sgst + igst + transport + loading;
+  const total = round2(state.roundOff ? Math.round(preRound) : preRound);
+  const roundOffAmount = round2(total - preRound);
+
+  const advance = round2(Math.min(Math.max(0,state.advance||0), total));
+  const balanceDue = round2(total - advance);
+
+  return {subtotal, discount, taxType, cgst, sgst, igst, transport, loading,
+          roundOffAmount, total, advance, balanceDue};
 }
 function renderTotals(){
   const t = computeTotals();
+  const row = (label, value, cls) =>
+    `<div class="inv-flex" style="margin-bottom:4px;${cls||""}"><span class="muted">${label}</span><span>${value}</span></div>`;
   document.getElementById("totals-card").innerHTML = `
-    <div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Subtotal</span><span>${fmt(t.subtotal)}</span></div>
-    ${t.discount>0?`<div class="inv-flex" style="margin-bottom:4px;color:var(--danger);"><span>Discount</span><span>-${fmt(t.discount)}</span></div>`:""}
+    ${row("Subtotal", fmtPaise(t.subtotal))}
+    ${t.discount>0 ? row("Discount", "-"+fmtPaise(t.discount), "color:var(--danger);") : ""}
     ${t.taxType==="IGST"
-      ? `<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">IGST</span><span>${fmt(t.igst)}</span></div>`
-      : `<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">CGST</span><span>${fmt(t.cgst)}</span></div>
-         <div class="inv-flex" style="margin-bottom:4px;"><span class="muted">SGST</span><span>${fmt(t.sgst)}</span></div>`}
-    <div class="inv-flex" style="font-weight:800;border-top:1px solid var(--border);padding-top:6px;"><span>Total</span><span>${fmt(t.total)}</span></div>
-    ${t.advance>0?`<div class="inv-flex" style="margin-top:4px;color:var(--ok);"><span>Advance paid</span><span>-${fmt(t.advance)}</span></div>
-    <div class="inv-flex" style="font-weight:800;color:var(--danger);"><span>Balance due</span><span>${fmt(t.balanceDue)}</span></div>`:""}
+      ? row("IGST", fmtPaise(t.igst))
+      : row("CGST", fmtPaise(t.cgst)) + row("SGST", fmtPaise(t.sgst))}
+    ${t.transport>0 ? row("Transport", fmtPaise(t.transport)) : ""}
+    ${t.loading>0 ? row("Loading", fmtPaise(t.loading)) : ""}
+    ${t.roundOffAmount!==0 ? row("Round off", (t.roundOffAmount>0?"+":"")+fmtPaise(t.roundOffAmount)) : ""}
+    <div class="inv-flex" style="font-weight:800;border-top:1px solid var(--border);padding-top:6px;font-size:15px;"><span>Grand Total</span><span>${fmtPaise(t.total)}</span></div>
+    <div class="amount-words">${Pricing.amountInWords(t.total)}</div>
+    ${t.advance>0?`<div class="inv-flex" style="margin-top:4px;color:var(--ok);"><span>Advance paid</span><span>-${fmtPaise(t.advance)}</span></div>
+    <div class="inv-flex" style="font-weight:800;color:var(--danger);"><span>Balance due</span><span>${fmtPaise(t.balanceDue)}</span></div>`:""}
   `;
 }
 async function completeSale(){
   if(!state.cart.length){ toast("Add at least one item to the invoice first."); return; }
+  // Catch bad lines here so the user gets the message next to the field rather
+  // than as a server rejection after the fact.
+  for(const c of state.cart){
+    const bad = Pricing.validateLine({
+      mode:c.mode, lengthFt:c.lengthFt, widthVal:c.widthVal,
+      thicknessIn:c.thicknessIn, pieces:c.pieces, rate:c.rate
+    }, c.name);
+    if(bad){ toast(bad); return; }
+  }
   const btn = document.getElementById("complete-sale-btn");
   btn.disabled = true;
   try{
     const invoice = await api("POST","/invoices", {
       customerId: state.selectedCustomerId,
-      items: state.cart.map(c=>({productId:c.productId, name:c.name, qty:c.qty, rate:c.price})),
+      // Only the raw inputs are sent — the server recomputes every derived
+      // figure itself, so a tampered client cannot invent a billed quantity.
+      items: state.cart.map(c=>({
+        productId:c.productId, name:c.name, mode:c.mode,
+        lengthFt:c.lengthFt, widthVal:c.widthVal, thicknessIn:c.thicknessIn,
+        pieces:c.pieces, rate:c.rate
+      })),
       discountType: state.discountType, discountValue: state.discountValue,
-      advance: state.advance, paymentMethod: state.paymentMethod, paperSize: state.paperSize
+      advance: state.advance, paymentMethod: state.paymentMethod, paperSize: state.paperSize,
+      transport: state.transport, loading: state.loading, roundOff: state.roundOff
     });
     state.cart = []; state.advance = 0; state.discountValue = 0;
+    state.transport = 0; state.loading = 0;
     document.getElementById("advance-input").value = 0;
     document.getElementById("discount-value").value = 0;
+    const tIn = document.getElementById("transport-input"); if(tIn) tIn.value = 0;
+    const lIn = document.getElementById("loading-input"); if(lIn) lIn.value = 0;
     await Promise.all([loadProducts(), loadCustomers()]);
     await renderBilling(); await renderHome();
     toast("Sale completed! Challan "+invoice.challan_no, "ok");
@@ -820,6 +975,13 @@ function renderAddProductSheet(context){
       ${["Sheet","Piece","Sq.ft","Sq.mtr","Cu.mtr","Running ft"].map((u,i)=>`<button class="chip ${i===0?'selected':''}" data-unit="${u}">${u}</button>`).join("")}
     </div>
     <label class="field-label">GST %</label><input type="number" id="np-gst" value="18">
+
+    <label class="field-label">Default billing mode</label>
+    <div class="chip-row" id="np-mode-chips">
+      ${Pricing.MODE_KEYS.map((k,i)=>`<button class="chip ${i===0?'selected':''}" data-mode="${k}" title="${Pricing.MODES[k].formula}">${Pricing.MODES[k].unit}</button>`).join("")}
+    </div>
+    <label class="field-label">Standard size <span class="muted" style="font-weight:400;">— pre-filled on every bill, still editable there</span></label>
+    <div class="charge-grid" id="np-dims"></div>
     <label class="field-label">Size / variant + price</label>
     <div id="np-sizes"></div>
     <a href="#" id="np-add-size" style="font-size:12px;font-weight:700;">+ Add another size</a>
@@ -838,10 +1000,32 @@ function renderAddProductSheet(context){
     document.querySelectorAll("[data-size-price]").forEach(inp=>inp.addEventListener("input", e=>sizes[e.target.dataset.sizePrice].price=e.target.value));
     document.querySelectorAll("[data-size-remove]").forEach(a=>a.addEventListener("click", e=>{ e.preventDefault(); sizes.splice(e.target.dataset.sizeRemove,1); renderSizes(); }));
   }
+  // Only the dimension boxes the chosen mode actually consumes are shown, and
+  // they carry the trade's units (inches for CFT width/thickness, feet else).
+  function renderDims(){
+    const mode = sheet.querySelector("[data-mode].selected").dataset.mode;
+    const m = Pricing.MODES[mode];
+    const box = (label, unit, id) => `
+      <label class="dim">
+        <span>${label} <em>(${unit})</em></span>
+        <input type="number" inputmode="decimal" step="any" min="0" id="${id}" placeholder="0">
+      </label>`;
+    const el = document.getElementById("np-dims");
+    el.innerHTML =
+      (m.needsThickness ? box("Thickness", m.thicknessUnit, "np-thk") : "") +
+      (m.needsWidth ? box("Width", m.widthUnit, "np-wid") : "") +
+      (m.needsLength ? box("Length", m.lengthUnit, "np-len") : "");
+    el.style.display = el.innerHTML ? "" : "none";
+  }
   renderSizes();
+  renderDims();
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
   sheet.querySelectorAll("[data-unit]").forEach(b=>b.addEventListener("click", ()=>{
     sheet.querySelectorAll("[data-unit]").forEach(x=>x.classList.remove("selected")); b.classList.add("selected");
+  }));
+  sheet.querySelectorAll("[data-mode]").forEach(b=>b.addEventListener("click", ()=>{
+    sheet.querySelectorAll("[data-mode]").forEach(x=>x.classList.remove("selected"));
+    b.classList.add("selected"); renderDims();
   }));
   sheet.querySelector("#np-add-size").addEventListener("click", (e)=>{ e.preventDefault(); sizes.push({label:"",price:""}); renderSizes(); });
   sheet.querySelector("#np-save").addEventListener("click", async ()=>{
@@ -855,6 +1039,8 @@ function renderAddProductSheet(context){
         unit, gst: parseFloat(document.getElementById("np-gst").value)||18,
         stock: parseInt(document.getElementById("np-stock").value)||0,
         godown: document.getElementById("np-godown").value.trim(),
+        defaultMode: sheet.querySelector("[data-mode].selected").dataset.mode,
+        lengthFt: val("np-len"), widthVal: val("np-wid"), thicknessIn: val("np-thk"),
         sizes
       });
       await loadProducts();
@@ -1114,8 +1300,20 @@ function openInvoicePreview(existingInvoice){
     lastPreviewInvoice = {
       challan_no: "(unsaved preview)", date: new Date().toISOString().slice(0,10),
       customer_id: state.selectedCustomerId,
-      items: state.cart.map(c=>({name:c.name, qty:c.qty, rate:c.price})),
-      tax_type: t.taxType, discount_amount:t.discount, subtotal:t.subtotal, cgst:t.cgst, sgst:t.sgst, igst:t.igst,
+      // Shape matches a row from the API so one template renders both an
+      // unsaved preview and a saved invoice re-opened from history.
+      items: state.cart.map(c=>{
+        const r = lineCalc(c);
+        return {
+          name:c.name, mode:r.mode, size_label:r.sizeLabel,
+          length_ft:r.lengthFt, width_val:r.widthVal, thickness_in:r.thicknessIn,
+          pieces:r.pieces, per_piece:r.perPiece, unit_label:r.unit,
+          qty:r.billedQty, rate:r.rate
+        };
+      }),
+      tax_type: t.taxType, discount_amount:t.discount, subtotal:t.subtotal,
+      cgst:t.cgst, sgst:t.sgst, igst:t.igst,
+      transport:t.transport, loading:t.loading, round_off:t.roundOffAmount,
       total:t.total, advance:t.advance, balance_due:t.balanceDue
     };
   }
@@ -1154,8 +1352,8 @@ function renderInvoicePageContent(){
   const isA4 = state.paperSize==="A4";
   document.getElementById("invoice-page-content").classList.toggle("size-a5", !isA4);
   const taxRows = inv.tax_type==="IGST"
-    ? `<div class="tr"><span>IGST</span><span>${fmt(inv.igst)}</span></div>`
-    : `<div class="tr"><span>CGST</span><span>${fmt(inv.cgst)}</span></div><div class="tr"><span>SGST</span><span>${fmt(inv.sgst)}</span></div>`;
+    ? `<div class="tr"><span>IGST</span><span>${fmtPaise(inv.igst)}</span></div>`
+    : `<div class="tr"><span>CGST</span><span>${fmtPaise(inv.cgst)}</span></div><div class="tr"><span>SGST</span><span>${fmtPaise(inv.sgst)}</span></div>`;
   document.getElementById("invoice-page-content").innerHTML = `
     <h2>${escapeHtml(cfg.business_name)}</h2>
     <div class="addr">${escapeHtml(cfg.tagline||"")}<br>${escapeHtml(cfg.address||"")}<br>Ph: ${escapeHtml(cfg.phones||"")} · GSTIN: ${escapeHtml(cfg.gstin||"")}</div>
@@ -1165,17 +1363,42 @@ function renderInvoicePageContent(){
       <div style="text-align:right;"><strong>Challan No:</strong> ${inv.challan_no}<br><strong>Date:</strong> ${inv.date}</div>
     </div>
     <table class="inv-table">
-      <thead><tr><th>Item</th><th>Qty</th><th>Rate</th><th style="text-align:right;">Amount</th></tr></thead>
-      <tbody>${inv.items.map(it=>`<tr><td>${escapeHtml(it.name)}</td><td>${it.qty}</td><td>${fmt(it.rate)}</td><td style="text-align:right;">${fmt(it.qty*it.rate)}</td></tr>`).join("")}</tbody>
+      <thead>
+        <tr>
+          <th class="c-sn">#</th>
+          <th>Particulars</th>
+          <th class="c-size">Size</th>
+          <th class="c-num">Qty</th>
+          <th class="c-num">Total</th>
+          <th class="c-num">Rate</th>
+          <th class="c-num c-amt">Amount</th>
+        </tr>
+      </thead>
+      <tbody>${inv.items.map((it,i)=>{
+        const mode = it.mode || "UNIT";
+        return `<tr>
+          <td class="c-sn">${i+1}</td>
+          <td>${escapeHtml(it.name)}</td>
+          <td class="c-size">${escapeHtml(it.size_label||"—")}</td>
+          <td class="c-num">${it.pieces||it.qty}</td>
+          <td class="c-num">${Pricing.formatQty(it.qty, mode)}</td>
+          <td class="c-num">${Pricing.formatRate(it.rate, mode)}</td>
+          <td class="c-num c-amt">${fmtPaise(it.qty*it.rate)}</td>
+        </tr>`;
+      }).join("")}</tbody>
     </table>
     <div class="inv-totals">
-      <div class="tr"><span>Subtotal</span><span>${fmt(inv.subtotal)}</span></div>
-      ${inv.discount_amount>0?`<div class="tr" style="color:var(--danger);"><span>Discount</span><span>-${fmt(inv.discount_amount)}</span></div>`:""}
+      <div class="tr"><span>Subtotal</span><span>${fmtPaise(inv.subtotal)}</span></div>
+      ${inv.discount_amount>0?`<div class="tr" style="color:var(--danger);"><span>Discount</span><span>-${fmtPaise(inv.discount_amount)}</span></div>`:""}
       ${taxRows}
-      <div class="tr grand"><span>Total</span><span>${fmt(inv.total)}</span></div>
-      ${inv.advance>0?`<div class="tr" style="color:var(--ok);"><span>Advance Paid</span><span>-${fmt(inv.advance)}</span></div>
-      <div class="tr" style="font-weight:800;color:var(--danger);"><span>Balance Due</span><span>${fmt(inv.balance_due)}</span></div>`:""}
+      ${inv.transport>0?`<div class="tr"><span>Transport</span><span>${fmtPaise(inv.transport)}</span></div>`:""}
+      ${inv.loading>0?`<div class="tr"><span>Loading / Labour</span><span>${fmtPaise(inv.loading)}</span></div>`:""}
+      ${inv.round_off?`<div class="tr"><span>Round Off</span><span>${inv.round_off>0?"+":""}${fmtPaise(inv.round_off)}</span></div>`:""}
+      <div class="tr grand"><span>Grand Total</span><span>${fmtPaise(inv.total)}</span></div>
+      ${inv.advance>0?`<div class="tr" style="color:var(--ok);"><span>Advance Paid</span><span>-${fmtPaise(inv.advance)}</span></div>
+      <div class="tr" style="font-weight:800;color:var(--danger);"><span>Balance Due</span><span>${fmtPaise(inv.balance_due)}</span></div>`:""}
     </div>
+    <div class="inv-words"><span>Amount in words:</span> ${Pricing.amountInWords(inv.total)}</div>
     <hr class="inv-rule">
     <div style="font-size:9px;color:#666;">Goods once sold will not be taken back. Warranty as per manufacturer's terms only.</div>
   `;

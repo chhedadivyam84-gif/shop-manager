@@ -34,6 +34,12 @@ CREATE TABLE IF NOT EXISTS products (
   stock REAL NOT NULL DEFAULT 0,
   godown TEXT DEFAULT '',
   rack TEXT DEFAULT '',
+  -- Defaults pre-filled onto a billing line when this product is picked, so
+  -- counter staff don't retype "8 × 4" for every single sale.
+  default_mode TEXT NOT NULL DEFAULT 'UNIT',
+  length_ft REAL,
+  width_val REAL,
+  thickness_in REAL,
   created_at INTEGER NOT NULL
 );
 
@@ -71,6 +77,12 @@ CREATE TABLE IF NOT EXISTS invoices (
   cgst REAL NOT NULL DEFAULT 0,
   sgst REAL NOT NULL DEFAULT 0,
   igst REAL NOT NULL DEFAULT 0,
+  -- Post-tax charges. Freight and labour are not the shop's supply and are
+  -- billed at cost, so they sit outside the taxable value rather than being
+  -- folded into the subtotal.
+  transport REAL NOT NULL DEFAULT 0,
+  loading REAL NOT NULL DEFAULT 0,
+  round_off REAL NOT NULL DEFAULT 0,
   total REAL NOT NULL,
   advance REAL NOT NULL DEFAULT 0,
   balance_due REAL NOT NULL DEFAULT 0,
@@ -79,11 +91,26 @@ CREATE TABLE IF NOT EXISTS invoices (
   voided INTEGER NOT NULL DEFAULT 0
 );
 
+-- qty is the BILLED quantity (total Sq.ft / Sq.m / Rft / CFT, or pieces) and
+-- is what gets multiplied by rate. pieces is the PHYSICAL count that comes out
+-- of stock. For UNIT-mode lines the two are equal; for board sold by area they
+-- are not, which is exactly why both columns exist.
+-- Width/thickness carry no unit in the column name on purpose: the trade uses
+-- FEET for Sq.ft/Sq.m widths but INCHES for CFT width and thickness, so the
+-- mode column is what tells you how to read them (see public/js/pricing.js).
 CREATE TABLE IF NOT EXISTS invoice_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   invoice_id TEXT NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
   product_id TEXT,
   name TEXT NOT NULL,
+  mode TEXT NOT NULL DEFAULT 'UNIT',
+  length_ft REAL,
+  width_val REAL,
+  thickness_in REAL,
+  size_label TEXT NOT NULL DEFAULT '',
+  pieces REAL NOT NULL DEFAULT 0,
+  per_piece REAL NOT NULL DEFAULT 0,
+  unit_label TEXT NOT NULL DEFAULT 'Pc',
   qty REAL NOT NULL,
   rate REAL NOT NULL,
   gst_rate REAL NOT NULL DEFAULT 18
@@ -141,6 +168,53 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_at ON audit_log(at);
 CREATE INDEX IF NOT EXISTS idx_payments_customer ON payments(customer_id);
 CREATE INDEX IF NOT EXISTS idx_stock_ins_product ON stock_ins(product_id);
 `);
+
+/* ------------------------------------------------------------------
+   MIGRATIONS
+   CREATE TABLE IF NOT EXISTS never alters an existing table, so columns
+   added after a shop is already live have to be patched on separately.
+   Each step is guarded by a column check, making this safe to re-run on
+   every boot — which is how it stays automatic for a shop owner who just
+   pulls a new version and restarts.
+   ------------------------------------------------------------------ */
+function columnsOf(table) {
+  return db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+}
+function addColumn(table, column, definition) {
+  if (!columnsOf(table).includes(column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    return true;
+  }
+  return false;
+}
+
+// Area/length/volume billing (Sq.ft / Sq.m / Rft / CFT).
+const addedItemMode = addColumn("invoice_items", "mode", "TEXT NOT NULL DEFAULT 'UNIT'");
+addColumn("invoice_items", "length_ft", "REAL");
+addColumn("invoice_items", "width_val", "REAL");
+addColumn("invoice_items", "thickness_in", "REAL");
+addColumn("invoice_items", "size_label", "TEXT NOT NULL DEFAULT ''");
+addColumn("invoice_items", "pieces", "REAL NOT NULL DEFAULT 0");
+addColumn("invoice_items", "per_piece", "REAL NOT NULL DEFAULT 0");
+addColumn("invoice_items", "unit_label", "TEXT NOT NULL DEFAULT 'Pc'");
+
+if (addedItemMode) {
+  // Every invoice raised before this feature existed was priced per piece, so
+  // one piece == one billed unit. Backfilling keeps old invoices re-printable
+  // and keeps void-restores-stock correct: voiding reads `pieces`, which would
+  // otherwise be 0 and silently restore nothing to inventory.
+  db.exec("UPDATE invoice_items SET pieces = qty, per_piece = 1 WHERE pieces = 0");
+}
+
+// Charges carried on the invoice rather than on any single line.
+addColumn("invoices", "transport", "REAL NOT NULL DEFAULT 0");
+addColumn("invoices", "loading", "REAL NOT NULL DEFAULT 0");
+addColumn("invoices", "round_off", "REAL NOT NULL DEFAULT 0");
+
+addColumn("products", "default_mode", "TEXT NOT NULL DEFAULT 'UNIT'");
+addColumn("products", "length_ft", "REAL");
+addColumn("products", "width_val", "REAL");
+addColumn("products", "thickness_in", "REAL");
 
 // First-run seed: create settings row if none exists. The PIN itself now lives
 // on the owner's staff account (below) — settings.pin_hash is unused but kept

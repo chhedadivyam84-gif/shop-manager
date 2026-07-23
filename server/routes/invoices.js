@@ -2,6 +2,8 @@ const express = require("express");
 const db = require("../db");
 const { uid, todayStr, round2, logAction } = require("../util");
 const { requireRole } = require("../auth");
+// Same module the browser loads — see public/js/pricing.js for why it is shared.
+const Pricing = require("../../public/js/pricing.js");
 
 const router = express.Router();
 
@@ -21,8 +23,11 @@ function nextChallanNo() {
   return `CH-${year}-${String(next).padStart(4, "0")}`;
 }
 
-function computeTotals({ items, discountType, discountValue, advance, taxType }) {
-  const subtotal = round2(items.reduce((s, it) => s + it.qty * it.rate, 0));
+function computeTotals({ items, discountType, discountValue, advance, taxType, transport, loading, roundOff }) {
+  // `it.amount` is already (rounded billed qty × rate) from the shared pricing
+  // module — summing that rather than recomputing keeps the invoice's line
+  // amounts and its subtotal in exact agreement.
+  const subtotal = round2(items.reduce((s, it) => s + it.amount, 0));
   let discountAmount = 0;
   if (discountType === "flat") discountAmount = Number(discountValue) || 0;
   else discountAmount = subtotal * (Math.min(100, Math.max(0, Number(discountValue) || 0)) / 100);
@@ -30,7 +35,7 @@ function computeTotals({ items, discountType, discountValue, advance, taxType })
 
   let totalTax = 0;
   const itemTax = items.map(it => {
-    const lineTotal = it.qty * it.rate;
+    const lineTotal = it.amount;
     const share = subtotal > 0 ? (lineTotal / subtotal) * discountAmount : 0;
     const taxable = Math.max(0, lineTotal - share);
     const tax = taxable * (it.gstRate / 100);
@@ -43,11 +48,23 @@ function computeTotals({ items, discountType, discountValue, advance, taxType })
   if (taxType === "IGST") igst = totalTax;
   else { cgst = round2(totalTax / 2); sgst = round2(totalTax - cgst); }
 
-  const total = round2(subtotal - discountAmount + cgst + sgst + igst);
+  // Freight and labour are recovered at cost and are not part of the taxable
+  // supply, so they are added after GST rather than before it.
+  const transportAmt = round2(Math.max(0, Number(transport) || 0));
+  const loadingAmt = round2(Math.max(0, Number(loading) || 0));
+
+  const preRound = subtotal - discountAmount + cgst + sgst + igst + transportAmt + loadingAmt;
+  const total = round2(roundOff ? Math.round(preRound) : preRound);
+  const roundOffAmount = round2(total - preRound);
+
   const advanceApplied = round2(Math.min(Math.max(0, Number(advance) || 0), total));
   const balanceDue = round2(total - advanceApplied);
 
-  return { subtotal, discountAmount, cgst, sgst, igst, total, advance: advanceApplied, balanceDue, itemTax };
+  return {
+    subtotal, discountAmount, cgst, sgst, igst,
+    transport: transportAmt, loading: loadingAmt, roundOffAmount,
+    total, advance: advanceApplied, balanceDue, itemTax
+  };
 }
 
 router.get("/", (req, res) => {
@@ -66,7 +83,8 @@ router.get("/:id", (req, res) => {
 });
 
 router.post("/", (req, res) => {
-  const { customerId, items: rawItems, discountType, discountValue, advance, paymentMethod, paperSize } = req.body;
+  const { customerId, items: rawItems, discountType, discountValue, advance,
+          paymentMethod, paperSize, transport, loading, roundOff } = req.body;
 
   if (!Array.isArray(rawItems) || !rawItems.length) {
     return res.status(400).json({ error: "Add at least one item to the invoice." });
@@ -82,38 +100,65 @@ router.post("/", (req, res) => {
     ? "IGST" : "CGST_SGST";
 
   // Look up authoritative product data (gst rate, stock) server-side; never trust client for these.
-  const qtyByProduct = {};
+  //
+  // The billed quantity is likewise RECOMPUTED here from the raw geometry
+  // rather than taken from the request. The browser sends length/width/
+  // thickness/sheets; a client that posted its own `qty` could otherwise bill
+  // 320 sq.ft while only drawing 1 sheet out of stock.
+  const piecesByProduct = {};
   const items = [];
   for (const raw of rawItems) {
     const product = db.prepare("SELECT * FROM products WHERE id = ?").get(raw.productId);
     if (!product) return res.status(400).json({ error: `Product ${raw.productId} no longer exists.` });
-    const qty = Number(raw.qty);
-    const rate = Number(raw.rate);
-    if (!qty || qty <= 0) return res.status(400).json({ error: `Invalid quantity for ${product.name}.` });
-    if (!(rate >= 0)) return res.status(400).json({ error: `Invalid rate for ${product.name}.` });
-    qtyByProduct[product.id] = (qtyByProduct[product.id] || 0) + qty;
-    items.push({ productId: product.id, name: raw.name || product.name, qty, rate, gstRate: product.gst_rate, product });
+
+    const line = {
+      mode: Pricing.normaliseMode(raw.mode),
+      lengthFt: raw.lengthFt,
+      widthVal: raw.widthVal,
+      thicknessIn: raw.thicknessIn,
+      pieces: raw.pieces,
+      rate: raw.rate
+    };
+    const invalid = Pricing.validateLine(line, product.name);
+    if (invalid) return res.status(400).json({ error: invalid });
+
+    const calc = Pricing.computeLine(line);
+    piecesByProduct[product.id] = (piecesByProduct[product.id] || 0) + calc.pieces;
+    items.push({
+      productId: product.id,
+      name: raw.name || product.name,
+      gstRate: product.gst_rate,
+      product,
+      ...calc
+    });
   }
-  for (const [productId, qty] of Object.entries(qtyByProduct)) {
+  for (const [productId, pieces] of Object.entries(piecesByProduct)) {
     const product = db.prepare("SELECT * FROM products WHERE id = ?").get(productId);
-    if (qty > product.stock) {
-      return res.status(400).json({ error: `Not enough stock for ${product.name}. Available: ${product.stock}.` });
+    if (pieces > product.stock) {
+      return res.status(400).json({
+        error: `Not enough stock for ${product.name}. Available: ${product.stock} ${product.unit || "Pc"}, needed: ${pieces}.`
+      });
     }
   }
 
-  const totals = computeTotals({ items, discountType, discountValue, advance, taxType });
+  const totals = computeTotals({ items, discountType, discountValue, advance, taxType, transport, loading, roundOff });
   const id = uid("INV");
   const challanNo = nextChallanNo();
   const date = todayStr();
 
   const insertInvoice = db.prepare(`
     INSERT INTO invoices (id, challan_no, date, created_at, customer_id, subtotal, discount_type, discount_value,
-      discount_amount, tax_type, cgst, sgst, igst, total, advance, balance_due, payment_method, paper_size)
+      discount_amount, tax_type, cgst, sgst, igst, transport, loading, round_off, total, advance, balance_due,
+      payment_method, paper_size)
     VALUES (@id, @challanNo, @date, @createdAt, @customerId, @subtotal, @discountType, @discountValue,
-      @discountAmount, @taxType, @cgst, @sgst, @igst, @total, @advance, @balanceDue, @paymentMethod, @paperSize)
+      @discountAmount, @taxType, @cgst, @sgst, @igst, @transport, @loading, @roundOffAmount, @total, @advance,
+      @balanceDue, @paymentMethod, @paperSize)
   `);
   const insertItem = db.prepare(`
-    INSERT INTO invoice_items (invoice_id, product_id, name, qty, rate, gst_rate) VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO invoice_items
+      (invoice_id, product_id, name, mode, length_ft, width_val, thickness_in,
+       size_label, pieces, per_piece, unit_label, qty, rate, gst_rate)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const deductStock = db.prepare("UPDATE products SET stock = stock - ? WHERE id = ?");
   const bumpDue = db.prepare("UPDATE customers SET due = due + ? WHERE id = ?");
@@ -123,12 +168,19 @@ router.post("/", (req, res) => {
       id, challanNo, date, createdAt: Date.now(), customerId: customerId || null,
       subtotal: totals.subtotal, discountType: discountType === "flat" ? "flat" : "pct",
       discountValue: Number(discountValue) || 0, discountAmount: totals.discountAmount,
-      taxType, cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst, total: totals.total,
-      advance: totals.advance, balanceDue: totals.balanceDue,
+      taxType, cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst,
+      transport: totals.transport, loading: totals.loading, roundOffAmount: totals.roundOffAmount,
+      total: totals.total, advance: totals.advance, balanceDue: totals.balanceDue,
       paymentMethod: paymentMethod || "Cash", paperSize: paperSize === "A4" ? "A4" : "A5"
     });
-    items.forEach(it => insertItem.run(id, it.productId, it.name, it.qty, it.rate, it.gstRate));
-    Object.entries(qtyByProduct).forEach(([productId, qty]) => deductStock.run(qty, productId));
+    items.forEach(it => insertItem.run(
+      id, it.productId, it.name, it.mode,
+      it.lengthFt || null, it.widthVal || null, it.thicknessIn || null,
+      it.sizeLabel, it.pieces, it.perPiece, it.unit,
+      it.billedQty, it.rate, it.gstRate
+    ));
+    // Stock moves in pieces, not in billed area/length/volume.
+    Object.entries(piecesByProduct).forEach(([productId, pieces]) => deductStock.run(pieces, productId));
     if (customerId && totals.balanceDue > 0) bumpDue.run(totals.balanceDue, customerId);
   })();
 
@@ -149,7 +201,9 @@ router.post("/:id/void", requireRole("owner"), (req, res) => {
   const voidInvoice = db.prepare("UPDATE invoices SET voided = 1 WHERE id = ?");
 
   db.transaction(() => {
-    items.forEach(it => { if (it.product_id) restoreStock.run(it.qty, it.product_id); });
+    // Restore the physical piece count, NOT `qty` — on an area-priced line qty
+    // is a sq.ft figure and would put hundreds of phantom sheets into stock.
+    items.forEach(it => { if (it.product_id) restoreStock.run(it.pieces, it.product_id); });
     if (inv.customer_id && inv.balance_due > 0) reduceDue.run(inv.balance_due, inv.customer_id);
     voidInvoice.run(inv.id);
   })();

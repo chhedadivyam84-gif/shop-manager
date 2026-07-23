@@ -2,8 +2,17 @@ const express = require("express");
 const db = require("../db");
 const { uid, logAction } = require("../util");
 const { requireRole } = require("../auth");
+const Pricing = require("../../public/js/pricing.js");
 
 const router = express.Router();
+
+/** Optional numeric field: blank/absent stays NULL rather than becoming 0. */
+function dim(v, fallback) {
+  if (v === undefined) return fallback === undefined ? null : fallback;
+  if (v === null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
 
 function loadSizes(productId) {
   return db.prepare("SELECT id, label, price FROM product_sizes WHERE product_id = ? ORDER BY sort_order ASC, id ASC").all(productId);
@@ -19,7 +28,8 @@ router.get("/", (req, res) => {
 });
 
 router.post("/", (req, res) => {
-  const { name, brand, category, unit, gst, stock, godown, rack, sizes } = req.body;
+  const { name, brand, category, unit, gst, stock, godown, rack, sizes,
+          defaultMode, lengthFt, widthVal, thicknessIn } = req.body;
   if (!name || typeof name !== "string" || !name.trim()) {
     return res.status(400).json({ error: "Product name is required." });
   }
@@ -34,8 +44,9 @@ router.post("/", (req, res) => {
   const gstRate = gst !== undefined && gst !== null && gst !== "" ? Number(gst) : 18;
 
   const insertProduct = db.prepare(`
-    INSERT INTO products (id, name, brand, category, sku, unit, gst_rate, stock, godown, rack, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO products (id, name, brand, category, sku, unit, gst_rate, stock, godown, rack,
+      default_mode, length_ft, width_val, thickness_in, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insertSize = db.prepare(`
     INSERT INTO product_sizes (product_id, label, price, sort_order) VALUES (?, ?, ?, ?)
@@ -45,7 +56,9 @@ router.post("/", (req, res) => {
     insertProduct.run(
       id, name.trim(), (brand || "Generic").trim(), (category || "General").trim(),
       sku, (unit || "Piece").trim(), gstRate, Number(stock) || 0,
-      (godown || "").trim(), (rack || "").trim(), Date.now()
+      (godown || "").trim(), (rack || "").trim(),
+      Pricing.normaliseMode(defaultMode), dim(lengthFt), dim(widthVal), dim(thicknessIn),
+      Date.now()
     );
     validSizes.forEach((s, i) => insertSize.run(id, String(s.label).trim(), parseFloat(s.price), i));
   })();
@@ -58,10 +71,12 @@ router.post("/", (req, res) => {
 router.put("/:id", (req, res) => {
   const p = db.prepare("SELECT * FROM products WHERE id = ?").get(req.params.id);
   if (!p) return res.status(404).json({ error: "Product not found." });
-  const { name, brand, category, unit, gst, godown, rack, sizes } = req.body;
+  const { name, brand, category, unit, gst, godown, rack, sizes,
+          defaultMode, lengthFt, widthVal, thicknessIn } = req.body;
 
   const update = db.prepare(`
-    UPDATE products SET name=?, brand=?, category=?, unit=?, gst_rate=?, godown=?, rack=? WHERE id=?
+    UPDATE products SET name=?, brand=?, category=?, unit=?, gst_rate=?, godown=?, rack=?,
+      default_mode=?, length_ft=?, width_val=?, thickness_in=? WHERE id=?
   `);
   const deleteSizes = db.prepare("DELETE FROM product_sizes WHERE product_id = ?");
   const insertSize = db.prepare("INSERT INTO product_sizes (product_id, label, price, sort_order) VALUES (?, ?, ?, ?)");
@@ -70,7 +85,10 @@ router.put("/:id", (req, res) => {
     update.run(
       (name || p.name).trim(), (brand ?? p.brand), (category ?? p.category),
       (unit ?? p.unit), gst !== undefined && gst !== "" ? Number(gst) : p.gst_rate,
-      (godown ?? p.godown), (rack ?? p.rack), p.id
+      (godown ?? p.godown), (rack ?? p.rack),
+      defaultMode !== undefined ? Pricing.normaliseMode(defaultMode) : p.default_mode,
+      dim(lengthFt, p.length_ft), dim(widthVal, p.width_val), dim(thicknessIn, p.thickness_in),
+      p.id
     );
     if (Array.isArray(sizes)) {
       const validSizes = sizes.filter(s => s && s.label && s.price !== "" && s.price != null && !isNaN(parseFloat(s.price)));

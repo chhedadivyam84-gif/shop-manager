@@ -198,6 +198,64 @@ table.inv-table td{padding:5px 0;border-bottom:1px dashed #ccc;}
 .inv-actions{display:flex;gap:8px;padding:12px 16px 20px;}
 .inv-actions button{flex:1;background:rgba(255,255,255,.15);color:#fff;border:none;border-radius:10px;padding:11px;font-size:12px;font-weight:700;}
 
+/* ============================================================
+   BILLING LINE EDITOR (Sq.ft / Sq.m / Rft / CFT)
+   ============================================================ */
+.bill-line{border-bottom:1px solid var(--border);padding:12px 0;}
+.bill-line:last-child{border-bottom:none;padding-bottom:2px;}
+.bill-line:first-child{padding-top:2px;}
+.bill-line-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;}
+.bill-line-name{font-size:13px;font-weight:800;line-height:1.3;}
+
+.mode-row{display:flex;gap:6px;overflow-x:auto;margin:8px 0 10px;padding-bottom:2px;}
+.chip.sm{padding:5px 11px;font-size:11px;}
+
+/* auto-fit keeps 2 columns on a narrow phone and 4-5 on a tablet without
+   needing separate breakpoints. */
+.dim-grid,.charge-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(84px,1fr));gap:8px;}
+.dim{display:flex;flex-direction:column;gap:3px;}
+.dim>span{font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;}
+.dim>span em{font-style:normal;font-weight:600;text-transform:none;letter-spacing:0;}
+.dim input{width:100%;padding:8px 9px;font-size:13px;font-weight:700;text-align:right;}
+
+/* The running calculation. This is the part the shopkeeper reads back to the
+   customer, so it shows the working, not just the answer. */
+.line-calc{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
+  margin-top:10px;padding:8px 10px;border-radius:9px;
+  background:var(--bg-outer);border:1px solid var(--border);
+}
+.line-calc-formula{font-size:11px;color:var(--muted);line-height:1.45;}
+.line-calc-formula strong{color:var(--text);font-weight:800;}
+.line-calc-amount{font-size:15px;font-weight:800;color:var(--navy);margin-left:auto;white-space:nowrap;}
+.line-warn{margin-top:6px;font-size:11px;font-weight:700;color:var(--danger);}
+
+.check-row{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12px;font-weight:600;}
+.check-row input{width:auto;margin:0;}
+.amount-words{
+  margin-top:6px;padding-top:6px;border-top:1px dashed var(--border);
+  font-size:11px;font-weight:700;color:var(--muted);line-height:1.4;
+}
+
+/* ============================================================
+   INVOICE DOCUMENT
+   ============================================================ */
+table.inv-table th.c-sn,table.inv-table td.c-sn{width:16px;text-align:left;color:#888;}
+table.inv-table th.c-size,table.inv-table td.c-size{white-space:nowrap;}
+table.inv-table th.c-num,table.inv-table td.c-num{text-align:right;white-space:nowrap;}
+table.inv-table td.c-amt,table.inv-table th.c-amt{font-weight:700;}
+table.inv-table th{border-bottom:1px solid #999;}
+table.inv-table td{vertical-align:top;}
+/* Seven columns will not fit A5 at the base size — shrink the type rather than
+   let the table overflow the paper. */
+.invoice-page.size-a5 table.inv-table{font-size:8.5px;}
+.invoice-page.size-a5 table.inv-table th{font-size:7.5px;}
+.inv-words{
+  margin-top:10px;padding:6px 8px;background:#f4f4f2;border-radius:5px;
+  font-size:9.5px;line-height:1.45;color:#222;
+}
+.inv-words span{font-weight:800;text-transform:uppercase;font-size:8.5px;color:#666;}
+
 .empty-hint{text-align:center;color:var(--muted);font-size:12.5px;padding:24px 8px;}
 
 #toast{

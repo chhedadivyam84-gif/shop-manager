@@ -144,9 +144,65 @@ router.get("/:id/stock-in", (req, res) => {
   res.json(rows);
 });
 
+/**
+ * Copy a product into a new one — the fast way to add the next thickness or
+ * grade of a board that is otherwise identical.
+ *
+ * Opening stock is deliberately 0 rather than the original's: a duplicate is a
+ * DIFFERENT physical item, and inheriting 100 sheets would invent inventory
+ * that nobody ever received. The user records a stock-in for the real count.
+ */
+router.post("/:id/duplicate", (req, res) => {
+  const p = db.prepare("SELECT * FROM products WHERE id = ?").get(req.params.id);
+  if (!p) return res.status(404).json({ error: "Product not found." });
+
+  const id = uid("P");
+  const sku = "SKU-" + Math.random().toString(36).slice(2, 8).toUpperCase();
+  const name = String(req.body && req.body.name ? req.body.name : p.name + " (Copy)").trim().slice(0, 120);
+  const sizes = loadSizes(p.id);
+
+  const insertProduct = db.prepare(`
+    INSERT INTO products (id, name, brand, category, sku, unit, gst_rate, stock, godown, rack,
+      default_mode, length_ft, width_val, thickness_in, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const insertSize = db.prepare(
+    "INSERT INTO product_sizes (product_id, label, price, sort_order) VALUES (?, ?, ?, ?)"
+  );
+
+  db.transaction(() => {
+    insertProduct.run(
+      id, name, p.brand, p.category, sku, p.unit, p.gst_rate, p.godown, p.rack,
+      p.default_mode, p.length_ft, p.width_val, p.thickness_in, Date.now()
+    );
+    sizes.forEach((s, i) => insertSize.run(id, s.label, s.price, i));
+  })();
+
+  logAction(req, "product.duplicate", `${p.name} -> ${name}`);
+  res.status(201).json(serialize(db.prepare("SELECT * FROM products WHERE id = ?").get(id)));
+});
+
+/**
+ * How much history a product carries, so the delete confirmation can say
+ * "this appears on 12 invoices" instead of a blind "are you sure?".
+ */
+router.get("/:id/usage", (req, res) => {
+  const p = db.prepare("SELECT * FROM products WHERE id = ?").get(req.params.id);
+  if (!p) return res.status(404).json({ error: "Product not found." });
+  const invoiceCount = db.prepare(`
+    SELECT COUNT(DISTINCT ii.invoice_id) AS n
+    FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
+    WHERE ii.product_id = ? AND i.voided = 0
+  `).get(p.id).n;
+  const stockInCount = db.prepare("SELECT COUNT(*) AS n FROM stock_ins WHERE product_id = ?").get(p.id).n;
+  res.json({ invoiceCount, stockInCount, stock: p.stock });
+});
+
 router.delete("/:id", requireRole("owner"), (req, res) => {
   const p = db.prepare("SELECT * FROM products WHERE id = ?").get(req.params.id);
   if (!p) return res.status(404).json({ error: "Product not found." });
+  // Past invoices keep their own copy of the name, size and rate, so deleting a
+  // product never rewrites history — the sale still prints exactly as issued.
   db.prepare("DELETE FROM products WHERE id = ?").run(p.id);
   logAction(req, "product.delete", p.name);
   res.json({ ok: true });

@@ -426,6 +426,31 @@ function addToCart(productId, sizeIdx){
   return true;
 }
 
+/**
+ * Re-sync the open bill against the product master after an edit, duplicate or
+ * delete, then recompute every total.
+ *
+ * The GST rate is pulled across unconditionally — tax correctness is not the
+ * counter staff's call. The line RATE is deliberately left alone: it is
+ * routinely negotiated per customer, and silently resetting a agreed price
+ * because someone corrected the list price would be worse than a stale figure.
+ * Lines whose product no longer exists are dropped, since the server would
+ * reject the sale anyway.
+ */
+function refreshCartFromProducts(){
+  const before = state.cart.length;
+  state.cart = state.cart.filter(c=>{
+    const p = state.products.find(x=>x.id===c.productId);
+    if(!p) return false;
+    c.gstRate = p.gst;
+    return true;
+  });
+  if(state.cart.length !== before){
+    toast("Removed "+(before-state.cart.length)+" bill line(s) — that product was deleted.");
+  }
+  renderCart(); renderTotals();
+}
+
 /** Live figures for a cart line, straight from the shared pricing module. */
 function lineCalc(c){
   return Pricing.computeLine({
@@ -456,7 +481,10 @@ function renderCart(){
     return `<div class="bill-line" data-line-row="${idx}">
       <div class="bill-line-head">
         <div class="bill-line-name">${escapeHtml(c.name)}</div>
-        <a href="#" data-remove="${idx}" class="btn-danger-link">Remove</a>
+        <div class="line-actions">
+          <a href="#" data-dup="${idx}">Duplicate</a>
+          <a href="#" data-remove="${idx}" class="btn-danger-link">Remove</a>
+        </div>
       </div>
 
       <div class="mode-row">
@@ -518,6 +546,15 @@ function renderCart(){
     // Re-render fully on blur so cleared fields settle back to a real number.
     inp.addEventListener("blur", ()=>{ renderCart(); renderTotals(); });
   });
+
+  // Duplicating a line is the quickest route to "same board, other size" — the
+  // copy is inserted directly beneath so the two stay side by side for editing.
+  wrap.querySelectorAll("[data-dup]").forEach(a=>a.addEventListener("click", (e)=>{
+    e.preventDefault();
+    const i = Number(a.dataset.dup);
+    state.cart.splice(i+1, 0, Object.assign({}, state.cart[i]));
+    renderCart(); renderTotals();
+  }));
 
   wrap.querySelectorAll("[data-remove]").forEach(a=>a.addEventListener("click", (e)=>{
     e.preventDefault(); state.cart.splice(a.dataset.remove,1); renderCart(); renderTotals();
@@ -740,9 +777,13 @@ function renderProductDetailSheet(context){
 
     ${context==="billing" ? `<button class="btn btn-gold" id="add-to-invoice-btn" style="margin-top:14px;" ${p.stock<=0?"disabled":""}>${p.stock<=0?"Out of stock":"Add to Invoice"}</button>` : ""}
 
-    ${isOwner() ? `<div style="margin-top:16px;text-align:center;">
+    <div class="action-row">
+      <button class="btn btn-outline" id="edit-product-btn">✎ Edit</button>
+      <button class="btn btn-outline" id="duplicate-product-btn">⧉ Duplicate</button>
+    </div>
+    ${isOwner() ? `<div style="margin-top:12px;text-align:center;">
       <a href="#" id="delete-product-link" class="btn-danger-link">Delete this product</a>
-    </div>` : ""}
+    </div>` : `<div class="muted" style="margin-top:12px;font-size:11px;text-align:center;">Only the owner can delete a product.</div>`}
   `;
   const stockArea = sheet.querySelector("#stock-editor-area");
   if(context==="inventory"){
@@ -782,14 +823,48 @@ function renderProductDetailSheet(context){
       else toast("Can't add more — that's all the stock we have.");
     });
   }
+  sheet.querySelector("#edit-product-btn").addEventListener("click", ()=>{
+    openProductForm(context, p);
+  });
+
+  sheet.querySelector("#duplicate-product-btn").addEventListener("click", async (e)=>{
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    try{
+      const copy = await api("POST", `/products/${p.id}/duplicate`);
+      await loadProducts();
+      renderInventoryList(); renderBillingProducts();
+      // Land straight in the edit form for the copy: a duplicate almost always
+      // needs one field changed (usually thickness or grade) before it is real.
+      openProductForm(context, state.products.find(x=>x.id===copy.id) || copy);
+      toast("Duplicated — opening stock starts at 0.", "ok");
+    }catch(err){ toast(err.message); }
+    finally{ btn.disabled = false; }
+  });
+
   const deleteProductLink = sheet.querySelector("#delete-product-link");
   if(deleteProductLink) deleteProductLink.addEventListener("click", async (e)=>{
     e.preventDefault();
-    if(confirm("Delete "+p.name+"? This can't be undone.")){
+    // Ask the server what this product carries first, so the confirmation can
+    // state the actual consequence instead of a generic warning.
+    let warn = "";
+    try{
+      const u = await api("GET", `/products/${p.id}/usage`);
+      const bits = [];
+      if(u.invoiceCount) bits.push(`${u.invoiceCount} invoice${u.invoiceCount>1?"s":""}`);
+      if(u.stockInCount) bits.push(`${u.stockInCount} purchase record${u.stockInCount>1?"s":""}`);
+      if(u.stock > 0) bits.push(`${u.stock} still in stock`);
+      if(bits.length) warn = "\n\nThis product appears on " + bits.join(", ") +
+        ".\nPast invoices keep their own copy of the name and price, so they will still print correctly.";
+    }catch(_){ /* fall back to the plain confirmation */ }
+
+    if(confirm("Delete " + p.name + "? This can't be undone." + warn)){
       try{
         await api("DELETE", `/products/${p.id}`);
         await loadProducts();
         closeAllSheets(); renderInventoryList(); renderBillingProducts();
+        refreshCartFromProducts();
+        toast("Product deleted.", "ok");
       }catch(err){ toast(err.message); }
     }
   });
@@ -955,39 +1030,65 @@ function openRecordPayment(customer){
 /* ============================================================
    SHEETS: Add Product
    ============================================================ */
-function openAddProduct(context){
-  state.ctx.addProductSizes = [{label:"", price:""}];
+const UNIT_OPTIONS = ["Sheet","Piece","Sq.ft","Sq.mtr","Cu.mtr","Running ft"];
+
+/**
+ * One form serves both "New Product" and "Edit Product". Editing shares every
+ * field and validation rule with creation, so a corrected product can never end
+ * up in a shape that creation would have rejected.
+ * Pass a product to edit it; pass nothing to create.
+ */
+function openProductForm(context, product){
+  state.ctx.editingProductId = product ? product.id : null;
+  state.ctx.addProductSizes = product && product.sizes.length
+    ? product.sizes.map(s=>({label:s.label, price:s.price}))
+    : [{label:"", price:""}];
   renderAddProductSheet(context);
   showSheet("sheet-add-product");
 }
+/* Kept as a thin alias so existing "+" buttons keep working. */
+function openAddProduct(context){ openProductForm(context, null); }
+
 function renderAddProductSheet(context){
   const sheet = document.getElementById("sheet-add-product");
   const sizes = state.ctx.addProductSizes;
+  const editing = state.ctx.editingProductId
+    ? state.products.find(p=>p.id===state.ctx.editingProductId)
+    : null;
+  const v = (field, fallback) => editing ? escapeHtml(String(editing[field] ?? "")) : (fallback ?? "");
+  const curMode = editing ? Pricing.normaliseMode(editing.default_mode) : Pricing.MODE_KEYS[0];
+  const curUnit = editing && editing.unit ? editing.unit : UNIT_OPTIONS[0];
+
   sheet.innerHTML = `
     <div class="sheet-handle"></div>
     <button class="sheet-close" data-sheetclose>✕</button>
-    <div class="sheet-title">New Product</div>
-    <label class="field-label">Product name</label><input type="text" id="np-name">
-    <label class="field-label">Brand</label><input type="text" id="np-brand">
-    <label class="field-label">Category</label><input type="text" id="np-category">
+    <div class="sheet-title">${editing ? "Edit Product" : "New Product"}</div>
+    ${editing ? `<div class="muted" style="font-size:11.5px;margin-bottom:8px;">SKU ${escapeHtml(editing.sku||"")} · changes apply to future bills only — past invoices keep the price they were issued at.</div>` : ""}
+    <label class="field-label">Product name</label><input type="text" id="np-name" value="${v("name")}">
+    <label class="field-label">Brand</label><input type="text" id="np-brand" value="${v("brand")}">
+    <label class="field-label">Category</label><input type="text" id="np-category" value="${v("category")}">
     <label class="field-label">Unit of measure</label>
     <div class="chip-row" id="np-unit-chips">
-      ${["Sheet","Piece","Sq.ft","Sq.mtr","Cu.mtr","Running ft"].map((u,i)=>`<button class="chip ${i===0?'selected':''}" data-unit="${u}">${u}</button>`).join("")}
+      ${UNIT_OPTIONS.map(u=>`<button class="chip ${u===curUnit?'selected':''}" data-unit="${u}">${u}</button>`).join("")}
     </div>
-    <label class="field-label">GST %</label><input type="number" id="np-gst" value="18">
+    <label class="field-label">GST %</label><input type="number" id="np-gst" value="${editing ? editing.gst : 18}">
 
     <label class="field-label">Default billing mode</label>
     <div class="chip-row" id="np-mode-chips">
-      ${Pricing.MODE_KEYS.map((k,i)=>`<button class="chip ${i===0?'selected':''}" data-mode="${k}" title="${Pricing.MODES[k].formula}">${Pricing.MODES[k].unit}</button>`).join("")}
+      ${Pricing.MODE_KEYS.map(k=>`<button class="chip ${k===curMode?'selected':''}" data-mode="${k}" title="${Pricing.MODES[k].formula}">${Pricing.MODES[k].unit}</button>`).join("")}
     </div>
     <label class="field-label">Standard size <span class="muted" style="font-weight:400;">— pre-filled on every bill, still editable there</span></label>
     <div class="charge-grid" id="np-dims"></div>
     <label class="field-label">Size / variant + price</label>
     <div id="np-sizes"></div>
     <a href="#" id="np-add-size" style="font-size:12px;font-weight:700;">+ Add another size</a>
-    <label class="field-label">Opening stock</label><input type="number" id="np-stock" value="0">
-    <label class="field-label">Godown / Rack</label><input type="text" id="np-godown" placeholder="e.g. Godown A / R3">
-    <button class="btn btn-primary" id="np-save" style="margin-top:16px;">Save Product</button>
+    ${editing
+      ? `<label class="field-label">Stock on hand</label>
+         <input type="number" id="np-stock" value="${editing.stock}">
+         <div class="muted" style="font-size:11px;margin-top:4px;">Correcting a miscount is fine here. For goods actually received, use “Record Stock In” so the purchase is kept in the history.</div>`
+      : `<label class="field-label">Opening stock</label><input type="number" id="np-stock" value="0">`}
+    <label class="field-label">Godown / Rack</label><input type="text" id="np-godown" placeholder="e.g. Godown A / R3" value="${v("godown")}">
+    <button class="btn btn-primary" id="np-save" style="margin-top:16px;">${editing ? "Update Product" : "Save Product"}</button>
   `;
   function renderSizes(){
     document.getElementById("np-sizes").innerHTML = sizes.map((s,i)=>`
@@ -1005,16 +1106,20 @@ function renderAddProductSheet(context){
   function renderDims(){
     const mode = sheet.querySelector("[data-mode].selected").dataset.mode;
     const m = Pricing.MODES[mode];
-    const box = (label, unit, id) => `
+    // Preserve whatever is already typed across a mode switch, falling back to
+    // the saved product, so changing mode never silently wipes a size.
+    const keep = id => { const el = document.getElementById(id); return el ? el.value : null; };
+    const prev = {thk: keep("np-thk"), wid: keep("np-wid"), len: keep("np-len")};
+    const box = (label, unit, id, value) => `
       <label class="dim">
         <span>${label} <em>(${unit})</em></span>
-        <input type="number" inputmode="decimal" step="any" min="0" id="${id}" placeholder="0">
+        <input type="number" inputmode="decimal" step="any" min="0" id="${id}" placeholder="0" value="${value ?? ""}">
       </label>`;
     const el = document.getElementById("np-dims");
     el.innerHTML =
-      (m.needsThickness ? box("Thickness", m.thicknessUnit, "np-thk") : "") +
-      (m.needsWidth ? box("Width", m.widthUnit, "np-wid") : "") +
-      (m.needsLength ? box("Length", m.lengthUnit, "np-len") : "");
+      (m.needsThickness ? box("Thickness", m.thicknessUnit, "np-thk", prev.thk ?? (editing && editing.thickness_in) ?? "") : "") +
+      (m.needsWidth ? box("Width", m.widthUnit, "np-wid", prev.wid ?? (editing && editing.width_val) ?? "") : "") +
+      (m.needsLength ? box("Length", m.lengthUnit, "np-len", prev.len ?? (editing && editing.length_ft) ?? "") : "");
     el.style.display = el.innerHTML ? "" : "none";
   }
   renderSizes();
@@ -1032,20 +1137,39 @@ function renderAddProductSheet(context){
     const name = document.getElementById("np-name").value.trim();
     if(!name){ toast("Enter a product name."); return; }
     const unit = sheet.querySelector("[data-unit].selected").dataset.unit;
+    const payload = {
+      name, brand: document.getElementById("np-brand").value.trim(),
+      category: document.getElementById("np-category").value.trim(),
+      unit, gst: parseFloat(document.getElementById("np-gst").value)||18,
+      godown: document.getElementById("np-godown").value.trim(),
+      defaultMode: sheet.querySelector("[data-mode].selected").dataset.mode,
+      lengthFt: val("np-len"), widthVal: val("np-wid"), thicknessIn: val("np-thk"),
+      sizes
+    };
+    const saveBtn = document.getElementById("np-save");
+    saveBtn.disabled = true;
     try{
-      await api("POST","/products", {
-        name, brand: document.getElementById("np-brand").value.trim(),
-        category: document.getElementById("np-category").value.trim(),
-        unit, gst: parseFloat(document.getElementById("np-gst").value)||18,
-        stock: parseInt(document.getElementById("np-stock").value)||0,
-        godown: document.getElementById("np-godown").value.trim(),
-        defaultMode: sheet.querySelector("[data-mode].selected").dataset.mode,
-        lengthFt: val("np-len"), widthVal: val("np-wid"), thicknessIn: val("np-thk"),
-        sizes
-      });
+      if(editing){
+        await api("PUT", `/products/${editing.id}`, payload);
+        // Stock is not part of PUT — it has its own audited endpoint — so an
+        // edited count is pushed separately and only when it actually changed.
+        const newStock = parseFloat(document.getElementById("np-stock").value);
+        if(Number.isFinite(newStock) && newStock !== editing.stock){
+          await api("PATCH", `/products/${editing.id}/stock`, {stock: newStock});
+        }
+      } else {
+        payload.stock = parseInt(document.getElementById("np-stock").value)||0;
+        await api("POST","/products", payload);
+      }
       await loadProducts();
-      closeAllSheets(); renderInventoryList(); renderBillingProducts();
+      closeAllSheets();
+      renderInventoryList(); renderBillingProducts();
+      // A price or GST change alters every line already in the bill, so the
+      // running totals have to be recomputed rather than left stale.
+      refreshCartFromProducts();
+      toast(editing ? "Product updated." : "Product added.", "ok");
     }catch(err){ toast(err.message); }
+    finally{ saveBtn.disabled = false; }
   });
 }
 

@@ -1,0 +1,29 @@
+# Fly.io deployment config — see README.md "Hosting online" section.
+# After `fly launch --no-deploy` generates its own fly.toml, replace it with
+# this one (or merge the [[mounts]] and [http_service] blocks in), then
+# adjust the `app` name below to whatever fly launch assigned you.
+
+app = "CHANGE-ME-shop-manager"
+primary_region = "bom" # Mumbai — pick the fly region closest to the shop
+
+[build]
+
+[env]
+  PORT = "3000"
+
+# Persistent disk so shop.db survives deploys and restarts.
+[[mounts]]
+  source = "shop_data"
+  destination = "/app/data"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1

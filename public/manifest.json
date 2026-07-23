@@ -1,0 +1,11 @@
+{
+  "name": "Shop Manager",
+  "short_name": "Shop Manager",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f2f1ee",
+  "theme_color": "#1e2a4a",
+  "icons": [
+    { "src": "/icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

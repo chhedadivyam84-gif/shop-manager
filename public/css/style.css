@@ -186,38 +186,35 @@ nav.bottom .tab.active{color:var(--navy);}
 .invoice-page{background:#fff;color:#111;margin-top:0;margin-right:16px;margin-bottom:16px;margin-left:16px;border-radius:10px;padding:18px 18px 20px;font-size:11.5px;flex:1;overflow-y:auto;}
 .invoice-page.size-a5{max-width:360px;margin-left:auto;margin-right:auto;}
 
-/* The printed invoice/challan uses ONLY hex colours, never the app's oklch()
-   theme variables: html2canvas 1.4.1 (used to rasterise the page into a PDF)
-   throws on oklch(). --inv-navy matches the theme navy as a plain hex. */
-.invoice-page{--inv-navy:#1e2a4a;--inv-border:#dcdcdc;}
+/* The printed invoice/challan uses ONLY plain hex/grey colours, never the
+   app's oklch() theme variables: html2canvas 1.4.1 (used to rasterise the
+   page into a PDF) throws on oklch(). Keep it that way for any future edits. */
 
 /* Header: business identity left, contact/GSTIN right */
 .inv-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;}
-.invoice-page h2{font-size:17px;margin:0;color:var(--inv-navy);letter-spacing:.01em;}
+.invoice-page h2{font-size:16px;margin:0;color:#111;letter-spacing:.01em;}
 .invoice-page .inv-tag{font-size:9px;color:#777;font-style:italic;margin-top:1px;}
 .invoice-page .addr{font-size:9.5px;color:#555;line-height:1.45;margin-top:2px;}
 .inv-head-meta{text-align:right;font-size:9px;color:#444;line-height:1.6;white-space:nowrap;}
 
-.inv-rule{border:none;border-top:1.5px solid var(--inv-navy);margin:8px 0;}
+.inv-rule{border:none;border-top:1px solid #ccc;margin:8px 0;}
 .inv-flex{display:flex;justify-content:space-between;font-size:10.5px;}
 
-/* Bill-to / document-info paired boxes */
-.inv-parties{display:flex;gap:8px;margin:10px 0;}
-.inv-party{flex:1;border:1px solid var(--inv-border);border-radius:7px;padding:7px 9px;font-size:10px;line-height:1.5;color:#333;}
-.inv-party .lbl{display:block;font-size:7.5px;text-transform:uppercase;letter-spacing:.06em;color:#8a8a8a;font-weight:800;margin-bottom:1px;}
-.inv-party .nm{font-weight:800;font-size:11.5px;color:#111;}
-.inv-party-doc{flex:0 0 40%;text-align:right;}
+/* Bill-to / document-info: plain two-column row, one rule underneath — no boxes. */
+.inv-parties{display:flex;justify-content:space-between;gap:12px;margin:10px 0;padding-bottom:8px;border-bottom:1px solid #ccc;font-size:10px;line-height:1.5;color:#333;}
+.inv-party .lbl{display:block;font-size:8px;text-transform:uppercase;letter-spacing:.05em;color:#888;font-weight:700;margin-bottom:1px;}
+.inv-party .nm{font-weight:700;font-size:11px;color:#111;}
+.inv-party-doc{text-align:right;}
 .inv-party-doc>div{margin-bottom:3px;}
-.inv-party-doc b{font-size:11px;}
+.inv-party-doc b{font-weight:700;font-size:10.5px;}
 
 table.inv-table{width:100%;border-collapse:collapse;margin-top:4px;font-size:10.5px;}
-table.inv-table th{text-align:left;font-size:8.5px;text-transform:uppercase;letter-spacing:.03em;color:#333;font-weight:800;padding:6px 6px;background:#eef0f4;border-top:1px solid var(--inv-navy);border-bottom:1px solid var(--inv-navy);}
-table.inv-table td{padding:5px 6px;border-bottom:1px solid #ececec;}
-table.inv-table tbody tr:nth-child(even) td{background:#fafafa;}
+table.inv-table th{text-align:left;font-size:8.5px;text-transform:uppercase;letter-spacing:.02em;color:#555;font-weight:700;padding:5px 6px;border-top:1px solid #999;border-bottom:1px solid #999;}
+table.inv-table td{padding:5px 6px;border-bottom:1px solid #e5e5e5;}
 
 .inv-totals{width:58%;margin-left:auto;margin-top:10px;font-size:10.5px;}
 .inv-totals .tr{display:flex;justify-content:space-between;padding:2px 2px;}
-.inv-totals .grand{font-weight:800;font-size:12.5px;color:#fff;background:var(--inv-navy);border-radius:5px;padding:6px 8px;margin-top:5px;}
+.inv-totals .grand{font-weight:700;font-size:12px;border-top:1.5px solid #111;padding-top:5px;margin-top:4px;}
 .inv-actions{display:flex;gap:8px;padding:12px 16px 20px;}
 .inv-actions button{flex:1;background:rgba(255,255,255,.15);color:#fff;border:none;border-radius:10px;padding:11px;font-size:12px;font-weight:700;}
 
@@ -293,20 +290,21 @@ table.inv-table td{vertical-align:top;}
   font-size:9.5px;line-height:1.45;color:#222;
 }
 .inv-words span{font-weight:800;text-transform:uppercase;font-size:8.5px;color:#666;}
-/* Document-type banner on the printed page (ESTIMATE / DELIVERY CHALLAN) */
+/* Document-type banner on the printed page (ESTIMATE / DELIVERY CHALLAN) —
+   plain centred text between two rules, no filled bar. */
 .doc-banner{
-  text-align:center;font-weight:800;font-size:12px;letter-spacing:.22em;
-  color:#fff;background:var(--inv-navy);border-radius:5px;
-  padding:6px 0;margin:10px 0 2px;
+  text-align:center;font-weight:700;font-size:12px;letter-spacing:.15em;
+  color:#111;border-top:1px solid #999;border-bottom:1px solid #999;
+  padding:5px 0;margin:8px 0;
 }
 .challan-sign{margin-top:22px;font-size:9.5px;color:#222;}
 .challan-sign-lines{display:flex;justify-content:space-between;margin-top:34px;}
 .challan-sign-lines span{border-top:1px solid #333;padding-top:3px;font-size:9px;color:#555;min-width:42%;text-align:center;}
 /* Invoice footer: terms (bold) + shop contact line */
-.inv-foot{margin-top:12px;border-top:1.5px solid var(--inv-navy);padding-top:6px;}
+.inv-foot{margin-top:12px;border-top:1px solid #ccc;padding-top:6px;}
 .inv-terms{font-size:9px;color:#333;line-height:1.45;}
 .inv-terms strong{font-weight:800;}
-.inv-contact{display:flex;justify-content:center;gap:16px;flex-wrap:wrap;margin-top:6px;font-size:9px;color:var(--inv-navy);font-weight:800;}
+.inv-contact{display:flex;justify-content:center;gap:16px;flex-wrap:wrap;margin-top:6px;font-size:9px;color:#444;font-weight:600;}
 .inv-contact a{color:inherit;text-decoration:none;}
 
 .empty-hint{text-align:center;color:var(--muted);font-size:12.5px;padding:24px 8px;}

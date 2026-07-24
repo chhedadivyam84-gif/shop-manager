@@ -1622,37 +1622,61 @@ function renderInvoicePageContent(){
        </div>`
     : `<div class="inv-totals">
       <div class="tr"><span>Subtotal</span><span>${fmtPaise(inv.subtotal)}</span></div>
-      ${inv.discount_amount>0?`<div class="tr" style="color:var(--danger);"><span>Discount</span><span>-${fmtPaise(inv.discount_amount)}</span></div>`:""}
+      ${inv.discount_amount>0?`<div class="tr" style="color:#c0392b;"><span>Discount</span><span>-${fmtPaise(inv.discount_amount)}</span></div>`:""}
       ${taxRows}
       ${inv.transport>0?`<div class="tr"><span>Transport</span><span>${fmtPaise(inv.transport)}</span></div>`:""}
       ${inv.loading>0?`<div class="tr"><span>Loading / Labour</span><span>${fmtPaise(inv.loading)}</span></div>`:""}
       ${inv.round_off?`<div class="tr"><span>Round Off</span><span>${inv.round_off>0?"+":""}${fmtPaise(inv.round_off)}</span></div>`:""}
       <div class="tr grand"><span>Grand Total</span><span>${fmtPaise(inv.total)}</span></div>
-      ${inv.advance>0?`<div class="tr" style="color:var(--ok);"><span>Advance Paid</span><span>-${fmtPaise(inv.advance)}</span></div>
-      <div class="tr" style="font-weight:800;color:var(--danger);"><span>Balance Due</span><span>${fmtPaise(inv.balance_due)}</span></div>`:""}
+      ${inv.advance>0?`<div class="tr" style="color:#1e8e5a;"><span>Advance Paid</span><span>-${fmtPaise(inv.advance)}</span></div>
+      <div class="tr" style="font-weight:800;color:#c0392b;"><span>Balance Due</span><span>${fmtPaise(inv.balance_due)}</span></div>`:""}
     </div>
     <div class="inv-words"><span>Amount in words:</span> ${Pricing.amountInWords(inv.total)}</div>`;
 
+  const bannerText = challan ? "DELIVERY CHALLAN" : "ESTIMATE CHALLAN";
   document.getElementById("invoice-page-content").innerHTML = `
-    <h2>${escapeHtml(cfg.business_name)}</h2>
-    <div class="addr">${escapeHtml(cfg.tagline||"")}<br>${escapeHtml(cfg.address||"")}<br>Ph: ${escapeHtml(cfg.phones||"")} · GSTIN: ${escapeHtml(cfg.gstin||"")}</div>
-    <div class="doc-banner">${challan ? "DELIVERY CHALLAN" : "TAX INVOICE"}</div>
-    <div class="inv-flex">
-      <div><strong>${challan ? "Deliver To:" : "Bill To:"}</strong><br>${cust?escapeHtml(cust.name):"Walk-in Customer"}${cust?"<br>"+escapeHtml(cust.type||"")+" · "+escapeHtml(cust.phone||""):""}${cust&&cust.address?"<br>"+escapeHtml(cust.address):""}${cust&&cust.gst?"<br>GSTIN: "+escapeHtml(cust.gst):""}</div>
-      <div style="text-align:right;"><strong>${challan ? "Challan No:" : "Invoice No:"}</strong> ${inv.challan_no}<br><strong>Date:</strong> ${inv.date}</div>
+    <div class="inv-head">
+      <div class="inv-head-main">
+        <h2>${escapeHtml(cfg.business_name)}</h2>
+        ${cfg.tagline ? `<div class="inv-tag">${escapeHtml(cfg.tagline)}</div>` : ""}
+        ${cfg.address ? `<div class="addr">${escapeHtml(cfg.address)}</div>` : ""}
+      </div>
+      <div class="inv-head-meta">
+        ${cfg.phones ? `<div>Ph: ${escapeHtml(cfg.phones)}</div>` : ""}
+        ${cfg.gstin ? `<div>GSTIN: <strong>${escapeHtml(cfg.gstin)}</strong></div>` : ""}
+      </div>
     </div>
+
+    <div class="doc-banner">${bannerText}</div>
+
+    <div class="inv-parties">
+      <div class="inv-party">
+        <span class="lbl">${challan ? "Deliver To" : "Bill To"}</span>
+        <div class="nm">${cust?escapeHtml(cust.name):"Walk-in Customer"}</div>
+        ${cust ? `<div>${escapeHtml(cust.type||"")}${cust.phone?" · "+escapeHtml(cust.phone):""}</div>` : ""}
+        ${cust&&cust.address ? `<div>${escapeHtml(cust.address)}</div>` : ""}
+        ${cust&&cust.gst ? `<div>GSTIN: ${escapeHtml(cust.gst)}</div>` : ""}
+      </div>
+      <div class="inv-party inv-party-doc">
+        <div><span class="lbl">${challan ? "Challan No" : "Estimate No"}</span><b>${inv.challan_no}</b></div>
+        <div><span class="lbl">Date</span><b>${inv.date}</b></div>
+      </div>
+    </div>
+
     <table class="inv-table">
       <thead><tr>${head}</tr></thead>
       <tbody>${rows}</tbody>
     </table>
     ${footer}
-    <hr class="inv-rule">
-    <div class="inv-terms">${challan
-      ? `This is a delivery challan and not a tax invoice — it is not a demand for payment.`
-      : `<strong>NO GURANTEE AND WARRANTY FOR DECORATIVE PRODUCTS AND AIR BUBBLES IN LAMMINATES, ACRYLIC AND PVC LAMINATES OR ANY SHADE VARIATION AFTER INSTALLATION. NO EXCHANGE. NO RETURN IN ANY CONDITION. PLEASE CHECK THE MATERIAL ON DELIVERY.</strong>`}</div>
-    <div class="inv-contact">
-      <span>Email: <a href="mailto:swagatply@gmail.com">swagatply@gmail.com</a></span>
-      <span>Website: <a href="https://www.swagatply.com" target="_blank" rel="noopener">www.swagatply.com</a></span>
+
+    <div class="inv-foot">
+      <div class="inv-terms">${challan
+        ? `This is a delivery challan and not a tax invoice — it is not a demand for payment.`
+        : `<strong>NO GURANTEE AND WARRANTY FOR DECORATIVE PRODUCTS AND AIR BUBBLES IN LAMMINATES, ACRYLIC AND PVC LAMINATES OR ANY SHADE VARIATION AFTER INSTALLATION. NO EXCHANGE. NO RETURN IN ANY CONDITION. PLEASE CHECK THE MATERIAL ON DELIVERY.</strong>`}</div>
+      <div class="inv-contact">
+        <span>Email: <a href="mailto:swagatply@gmail.com">swagatply@gmail.com</a></span>
+        <span>Website: <a href="https://www.swagatply.com" target="_blank" rel="noopener">www.swagatply.com</a></span>
+      </div>
     </div>
   `;
 }
@@ -1666,7 +1690,27 @@ async function downloadInvoicePdf(){
       throw new Error("PDF libraries not loaded");
     }
     const node = document.getElementById("invoice-page-content");
-    const canvas = await html2canvas(node, {scale:2, backgroundColor:"#ffffff", useCORS:true});
+    // The printed page itself uses only hex colours (see .invoice-page in
+    // style.css), but html2canvas 1.4.1 also walks and resolves styles on
+    // ANCESTOR elements (body, the fullscreen wrapper, :root) for layout
+    // context, and those still use the app's oklch() theme — which this old
+    // html2canvas build cannot parse, so it throws before any image is drawn.
+    // `onclone` lets us patch the OFF-SCREEN CLONE that html2canvas rasterises
+    // — never the live page the user is looking at — by overriding the theme
+    // variables with plain hex equivalents just for that clone.
+    const canvas = await html2canvas(node, {
+      scale:2, backgroundColor:"#ffffff", useCORS:true,
+      onclone: (clonedDoc) => {
+        const style = clonedDoc.createElement("style");
+        style.textContent = `:root{
+          --navy:#1e2a4a; --navy-2:#182140; --gold:#d4a94a; --gold-2:#c2963c;
+          --bg:#fbfaf8; --bg-outer:#f0efeb; --card:#ffffff; --border:#e0dfda;
+          --text:#262b38; --muted:#6b7280; --ok:#2e9e5b; --ok-bg:#dcf3e4;
+          --warn-bg:#f5e7c9; --warn-text:#8a6a1f; --danger:#c0392b; --danger-bg:#f6dcd8;
+        }`;
+        clonedDoc.head.appendChild(style);
+      }
+    });
     const imgData = canvas.toDataURL("image/png");
     const { jsPDF } = window.jspdf;
     const isA4 = state.paperSize==="A4";

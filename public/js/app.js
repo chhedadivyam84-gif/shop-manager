@@ -1647,9 +1647,13 @@ function renderInvoicePageContent(){
     </table>
     ${footer}
     <hr class="inv-rule">
-    <div style="font-size:9px;color:#666;">${challan
-      ? "This is a delivery challan and not a tax invoice — it is not a demand for payment."
-      : "Goods once sold will not be taken back. Warranty as per manufacturer's terms only."}</div>
+    <div class="inv-terms">${challan
+      ? `This is a delivery challan and not a tax invoice — it is not a demand for payment.`
+      : `<strong>NO GURANTEE AND WARRANTY FOR DECORATIVE PRODUCTS AND AIR BUBBLES IN LAMMINATES, ACRYLIC AND PVC LAMINATES OR ANY SHADE VARIATION AFTER INSTALLATION. NO EXCHANGE. NO RETURN IN ANY CONDITION. PLEASE CHECK THE MATERIAL ON DELIVERY.</strong>`}</div>
+    <div class="inv-contact">
+      <span>Email: <a href="mailto:swagatply@gmail.com">swagatply@gmail.com</a></span>
+      <span>Website: <a href="https://www.swagatply.com" target="_blank" rel="noopener">www.swagatply.com</a></span>
+    </div>
   `;
 }
 async function downloadInvoicePdf(){

@@ -929,7 +929,7 @@ async function openCustomerDetail(customerId){
     <div class="sheet-handle"></div>
     <button class="sheet-close" data-sheetclose>✕</button>
     <div class="sheet-title">${escapeHtml(detail.name)}</div>
-    <div class="muted" style="font-size:12px;margin-bottom:10px;">${escapeHtml(detail.type||"")} · ${escapeHtml(detail.phone||"")}${detail.gst?" · GST "+escapeHtml(detail.gst):""}${detail.state?" · "+escapeHtml(detail.state):""}</div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px;">${escapeHtml(detail.type||"")} · ${escapeHtml(detail.phone||"")}${detail.gst?" · GST "+escapeHtml(detail.gst):""}${detail.state?" · "+escapeHtml(detail.state):""}${detail.address?"<br>"+escapeHtml(detail.address):""}</div>
     <div class="stat-grid">
       <div class="stat-card plain"><div class="label">Credit Limit</div><div class="value">${fmt(detail.credit_limit)}</div></div>
       <div class="stat-card plain"><div class="label">Outstanding Due</div><div class="value red">${fmt(detail.due)}</div></div>
@@ -1187,6 +1187,7 @@ function openAddCustomer(){
     <label class="field-label">Party type</label>
     <div class="chip-row" id="nc-type-chips">${types.map((t,i)=>`<button class="chip ${i===0?'selected':''}" data-type="${t}">${t}</button>`).join("")}</div>
     <label class="field-label">Phone / WhatsApp</label><input type="tel" id="nc-phone">
+    <label class="field-label">Address</label><textarea id="nc-address" rows="2" placeholder="Shop / site address — shown on the invoice"></textarea>
     <label class="field-label">State (for GST)</label>
     <select id="nc-state"><option value="">${state.settings.state ? "Same as shop ("+escapeHtml(state.settings.state)+")" : "Select state"}</option>${INDIAN_STATES.map(s=>`<option value="${s}">${s}</option>`).join("")}</select>
     <label class="field-label">GSTIN (optional)</label><input type="text" id="nc-gst">
@@ -1204,6 +1205,7 @@ function openAddCustomer(){
     try{
       await api("POST","/customers", {
         name, type: sheet.querySelector("[data-type].selected").dataset.type, phone,
+        address: document.getElementById("nc-address").value.trim(),
         gst: document.getElementById("nc-gst").value.trim(),
         state: document.getElementById("nc-state").value || state.settings.state,
         creditLimit: parseFloat(document.getElementById("nc-credit").value)||0
@@ -1545,7 +1547,7 @@ function renderInvoicePageContent(){
     <div class="addr">${escapeHtml(cfg.tagline||"")}<br>${escapeHtml(cfg.address||"")}<br>Ph: ${escapeHtml(cfg.phones||"")} · GSTIN: ${escapeHtml(cfg.gstin||"")}</div>
     <hr class="inv-rule">
     <div class="inv-flex">
-      <div><strong>Bill To:</strong><br>${cust?escapeHtml(cust.name):"Walk-in Customer"}${cust?"<br>"+escapeHtml(cust.type||"")+" · "+escapeHtml(cust.phone||""):""}</div>
+      <div><strong>Bill To:</strong><br>${cust?escapeHtml(cust.name):"Walk-in Customer"}${cust?"<br>"+escapeHtml(cust.type||"")+" · "+escapeHtml(cust.phone||""):""}${cust&&cust.address?"<br>"+escapeHtml(cust.address):""}${cust&&cust.gst?"<br>GSTIN: "+escapeHtml(cust.gst):""}</div>
       <div style="text-align:right;"><strong>Challan No:</strong> ${inv.challan_no}<br><strong>Date:</strong> ${inv.date}</div>
     </div>
     <table class="inv-table">

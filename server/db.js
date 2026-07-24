@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS customers (
   name TEXT NOT NULL,
   type TEXT DEFAULT 'Retail Customer',
   phone TEXT DEFAULT '',
+  address TEXT DEFAULT '',
   gst TEXT DEFAULT '',
   state TEXT DEFAULT '',
   credit_limit REAL NOT NULL DEFAULT 0,
@@ -210,6 +211,10 @@ if (addedItemMode) {
 addColumn("invoices", "transport", "REAL NOT NULL DEFAULT 0");
 addColumn("invoices", "loading", "REAL NOT NULL DEFAULT 0");
 addColumn("invoices", "round_off", "REAL NOT NULL DEFAULT 0");
+
+// Customer billing address — appears in the invoice "Bill To" block, which a
+// GST invoice is expected to carry.
+addColumn("customers", "address", "TEXT DEFAULT ''");
 
 addColumn("products", "default_mode", "TEXT NOT NULL DEFAULT 'UNIT'");
 addColumn("products", "length_ft", "REAL");

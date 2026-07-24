@@ -5,3 +5,5 @@ data/session-secret.txt
 data/.env
 npm-debug.log
 backups/
+print-archive/
+data/tools/

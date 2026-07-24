@@ -87,7 +87,10 @@
         </div>
 
         <div class="section-title" style="margin-top:0;">Bill to</div>
-        <div class="chip-row" id="billing-customers"></div>
+        <div class="searchbar" style="margin-top:0;">
+          <span>&#128269;</span><input type="text" id="billing-customer-search" placeholder="Search customer by name or phone">
+        </div>
+        <div class="chip-row" id="billing-customers" style="margin-top:8px;"></div>
 
         <div class="section-title">Add products</div>
         <div class="searchbar">
@@ -98,18 +101,9 @@
         <div class="section-title" id="items-title">Invoice items</div>
         <div class="card" id="cart-list"><div class="empty-hint">No items yet. Add products above.</div></div>
 
-        <!-- Everything price-related lives here so Delivery Challan mode can hide
-             it in one move — a challan carries no rates, GST or totals. -->
-        <div id="billing-pricing">
-        <div class="section-title">Discount</div>
-        <div class="card">
-          <div class="chip-row" style="margin-bottom:8px;">
-            <button class="chip selected" data-disc="pct">%</button>
-            <button class="chip" data-disc="flat">₹ Flat</button>
-          </div>
-          <input type="number" id="discount-value" placeholder="0" min="0" value="0">
-        </div>
-
+        <!-- Transport &amp; Loading stay visible in both Tax Invoice and
+             Delivery Challan modes — a challan can carry real transport/labour
+             charges even though it has no GST, discount or item pricing. -->
         <div class="section-title">Transport &amp; Loading</div>
         <div class="card">
           <div class="charge-grid">
@@ -122,10 +116,23 @@
               <input type="number" inputmode="decimal" step="any" min="0" id="loading-input" value="0" placeholder="0">
             </label>
           </div>
-          <label class="check-row">
+          <label class="check-row" id="roundoff-toggle-row">
             <input type="checkbox" id="roundoff-toggle" checked>
             <span>Round off the grand total to the nearest rupee</span>
           </label>
+        </div>
+        <div class="card" id="challan-charge-total" style="display:none;margin-top:8px;"></div>
+
+        <!-- Everything else price-related lives here so Delivery Challan mode
+             can hide it in one move — a challan carries no rates, GST or totals. -->
+        <div id="billing-pricing">
+        <div class="section-title">Discount</div>
+        <div class="card">
+          <div class="chip-row" style="margin-bottom:8px;">
+            <button class="chip selected" data-disc="pct">%</button>
+            <button class="chip" data-disc="flat">₹ Flat</button>
+          </div>
+          <input type="number" id="discount-value" placeholder="0" min="0" value="0">
         </div>
 
         <div class="section-title">Totals</div>
@@ -229,10 +236,12 @@
       <span>Show Rate &amp; Amount on this printout</span>
     </label>
     <div class="invoice-page" id="invoice-page-content"></div>
+    <div class="print-status-row" id="print-status-row" style="display:none;"></div>
     <div class="inv-actions">
+      <button id="inv-server-print">&#128424; Print to Shop Printer</button>
       <button id="inv-download">&#11015; Download PDF</button>
       <button id="inv-whatsapp">&#128172; WhatsApp</button>
-      <button id="inv-print">&#128424; Print</button>
+      <button id="inv-print">&#128424; Browser Print</button>
     </div>
   </div>
 

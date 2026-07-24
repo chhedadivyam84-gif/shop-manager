@@ -62,6 +62,7 @@ app.use("/api/reports", requireAuth, require("./routes/reports"));
 app.use("/api/staff", requireAuth, requireRole("owner"), require("./routes/staff"));
 app.use("/api/audit", requireAuth, requireRole("owner"), require("./routes/audit"));
 app.use("/api/backup", requireAuth, requireRole("owner"), require("./routes/backup"));
+app.use("/api/print", requireAuth, require("./routes/print"));
 
 app.use(express.static(path.join(__dirname, "..", "public")));
 

@@ -221,6 +221,7 @@ async function initApp(){
   });
 
   document.getElementById("billing-search").addEventListener("input", renderBillingProducts);
+  document.getElementById("billing-customer-search").addEventListener("input", renderBillingCustomers);
   document.querySelectorAll('[data-disc]').forEach(b=>{
     b.addEventListener("click", ()=>{
       state.discountType = b.dataset.disc;
@@ -282,6 +283,7 @@ async function initApp(){
   document.getElementById("inv-download").addEventListener("click", downloadInvoicePdf);
   document.getElementById("inv-print").addEventListener("click", ()=>window.print());
   document.getElementById("inv-whatsapp").addEventListener("click", shareWhatsApp);
+  document.getElementById("inv-server-print").addEventListener("click", printViaServer);
 
   await renderAll();
 }
@@ -377,9 +379,22 @@ async function renderBilling(){
 }
 function renderBillingCustomers(){
   const wrap = document.getElementById("billing-customers");
-  wrap.innerHTML = `<button class="chip ${!state.selectedCustomerId?'selected':''}" data-cust="">Walk-in</button>` + state.customers.map(c=>`
+  const searchEl = document.getElementById("billing-customer-search");
+  const q = (searchEl && searchEl.value || "").trim().toLowerCase();
+
+  // The currently selected customer always stays visible even if a search
+  // filters it out of view elsewhere — losing sight of who you're billing to
+  // mid-search would be worse than a slightly redundant chip.
+  const selected = state.customers.find(c=>c.id===state.selectedCustomerId);
+  let list = state.customers;
+  if(q) list = list.filter(c=>c.name.toLowerCase().includes(q) || (c.phone||"").includes(q));
+  if(selected && !list.includes(selected)) list = [selected, ...list];
+
+  const walkInChip = !q ? `<button class="chip ${!state.selectedCustomerId?'selected':''}" data-cust="">Walk-in</button>` : "";
+  wrap.innerHTML = walkInChip + list.map(c=>`
     <button class="chip ${state.selectedCustomerId===c.id?'selected':''}" data-cust="${c.id}">${escapeHtml(c.name)}</button>
-  `).join("");
+  `).join("") || `<div class="empty-hint" style="padding:8px 4px;">No customer matches "${escapeHtml(q)}".</div>`;
+
   wrap.querySelectorAll("[data-cust]").forEach(b=>{
     b.addEventListener("click", ()=>{ state.selectedCustomerId=b.dataset.cust||null; renderBillingCustomers(); renderTotals(); });
   });
@@ -485,6 +500,10 @@ function setDocType(type){
     b.classList.toggle("selected", b.dataset.doctype === state.docType));
   const pricing = document.getElementById("billing-pricing");
   if(pricing) pricing.style.display = challan ? "none" : "";
+  // Round-off only makes sense against a GST grand total — hide it for a
+  // challan, but Transport & Loading stay visible either way (see index.html).
+  const roundoffRow = document.getElementById("roundoff-toggle-row");
+  if(roundoffRow) roundoffRow.style.display = challan ? "none" : "flex";
   const note = document.getElementById("challan-note");
   if(note) note.style.display = challan ? "block" : "none";
   const itemsTitle = document.getElementById("items-title");
@@ -672,6 +691,23 @@ function renderTotals(){
   const t = computeTotals();
   const row = (label, value, cls) =>
     `<div class="inv-flex" style="margin-bottom:4px;${cls||""}"><span class="muted">${label}</span><span>${value}</span></div>`;
+
+  // A challan hides the GST totals card entirely, so Transport & Loading need
+  // their own small total here — the only "money" a challan carries.
+  const challanTotalBox = document.getElementById("challan-charge-total");
+  if(challanTotalBox){
+    if(isChallanMode() && (t.transport>0 || t.loading>0)){
+      challanTotalBox.style.display = "block";
+      challanTotalBox.innerHTML =
+        (t.transport>0 ? row("Transport", fmtPaise(t.transport)) : "") +
+        (t.loading>0 ? row("Loading / Labour", fmtPaise(t.loading)) : "") +
+        `<div class="inv-flex" style="font-weight:800;border-top:1px solid var(--border);padding-top:6px;"><span>Total charges</span><span>${fmtPaise(t.transport+t.loading)}</span></div>`;
+    } else {
+      challanTotalBox.style.display = "none";
+      challanTotalBox.innerHTML = "";
+    }
+  }
+
   document.getElementById("totals-card").innerHTML = `
     ${row("Subtotal", fmtPaise(t.subtotal))}
     ${t.discount>0 ? row("Discount", "-"+fmtPaise(t.discount), "color:var(--danger);") : ""}
@@ -1427,6 +1463,11 @@ function openSettings(){
       <button class="btn btn-primary" id="st-download-backup" style="margin-top:10px;">⬇ Download Backup Now</button>
       <button class="btn btn-outline" id="st-run-backup" style="margin-top:8px;">Back Up Now</button>
       <p class="muted" style="font-size:11px;margin-top:8px;">Your whole shop lives in one file. Automatic snapshots are kept on this PC daily. Use <strong>Download Backup</strong> to keep a copy on your phone or a USB drive — that's your safety net if this PC is ever lost.</p>
+
+      <div class="section-title">Printing</div>
+      <div class="card" id="print-server-status"><div class="empty-hint">Checking printer…</div></div>
+      <button class="btn btn-outline" id="st-recheck-print" style="margin-top:10px;">Recheck Printer</button>
+      <p class="muted" style="font-size:11px;margin-top:8px;">Any phone can print an invoice straight to the shop's printer — no drivers needed on the phone. This checks whether the shop PC can currently reach it.</p>
     ` : `<div class="card"><div class="empty-hint">Business details and staff accounts can only be changed by the owner.</div></div>`}
 
     <button class="btn btn-outline" id="st-logout" style="margin-top:16px;">Log out of this device</button>
@@ -1480,6 +1521,8 @@ function openSettings(){
       }catch(err){ toast(err.message); }
       finally{ btn.disabled = false; btn.textContent = "Back Up Now"; }
     });
+    renderPrintServerStatus();
+    sheet.querySelector("#st-recheck-print").addEventListener("click", renderPrintServerStatus);
   }
   sheet.querySelector("#st-logout").addEventListener("click", async ()=>{
     await api("POST","/auth/logout");
@@ -1514,6 +1557,28 @@ async function renderBackupStatus(){
       </div>`;
   }catch(e){
     if(box.isConnected) box.innerHTML = `<div class="empty-hint">Couldn't load backup status.</div>`;
+  }
+}
+
+async function renderPrintServerStatus(){
+  const box = document.getElementById("print-server-status");
+  if(!box) return;
+  box.innerHTML = `<div class="empty-hint">Checking printer…</div>`;
+  try{
+    const s = await api("GET", "/print/health");
+    if(!box.isConnected) return;
+    const pill = s.online
+      ? `<span class="pill ok">Online</span>`
+      : `<span class="pill danger">Offline</span>`;
+    box.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+        <div class="row-title" style="font-size:12.5px;">${escapeHtml(s.printerName||"Printer")}</div>
+        ${pill}
+      </div>
+      ${s.reason ? `<div class="muted" style="font-size:11.5px;margin-top:4px;">${escapeHtml(s.reason)}</div>` : ""}
+    `;
+  }catch(e){
+    if(box.isConnected) box.innerHTML = `<div class="empty-hint">Couldn't reach the print service.</div>`;
   }
 }
 
@@ -1701,6 +1766,17 @@ function openInvoicePreview(existingInvoice){
     toggle.onchange = () => { state.challanShowRate = toggle.checked; renderInvoicePageContent(); };
   }
 
+  // Silent printing needs a real, saved invoice to look up server-side — an
+  // unsaved live preview (still being composed) has nothing to print yet.
+  const serverPrintBtn = document.getElementById("inv-server-print");
+  const statusRow = document.getElementById("print-status-row");
+  if(statusRow){ statusRow.style.display = "none"; statusRow.textContent = ""; }
+  if(serverPrintBtn){
+    const canPrint = !!(existingInvoice && existingInvoice.id);
+    serverPrintBtn.disabled = !canPrint;
+    serverPrintBtn.title = canPrint ? "" : "Complete the sale first — printing needs a saved invoice.";
+  }
+
   const voidBtn = document.getElementById("inv-void");
   if(existingInvoice && existingInvoice.id && isOwner()){
     if(!voidBtn){
@@ -1709,12 +1785,26 @@ function openInvoicePreview(existingInvoice){
       document.querySelector(".inv-actions").appendChild(b);
     }
     const vb = document.getElementById("inv-void");
-    vb.textContent = challan ? "Void Challan" : "Void Invoice";
+    // A Delivery Challan has no GST or financial record worth preserving, so
+    // it gets a real Delete instead of Void — a Tax Invoice/Estimate keeps
+    // Void, which reverses stock/dues but keeps the numbered record intact.
+    vb.textContent = challan ? "Delete Challan" : "Void Invoice";
     vb.onclick = async ()=>{
-      if(!confirm(`Void this ${challan?"challan":"invoice"}? Stock${challan?" will be restored":" and customer dues will be reversed"}.`)) return;
+      if(challan){
+        if(!confirm("Delete this challan? Stock will be restored and this cannot be undone.")) return;
+        try{
+          await api("DELETE", `/invoices/${lastPreviewInvoice.id}`);
+          toast("Challan deleted.", "ok");
+          closeFullscreen("fs-invoice");
+          await Promise.all([loadProducts(), loadCustomers()]);
+          await renderHome();
+        }catch(err){ toast(err.message); }
+        return;
+      }
+      if(!confirm("Void this invoice? Stock and customer dues will be reversed.")) return;
       try{
         await api("POST", `/invoices/${lastPreviewInvoice.id}/void`);
-        toast(`${challan?"Challan":"Invoice"} voided.`, "ok");
+        toast("Invoice voided.", "ok");
         closeFullscreen("fs-invoice");
         await Promise.all([loadProducts(), loadCustomers()]);
         await renderHome();
@@ -1765,6 +1855,8 @@ function renderInvoicePageContent(){
   const footer = challan
     ? `<div class="inv-totals">
          ${showRate && challanSubtotal>0 ? `<div class="tr"><span>Subtotal (reference only)</span><span>${fmtPaise(challanSubtotal)}</span></div>` : ""}
+         ${inv.transport>0 ? `<div class="tr"><span>Transport</span><span>${fmtPaise(inv.transport)}</span></div>` : ""}
+         ${inv.loading>0 ? `<div class="tr"><span>Loading / Labour</span><span>${fmtPaise(inv.loading)}</span></div>` : ""}
          <div class="tr grand"><span>Total pieces</span><span>${totalPieces}</span></div>
        </div>
        <div class="challan-sign">
@@ -1882,6 +1974,58 @@ async function downloadInvoicePdf(){
     btn.disabled = false;
   }
 }
+/**
+ * "Print to Shop Printer" — asks the SAME server this phone is already
+ * talking to, to silently print the invoice on the shop PC's USB printer
+ * (see server/routes/print.js). Shows Printing… while the job is queued/
+ * running, then Printed Successfully or the specific reason it failed
+ * (printer offline, out of paper, helper not installed, etc) — polling
+ * rather than waiting on one long request, since real printing can take
+ * longer than any request should stay open.
+ */
+async function printViaServer(){
+  const inv = lastPreviewInvoice;
+  if(!inv || !inv.id){ toast("Complete the sale first — printing needs a saved invoice."); return; }
+  const btn = document.getElementById("inv-server-print");
+  const statusRow = document.getElementById("print-status-row");
+  const setStatus = (text, cls) => {
+    if(!statusRow) return;
+    statusRow.style.display = "block";
+    statusRow.textContent = text;
+    statusRow.className = "print-status-row" + (cls ? " "+cls : "");
+  };
+
+  btn.disabled = true;
+  setStatus("🖨 Printing…");
+  try{
+    const job = await api("POST", "/print", { invoiceId: inv.id, showRate: state.challanShowRate });
+    const jobId = job.jobId;
+
+    // Poll every 1s for up to 30s — a real print job is typically done in a
+    // few seconds, but a slow/busy printer shouldn't be cut off early.
+    for(let i=0; i<30; i++){
+      await new Promise(r=>setTimeout(r,1000));
+      const status = await api("GET", `/print/jobs/${jobId}`);
+      if(status.status === "done"){
+        setStatus("✅ Printed successfully.", "ok");
+        btn.disabled = false;
+        return;
+      }
+      if(status.status === "failed"){
+        setStatus("❌ "+(status.error||"Printing failed."), "error");
+        btn.disabled = false;
+        return;
+      }
+      // still queued/printing — keep waiting
+    }
+    setStatus("⏳ Still printing — check the shop PC if this doesn't finish.", "");
+  }catch(err){
+    setStatus("❌ "+err.message, "error");
+  }finally{
+    btn.disabled = false;
+  }
+}
+
 function shareWhatsApp(){
   const inv = lastPreviewInvoice; if(!inv) return;
   const cust = state.customers.find(c=>c.id===inv.customer_id);

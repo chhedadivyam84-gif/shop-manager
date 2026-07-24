@@ -12,19 +12,33 @@ function getSettingsRow() {
 }
 
 // Tax invoices and delivery challans run on SEPARATE number series, so each has
-// its own clean, gap-free sequence (CH-2026-0001…, DC-2026-0001…). Mixing them
-// would leave holes in both, which looks wrong to a customer or an auditor.
+// its own clean, gap-free sequence. Mixing them would leave holes in both,
+// which looks wrong to a customer or an auditor.
+//
+// Estimate (invoice) numbers use a single ever-incrementing counter —
+// SP0000001, SP0000002, … — with no year component, so the counter is NOT
+// reset every January the way the delivery-challan series (DC-2026-0001…)
+// still is.
 function nextDocNo(docType) {
-  const year = new Date().getFullYear();
   const isChallan = docType === "challan";
-  const counterName = `${isChallan ? "deliverychallan" : "challan"}-${year}`;
+  if (!isChallan) {
+    const row = db.prepare("SELECT value FROM counters WHERE name = 'estimate-no'").get();
+    const next = row ? row.value + 1 : 1;
+    db.prepare(`
+      INSERT INTO counters (name, value) VALUES ('estimate-no', ?)
+      ON CONFLICT(name) DO UPDATE SET value = excluded.value
+    `).run(next);
+    return `SP${String(next).padStart(7, "0")}`;
+  }
+  const year = new Date().getFullYear();
+  const counterName = `deliverychallan-${year}`;
   const row = db.prepare("SELECT value FROM counters WHERE name = ?").get(counterName);
   const next = row ? row.value + 1 : 1;
   db.prepare(`
     INSERT INTO counters (name, value) VALUES (?, ?)
     ON CONFLICT(name) DO UPDATE SET value = excluded.value
   `).run(counterName, next);
-  return `${isChallan ? "DC" : "CH"}-${year}-${String(next).padStart(4, "0")}`;
+  return `DC-${year}-${String(next).padStart(4, "0")}`;
 }
 
 function computeTotals({ items, discountType, discountValue, advance, taxType, transport, loading, roundOff }) {
@@ -147,15 +161,21 @@ router.post("/", (req, res) => {
     }
   }
 
-  // A delivery challan carries no money at all — every monetary field is zero,
-  // regardless of anything the client sent. Stock still moves (handled below),
-  // but nothing is added to the customer's due.
-  const zeroTotals = {
+  // A delivery challan is never a tax invoice: no GST, no discount, no
+  // round-off, no advance, and nothing added to the customer's due —
+  // regardless of anything the client sent for those fields. Transport and
+  // loading/labour ARE kept though: they're real charges a driver or the
+  // customer needs to see on the challan itself, not a taxable sale value,
+  // so `total` on a challan means "transport + loading", nothing else.
+  const challanTransport = round2(Math.max(0, Number(transport) || 0));
+  const challanLoading = round2(Math.max(0, Number(loading) || 0));
+  const challanTotals = {
     subtotal: 0, discountAmount: 0, cgst: 0, sgst: 0, igst: 0,
-    transport: 0, loading: 0, roundOffAmount: 0, total: 0, advance: 0, balanceDue: 0
+    transport: challanTransport, loading: challanLoading, roundOffAmount: 0,
+    total: round2(challanTransport + challanLoading), advance: 0, balanceDue: 0
   };
   const totals = isChallan
-    ? zeroTotals
+    ? challanTotals
     : computeTotals({ items, discountType, discountValue, advance, taxType, transport, loading, roundOff });
   const id = uid(isChallan ? "DC" : "INV");
   const challanNo = nextDocNo(docType);
@@ -232,6 +252,38 @@ router.post("/:id/void", requireRole("owner"), (req, res) => {
   })();
 
   logAction(req, "invoice.void", `${inv.challan_no}`);
+  res.json({ ok: true });
+});
+
+/**
+ * A genuine hard delete — restricted to delivery challans only.
+ *
+ * A tax invoice/estimate must never be deleted outright: it's a numbered GST
+ * record, and Void (above) is the correct way to reverse one while keeping
+ * the number and the audit trail intact. A challan carries no GST, no
+ * customer due, and no financial obligation — deleting it removes nothing
+ * that regulation or bookkeeping requires keeping, so a shop owner cleaning
+ * up a mis-entered or duplicate challan doesn't need to leave a permanent
+ * voided stub behind for it.
+ */
+router.delete("/:id", requireRole("owner"), (req, res) => {
+  const inv = db.prepare("SELECT * FROM invoices WHERE id = ?").get(req.params.id);
+  if (!inv) return res.status(404).json({ error: "Document not found." });
+  if (inv.doc_type !== "challan") {
+    return res.status(400).json({ error: "Only a Delivery Challan can be deleted. Use Void for a Tax Invoice — it keeps the numbered record while reversing stock and dues." });
+  }
+  const items = db.prepare("SELECT * FROM invoice_items WHERE invoice_id = ?").all(inv.id);
+  const restoreStock = db.prepare("UPDATE products SET stock = stock + ? WHERE id = ?");
+
+  db.transaction(() => {
+    if (!inv.voided) {
+      // Only give stock back if it hasn't already been returned by a prior void.
+      items.forEach(it => { if (it.product_id) restoreStock.run(it.pieces, it.product_id); });
+    }
+    db.prepare("DELETE FROM invoices WHERE id = ?").run(inv.id); // cascades to invoice_items
+  })();
+
+  logAction(req, "challan.delete", `${inv.challan_no}`);
   res.json({ ok: true });
 });
 

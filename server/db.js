@@ -193,12 +193,31 @@ CREATE TABLE IF NOT EXISTS stock_ins (
   created_at INTEGER NOT NULL
 );
 
+-- One row per silent print request sent to the shop PC's local printer. This
+-- is the audit trail behind "Printing… / Printed / Failed" on the phone —
+-- the phone polls this row's status rather than waiting on an open HTTP
+-- connection, since a real printer can take longer than any reasonable
+-- request timeout to actually finish.
+CREATE TABLE IF NOT EXISTS print_jobs (
+  id TEXT PRIMARY KEY,
+  invoice_id TEXT REFERENCES invoices(id) ON DELETE SET NULL,
+  doc_type TEXT NOT NULL DEFAULT 'invoice',
+  show_rate INTEGER NOT NULL DEFAULT 0,
+  printer_name TEXT NOT NULL DEFAULT '',
+  pdf_path TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'queued', -- queued | printing | done | failed
+  error TEXT DEFAULT '',
+  created_at INTEGER NOT NULL,
+  finished_at INTEGER
+);
+
 CREATE INDEX IF NOT EXISTS idx_invoices_date ON invoices(date);
 CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice ON invoice_items(invoice_id);
 CREATE INDEX IF NOT EXISTS idx_product_sizes_product ON product_sizes(product_id);
 CREATE INDEX IF NOT EXISTS idx_audit_log_at ON audit_log(at);
 CREATE INDEX IF NOT EXISTS idx_payments_customer ON payments(customer_id);
 CREATE INDEX IF NOT EXISTS idx_stock_ins_product ON stock_ins(product_id);
+CREATE INDEX IF NOT EXISTS idx_print_jobs_created ON print_jobs(created_at);
 `);
 
 /* ------------------------------------------------------------------

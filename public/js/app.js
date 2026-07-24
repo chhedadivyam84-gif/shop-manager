@@ -985,6 +985,65 @@ async function loadStockInHistory(productId){
 }
 
 /**
+ * Factory Reset confirmation sheet. Two independent gates, both required:
+ * the owner's PIN (re-typed here even though they're already logged in) and
+ * a phrase typed out in full — a checkbox is too easy to click through
+ * without reading. Both are re-verified server-side; this client-side gate
+ * only exists to make the moment feel as serious as it is.
+ */
+const RESET_CONFIRM_PHRASE = "DELETE ALL DATA";
+function openFactoryResetSheet(){
+  const sheet = document.getElementById("sheet-factory-reset");
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title" style="color:var(--danger);">⚠ Factory Reset</div>
+    <p class="muted" style="font-size:12.5px;line-height:1.5;margin-top:4px;">
+      This permanently deletes every <strong>product, customer, invoice, delivery challan, purchase record, and payment</strong>.
+      Your business profile (name, GSTIN, address) and staff logins are kept.
+    </p>
+    <p class="muted" style="font-size:12.5px;line-height:1.5;">
+      A full backup is taken automatically right before this runs, so the data isn't gone forever — but restoring it means replacing this file by hand later. This is not something to click through casually.
+    </p>
+    <label class="field-label">Enter your PIN</label>
+    <input type="password" inputmode="numeric" id="fr-pin" placeholder="••••" maxlength="6">
+    <label class="field-label">Type <strong>${RESET_CONFIRM_PHRASE}</strong> to confirm</label>
+    <input type="text" id="fr-phrase" placeholder="${RESET_CONFIRM_PHRASE}" autocomplete="off" autocapitalize="characters">
+    <button class="btn" id="fr-submit" style="background:var(--danger);color:#fff;width:100%;margin-top:16px;" disabled>Wipe All Shop Data</button>
+  `;
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+
+  const pinEl = sheet.querySelector("#fr-pin");
+  const phraseEl = sheet.querySelector("#fr-phrase");
+  const submitBtn = sheet.querySelector("#fr-submit");
+  const updateEnabled = () => {
+    submitBtn.disabled = !(pinEl.value.length>=4 && phraseEl.value.trim()===RESET_CONFIRM_PHRASE);
+  };
+  pinEl.addEventListener("input", updateEnabled);
+  phraseEl.addEventListener("input", updateEnabled);
+
+  submitBtn.addEventListener("click", async ()=>{
+    // Last checkpoint before the irreversible network call — a second, more
+    // explicit confirm() on top of the two typed gates above.
+    if(!confirm("This is the final step. Everything except your business profile and staff logins will be permanently deleted. Continue?")) return;
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Wiping…";
+    try{
+      const r = await api("POST", "/reset", { pin: pinEl.value, confirmText: phraseEl.value.trim() });
+      closeAllSheets();
+      toast(`Shop data wiped. Backup saved: ${r.backupFile}`, "ok");
+      await Promise.all([loadProducts(), loadCustomers()]);
+      await renderAll();
+    }catch(err){
+      toast(err.message);
+      submitBtn.textContent = "Wipe All Shop Data";
+      updateEnabled();
+    }
+  });
+  showSheet("sheet-factory-reset");
+}
+
+/**
  * Full Purchase Entry sheet: date, supplier, invoice number, the same size/
  * mode picker billing uses (with live Sq.ft auto-calc), GST and transport,
  * ending in a Grand Total — mirrors a sales invoice line but for stock coming
@@ -1468,6 +1527,13 @@ function openSettings(){
       <div class="card" id="print-server-status"><div class="empty-hint">Checking printer…</div></div>
       <button class="btn btn-outline" id="st-recheck-print" style="margin-top:10px;">Recheck Printer</button>
       <p class="muted" style="font-size:11px;margin-top:8px;">Any phone can print an invoice straight to the shop's printer — no drivers needed on the phone. This checks whether the shop PC can currently reach it.</p>
+
+      <div class="section-title" style="color:var(--danger);">Danger Zone</div>
+      <div class="card" style="border-color:var(--danger);">
+        <div class="row-title" style="font-size:12.5px;">Factory Reset</div>
+        <p class="muted" style="font-size:11px;margin:4px 0 10px;">Permanently erases every product, customer, invoice, challan, purchase and payment. A backup is taken automatically right before — your business profile and staff logins are kept, everything else is not.</p>
+        <button class="btn" id="st-factory-reset" style="background:var(--danger);color:#fff;width:100%;">⚠ Wipe All Shop Data</button>
+      </div>
     ` : `<div class="card"><div class="empty-hint">Business details and staff accounts can only be changed by the owner.</div></div>`}
 
     <button class="btn btn-outline" id="st-logout" style="margin-top:16px;">Log out of this device</button>
@@ -1523,6 +1589,7 @@ function openSettings(){
     });
     renderPrintServerStatus();
     sheet.querySelector("#st-recheck-print").addEventListener("click", renderPrintServerStatus);
+    sheet.querySelector("#st-factory-reset").addEventListener("click", openFactoryResetSheet);
   }
   sheet.querySelector("#st-logout").addEventListener("click", async ()=>{
     await api("POST","/auth/logout");
@@ -1777,40 +1844,57 @@ function openInvoicePreview(existingInvoice){
     serverPrintBtn.title = canPrint ? "" : "Complete the sale first — printing needs a saved invoice.";
   }
 
-  const voidBtn = document.getElementById("inv-void");
+// Remove any void/delete buttons left over from a previously-opened document
+// before deciding which ones this one needs — the set differs by doc type.
+["inv-void", "inv-delete"].forEach(id => { const el = document.getElementById(id); if(el) el.remove(); });
   if(existingInvoice && existingInvoice.id && isOwner()){
-    if(!voidBtn){
-      const b = document.createElement("button");
-      b.id = "inv-void";
-      document.querySelector(".inv-actions").appendChild(b);
-    }
-    const vb = document.getElementById("inv-void");
-    // A Delivery Challan has no GST or financial record worth preserving, so
-    // it gets a real Delete instead of Void — a Tax Invoice/Estimate keeps
-    // Void, which reverses stock/dues but keeps the numbered record intact.
-    vb.textContent = challan ? "Delete Challan" : "Void Invoice";
-    vb.onclick = async ()=>{
-      if(challan){
-        if(!confirm("Delete this challan? Stock will be restored and this cannot be undone.")) return;
-        try{
-          await api("DELETE", `/invoices/${lastPreviewInvoice.id}`);
-          toast("Challan deleted.", "ok");
-          closeFullscreen("fs-invoice");
-          await Promise.all([loadProducts(), loadCustomers()]);
-          await renderHome();
-        }catch(err){ toast(err.message); }
-        return;
-      }
-      if(!confirm("Void this invoice? Stock and customer dues will be reversed.")) return;
-      try{
-        await api("POST", `/invoices/${lastPreviewInvoice.id}/void`);
-        toast("Invoice voided.", "ok");
-        closeFullscreen("fs-invoice");
-        await Promise.all([loadProducts(), loadCustomers()]);
-        await renderHome();
-      }catch(err){ toast(err.message); }
+    const actionsBar = document.querySelector(".inv-actions");
+    const afterDelete = async (msg) => {
+      toast(msg, "ok");
+      closeFullscreen("fs-invoice");
+      await Promise.all([loadProducts(), loadCustomers()]);
+      await renderHome();
     };
-  } else if(voidBtn){ voidBtn.remove(); }
+
+    if(challan){
+      // A Delivery Challan carries no GST or financial record worth
+      // preserving, so it only gets a real Delete — Void's benefit (keeping
+      // a numbered record intact) doesn't apply here.
+      const del = document.createElement("button");
+      del.id = "inv-delete"; del.textContent = "Delete Challan";
+      del.onclick = async ()=>{
+        if(!confirm("Delete this challan? Stock will be restored and this cannot be undone.")) return;
+        try{ await api("DELETE", `/invoices/${lastPreviewInvoice.id}`); await afterDelete("Challan deleted."); }
+        catch(err){ toast(err.message); }
+      };
+      actionsBar.appendChild(del);
+    } else {
+      // A Tax Invoice/Estimate is a numbered GST record — Void (reverses
+      // stock/dues, keeps the record marked voided) is the button to reach
+      // for. Delete is offered too, but only with a much sharper warning:
+      // it leaves a gap in the SP0000001... sequence, which can look
+      // irregular in a GST audit.
+      const voidBtn = document.createElement("button");
+      voidBtn.id = "inv-void"; voidBtn.textContent = "Void Invoice";
+      voidBtn.onclick = async ()=>{
+        if(!confirm("Void this invoice? Stock and customer dues will be reversed. The record stays visible as voided.")) return;
+        try{
+          await api("POST", `/invoices/${lastPreviewInvoice.id}/void`);
+          await afterDelete("Invoice voided.");
+        }catch(err){ toast(err.message); }
+      };
+      actionsBar.appendChild(voidBtn);
+
+      const del = document.createElement("button");
+      del.id = "inv-delete"; del.textContent = "Delete Invoice";
+      del.onclick = async ()=>{
+        if(!confirm(`Permanently delete ${lastPreviewInvoice.challan_no}? Stock and customer dues will be reversed, and the record will be GONE — not just voided. This leaves a gap in your estimate number sequence, which can look irregular in a GST audit. This cannot be undone.`)) return;
+        try{ await api("DELETE", `/invoices/${lastPreviewInvoice.id}`); await afterDelete("Invoice deleted."); }
+        catch(err){ toast(err.message); }
+      };
+      actionsBar.appendChild(del);
+    }
+  }
   setPaper(state.paperSize);
   document.getElementById("fs-invoice").classList.add("show");
 }

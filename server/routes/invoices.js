@@ -256,34 +256,34 @@ router.post("/:id/void", requireRole("owner"), (req, res) => {
 });
 
 /**
- * A genuine hard delete — restricted to delivery challans only.
+ * A genuine hard delete, owner-only. Restores stock (and, for a real Tax
+ * Invoice, the customer's due) exactly like Void does, then actually removes
+ * the row instead of leaving a "voided" stub behind.
  *
- * A tax invoice/estimate must never be deleted outright: it's a numbered GST
- * record, and Void (above) is the correct way to reverse one while keeping
- * the number and the audit trail intact. A challan carries no GST, no
- * customer due, and no financial obligation — deleting it removes nothing
- * that regulation or bookkeeping requires keeping, so a shop owner cleaning
- * up a mis-entered or duplicate challan doesn't need to leave a permanent
- * voided stub behind for it.
+ * Deleting a Tax Invoice/Estimate leaves a gap in its numbered sequence
+ * (SP0000001, SP0000003, … with no SP0000002) — that can look irregular in a
+ * GST audit, which is precisely why Void exists as the non-destructive
+ * alternative. This route allows it anyway, at the owner's explicit request,
+ * but the client-side confirmation must say so plainly each time; this is
+ * not a decision to make silently on someone's behalf.
  */
 router.delete("/:id", requireRole("owner"), (req, res) => {
   const inv = db.prepare("SELECT * FROM invoices WHERE id = ?").get(req.params.id);
   if (!inv) return res.status(404).json({ error: "Document not found." });
-  if (inv.doc_type !== "challan") {
-    return res.status(400).json({ error: "Only a Delivery Challan can be deleted. Use Void for a Tax Invoice — it keeps the numbered record while reversing stock and dues." });
-  }
   const items = db.prepare("SELECT * FROM invoice_items WHERE invoice_id = ?").all(inv.id);
   const restoreStock = db.prepare("UPDATE products SET stock = stock + ? WHERE id = ?");
+  const reduceDue = db.prepare("UPDATE customers SET due = MAX(0, due - ?) WHERE id = ?");
 
   db.transaction(() => {
     if (!inv.voided) {
-      // Only give stock back if it hasn't already been returned by a prior void.
+      // Only reverse stock/dues if a prior Void hasn't already done so.
       items.forEach(it => { if (it.product_id) restoreStock.run(it.pieces, it.product_id); });
+      if (inv.customer_id && inv.balance_due > 0) reduceDue.run(inv.balance_due, inv.customer_id);
     }
     db.prepare("DELETE FROM invoices WHERE id = ?").run(inv.id); // cascades to invoice_items
   })();
 
-  logAction(req, "challan.delete", `${inv.challan_no}`);
+  logAction(req, inv.doc_type === "challan" ? "challan.delete" : "invoice.delete", `${inv.challan_no}`);
   res.json({ ok: true });
 });
 

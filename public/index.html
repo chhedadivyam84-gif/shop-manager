@@ -81,6 +81,11 @@
 
       <!-- BILLING -->
       <div class="screen" id="screen-billing">
+        <div class="doctype-toggle" id="doctype-toggle">
+          <button class="doctype-btn selected" data-doctype="invoice">🧾 Tax Invoice<small>with prices &amp; GST</small></button>
+          <button class="doctype-btn" data-doctype="challan">📦 Delivery Challan<small>items only, no prices</small></button>
+        </div>
+
         <div class="section-title" style="margin-top:0;">Bill to</div>
         <div class="chip-row" id="billing-customers"></div>
 
@@ -90,9 +95,12 @@
         </div>
         <div class="card" id="billing-product-list" style="max-height:260px;overflow-y:auto;margin-top:8px;"></div>
 
-        <div class="section-title">Invoice items</div>
+        <div class="section-title" id="items-title">Invoice items</div>
         <div class="card" id="cart-list"><div class="empty-hint">No items yet. Add products above.</div></div>
 
+        <!-- Everything price-related lives here so Delivery Challan mode can hide
+             it in one move — a challan carries no rates, GST or totals. -->
+        <div id="billing-pricing">
         <div class="section-title">Discount</div>
         <div class="card">
           <div class="chip-row" style="margin-bottom:8px;">
@@ -133,6 +141,9 @@
           <button class="chip" data-pay="Card">Card</button>
           <button class="chip" data-pay="Credit">Credit</button>
         </div>
+        </div><!-- /#billing-pricing -->
+
+        <p class="muted" id="challan-note" style="display:none;font-size:12px;margin-top:14px;background:var(--bg-outer);border:1px solid var(--border);border-radius:9px;padding:10px 12px;">📦 <strong>Delivery Challan</strong> — no prices, GST or totals. Stock is still reduced because the goods are leaving the shop. You can raise a priced Tax Invoice for these items separately.</p>
 
         <div style="margin-top:16px;display:flex;flex-direction:column;gap:8px;">
           <button class="btn btn-primary" id="complete-sale-btn">Complete Sale &amp; Update Stock</button>

@@ -13,9 +13,11 @@ router.get("/", (req, res) => {
 router.get("/:id", (req, res) => {
   const c = db.prepare("SELECT * FROM customers WHERE id = ?").get(req.params.id);
   if (!c) return res.status(404).json({ error: "Customer not found." });
+  // Challans carry no price, so they belong to neither the purchase history nor
+  // the money ledger — only priced tax invoices move a customer's balance.
   const history = db.prepare(`
     SELECT id, challan_no, date, total FROM invoices
-    WHERE customer_id = ? AND voided = 0 ORDER BY created_at DESC
+    WHERE customer_id = ? AND voided = 0 AND doc_type = 'invoice' ORDER BY created_at DESC
   `).all(c.id);
   const payments = db.prepare(`
     SELECT * FROM payments WHERE customer_id = ? AND voided = 0 ORDER BY created_at DESC
@@ -25,7 +27,8 @@ router.get("/:id", (req, res) => {
   // is what actually answers "what does this customer owe and why", rather
   // than two disconnected lists staff have to mentally merge themselves.
   const invoiceRows = db.prepare(`
-    SELECT id, challan_no, date, total, created_at FROM invoices WHERE customer_id = ? AND voided = 0
+    SELECT id, challan_no, date, total, created_at FROM invoices
+    WHERE customer_id = ? AND voided = 0 AND doc_type = 'invoice'
   `).all(c.id);
   const ledger = [
     ...invoiceRows.map(h => ({ type: "invoice", id: h.id, label: h.challan_no, amount: h.total, date: h.date, at: h.created_at })),

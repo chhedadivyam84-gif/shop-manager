@@ -37,7 +37,7 @@ let state = {
   products: [], customers: [], invoices: [], settings: null, dashboard: null,
   cart: [], selectedCustomerId: null,
   discountType: "pct", discountValue: 0, advance: 0, paymentMethod: "Cash",
-  transport: 0, loading: 0, roundOff: true,
+  transport: 0, loading: 0, roundOff: true, docType: "invoice",
   invBrandFilter: "All", reportType: "Sales",
   paperSize: "A5",
   me: { staffName: "", role: "" },
@@ -245,6 +245,9 @@ async function initApp(){
       b.classList.add("selected");
     });
   });
+  document.querySelectorAll('[data-doctype]').forEach(b=>{
+    b.addEventListener("click", ()=>setDocType(b.dataset.doctype));
+  });
   document.getElementById("complete-sale-btn").addEventListener("click", completeSale);
   document.getElementById("preview-invoice-btn").addEventListener("click", ()=>openInvoicePreview(null));
 
@@ -339,10 +342,13 @@ async function renderHome(){
     <div class="row-right row-title">${fmt(c.total)}</div></div>`).join("") : `<div class="empty-hint">No customer purchases yet.</div>`;
 
   document.getElementById("recent-invoices").innerHTML = d.recentInvoices.length ? d.recentInvoices.map(inv=>{
-    const status = inv.balance_due<=0 ? "Paid" : (inv.advance>0 ? "Partial":"Due");
-    const cls = status==="Paid"?"ok":status==="Partial"?"warn":"danger";
+    // A challan carries no money, so it shows a "Challan" tag and no amount
+    // rather than a misleading ₹0 / Paid pill.
+    const challan = inv.doc_type === "challan";
+    const status = challan ? "Challan" : (inv.balance_due<=0 ? "Paid" : (inv.advance>0 ? "Partial":"Due"));
+    const cls = challan ? "" : (status==="Paid"?"ok":status==="Partial"?"warn":"danger");
     return `<div class="list-row" data-open-invoice="${inv.id}" style="cursor:pointer;"><div><div class="row-title">${inv.challan_no}</div><div class="row-sub">${escapeHtml(inv.customer_name||"Walk-in")} · ${inv.date}</div></div>
-    <div class="row-right"><div class="row-title">${fmt(inv.total)}</div><span class="pill ${cls}">${status}</span></div></div>`;
+    <div class="row-right"><div class="row-title">${challan?"":fmt(inv.total)}</div><span class="pill ${cls}">${status}</span></div></div>`;
   }).join("") : `<div class="empty-hint">No invoices yet. Tap "New Invoice" to create your first one.</div>`;
   document.querySelectorAll("[data-open-invoice]").forEach(el=>{
     el.addEventListener("click", ()=>openExistingInvoice(el.dataset.openInvoice));
@@ -358,8 +364,10 @@ function escapeHtml(s){
 async function renderBilling(){
   renderBillingCustomers();
   renderBillingProducts();
-  renderCart();
-  renderTotals();
+  // Re-applies the document-type UI (which section is hidden, button labels)
+  // and calls renderCart + renderTotals itself, so a challan-in-progress
+  // survives any re-render and a fresh screen starts as a Tax Invoice.
+  setDocType(state.docType);
 }
 function renderBillingCustomers(){
   const wrap = document.getElementById("billing-customers");
@@ -451,6 +459,34 @@ function refreshCartFromProducts(){
   renderCart(); renderTotals();
 }
 
+/** True when the billing screen is composing a no-price delivery challan. */
+function isChallanMode(){ return state.docType === "challan"; }
+
+/**
+ * Switch between Tax Invoice and Delivery Challan. A challan hides everything
+ * price-related in one move (the #billing-pricing wrapper) and rewords the
+ * action buttons, but leaves the item list — including sizes and quantities —
+ * exactly as-is, since a challan still needs those.
+ */
+function setDocType(type){
+  state.docType = type === "challan" ? "challan" : "invoice";
+  const challan = isChallanMode();
+  document.querySelectorAll('[data-doctype]').forEach(b=>
+    b.classList.toggle("selected", b.dataset.doctype === state.docType));
+  const pricing = document.getElementById("billing-pricing");
+  if(pricing) pricing.style.display = challan ? "none" : "";
+  const note = document.getElementById("challan-note");
+  if(note) note.style.display = challan ? "block" : "none";
+  const itemsTitle = document.getElementById("items-title");
+  if(itemsTitle) itemsTitle.textContent = challan ? "Challan items" : "Invoice items";
+  const completeBtn = document.getElementById("complete-sale-btn");
+  if(completeBtn) completeBtn.textContent = challan ? "Create Delivery Challan" : "Complete Sale & Update Stock";
+  const previewBtn = document.getElementById("preview-invoice-btn");
+  if(previewBtn) previewBtn.textContent = challan ? "Preview / Print Challan" : "Preview / Print Invoice";
+  renderCart();
+  renderTotals();
+}
+
 /** Live figures for a cart line, straight from the shared pricing module. */
 function lineCalc(c){
   return Pricing.computeLine({
@@ -499,7 +535,7 @@ function renderCart(){
         ${m.needsWidth ? dim("Width", m.widthUnit, "widthVal", c.widthVal) : ""}
         ${m.needsLength ? dim("Length", m.lengthUnit, "lengthFt", c.lengthFt) : ""}
         ${dim("Qty", "pcs", "pieces", c.pieces)}
-        ${dim("Rate", "₹/"+m.unit, "rate", c.rate)}
+        ${isChallanMode() ? "" : dim("Rate", "₹/"+m.unit, "rate", c.rate)}
       </div>
 
       <div class="line-calc">
@@ -507,9 +543,9 @@ function renderCart(){
           ${r.sizeLabel ? `<strong>${escapeHtml(r.sizeLabel)}</strong> · ` : ""}
           ${m.key!=="UNIT" ? `${Pricing.formatQty(r.perPiece, r.mode)}/pc × ${r.pieces} pcs = ` : ""}
           <strong>${Pricing.formatQty(r.billedQty, r.mode)}</strong>
-          × ${Pricing.formatRate(r.rate, r.mode)}
+          ${isChallanMode() ? "" : `× ${Pricing.formatRate(r.rate, r.mode)}`}
         </div>
-        <div class="line-calc-amount">${fmtPaise(r.amount)}</div>
+        ${isChallanMode() ? "" : `<div class="line-calc-amount">${fmtPaise(r.amount)}</div>`}
       </div>
       ${stock!==undefined && r.pieces>stock
         ? `<div class="line-warn">Only ${stock} in stock — this line needs ${r.pieces}.</div>` : ""}
@@ -575,8 +611,9 @@ function renderLineCalc(idx){
   if(f) f.innerHTML =
     (r.sizeLabel ? `<strong>${escapeHtml(r.sizeLabel)}</strong> · ` : "") +
     (m.key!=="UNIT" ? `${Pricing.formatQty(r.perPiece, r.mode)}/pc × ${r.pieces} pcs = ` : "") +
-    `<strong>${Pricing.formatQty(r.billedQty, r.mode)}</strong> × ${Pricing.formatRate(r.rate, r.mode)}`;
-  if(a) a.textContent = fmtPaise(r.amount);
+    `<strong>${Pricing.formatQty(r.billedQty, r.mode)}</strong>` +
+    (isChallanMode() ? "" : ` × ${Pricing.formatRate(r.rate, r.mode)}`);
+  if(a) a.textContent = isChallanMode() ? "" : fmtPaise(r.amount);
 }
 function currentTaxType(){
   const cust = state.customers.find(c=>c.id===state.selectedCustomerId);
@@ -641,13 +678,15 @@ function renderTotals(){
   `;
 }
 async function completeSale(){
-  if(!state.cart.length){ toast("Add at least one item to the invoice first."); return; }
+  const challan = isChallanMode();
+  if(!state.cart.length){ toast(`Add at least one item to the ${challan?"challan":"invoice"} first.`); return; }
   // Catch bad lines here so the user gets the message next to the field rather
-  // than as a server rejection after the fact.
+  // than as a server rejection after the fact. A challan needs a size and
+  // quantity just like an invoice — only the rate is optional there.
   for(const c of state.cart){
     const bad = Pricing.validateLine({
       mode:c.mode, lengthFt:c.lengthFt, widthVal:c.widthVal,
-      thicknessIn:c.thicknessIn, pieces:c.pieces, rate:c.rate
+      thicknessIn:c.thicknessIn, pieces:c.pieces, rate: challan ? 0 : c.rate
     }, c.name);
     if(bad){ toast(bad); return; }
   }
@@ -656,12 +695,13 @@ async function completeSale(){
   try{
     const invoice = await api("POST","/invoices", {
       customerId: state.selectedCustomerId,
+      docType: state.docType,
       // Only the raw inputs are sent — the server recomputes every derived
       // figure itself, so a tampered client cannot invent a billed quantity.
       items: state.cart.map(c=>({
         productId:c.productId, name:c.name, mode:c.mode,
         lengthFt:c.lengthFt, widthVal:c.widthVal, thicknessIn:c.thicknessIn,
-        pieces:c.pieces, rate:c.rate
+        pieces:c.pieces, rate: challan ? 0 : c.rate
       })),
       discountType: state.discountType, discountValue: state.discountValue,
       advance: state.advance, paymentMethod: state.paymentMethod, paperSize: state.paperSize,
@@ -675,7 +715,7 @@ async function completeSale(){
     const lIn = document.getElementById("loading-input"); if(lIn) lIn.value = 0;
     await Promise.all([loadProducts(), loadCustomers()]);
     await renderBilling(); await renderHome();
-    toast("Sale completed! Challan "+invoice.challan_no, "ok");
+    toast(`${challan?"Delivery Challan":"Sale"} created — ${invoice.challan_no}`, "ok");
     openExistingInvoice(invoice.id);
   }catch(e){
     toast(e.message);
@@ -1487,6 +1527,7 @@ function openInvoicePreview(existingInvoice){
     const t = computeTotals();
     lastPreviewInvoice = {
       challan_no: "(unsaved preview)", date: new Date().toISOString().slice(0,10),
+      doc_type: state.docType,
       customer_id: state.selectedCustomerId,
       // Shape matches a row from the API so one template renders both an
       // unsaved preview and a saved invoice re-opened from history.
@@ -1505,23 +1546,29 @@ function openInvoicePreview(existingInvoice){
       total:t.total, advance:t.advance, balance_due:t.balanceDue
     };
   }
+  const challan = lastPreviewInvoice.doc_type === "challan";
+  const fsTitle = document.querySelector("#fs-invoice .fs-title");
+  if(fsTitle) fsTitle.textContent = challan ? "Delivery Challan" : "Invoice Preview";
+
   const voidBtn = document.getElementById("inv-void");
   if(existingInvoice && existingInvoice.id && isOwner()){
     if(!voidBtn){
       const b = document.createElement("button");
-      b.id = "inv-void"; b.textContent = "Void Invoice";
-      b.addEventListener("click", async ()=>{
-        if(!confirm("Void this invoice? Stock and customer dues will be reversed.")) return;
-        try{
-          await api("POST", `/invoices/${lastPreviewInvoice.id}/void`);
-          toast("Invoice voided.", "ok");
-          closeFullscreen("fs-invoice");
-          await Promise.all([loadProducts(), loadCustomers()]);
-          await renderHome();
-        }catch(err){ toast(err.message); }
-      });
+      b.id = "inv-void";
       document.querySelector(".inv-actions").appendChild(b);
     }
+    const vb = document.getElementById("inv-void");
+    vb.textContent = challan ? "Void Challan" : "Void Invoice";
+    vb.onclick = async ()=>{
+      if(!confirm(`Void this ${challan?"challan":"invoice"}? Stock${challan?" will be restored":" and customer dues will be reversed"}.`)) return;
+      try{
+        await api("POST", `/invoices/${lastPreviewInvoice.id}/void`);
+        toast(`${challan?"Challan":"Invoice"} voided.`, "ok");
+        closeFullscreen("fs-invoice");
+        await Promise.all([loadProducts(), loadCustomers()]);
+        await renderHome();
+      }catch(err){ toast(err.message); }
+    };
   } else if(voidBtn){ voidBtn.remove(); }
   setPaper(state.paperSize);
   document.getElementById("fs-invoice").classList.add("show");
@@ -1538,44 +1585,34 @@ function renderInvoicePageContent(){
   const cfg = state.settings;
   const cust = state.customers.find(c=>c.id===inv.customer_id);
   const isA4 = state.paperSize==="A4";
+  const challan = inv.doc_type === "challan";
   document.getElementById("invoice-page-content").classList.toggle("size-a5", !isA4);
+
+  // A delivery challan drops the Rate and Amount columns (it carries no money)
+  // and keeps only what identifies the goods leaving the shop.
+  const head = challan
+    ? `<th class="c-sn">#</th><th>Particulars</th><th class="c-size">Size</th><th class="c-num">Qty</th><th class="c-num">Total</th>`
+    : `<th class="c-sn">#</th><th>Particulars</th><th class="c-size">Size</th><th class="c-num">Qty</th><th class="c-num">Total</th><th class="c-num">Rate</th><th class="c-num c-amt">Amount</th>`;
+  const rows = inv.items.map((it,i)=>{
+    const mode = it.mode || "UNIT";
+    const base = `<td class="c-sn">${i+1}</td><td>${escapeHtml(it.name)}</td><td class="c-size">${escapeHtml(it.size_label||"—")}</td><td class="c-num">${it.pieces||it.qty}</td><td class="c-num">${Pricing.formatQty(it.qty, mode)}</td>`;
+    return `<tr>${base}${challan ? "" : `<td class="c-num">${Pricing.formatRate(it.rate, mode)}</td><td class="c-num c-amt">${fmtPaise(it.qty*it.rate)}</td>`}</tr>`;
+  }).join("");
+
   const taxRows = inv.tax_type==="IGST"
     ? `<div class="tr"><span>IGST</span><span>${fmtPaise(inv.igst)}</span></div>`
     : `<div class="tr"><span>CGST</span><span>${fmtPaise(inv.cgst)}</span></div><div class="tr"><span>SGST</span><span>${fmtPaise(inv.sgst)}</span></div>`;
-  document.getElementById("invoice-page-content").innerHTML = `
-    <h2>${escapeHtml(cfg.business_name)}</h2>
-    <div class="addr">${escapeHtml(cfg.tagline||"")}<br>${escapeHtml(cfg.address||"")}<br>Ph: ${escapeHtml(cfg.phones||"")} · GSTIN: ${escapeHtml(cfg.gstin||"")}</div>
-    <hr class="inv-rule">
-    <div class="inv-flex">
-      <div><strong>Bill To:</strong><br>${cust?escapeHtml(cust.name):"Walk-in Customer"}${cust?"<br>"+escapeHtml(cust.type||"")+" · "+escapeHtml(cust.phone||""):""}${cust&&cust.address?"<br>"+escapeHtml(cust.address):""}${cust&&cust.gst?"<br>GSTIN: "+escapeHtml(cust.gst):""}</div>
-      <div style="text-align:right;"><strong>Challan No:</strong> ${inv.challan_no}<br><strong>Date:</strong> ${inv.date}</div>
-    </div>
-    <table class="inv-table">
-      <thead>
-        <tr>
-          <th class="c-sn">#</th>
-          <th>Particulars</th>
-          <th class="c-size">Size</th>
-          <th class="c-num">Qty</th>
-          <th class="c-num">Total</th>
-          <th class="c-num">Rate</th>
-          <th class="c-num c-amt">Amount</th>
-        </tr>
-      </thead>
-      <tbody>${inv.items.map((it,i)=>{
-        const mode = it.mode || "UNIT";
-        return `<tr>
-          <td class="c-sn">${i+1}</td>
-          <td>${escapeHtml(it.name)}</td>
-          <td class="c-size">${escapeHtml(it.size_label||"—")}</td>
-          <td class="c-num">${it.pieces||it.qty}</td>
-          <td class="c-num">${Pricing.formatQty(it.qty, mode)}</td>
-          <td class="c-num">${Pricing.formatRate(it.rate, mode)}</td>
-          <td class="c-num c-amt">${fmtPaise(it.qty*it.rate)}</td>
-        </tr>`;
-      }).join("")}</tbody>
-    </table>
-    <div class="inv-totals">
+
+  // Priced invoice: full totals + amount in words. Challan: a total-pieces line
+  // and a received-in-good-condition signature block instead.
+  const totalPieces = inv.items.reduce((s,it)=>s+(Number(it.pieces)||0),0);
+  const footer = challan
+    ? `<div class="inv-totals"><div class="tr grand"><span>Total pieces</span><span>${totalPieces}</span></div></div>
+       <div class="challan-sign">
+         <div>Received the above goods in good condition.</div>
+         <div class="challan-sign-lines"><span>Receiver's Signature</span><span>For ${escapeHtml(cfg.business_name)}</span></div>
+       </div>`
+    : `<div class="inv-totals">
       <div class="tr"><span>Subtotal</span><span>${fmtPaise(inv.subtotal)}</span></div>
       ${inv.discount_amount>0?`<div class="tr" style="color:var(--danger);"><span>Discount</span><span>-${fmtPaise(inv.discount_amount)}</span></div>`:""}
       ${taxRows}
@@ -1586,9 +1623,25 @@ function renderInvoicePageContent(){
       ${inv.advance>0?`<div class="tr" style="color:var(--ok);"><span>Advance Paid</span><span>-${fmtPaise(inv.advance)}</span></div>
       <div class="tr" style="font-weight:800;color:var(--danger);"><span>Balance Due</span><span>${fmtPaise(inv.balance_due)}</span></div>`:""}
     </div>
-    <div class="inv-words"><span>Amount in words:</span> ${Pricing.amountInWords(inv.total)}</div>
+    <div class="inv-words"><span>Amount in words:</span> ${Pricing.amountInWords(inv.total)}</div>`;
+
+  document.getElementById("invoice-page-content").innerHTML = `
+    <h2>${escapeHtml(cfg.business_name)}</h2>
+    <div class="addr">${escapeHtml(cfg.tagline||"")}<br>${escapeHtml(cfg.address||"")}<br>Ph: ${escapeHtml(cfg.phones||"")} · GSTIN: ${escapeHtml(cfg.gstin||"")}</div>
+    <div class="doc-banner">${challan ? "DELIVERY CHALLAN" : "TAX INVOICE"}</div>
+    <div class="inv-flex">
+      <div><strong>${challan ? "Deliver To:" : "Bill To:"}</strong><br>${cust?escapeHtml(cust.name):"Walk-in Customer"}${cust?"<br>"+escapeHtml(cust.type||"")+" · "+escapeHtml(cust.phone||""):""}${cust&&cust.address?"<br>"+escapeHtml(cust.address):""}${cust&&cust.gst?"<br>GSTIN: "+escapeHtml(cust.gst):""}</div>
+      <div style="text-align:right;"><strong>${challan ? "Challan No:" : "Invoice No:"}</strong> ${inv.challan_no}<br><strong>Date:</strong> ${inv.date}</div>
+    </div>
+    <table class="inv-table">
+      <thead><tr>${head}</tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    ${footer}
     <hr class="inv-rule">
-    <div style="font-size:9px;color:#666;">Goods once sold will not be taken back. Warranty as per manufacturer's terms only.</div>
+    <div style="font-size:9px;color:#666;">${challan
+      ? "This is a delivery challan and not a tax invoice — it is not a demand for payment."
+      : "Goods once sold will not be taken back. Warranty as per manufacturer's terms only."}</div>
   `;
 }
 async function downloadInvoicePdf(){
@@ -1625,7 +1678,11 @@ async function downloadInvoicePdf(){
 function shareWhatsApp(){
   const inv = lastPreviewInvoice; if(!inv) return;
   const cust = state.customers.find(c=>c.id===inv.customer_id);
-  const text = `Invoice ${inv.challan_no}\nDate: ${inv.date}\nCustomer: ${cust?cust.name:"Walk-in"}\nTotal: ${fmt(inv.total)}${inv.balance_due>0?`\nBalance Due: ${fmt(inv.balance_due)}`:""}`;
+  const challan = inv.doc_type === "challan";
+  const totalPieces = inv.items.reduce((s,it)=>s+(Number(it.pieces)||0),0);
+  const text = challan
+    ? `Delivery Challan ${inv.challan_no}\nDate: ${inv.date}\nTo: ${cust?cust.name:"Walk-in"}\nItems: ${inv.items.length} · ${totalPieces} pcs`
+    : `Invoice ${inv.challan_no}\nDate: ${inv.date}\nCustomer: ${cust?cust.name:"Walk-in"}\nTotal: ${fmt(inv.total)}${inv.balance_due>0?`\nBalance Due: ${fmt(inv.balance_due)}`:""}`;
   const phone = cust && cust.phone ? cust.phone.replace(/\D/g,"") : "";
   const url = "https://wa.me/" + (phone?("91"+phone):"") + "?text=" + encodeURIComponent(text);
   window.open(url, "_blank");

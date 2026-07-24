@@ -6,7 +6,9 @@ const router = express.Router();
 
 router.get("/dashboard", (req, res) => {
   const today = todayStr();
-  const todaysInvoices = db.prepare("SELECT * FROM invoices WHERE date = ? AND voided = 0").all(today);
+  // Sales figures count priced tax invoices only — a delivery challan carries no
+  // money, so it must never inflate sales, best-sellers or a customer's total.
+  const todaysInvoices = db.prepare("SELECT * FROM invoices WHERE date = ? AND voided = 0 AND doc_type = 'invoice'").all(today);
   const todaysSales = todaysInvoices.reduce((s, i) => s + i.total, 0);
   const todaysProfit = Math.round(todaysSales * 0.22);
 
@@ -22,19 +24,19 @@ router.get("/dashboard", (req, res) => {
     const d = new Date();
     d.setDate(d.getDate() - i);
     const key = d.toISOString().slice(0, 10);
-    const total = db.prepare("SELECT COALESCE(SUM(total),0) AS t FROM invoices WHERE date = ? AND voided = 0").get(key).t;
+    const total = db.prepare("SELECT COALESCE(SUM(total),0) AS t FROM invoices WHERE date = ? AND voided = 0 AND doc_type = 'invoice'").get(key).t;
     days.push({ label: d.toLocaleDateString("en-IN", { weekday: "short" }), date: key, total });
   }
 
   const soldRows = db.prepare(`
     SELECT ii.name, SUM(ii.qty) AS units, SUM(ii.qty*ii.rate) AS revenue
     FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
-    WHERE i.voided = 0 GROUP BY ii.name ORDER BY units DESC LIMIT 4
+    WHERE i.voided = 0 AND i.doc_type = 'invoice' GROUP BY ii.name ORDER BY units DESC LIMIT 4
   `).all();
 
   const topCustomers = db.prepare(`
     SELECT c.id, c.name, c.type, COALESCE(SUM(i.total),0) AS total
-    FROM customers c LEFT JOIN invoices i ON i.customer_id = c.id AND i.voided = 0
+    FROM customers c LEFT JOIN invoices i ON i.customer_id = c.id AND i.voided = 0 AND i.doc_type = 'invoice'
     GROUP BY c.id ORDER BY total DESC LIMIT 4
   `).all();
 
@@ -53,7 +55,7 @@ router.get("/dashboard", (req, res) => {
 router.get("/sales-by-payment", (req, res) => {
   const rows = db.prepare(`
     SELECT payment_method AS label, COALESCE(SUM(total),0) AS value
-    FROM invoices WHERE voided = 0 GROUP BY payment_method
+    FROM invoices WHERE voided = 0 AND doc_type = 'invoice' GROUP BY payment_method
   `).all();
   res.json(rows);
 });
@@ -61,7 +63,7 @@ router.get("/sales-by-payment", (req, res) => {
 router.get("/gst", (req, res) => {
   const row = db.prepare(`
     SELECT COALESCE(SUM(cgst),0) AS cgst, COALESCE(SUM(sgst),0) AS sgst, COALESCE(SUM(igst),0) AS igst
-    FROM invoices WHERE voided = 0
+    FROM invoices WHERE voided = 0 AND doc_type = 'invoice'
   `).get();
   res.json(row);
 });
@@ -94,7 +96,7 @@ router.get("/export", (req, res) => {
     rows = [["Challan No", "Date", "Customer", "Payment", "Total"]];
     const invoices = db.prepare(`
       SELECT i.*, c.name AS customer_name FROM invoices i
-      LEFT JOIN customers c ON c.id = i.customer_id WHERE i.voided = 0 ORDER BY i.created_at DESC
+      LEFT JOIN customers c ON c.id = i.customer_id WHERE i.voided = 0 AND i.doc_type = 'invoice' ORDER BY i.created_at DESC
     `).all();
     invoices.forEach(inv => rows.push([inv.challan_no, inv.date, inv.customer_name || "Walk-in", inv.payment_method, inv.total]));
   } else if (type === "Stock") {
@@ -108,7 +110,7 @@ router.get("/export", (req, res) => {
   } else {
     filename = "gst-report.csv";
     rows = [["Challan No", "Date", "Tax Type", "CGST", "SGST", "IGST"]];
-    db.prepare("SELECT * FROM invoices WHERE voided = 0 ORDER BY created_at DESC").all()
+    db.prepare("SELECT * FROM invoices WHERE voided = 0 AND doc_type = 'invoice' ORDER BY created_at DESC").all()
       .forEach(inv => rows.push([inv.challan_no, inv.date, inv.tax_type, inv.cgst.toFixed(2), inv.sgst.toFixed(2), inv.igst.toFixed(2)]));
   }
 

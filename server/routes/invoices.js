@@ -11,16 +11,20 @@ function getSettingsRow() {
   return db.prepare("SELECT * FROM settings WHERE id = 1").get();
 }
 
-function nextChallanNo() {
+// Tax invoices and delivery challans run on SEPARATE number series, so each has
+// its own clean, gap-free sequence (CH-2026-0001…, DC-2026-0001…). Mixing them
+// would leave holes in both, which looks wrong to a customer or an auditor.
+function nextDocNo(docType) {
   const year = new Date().getFullYear();
-  const counterName = `challan-${year}`;
+  const isChallan = docType === "challan";
+  const counterName = `${isChallan ? "deliverychallan" : "challan"}-${year}`;
   const row = db.prepare("SELECT value FROM counters WHERE name = ?").get(counterName);
   const next = row ? row.value + 1 : 1;
   db.prepare(`
     INSERT INTO counters (name, value) VALUES (?, ?)
     ON CONFLICT(name) DO UPDATE SET value = excluded.value
   `).run(counterName, next);
-  return `CH-${year}-${String(next).padStart(4, "0")}`;
+  return `${isChallan ? "DC" : "CH"}-${year}-${String(next).padStart(4, "0")}`;
 }
 
 function computeTotals({ items, discountType, discountValue, advance, taxType, transport, loading, roundOff }) {
@@ -85,9 +89,11 @@ router.get("/:id", (req, res) => {
 router.post("/", (req, res) => {
   const { customerId, items: rawItems, discountType, discountValue, advance,
           paymentMethod, paperSize, transport, loading, roundOff } = req.body;
+  const docType = req.body.docType === "challan" ? "challan" : "invoice";
+  const isChallan = docType === "challan";
 
   if (!Array.isArray(rawItems) || !rawItems.length) {
-    return res.status(400).json({ error: "Add at least one item to the invoice." });
+    return res.status(400).json({ error: `Add at least one item to the ${isChallan ? "challan" : "invoice"}.` });
   }
 
   const settings = getSettingsRow();
@@ -141,16 +147,25 @@ router.post("/", (req, res) => {
     }
   }
 
-  const totals = computeTotals({ items, discountType, discountValue, advance, taxType, transport, loading, roundOff });
-  const id = uid("INV");
-  const challanNo = nextChallanNo();
+  // A delivery challan carries no money at all — every monetary field is zero,
+  // regardless of anything the client sent. Stock still moves (handled below),
+  // but nothing is added to the customer's due.
+  const zeroTotals = {
+    subtotal: 0, discountAmount: 0, cgst: 0, sgst: 0, igst: 0,
+    transport: 0, loading: 0, roundOffAmount: 0, total: 0, advance: 0, balanceDue: 0
+  };
+  const totals = isChallan
+    ? zeroTotals
+    : computeTotals({ items, discountType, discountValue, advance, taxType, transport, loading, roundOff });
+  const id = uid(isChallan ? "DC" : "INV");
+  const challanNo = nextDocNo(docType);
   const date = todayStr();
 
   const insertInvoice = db.prepare(`
-    INSERT INTO invoices (id, challan_no, date, created_at, customer_id, subtotal, discount_type, discount_value,
+    INSERT INTO invoices (id, challan_no, doc_type, date, created_at, customer_id, subtotal, discount_type, discount_value,
       discount_amount, tax_type, cgst, sgst, igst, transport, loading, round_off, total, advance, balance_due,
       payment_method, paper_size)
-    VALUES (@id, @challanNo, @date, @createdAt, @customerId, @subtotal, @discountType, @discountValue,
+    VALUES (@id, @challanNo, @docType, @date, @createdAt, @customerId, @subtotal, @discountType, @discountValue,
       @discountAmount, @taxType, @cgst, @sgst, @igst, @transport, @loading, @roundOffAmount, @total, @advance,
       @balanceDue, @paymentMethod, @paperSize)
   `);
@@ -165,26 +180,31 @@ router.post("/", (req, res) => {
 
   db.transaction(() => {
     insertInvoice.run({
-      id, challanNo, date, createdAt: Date.now(), customerId: customerId || null,
+      id, challanNo, docType, date, createdAt: Date.now(), customerId: customerId || null,
       subtotal: totals.subtotal, discountType: discountType === "flat" ? "flat" : "pct",
-      discountValue: Number(discountValue) || 0, discountAmount: totals.discountAmount,
+      discountValue: isChallan ? 0 : (Number(discountValue) || 0), discountAmount: totals.discountAmount,
       taxType, cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst,
       transport: totals.transport, loading: totals.loading, roundOffAmount: totals.roundOffAmount,
       total: totals.total, advance: totals.advance, balanceDue: totals.balanceDue,
-      paymentMethod: paymentMethod || "Cash", paperSize: paperSize === "A4" ? "A4" : "A5"
+      // A challan has no tender; store a dash rather than a misleading "Cash".
+      paymentMethod: isChallan ? "—" : (paymentMethod || "Cash"),
+      paperSize: paperSize === "A4" ? "A4" : "A5"
     });
     items.forEach(it => insertItem.run(
       id, it.productId, it.name, it.mode,
       it.lengthFt || null, it.widthVal || null, it.thicknessIn || null,
       it.sizeLabel, it.pieces, it.perPiece, it.unit,
-      it.billedQty, it.rate, it.gstRate
+      // A challan stores no rates. Keep the geometry/qty, zero the money.
+      it.billedQty, isChallan ? 0 : it.rate, it.gstRate
     ));
-    // Stock moves in pieces, not in billed area/length/volume.
+    // Stock moves in pieces, not in billed area/length/volume — for a challan
+    // too, since the goods physically leave the shop.
     Object.entries(piecesByProduct).forEach(([productId, pieces]) => deductStock.run(pieces, productId));
     if (customerId && totals.balanceDue > 0) bumpDue.run(totals.balanceDue, customerId);
   })();
 
-  logAction(req, "invoice.create", `${challanNo} — ${totals.total}`);
+  logAction(req, isChallan ? "challan.create" : "invoice.create",
+    isChallan ? challanNo : `${challanNo} — ${totals.total}`);
   const invoice = db.prepare("SELECT * FROM invoices WHERE id = ?").get(id);
   const savedItems = db.prepare("SELECT * FROM invoice_items WHERE invoice_id = ?").all(id);
   res.status(201).json({ ...invoice, items: savedItems });

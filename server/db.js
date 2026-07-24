@@ -67,6 +67,9 @@ CREATE TABLE IF NOT EXISTS customers (
 CREATE TABLE IF NOT EXISTS invoices (
   id TEXT PRIMARY KEY,
   challan_no TEXT UNIQUE NOT NULL,
+  -- 'invoice' = priced tax invoice; 'challan' = delivery challan (goods leave
+  -- the shop but carry no rates, GST or totals). Both reduce stock.
+  doc_type TEXT NOT NULL DEFAULT 'invoice',
   date TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   customer_id TEXT REFERENCES customers(id) ON DELETE SET NULL,
@@ -211,6 +214,8 @@ if (addedItemMode) {
 addColumn("invoices", "transport", "REAL NOT NULL DEFAULT 0");
 addColumn("invoices", "loading", "REAL NOT NULL DEFAULT 0");
 addColumn("invoices", "round_off", "REAL NOT NULL DEFAULT 0");
+// Delivery-challan support. Existing rows are all priced invoices.
+addColumn("invoices", "doc_type", "TEXT NOT NULL DEFAULT 'invoice'");
 
 // Customer billing address — appears in the invoice "Bill To" block, which a
 // GST invoice is expected to carry.

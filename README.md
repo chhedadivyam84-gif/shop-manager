@@ -131,9 +131,39 @@ has to remember to reopen Termux.
 
 ## Backing up your data
 
-Everything lives in one file: `data/shop.db`. Copy that file somewhere
-safe (a USB drive, email it to yourself, etc.) regularly — that's your
-entire shop's records. There's nothing else to back up.
+Everything lives in one file: `data/shop.db` — that's your entire shop's
+records. The app now protects it for you on two levels:
+
+**Automatic local snapshots.** A consistent copy is saved to
+`data/backups/` shortly after the app starts and then once a day, keeping
+the last 30. These use SQLite's own `VACUUM INTO`, so they're safe to take
+while the app is running (a plain file copy of a live database can be
+corrupt). This guards against accidental deletion and database corruption.
+
+**One-tap off-site copy.** Open **Settings → Backup & Restore → Download
+Backup Now** (owner only) to save a fresh snapshot straight to whatever
+device you're on — your phone, a USB drive, or email it to yourself. Do
+this every so often: local snapshots don't help if the PC itself is lost,
+stolen, or damaged.
+
+### Optional: automatic cloud backup (free Supabase)
+
+If you want off-site copies pushed automatically instead of downloading by
+hand, the app can upload each snapshot to your own free
+[Supabase](https://supabase.com) Storage bucket. It stays **fully optional**
+— with nothing configured, the app is 100% local and needs no internet.
+
+1. Copy `data/.env.example` to `data/.env`.
+2. Follow the setup steps written inside that file (create a free Supabase
+   project, a private `shop-backups` bucket, and paste in your Project URL
+   and `service_role` key).
+3. Restart the app (`pm2 restart shop-manager`). Settings → Backup should
+   now show **"Cloud backup on"**.
+
+The `service_role` key stays on the shop PC in `data/.env` (which is
+git-ignored) and is never sent to any browser. If the internet is down when
+a backup runs, the local snapshot still succeeds and the cloud upload is
+simply retried on the next run.
 
 ## Running it in the background permanently
 

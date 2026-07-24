@@ -74,6 +74,17 @@ router.put("/:id", (req, res) => {
   const { name, brand, category, unit, gst, godown, rack, sizes,
           defaultMode, lengthFt, widthVal, thicknessIn } = req.body;
 
+  // A product's price lives in its size rows, so an edit that supplies a `sizes`
+  // array must leave at least one valid entry — otherwise the product becomes
+  // unsellable and crashes the billing screen. Create enforces this; edit must
+  // too, or the guard is trivially bypassed by clearing the field and saving.
+  if (Array.isArray(sizes)) {
+    const valid = sizes.filter(s => s && s.label && s.price !== "" && s.price != null && !isNaN(parseFloat(s.price)));
+    if (!valid.length) {
+      return res.status(400).json({ error: "Keep at least one size/variant with a price." });
+    }
+  }
+
   const update = db.prepare(`
     UPDATE products SET name=?, brand=?, category=?, unit=?, gst_rate=?, godown=?, rack=?,
       default_mode=?, length_ft=?, width_val=?, thickness_in=? WHERE id=?

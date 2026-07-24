@@ -385,7 +385,7 @@ function renderBillingProducts(){
   );
   const wrap = document.getElementById("billing-product-list");
   wrap.innerHTML = list.map(p=>{
-    const priceLabel = p.sizes.length>1 ? "From "+fmt(Math.min(...p.sizes.map(s=>s.price))) : fmt(p.sizes[0].price);
+    const priceLabel = !p.sizes.length ? "⚠ No price — tap Edit" : (p.sizes.length>1 ? "From "+fmt(Math.min(...p.sizes.map(s=>s.price))) : fmt(p.sizes[0].price));
     const out = p.stock<=0;
     return `<div class="list-row" data-open-product="${p.id}" style="cursor:pointer;">
       <div class="swatch"></div>
@@ -410,7 +410,11 @@ function renderBillingProducts(){
 function addToCart(productId, sizeIdx){
   const p = state.products.find(x=>x.id===productId);
   if(!p) return false;
-  const size = p.sizes[sizeIdx];
+  // A product with no size/price row can't be sold until a price is set. Guard
+  // here so a bad product (e.g. one whose last size was removed in an edit)
+  // toasts a clear fix instead of throwing on `size.price`.
+  if(!p.sizes.length){ toast(`"${p.name}" has no price yet — open it and tap Edit to add one.`); return false; }
+  const size = p.sizes[sizeIdx] || p.sizes[0];
   const existing = state.cart.find(c=>c.productId===productId && c.sizeIdx===sizeIdx);
   const piecesForProduct = state.cart.filter(c=>c.productId===productId).reduce((s,c)=>s+(c.pieces||0),0);
   if(piecesForProduct >= p.stock){ return false; }
@@ -744,7 +748,7 @@ async function renderInventoryList(){
   if(q) list = list.filter(p=>p.name.toLowerCase().includes(q) || (p.sku||"").toLowerCase().includes(q));
   document.getElementById("product-count").textContent = list.length + " product" + (list.length!==1?"s":"");
   document.getElementById("inventory-list").innerHTML = `<div class="card">` + (list.length ? list.map(p=>{
-    const priceLabel = p.sizes.length>1 ? "From "+fmt(Math.min(...p.sizes.map(s=>s.price))) : fmt(p.sizes[0].price);
+    const priceLabel = !p.sizes.length ? "⚠ No price — tap Edit" : (p.sizes.length>1 ? "From "+fmt(Math.min(...p.sizes.map(s=>s.price))) : fmt(p.sizes[0].price));
     return `<div class="list-row" data-open-inv-product="${p.id}" style="cursor:pointer;">
       <div class="swatch"></div>
       <div><div class="row-title">${escapeHtml(p.name)}</div><div class="row-sub">${escapeHtml(p.brand||"")} · ${priceLabel}</div></div>
@@ -815,7 +819,11 @@ function renderProductDetailSheet(context){
       <div class="card" id="stock-in-history"><div class="empty-hint">Loading…</div></div>
     ` : ""}
 
-    ${context==="billing" ? `<button class="btn btn-gold" id="add-to-invoice-btn" style="margin-top:14px;" ${p.stock<=0?"disabled":""}>${p.stock<=0?"Out of stock":"Add to Invoice"}</button>` : ""}
+    ${context==="billing" ? (
+      !p.sizes.length
+        ? `<button class="btn btn-gold" id="add-to-invoice-btn" style="margin-top:14px;" disabled>No price set — tap Edit below</button>`
+        : `<button class="btn btn-gold" id="add-to-invoice-btn" style="margin-top:14px;" ${p.stock<=0?"disabled":""}>${p.stock<=0?"Out of stock":"Add to Invoice"}</button>`
+    ) : ""}
 
     <div class="action-row">
       <button class="btn btn-outline" id="edit-product-btn">✎ Edit</button>

@@ -194,8 +194,11 @@ router.post("/", (req, res) => {
       id, it.productId, it.name, it.mode,
       it.lengthFt || null, it.widthVal || null, it.thicknessIn || null,
       it.sizeLabel, it.pieces, it.perPiece, it.unit,
-      // A challan stores no rates. Keep the geometry/qty, zero the money.
-      it.billedQty, isChallan ? 0 : it.rate, it.gstRate
+      // A challan's item RATE is now kept (optional, defaults 0) so the print
+      // screen can offer "Delivery Challan (With Rate)" — but the invoice-level
+      // GST/discount/transport/total above stays zero either way: a challan is
+      // never a tax invoice regardless of whether a rate was noted per line.
+      it.billedQty, it.rate, it.gstRate
     ));
     // Stock moves in pieces, not in billed area/length/volume — for a challan
     // too, since the goods physically leave the shop.

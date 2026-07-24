@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS products (
   category TEXT DEFAULT '',
   sku TEXT UNIQUE,
   unit TEXT DEFAULT 'Piece',
+  hsn_code TEXT DEFAULT '',
   gst_rate REAL NOT NULL DEFAULT 18,
   stock REAL NOT NULL DEFAULT 0,
   godown TEXT DEFAULT '',
@@ -154,13 +155,40 @@ CREATE TABLE IF NOT EXISTS payments (
   created_at INTEGER NOT NULL
 );
 
+-- A purchase entry, one product per row (mirrors how the product is sold: one
+-- board/size per line). qty is the physical sheet/piece count received --
+-- what products.stock goes up by. billed_qty/mode/geometry mirror
+-- invoice_items so a Sq.ft purchase auto-calculates the same way a Sq.ft sale
+-- does, via the shared public/js/pricing.js module.
 CREATE TABLE IF NOT EXISTS stock_ins (
   id TEXT PRIMARY KEY,
   product_id TEXT REFERENCES products(id) ON DELETE SET NULL,
   product_name TEXT NOT NULL,
-  qty REAL NOT NULL,
-  cost_price REAL NOT NULL DEFAULT 0,
+  purchase_date TEXT NOT NULL,
+  invoice_no TEXT DEFAULT '',
   supplier TEXT DEFAULT '',
+  brand TEXT DEFAULT '',
+  category TEXT DEFAULT '',
+  mode TEXT NOT NULL DEFAULT 'UNIT',
+  length_ft REAL,
+  width_val REAL,
+  thickness_in REAL,
+  size_label TEXT DEFAULT '',
+  qty REAL NOT NULL,
+  per_piece REAL NOT NULL DEFAULT 0,
+  billed_qty REAL NOT NULL DEFAULT 0,
+  unit_label TEXT NOT NULL DEFAULT 'Pc',
+  rate REAL NOT NULL DEFAULT 0,
+  amount REAL NOT NULL DEFAULT 0,
+  gst_rate REAL NOT NULL DEFAULT 0,
+  gst_amount REAL NOT NULL DEFAULT 0,
+  transport REAL NOT NULL DEFAULT 0,
+  grand_total REAL NOT NULL DEFAULT 0,
+  -- Cost per physical piece (amount / qty), used by the Profit Report as the
+  -- cost basis for a sale of the same product — kept even though it can be
+  -- derived, because rate/amount can later be edited on the product while a
+  -- historical purchase's cost must never move.
+  cost_price REAL NOT NULL DEFAULT 0,
   note TEXT DEFAULT '',
   created_at INTEGER NOT NULL
 );
@@ -183,6 +211,11 @@ CREATE INDEX IF NOT EXISTS idx_stock_ins_product ON stock_ins(product_id);
    ------------------------------------------------------------------ */
 function columnsOf(table) {
   return db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+}
+// Not imported from util.js: util.js requires this file, so that would be
+// circular. This migration-only copy avoids that.
+function round2(n) {
+  return Math.round((n + Number.EPSILON) * 100) / 100;
 }
 function addColumn(table, column, definition) {
   if (!columnsOf(table).includes(column)) {
@@ -225,6 +258,48 @@ addColumn("products", "default_mode", "TEXT NOT NULL DEFAULT 'UNIT'");
 addColumn("products", "length_ft", "REAL");
 addColumn("products", "width_val", "REAL");
 addColumn("products", "thickness_in", "REAL");
+addColumn("products", "hsn_code", "TEXT DEFAULT ''");
+
+// Full Purchase Entry (invoice no., GST, transport, auto Sq.ft) on top of the
+// original bare stock-in (qty + cost_price + supplier).
+const addedPurchaseDate = addColumn("stock_ins", "purchase_date", "TEXT NOT NULL DEFAULT ''");
+addColumn("stock_ins", "invoice_no", "TEXT DEFAULT ''");
+addColumn("stock_ins", "brand", "TEXT DEFAULT ''");
+addColumn("stock_ins", "category", "TEXT DEFAULT ''");
+addColumn("stock_ins", "mode", "TEXT NOT NULL DEFAULT 'UNIT'");
+addColumn("stock_ins", "length_ft", "REAL");
+addColumn("stock_ins", "width_val", "REAL");
+addColumn("stock_ins", "thickness_in", "REAL");
+addColumn("stock_ins", "size_label", "TEXT DEFAULT ''");
+addColumn("stock_ins", "per_piece", "REAL NOT NULL DEFAULT 0");
+addColumn("stock_ins", "billed_qty", "REAL NOT NULL DEFAULT 0");
+addColumn("stock_ins", "unit_label", "TEXT NOT NULL DEFAULT 'Pc'");
+addColumn("stock_ins", "rate", "REAL NOT NULL DEFAULT 0");
+addColumn("stock_ins", "amount", "REAL NOT NULL DEFAULT 0");
+addColumn("stock_ins", "gst_rate", "REAL NOT NULL DEFAULT 0");
+addColumn("stock_ins", "gst_amount", "REAL NOT NULL DEFAULT 0");
+addColumn("stock_ins", "transport", "REAL NOT NULL DEFAULT 0");
+addColumn("stock_ins", "grand_total", "REAL NOT NULL DEFAULT 0");
+
+if (addedPurchaseDate) {
+  // Every stock-in recorded before this feature existed only had qty and
+  // cost_price. Backfill so those old rows are still coherent in the new
+  // Purchase Report: date from created_at, UNIT mode (qty == billed_qty, one
+  // piece == one billed unit), amount/grand_total derived from the cost
+  // already on record rather than left at 0.
+  const legacyRows = db.prepare(
+    "SELECT id, qty, cost_price, created_at FROM stock_ins WHERE purchase_date = ''"
+  ).all();
+  const backfill = db.prepare(`
+    UPDATE stock_ins SET purchase_date=?, mode='UNIT', per_piece=1, billed_qty=?,
+      unit_label='Pc', rate=?, amount=?, grand_total=? WHERE id=?
+  `);
+  legacyRows.forEach(r => {
+    const date = new Date(r.created_at).toISOString().slice(0, 10);
+    const amount = round2(r.qty * r.cost_price);
+    backfill.run(date, r.qty, r.cost_price, amount, amount, r.id);
+  });
+}
 
 // First-run seed: create settings row if none exists. The PIN itself now lives
 // on the owner's staff account (below) — settings.pin_hash is unused but kept

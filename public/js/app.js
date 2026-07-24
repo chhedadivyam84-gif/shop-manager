@@ -37,7 +37,7 @@ let state = {
   products: [], customers: [], invoices: [], settings: null, dashboard: null,
   cart: [], selectedCustomerId: null,
   discountType: "pct", discountValue: 0, advance: 0, paymentMethod: "Cash",
-  transport: 0, loading: 0, roundOff: true, docType: "invoice",
+  transport: 0, loading: 0, roundOff: true, docType: "invoice", challanShowRate: false,
   invBrandFilter: "All", reportType: "Sales",
   paperSize: "A5",
   me: { staffName: "", role: "" },
@@ -71,6 +71,12 @@ function stockLabel(stock){
 /* Rounding comes from the shared pricing module rather than a local copy, so
    the browser and the server round identically at every step. */
 const round2 = Pricing.round2;
+/** "2026-07-24" in the browser's local timezone — for date input defaults. */
+function todayISO(){
+  const d = new Date();
+  const p = n => String(n).padStart(2,"0");
+  return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate());
+}
 
 /* Reads an optional input that may not be in the DOM at all — the dimension
    boxes are rendered per mode, so Rft genuinely has no width field. */
@@ -539,7 +545,7 @@ function renderCart(){
         ${m.needsWidth ? dim("Width", m.widthUnit, "widthVal", c.widthVal) : ""}
         ${m.needsLength ? dim("Length", m.lengthUnit, "lengthFt", c.lengthFt) : ""}
         ${dim("Qty", "pcs", "pieces", c.pieces)}
-        ${isChallanMode() ? "" : dim("Rate", "₹/"+m.unit, "rate", c.rate)}
+        ${dim("Rate", "₹/"+m.unit+(isChallanMode()?" · optional":""), "rate", c.rate)}
       </div>
 
       <div class="line-calc">
@@ -547,9 +553,9 @@ function renderCart(){
           ${r.sizeLabel ? `<strong>${escapeHtml(r.sizeLabel)}</strong> · ` : ""}
           ${m.key!=="UNIT" ? `${Pricing.formatQty(r.perPiece, r.mode)}/pc × ${r.pieces} pcs = ` : ""}
           <strong>${Pricing.formatQty(r.billedQty, r.mode)}</strong>
-          ${isChallanMode() ? "" : `× ${Pricing.formatRate(r.rate, r.mode)}`}
+          × ${Pricing.formatRate(r.rate, r.mode)}
         </div>
-        ${isChallanMode() ? "" : `<div class="line-calc-amount">${fmtPaise(r.amount)}</div>`}
+        <div class="line-calc-amount">${fmtPaise(r.amount)}</div>
       </div>
       ${stock!==undefined && r.pieces>stock
         ? `<div class="line-warn">Only ${stock} in stock — this line needs ${r.pieces}.</div>` : ""}
@@ -616,8 +622,8 @@ function renderLineCalc(idx){
     (r.sizeLabel ? `<strong>${escapeHtml(r.sizeLabel)}</strong> · ` : "") +
     (m.key!=="UNIT" ? `${Pricing.formatQty(r.perPiece, r.mode)}/pc × ${r.pieces} pcs = ` : "") +
     `<strong>${Pricing.formatQty(r.billedQty, r.mode)}</strong>` +
-    (isChallanMode() ? "" : ` × ${Pricing.formatRate(r.rate, r.mode)}`);
-  if(a) a.textContent = isChallanMode() ? "" : fmtPaise(r.amount);
+    ` × ${Pricing.formatRate(r.rate, r.mode)}`;
+  if(a) a.textContent = fmtPaise(r.amount);
 }
 function currentTaxType(){
   const cust = state.customers.find(c=>c.id===state.selectedCustomerId);
@@ -685,12 +691,13 @@ async function completeSale(){
   const challan = isChallanMode();
   if(!state.cart.length){ toast(`Add at least one item to the ${challan?"challan":"invoice"} first.`); return; }
   // Catch bad lines here so the user gets the message next to the field rather
-  // than as a server rejection after the fact. A challan needs a size and
-  // quantity just like an invoice — only the rate is optional there.
+  // than as a server rejection after the fact. A blank/0 rate is valid on a
+  // challan — the rate is optional there, shown only if the print screen's
+  // "Show Rate" toggle is on.
   for(const c of state.cart){
     const bad = Pricing.validateLine({
       mode:c.mode, lengthFt:c.lengthFt, widthVal:c.widthVal,
-      thicknessIn:c.thicknessIn, pieces:c.pieces, rate: challan ? 0 : c.rate
+      thicknessIn:c.thicknessIn, pieces:c.pieces, rate: c.rate
     }, c.name);
     if(bad){ toast(bad); return; }
   }
@@ -705,7 +712,7 @@ async function completeSale(){
       items: state.cart.map(c=>({
         productId:c.productId, name:c.name, mode:c.mode,
         lengthFt:c.lengthFt, widthVal:c.widthVal, thicknessIn:c.thicknessIn,
-        pieces:c.pieces, rate: challan ? 0 : c.rate
+        pieces:c.pieces, rate: c.rate
       })),
       discountType: state.discountType, discountValue: state.discountValue,
       advance: state.advance, paymentMethod: state.paymentMethod, paperSize: state.paperSize,
@@ -806,6 +813,7 @@ function renderProductDetailSheet(context){
 
     <div class="card" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11.5px;">
       <div><span class="muted">SKU</span><br>${escapeHtml(p.sku||"")}</div>
+      <div><span class="muted">HSN Code</span><br>${escapeHtml(p.hsn_code||"—")}</div>
       <div><span class="muted">Unit</span><br>${escapeHtml(p.unit||"")}</div>
       <div><span class="muted">GST%</span><br>${p.gst}%</div>
       <div><span class="muted">Godown</span><br>${escapeHtml(p.godown||"—")}</div>
@@ -894,17 +902,21 @@ function renderProductDetailSheet(context){
   if(deleteProductLink) deleteProductLink.addEventListener("click", async (e)=>{
     e.preventDefault();
     // Ask the server what this product carries first, so the confirmation can
-    // state the actual consequence instead of a generic warning.
+    // state the actual consequence instead of a generic warning — and so a
+    // product already used in a sale is refused here rather than after a
+    // confirm dialog the user just clicked through.
     let warn = "";
     try{
       const u = await api("GET", `/products/${p.id}/usage`);
+      if(u.invoiceCount > 0){
+        toast(`"${p.name}" can't be deleted — it's used in ${u.invoiceCount} sale line${u.invoiceCount>1?"s":""}. Products already sold are kept for record-keeping.`);
+        return;
+      }
       const bits = [];
-      if(u.invoiceCount) bits.push(`${u.invoiceCount} invoice${u.invoiceCount>1?"s":""}`);
       if(u.stockInCount) bits.push(`${u.stockInCount} purchase record${u.stockInCount>1?"s":""}`);
       if(u.stock > 0) bits.push(`${u.stock} still in stock`);
-      if(bits.length) warn = "\n\nThis product appears on " + bits.join(", ") +
-        ".\nPast invoices keep their own copy of the name and price, so they will still print correctly.";
-    }catch(_){ /* fall back to the plain confirmation */ }
+      if(bits.length) warn = "\n\nThis product has " + bits.join(", ") + ".";
+    }catch(_){ /* fall back to the plain confirmation; server still enforces the rule */ }
 
     if(confirm("Delete " + p.name + "? This can't be undone." + warn)){
       try{
@@ -925,45 +937,160 @@ async function loadStockInHistory(productId){
     if(!area.isConnected) return;
     area.innerHTML = rows.length ? rows.map(r=>{
       const dt = new Date(r.created_at);
-      return `<div class="list-row"><div><div class="row-title">+${r.qty} received${r.supplier?" from "+escapeHtml(r.supplier):""}</div><div class="row-sub">${dt.toLocaleDateString("en-IN")}${r.cost_price?" · Cost "+fmt(r.cost_price)+" each":""}${r.note?" · "+escapeHtml(r.note):""}</div></div></div>`;
+      const sizeBit = r.size_label ? escapeHtml(r.size_label)+" · " : "";
+      const qtyBit = Pricing.formatQty(r.billed_qty||r.qty, r.mode||"UNIT");
+      return `<div class="list-row"><div>
+        <div class="row-title">+${r.qty} pcs received${r.supplier?" from "+escapeHtml(r.supplier):""}</div>
+        <div class="row-sub">${dt.toLocaleDateString("en-IN")}${r.invoice_no?" · Inv# "+escapeHtml(r.invoice_no):""}${r.purchase_date?" · "+escapeHtml(r.purchase_date):""}</div>
+        <div class="row-sub">${sizeBit}${qtyBit}${r.rate?" @ "+fmt(r.rate):""} · Grand Total ${fmt(r.grand_total||r.cost_price*r.qty)}</div>
+      </div></div>`;
     }).join("") : `<div class="empty-hint">No purchases recorded yet.</div>`;
   }catch(e){ if(area.isConnected) area.innerHTML = `<div class="empty-hint">Couldn't load purchase history.</div>`; }
 }
+
+/**
+ * Full Purchase Entry sheet: date, supplier, invoice number, the same size/
+ * mode picker billing uses (with live Sq.ft auto-calc), GST and transport,
+ * ending in a Grand Total — mirrors a sales invoice line but for stock coming
+ * IN rather than going out.
+ */
 function openStockIn(p){
   const sheet = document.getElementById("sheet-stock-in");
-  sheet.innerHTML = `
-    <div class="sheet-handle"></div>
-    <button class="sheet-close" data-sheetclose>✕</button>
-    <div class="sheet-title">Record Stock In</div>
-    <div class="muted" style="font-size:12px;margin-bottom:10px;">${escapeHtml(p.name)} · Current stock: ${p.stock} ${escapeHtml(p.unit||"")}</div>
-    <label class="field-label">Quantity received</label>
-    <input type="number" id="si-qty" min="0" value="1">
-    <label class="field-label">Cost price per unit (₹, optional)</label>
-    <input type="number" id="si-cost" min="0" value="0">
-    <label class="field-label">Supplier (optional)</label>
-    <input type="text" id="si-supplier" placeholder="e.g. Century Ply Distributor">
-    <label class="field-label">Note (optional)</label>
-    <input type="text" id="si-note" placeholder="e.g. Invoice / LR number">
-    <button class="btn btn-primary" id="si-save" style="margin-top:16px;">Save</button>
-  `;
-  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
-  sheet.querySelector("#si-save").addEventListener("click", async ()=>{
-    const qty = parseFloat(document.getElementById("si-qty").value);
-    if(!qty || qty<=0){ toast("Enter a valid quantity."); return; }
-    try{
-      const updated = await api("POST", `/products/${p.id}/stock-in`, {
-        qty, costPrice: parseFloat(document.getElementById("si-cost").value)||0,
-        supplier: document.getElementById("si-supplier").value.trim(),
-        note: document.getElementById("si-note").value.trim()
-      });
-      Object.assign(p, updated);
-      await loadProducts();
-      closeAllSheets();
-      openProductDetail(p.id, "inventory");
-      renderInventoryList();
-      toast("Stock updated.", "ok");
-    }catch(err){ toast(err.message); }
-  });
+  const ctx = {
+    mode: Pricing.normaliseMode(p.default_mode),
+    lengthFt: p.length_ft || "", widthVal: p.width_val || "", thicknessIn: p.thickness_in || "",
+    pieces: 1, rate: 0, gst: p.gst, transport: 0
+  };
+
+  function calc(){
+    return Pricing.computeLine({
+      mode: ctx.mode, lengthFt: ctx.lengthFt, widthVal: ctx.widthVal,
+      thicknessIn: ctx.thicknessIn, pieces: ctx.pieces, rate: ctx.rate
+    });
+  }
+
+  function render(){
+    const m = Pricing.MODES[ctx.mode];
+    const r = calc();
+    const gstAmt = round2(r.amount * ((parseFloat(ctx.gst)||0)/100));
+    const transportAmt = Math.max(0, parseFloat(ctx.transport)||0);
+    const grandTotal = round2(r.amount + gstAmt + transportAmt);
+
+    const dim = (label, unit, key, val) => `
+      <label class="dim">
+        <span>${label}${unit?` <em>(${unit})</em>`:""}</span>
+        <input type="number" inputmode="decimal" step="any" min="0" value="${val===0||val?val:""}" data-si-field="${key}" placeholder="0">
+      </label>`;
+
+    sheet.innerHTML = `
+      <div class="sheet-handle"></div>
+      <button class="sheet-close" data-sheetclose>✕</button>
+      <div class="sheet-title">Record Purchase</div>
+      <div class="muted" style="font-size:12px;margin-bottom:10px;">${escapeHtml(p.name)} · Current stock: ${p.stock} ${escapeHtml(p.unit||"")}</div>
+
+      <div class="charge-grid">
+        <label class="dim"><span>Purchase Date</span><input type="date" id="si-date" value="${todayISO()}"></label>
+        <label class="dim"><span>Invoice No.</span><input type="text" id="si-invoice" placeholder="Supplier's invoice #"></label>
+      </div>
+      <label class="field-label">Supplier</label>
+      <input type="text" id="si-supplier" placeholder="e.g. Century Ply Distributor">
+
+      <label class="field-label">Billing mode</label>
+      <div class="mode-row">
+        ${Pricing.MODE_KEYS.map(k=>`<button class="chip sm ${k===ctx.mode?'selected':''}" data-si-mode="${k}" title="${Pricing.MODES[k].formula}">${Pricing.MODES[k].unit}</button>`).join("")}
+      </div>
+
+      <div class="dim-grid">
+        ${m.needsThickness ? dim("Thickness", m.thicknessUnit, "thicknessIn", ctx.thicknessIn) : ""}
+        ${m.needsWidth ? dim("Width", m.widthUnit, "widthVal", ctx.widthVal) : ""}
+        ${m.needsLength ? dim("Length", m.lengthUnit, "lengthFt", ctx.lengthFt) : ""}
+        ${dim("Qty received", "pcs", "pieces", ctx.pieces)}
+        ${dim("Rate", "₹/"+m.unit, "rate", ctx.rate)}
+      </div>
+
+      <div class="line-calc">
+        <div class="line-calc-formula">
+          ${r.sizeLabel ? `<strong>${escapeHtml(r.sizeLabel)}</strong> · ` : ""}
+          ${m.key!=="UNIT" ? `${Pricing.formatQty(r.perPiece, r.mode)}/pc × ${r.pieces} pcs = ` : ""}
+          <strong>${Pricing.formatQty(r.billedQty, r.mode)}</strong> × ${Pricing.formatRate(r.rate, r.mode)}
+        </div>
+        <div class="line-calc-amount">${fmtPaise(r.amount)}</div>
+      </div>
+
+      <div class="charge-grid" style="margin-top:10px;">
+        <label class="dim"><span>GST %</span><input type="number" id="si-gst" value="${ctx.gst}" data-si-field="gst"></label>
+        <label class="dim"><span>Transport / Other (₹)</span><input type="number" id="si-transport" value="${ctx.transport}" data-si-field="transport"></label>
+      </div>
+
+      <div class="line-calc" style="margin-top:10px;">
+        <div class="line-calc-formula">Amount ${fmtPaise(r.amount)} + GST ${fmtPaise(gstAmt)} + Transport ${fmtPaise(transportAmt)}</div>
+        <div class="line-calc-amount">Grand Total ${fmtPaise(grandTotal)}</div>
+      </div>
+
+      <label class="field-label">Note (optional)</label>
+      <input type="text" id="si-note" placeholder="e.g. LR number, remarks">
+      <button class="btn btn-primary" id="si-save" style="margin-top:16px;">Save Purchase</button>
+    `;
+
+    sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+    sheet.querySelectorAll("[data-si-mode]").forEach(b=>b.addEventListener("click", ()=>{
+      ctx.mode = b.dataset.siMode; render();
+    }));
+    sheet.querySelectorAll("[data-si-field]").forEach(inp=>inp.addEventListener("input", ()=>{
+      ctx[inp.dataset.siField] = inp.value;
+      renderCalcOnly();
+    }));
+    sheet.querySelector("#si-save").addEventListener("click", async ()=>{
+      const bad = Pricing.validateLine({
+        mode: ctx.mode, lengthFt: ctx.lengthFt, widthVal: ctx.widthVal,
+        thicknessIn: ctx.thicknessIn, pieces: ctx.pieces, rate: ctx.rate
+      }, p.name);
+      if(bad){ toast(bad); return; }
+      const btn = document.getElementById("si-save");
+      btn.disabled = true;
+      try{
+        const result = await api("POST", `/products/${p.id}/stock-in`, {
+          purchaseDate: document.getElementById("si-date").value,
+          invoiceNo: document.getElementById("si-invoice").value.trim(),
+          supplier: document.getElementById("si-supplier").value.trim(),
+          note: document.getElementById("si-note").value.trim(),
+          mode: ctx.mode, lengthFt: ctx.lengthFt, widthVal: ctx.widthVal, thicknessIn: ctx.thicknessIn,
+          pieces: ctx.pieces, rate: ctx.rate, gst: ctx.gst, transport: ctx.transport
+        });
+        Object.assign(p, result.product);
+        await loadProducts();
+        closeAllSheets();
+        openProductDetail(p.id, "inventory");
+        renderInventoryList();
+        toast(`Purchase recorded — Grand Total ${fmt(result.purchase.grand_total)}`, "ok");
+      }catch(err){ toast(err.message); }
+      finally{ btn.disabled = false; }
+    });
+  }
+
+  // Repaint just the live-calc figures on every keystroke, without rebuilding
+  // the whole form (which would steal focus from the input being typed in).
+  function renderCalcOnly(){
+    const m = Pricing.MODES[ctx.mode];
+    const r = calc();
+    const gstAmt = round2(r.amount * ((parseFloat(ctx.gst)||0)/100));
+    const transportAmt = Math.max(0, parseFloat(ctx.transport)||0);
+    const grandTotal = round2(r.amount + gstAmt + transportAmt);
+    const blocks = sheet.querySelectorAll(".line-calc");
+    if(blocks[0]){
+      blocks[0].querySelector(".line-calc-formula").innerHTML =
+        (r.sizeLabel ? `<strong>${escapeHtml(r.sizeLabel)}</strong> · ` : "") +
+        (m.key!=="UNIT" ? `${Pricing.formatQty(r.perPiece, r.mode)}/pc × ${r.pieces} pcs = ` : "") +
+        `<strong>${Pricing.formatQty(r.billedQty, r.mode)}</strong> × ${Pricing.formatRate(r.rate, r.mode)}`;
+      blocks[0].querySelector(".line-calc-amount").textContent = fmtPaise(r.amount);
+    }
+    if(blocks[1]){
+      blocks[1].querySelector(".line-calc-formula").textContent = `Amount ${fmtPaise(r.amount)} + GST ${fmtPaise(gstAmt)} + Transport ${fmtPaise(transportAmt)}`;
+      blocks[1].querySelector(".line-calc-amount").textContent = `Grand Total ${fmtPaise(grandTotal)}`;
+    }
+  }
+
+  render();
   showSheet("sheet-stock-in");
 }
 
@@ -1114,11 +1241,12 @@ function renderAddProductSheet(context){
     ${editing ? `<div class="muted" style="font-size:11.5px;margin-bottom:8px;">SKU ${escapeHtml(editing.sku||"")} · changes apply to future bills only — past invoices keep the price they were issued at.</div>` : ""}
     <label class="field-label">Product name</label><input type="text" id="np-name" value="${v("name")}">
     <label class="field-label">Brand</label><input type="text" id="np-brand" value="${v("brand")}">
-    <label class="field-label">Category</label><input type="text" id="np-category" value="${v("category")}">
+    <label class="field-label">Category</label><input type="text" id="np-category" value="${v("category")}" placeholder="Plywood, Laminate, MDF, Veneer…">
     <label class="field-label">Unit of measure</label>
     <div class="chip-row" id="np-unit-chips">
       ${UNIT_OPTIONS.map(u=>`<button class="chip ${u===curUnit?'selected':''}" data-unit="${u}">${u}</button>`).join("")}
     </div>
+    <label class="field-label">HSN Code</label><input type="text" id="np-hsn" value="${v("hsn_code")}" placeholder="e.g. 4412">
     <label class="field-label">GST %</label><input type="number" id="np-gst" value="${editing ? editing.gst : 18}">
 
     <label class="field-label">Default billing mode</label>
@@ -1188,7 +1316,8 @@ function renderAddProductSheet(context){
     const payload = {
       name, brand: document.getElementById("np-brand").value.trim(),
       category: document.getElementById("np-category").value.trim(),
-      unit, gst: parseFloat(document.getElementById("np-gst").value)||18,
+      unit, hsnCode: document.getElementById("np-hsn").value.trim(),
+      gst: parseFloat(document.getElementById("np-gst").value)||18,
       godown: document.getElementById("np-godown").value.trim(),
       defaultMode: sheet.querySelector("[data-mode].selected").dataset.mode,
       lengthFt: val("np-len"), widthVal: val("np-wid"), thicknessIn: val("np-thk"),
@@ -1558,6 +1687,20 @@ function openInvoicePreview(existingInvoice){
   const fsTitle = document.querySelector("#fs-invoice .fs-title");
   if(fsTitle) fsTitle.textContent = challan ? "Delivery Challan" : "Invoice Preview";
 
+  // "Delivery Challan (With Rate)" vs "(Without Rate)" is a PRINT-TIME choice
+  // on the same saved document — the item rate is stored either way (see
+  // server/routes/invoices.js), this toggle only controls whether it's shown.
+  // Resets to off (the original, still-default behaviour) each time a fresh
+  // challan is opened, rather than remembering the last choice.
+  const toggleRow = document.getElementById("challan-rate-toggle-row");
+  const toggle = document.getElementById("challan-rate-toggle");
+  if(toggleRow) toggleRow.style.display = challan ? "flex" : "none";
+  if(toggle){
+    toggle.checked = false;
+    state.challanShowRate = false;
+    toggle.onchange = () => { state.challanShowRate = toggle.checked; renderInvoicePageContent(); };
+  }
+
   const voidBtn = document.getElementById("inv-void");
   if(existingInvoice && existingInvoice.id && isOwner()){
     if(!voidBtn){
@@ -1596,26 +1739,34 @@ function renderInvoicePageContent(){
   const challan = inv.doc_type === "challan";
   document.getElementById("invoice-page-content").classList.toggle("size-a5", !isA4);
 
-  // A delivery challan drops the Rate and Amount columns (it carries no money)
-  // and keeps only what identifies the goods leaving the shop.
-  const head = challan
-    ? `<th class="c-sn">#</th><th>Particulars</th><th class="c-size">Size</th><th class="c-num">Qty</th><th class="c-num">Total</th>`
-    : `<th class="c-sn">#</th><th>Particulars</th><th class="c-size">Size</th><th class="c-num">Qty</th><th class="c-num">Total</th><th class="c-num">Rate</th><th class="c-num c-amt">Amount</th>`;
+  // A challan hides Rate/Amount by default (it carries no GST invoice
+  // meaning) but can show them on this printout via the "Show Rate" toggle —
+  // "Delivery Challan (With Rate)" vs "(Without Rate)" from the same entry.
+  const showRate = !challan || state.challanShowRate;
+  const head = showRate
+    ? `<th class="c-sn">#</th><th>Particulars</th><th class="c-size">Size</th><th class="c-num">Qty</th><th class="c-num">Total</th><th class="c-num">Rate</th><th class="c-num c-amt">Amount</th>`
+    : `<th class="c-sn">#</th><th>Particulars</th><th class="c-size">Size</th><th class="c-num">Qty</th><th class="c-num">Total</th>`;
   const rows = inv.items.map((it,i)=>{
     const mode = it.mode || "UNIT";
     const base = `<td class="c-sn">${i+1}</td><td>${escapeHtml(it.name)}</td><td class="c-size">${escapeHtml(it.size_label||"—")}</td><td class="c-num">${it.pieces||it.qty}</td><td class="c-num">${Pricing.formatQty(it.qty, mode)}</td>`;
-    return `<tr>${base}${challan ? "" : `<td class="c-num">${Pricing.formatRate(it.rate, mode)}</td><td class="c-num c-amt">${fmtPaise(it.qty*it.rate)}</td>`}</tr>`;
+    return `<tr>${base}${showRate ? `<td class="c-num">${Pricing.formatRate(it.rate, mode)}</td><td class="c-num c-amt">${fmtPaise(it.qty*it.rate)}</td>` : ""}</tr>`;
   }).join("");
 
   const taxRows = inv.tax_type==="IGST"
     ? `<div class="tr"><span>IGST</span><span>${fmtPaise(inv.igst)}</span></div>`
     : `<div class="tr"><span>CGST</span><span>${fmtPaise(inv.cgst)}</span></div><div class="tr"><span>SGST</span><span>${fmtPaise(inv.sgst)}</span></div>`;
 
-  // Priced invoice: full totals + amount in words. Challan: a total-pieces line
-  // and a received-in-good-condition signature block instead.
+  // Priced invoice: full totals + amount in words. Challan: a total-pieces
+  // line (plus a reference subtotal if rates are shown) and a received-in-
+  // good-condition signature block instead — never GST, since a challan is
+  // never a tax invoice regardless of whether a rate was noted per line.
   const totalPieces = inv.items.reduce((s,it)=>s+(Number(it.pieces)||0),0);
+  const challanSubtotal = inv.items.reduce((s,it)=>s+(it.qty*it.rate||0),0);
   const footer = challan
-    ? `<div class="inv-totals"><div class="tr grand"><span>Total pieces</span><span>${totalPieces}</span></div></div>
+    ? `<div class="inv-totals">
+         ${showRate && challanSubtotal>0 ? `<div class="tr"><span>Subtotal (reference only)</span><span>${fmtPaise(challanSubtotal)}</span></div>` : ""}
+         <div class="tr grand"><span>Total pieces</span><span>${totalPieces}</span></div>
+       </div>
        <div class="challan-sign">
          <div>Received the above goods in good condition.</div>
          <div class="challan-sign-lines"><span>Receiver's Signature</span><span>For ${escapeHtml(cfg.business_name)}</span></div>
@@ -1749,8 +1900,12 @@ function shareWhatsApp(){
    ============================================================ */
 async function renderReport(){
   const body = document.getElementById("report-body");
-  let title="", subtitle="", rows=[];
   try{
+    if(state.reportType==="Purchase") return renderPurchaseReport(body);
+    if(state.reportType==="Party") return renderPartyReport(body);
+    if(state.reportType==="Profit") return renderProfitReport(body);
+
+    let title="", subtitle="", rows=[];
     if(state.reportType==="Sales"){
       title = "Sales by Payment Method"; subtitle="Total invoice value";
       rows = await api("GET","/reports/sales-by-payment");
@@ -1761,18 +1916,65 @@ async function renderReport(){
     } else if(state.reportType==="Stock"){
       title="Stock by Brand"; subtitle="Units currently on hand";
       rows = await api("GET","/reports/stock-by-brand");
+    } else if(state.reportType==="Brand"){
+      title="Sales by Brand"; subtitle="Revenue from priced invoices, by product brand";
+      rows = await api("GET","/reports/brand-wise");
     } else {
       title="Customer Outstanding"; subtitle="Dues by customer";
       rows = await api("GET","/reports/customer-dues");
     }
-  }catch(e){ toast(e.message); return; }
-  const max = Math.max(1, ...rows.map(r=>r.value));
-  body.innerHTML = `<div style="font-weight:800;font-size:14px;">${title}</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">${subtitle}</div>` +
+    const max = Math.max(1, ...rows.map(r=>r.value));
+    body.innerHTML = `<div style="font-weight:800;font-size:14px;">${title}</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">${subtitle}</div>` +
+      (rows.length ? rows.map(r=>`
+        <div style="margin-bottom:10px;">
+          <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700;margin-bottom:4px;"><span>${escapeHtml(r.label)}</span><span>${state.reportType==="Stock"?r.value+" units":fmt(r.value)}</span></div>
+          <div style="height:8px;background:var(--bg-outer);border-radius:100px;"><div style="height:100%;width:${(r.value/max)*100}%;background:var(--navy);border-radius:100px;"></div></div>
+        </div>`).join("") : `<div class="empty-hint">No data yet for this report.</div>`);
+  }catch(e){ toast(e.message); }
+}
+
+async function renderPurchaseReport(body){
+  const rows = await api("GET","/reports/purchases");
+  body.innerHTML = `<div style="font-weight:800;font-size:14px;">Purchase Report</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every stock-in recorded, newest first</div>` +
     (rows.length ? rows.map(r=>`
-      <div style="margin-bottom:10px;">
-        <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700;margin-bottom:4px;"><span>${escapeHtml(r.label)}</span><span>${state.reportType==="Stock"?r.value+" units":fmt(r.value)}</span></div>
-        <div style="height:8px;background:var(--bg-outer);border-radius:100px;"><div style="height:100%;width:${(r.value/max)*100}%;background:var(--navy);border-radius:100px;"></div></div>
-      </div>`).join("") : `<div class="empty-hint">No data yet for this report.</div>`);
+      <div class="list-row"><div>
+        <div class="row-title">${escapeHtml(r.product_name)}${r.size_label?" · "+escapeHtml(r.size_label):""}</div>
+        <div class="row-sub">${escapeHtml(r.purchase_date||"")}${r.invoice_no?" · Inv# "+escapeHtml(r.invoice_no):""}${r.supplier?" · "+escapeHtml(r.supplier):""}</div>
+        <div class="row-sub">${r.qty} pcs${r.billed_qty&&r.billed_qty!==r.qty?" · "+Pricing.formatQty(r.billed_qty, r.mode||"UNIT"):""}</div>
+      </div><div class="row-right row-title">${fmt(r.grand_total)}</div></div>
+    `).join("") : `<div class="empty-hint">No purchases recorded yet.</div>`);
+}
+
+async function renderPartyReport(body){
+  const rows = await api("GET","/reports/party-wise");
+  body.innerHTML = `<div style="font-weight:800;font-size:14px;">Party-wise Report</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Total business per customer</div>` +
+    (rows.length ? rows.map(r=>`
+      <div class="list-row"><div>
+        <div class="row-title">${escapeHtml(r.label)}</div>
+        <div class="row-sub">${escapeHtml(r.type||"")} · ${r.invoices} invoice${r.invoices!==1?"s":""}${r.due>0?" · Due "+fmt(r.due):""}</div>
+      </div><div class="row-right row-title">${fmt(r.value)}</div></div>
+    `).join("") : `<div class="empty-hint">No customers yet.</div>`);
+}
+
+async function renderProfitReport(body){
+  const d = await api("GET","/reports/profit");
+  const missingCost = d.rows.some(r=>!r.hasCost && r.pieces>0);
+  body.innerHTML = `
+    <div style="font-weight:800;font-size:14px;">Profit Report</div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Revenue minus each product's latest recorded purchase cost</div>
+    <div class="stat-grid" style="margin-bottom:12px;">
+      <div class="stat-card plain"><div class="label">Revenue</div><div class="value">${fmt(d.totalRevenue)}</div></div>
+      <div class="stat-card plain"><div class="label">Cost</div><div class="value">${fmt(d.totalCost)}</div></div>
+      <div class="stat-card navy"><div class="label">Profit</div><div class="value">${fmt(d.totalProfit)}</div></div>
+    </div>
+    ${missingCost ? `<div class="muted" style="font-size:11px;margin-bottom:8px;">⚠ Some items sold have no purchase on file, so their cost is counted as ₹0 — record a Purchase entry for accurate profit.</div>` : ""}
+    ${d.rows.length ? d.rows.slice(0,50).map(r=>`
+      <div class="list-row"><div>
+        <div class="row-title">${escapeHtml(r.name)}${!r.hasCost&&r.pieces>0?' <span class="pill warn">no cost on file</span>':""}</div>
+        <div class="row-sub">${r.date} · ${escapeHtml(r.challan_no)} · Revenue ${fmt(r.revenue)} − Cost ${fmt(r.cost)}</div>
+      </div><div class="row-right row-title" style="color:${r.profit>=0?'var(--ok)':'var(--danger)'};">${fmt(r.profit)}</div></div>
+    `).join("") : `<div class="empty-hint">No sales yet.</div>`}
+  `;
 }
 
 })();

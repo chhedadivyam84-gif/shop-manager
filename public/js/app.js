@@ -561,8 +561,8 @@ function renderCart(){
 
       <div class="dim-grid">
         ${m.needsThickness ? dim("Thickness", m.thicknessUnit, "thicknessIn", c.thicknessIn) : ""}
-        ${m.needsWidth ? dim("Width", m.widthUnit, "widthVal", c.widthVal) : ""}
         ${m.needsLength ? dim("Length", m.lengthUnit, "lengthFt", c.lengthFt) : ""}
+        ${m.needsWidth ? dim("Width", m.widthUnit, "widthVal", c.widthVal) : ""}
         ${dim("Qty", "pcs", "pieces", c.pieces)}
         ${dim("Rate", "₹/"+m.unit+(isChallanMode()?" · optional":""), "rate", c.rate)}
       </div>
@@ -1097,8 +1097,8 @@ function openStockIn(p){
 
       <div class="dim-grid">
         ${m.needsThickness ? dim("Thickness", m.thicknessUnit, "thicknessIn", ctx.thicknessIn) : ""}
-        ${m.needsWidth ? dim("Width", m.widthUnit, "widthVal", ctx.widthVal) : ""}
         ${m.needsLength ? dim("Length", m.lengthUnit, "lengthFt", ctx.lengthFt) : ""}
+        ${m.needsWidth ? dim("Width", m.widthUnit, "widthVal", ctx.widthVal) : ""}
         ${dim("Qty received", "pcs", "pieces", ctx.pieces)}
         ${dim("Rate", "₹/"+m.unit, "rate", ctx.rate)}
       </div>
@@ -1389,8 +1389,8 @@ function renderAddProductSheet(context){
     const el = document.getElementById("np-dims");
     el.innerHTML =
       (m.needsThickness ? box("Thickness", m.thicknessUnit, "np-thk", prev.thk ?? (editing && editing.thickness_in) ?? "") : "") +
-      (m.needsWidth ? box("Width", m.widthUnit, "np-wid", prev.wid ?? (editing && editing.width_val) ?? "") : "") +
-      (m.needsLength ? box("Length", m.lengthUnit, "np-len", prev.len ?? (editing && editing.length_ft) ?? "") : "");
+      (m.needsLength ? box("Length", m.lengthUnit, "np-len", prev.len ?? (editing && editing.length_ft) ?? "") : "") +
+      (m.needsWidth ? box("Width", m.widthUnit, "np-wid", prev.wid ?? (editing && editing.width_val) ?? "") : "");
     el.style.display = el.innerHTML ? "" : "none";
   }
   renderSizes();

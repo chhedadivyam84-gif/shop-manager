@@ -1,2 +1,0 @@
-2026-07-24T17:45:19.816Z | reset by Owner (via direct request, confirmed in chat) | pre-reset backup: shop-20260724-231506.db
-2026-07-24T17:48:43.205Z | reset by Owner (STAFF_owner) | pre-reset backup: shop-20260724-231843.db

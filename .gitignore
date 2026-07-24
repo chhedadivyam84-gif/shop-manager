@@ -3,6 +3,7 @@ data/*.db
 data/*.db-*
 data/session-secret.txt
 data/.env
+data/reset-log.txt
 npm-debug.log
 backups/
 print-archive/

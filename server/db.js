@@ -266,4 +266,9 @@ db.transaction = function (fn) {
   };
 };
 
+// Where the data lives — the backup module needs the on-disk paths, and this
+// is the single place that knows them.
+db.dataDir = DATA_DIR;
+db.file = path.join(DATA_DIR, "shop.db");
+
 module.exports = db;

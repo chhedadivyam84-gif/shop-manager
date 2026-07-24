@@ -4,7 +4,20 @@ const crypto = require("crypto");
 const express = require("express");
 const session = require("express-session");
 
+// Load data/.env if present, before anything reads process.env. Node 20.12+/22
+// has this built in, so cloud-backup credentials need no dotenv dependency.
+// Guarded: a shop with no .env (the default, fully-local setup) is normal.
+try {
+  const envPath = path.join(__dirname, "..", "data", ".env");
+  if (fs.existsSync(envPath) && typeof process.loadEnvFile === "function") {
+    process.loadEnvFile(envPath);
+  }
+} catch (err) {
+  console.warn("Could not load data/.env:", err.message);
+}
+
 const db = require("./db");
+const backup = require("./backup");
 const { requireAuth, requireRole } = require("./auth");
 
 const app = express();
@@ -48,6 +61,7 @@ app.use("/api/invoices", requireAuth, require("./routes/invoices"));
 app.use("/api/reports", requireAuth, require("./routes/reports"));
 app.use("/api/staff", requireAuth, requireRole("owner"), require("./routes/staff"));
 app.use("/api/audit", requireAuth, requireRole("owner"), require("./routes/audit"));
+app.use("/api/backup", requireAuth, requireRole("owner"), require("./routes/backup"));
 
 app.use(express.static(path.join(__dirname, "..", "public")));
 
@@ -62,4 +76,7 @@ app.listen(PORT, "0.0.0.0", () => {
     console.log(`Open http://localhost:${PORT}`);
     console.log("On other phones/tablets on the same WiFi, use this PC's local IP address instead of localhost.");
   }
+  // Automatic rotating snapshots (+ cloud if configured). Started after the
+  // server is up so a backup can never delay accepting requests.
+  backup.startSchedule();
 });

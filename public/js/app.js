@@ -1242,6 +1242,12 @@ function openSettings(){
       <div class="section-title">Staff Access</div>
       <button class="btn btn-outline" id="st-manage-staff">Manage Staff &amp; PINs</button>
       <button class="btn btn-outline" id="st-audit-log" style="margin-top:8px;">Activity Log</button>
+
+      <div class="section-title">Backup &amp; Restore</div>
+      <div class="card" id="backup-status"><div class="empty-hint">Loading backup status…</div></div>
+      <button class="btn btn-primary" id="st-download-backup" style="margin-top:10px;">⬇ Download Backup Now</button>
+      <button class="btn btn-outline" id="st-run-backup" style="margin-top:8px;">Back Up Now</button>
+      <p class="muted" style="font-size:11px;margin-top:8px;">Your whole shop lives in one file. Automatic snapshots are kept on this PC daily. Use <strong>Download Backup</strong> to keep a copy on your phone or a USB drive — that's your safety net if this PC is ever lost.</p>
     ` : `<div class="card"><div class="empty-hint">Business details and staff accounts can only be changed by the owner.</div></div>`}
 
     <button class="btn btn-outline" id="st-logout" style="margin-top:16px;">Log out of this device</button>
@@ -1268,12 +1274,68 @@ function openSettings(){
   if(manageStaffBtn) manageStaffBtn.addEventListener("click", openStaffManage);
   const auditLogBtn = sheet.querySelector("#st-audit-log");
   if(auditLogBtn) auditLogBtn.addEventListener("click", openAuditLog);
+
+  if(owner){
+    renderBackupStatus();
+    // Download streams a fresh snapshot straight to the browser. A hidden
+    // <iframe> lets the file download without navigating away from the sheet,
+    // and keeps the session cookie (unlike opening a new tab on some phones).
+    sheet.querySelector("#st-download-backup").addEventListener("click", ()=>{
+      toast("Preparing your backup file…", "ok");
+      let frame = document.getElementById("backup-dl-frame");
+      if(!frame){
+        frame = document.createElement("iframe");
+        frame.id = "backup-dl-frame"; frame.style.display = "none";
+        document.body.appendChild(frame);
+      }
+      frame.src = "/api/backup/download?t=" + Date.now();
+    });
+    sheet.querySelector("#st-run-backup").addEventListener("click", async (e)=>{
+      const btn = e.currentTarget; btn.disabled = true; btn.textContent = "Backing up…";
+      try{
+        const r = await api("POST", "/backup/run");
+        const cloudMsg = r.cloud.ok ? " and uploaded to cloud"
+          : (r.cloud.attempted ? " (cloud upload failed — check internet)" : "");
+        toast("Backup saved on this PC" + cloudMsg + ".", r.cloud.attempted && !r.cloud.ok ? "" : "ok");
+        renderBackupStatus();
+      }catch(err){ toast(err.message); }
+      finally{ btn.disabled = false; btn.textContent = "Back Up Now"; }
+    });
+  }
   sheet.querySelector("#st-logout").addEventListener("click", async ()=>{
     await api("POST","/auth/logout");
     closeAllSheets();
     await showLogin();
   });
   showSheet("sheet-settings");
+}
+
+async function renderBackupStatus(){
+  const box = document.getElementById("backup-status");
+  if(!box) return;
+  try{
+    const s = await api("GET", "/backup");
+    if(!box.isConnected) return;
+    const last = s.lastRun;
+    const when = last ? new Date(last.at) : null;
+    const lastLine = last
+      ? `Last backup: <strong>${when.toLocaleString("en-IN",{dateStyle:"medium",timeStyle:"short"})}</strong> (${last.trigger})`
+      : `No backup yet this session — one runs automatically shortly after startup.`;
+    const cloudLine = s.cloudEnabled
+      ? `<span class="pill ok">Cloud backup on</span>`
+      : `<span class="pill warn">Cloud off — local only</span>`;
+    box.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;">
+        <div class="row-title" style="font-size:12.5px;">${lastLine}</div>
+        ${cloudLine}
+      </div>
+      <div class="muted" style="font-size:11.5px;">
+        ${s.localCount} snapshot${s.localCount!==1?"s":""} kept on this PC (last ${s.keepLocal} days).
+        ${last && last.cloud && last.cloud.attempted && !last.cloud.ok ? `<br><span style="color:var(--danger);">Last cloud upload failed: ${escapeHtml(last.cloud.error||"")}</span>` : ""}
+      </div>`;
+  }catch(e){
+    if(box.isConnected) box.innerHTML = `<div class="empty-hint">Couldn't load backup status.</div>`;
+  }
 }
 
 /* ============================================================

@@ -1912,9 +1912,18 @@ function closeFullscreen(id){ document.getElementById(id).classList.remove("show
 function applyPageSizeStyle(){
   const style = document.getElementById("page-size-style");
   if(!style) return;
-  style.textContent = state.paperSize === "A4"
-    ? "@page{ size:A4 portrait; margin:6mm; }"
-    : "@page{ size:A5 portrait; margin:5mm; }";
+  const isA4 = state.paperSize === "A4";
+  const pageH = isA4 ? 297 : 210, margin = isA4 ? 6 : 5;
+  const contentH = pageH - margin * 2;
+  // min-height (not height/max-height) applies on-screen too, not just
+  // @media print — this is what "Download PDF" (html2canvas) rasterises
+  // as-is, so the screenshot already matches print without a separate
+  // stretch step. A short item list gets stretched to fill it (via the
+  // table's flex:1); a long one is free to grow taller, never clipped.
+  style.textContent = `
+    @page{ size:${isA4 ? "A4" : "A5"} portrait; margin:${margin}mm; }
+    .invoice-page{ min-height:${contentH}mm; }
+  `;
 }
 function setPaper(size){
   state.paperSize = size;
@@ -2202,15 +2211,32 @@ async function downloadInvoicePdf(){
         clonedDoc.head.appendChild(style);
       }
     });
-    const imgData = canvas.toDataURL("image/png");
     const { jsPDF } = window.jspdf;
     const isA4 = state.paperSize==="A4";
     const pdf = new jsPDF({unit:"mm", format: isA4 ? "a4" : "a5"});
     const pageWidth = pdf.internal.pageSize.getWidth();
     const pageHeight = pdf.internal.pageSize.getHeight();
     const imgWidth = pageWidth;
-    const imgHeight = Math.min(pageHeight, canvas.height * imgWidth / canvas.width);
-    pdf.addImage(imgData, "PNG", 0, 0, imgWidth, imgHeight);
+    // A long item list can make the captured canvas taller than one page —
+    // slice it into page-height chunks and add each as its own PDF page,
+    // rather than the previous Math.min(), which silently cropped anything
+    // past the first page instead of continuing onto a second one.
+    const pxPerMm = canvas.width / imgWidth;
+    const pageHeightPx = Math.round(pageHeight * pxPerMm);
+    let renderedPx = 0, firstPage = true;
+    while (renderedPx < canvas.height) {
+      const sliceHeightPx = Math.min(pageHeightPx, canvas.height - renderedPx);
+      const sliceCanvas = document.createElement("canvas");
+      sliceCanvas.width = canvas.width;
+      sliceCanvas.height = sliceHeightPx;
+      sliceCanvas.getContext("2d").drawImage(
+        canvas, 0, renderedPx, canvas.width, sliceHeightPx, 0, 0, canvas.width, sliceHeightPx
+      );
+      if (!firstPage) pdf.addPage();
+      pdf.addImage(sliceCanvas.toDataURL("image/png"), "PNG", 0, 0, imgWidth, sliceHeightPx / pxPerMm);
+      renderedPx += sliceHeightPx;
+      firstPage = false;
+    }
     const fname = (lastPreviewInvoice && lastPreviewInvoice.challan_no ? lastPreviewInvoice.challan_no : "invoice") + ".pdf";
     pdf.save(fname);
   }catch(e){

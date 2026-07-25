@@ -196,18 +196,12 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
   const footerReserve = bottomBoxH + signRowH + termsBoxH;
   const tableTargetBottom = PAGE_H - MARGIN - footerReserve;
 
-  // No real pagination here — this layout is built to fill exactly one page
-  // (per spec). An unusually long item list would otherwise run the table
-  // (and everything below it) off the bottom of the sheet, so row height
-  // shrinks to whatever fits the fixed budget instead, down to a legibility
-  // floor. Genuinely huge orders beyond that floor are a known limitation.
-  const availableTableH = tableTargetBottom - y - headerH;
-  const neededRows = invoice.items.length + 1; // +1 for the Total Quantity row
-  const bodyRowH = neededRows > 0
-    ? Math.max(fs(3.2), Math.min(idealBodyRowH, availableTableH / neededRows))
-    : idealBodyRowH;
+  // Row height stays CONSTANT regardless of item count — a long order pages
+  // onto a continuation sheet instead of squeezing every row down to fit
+  // one page (which just made a big order unreadable). Only the page that
+  // ends up holding the LAST item also reserves room for the footer below.
+  const bodyRowH = idealBodyRowH;
 
-  // ---- Draw the table ----
   const drawHeaderRow = (yy) => {
     doc.setFont("helvetica", "bold"); doc.setFontSize(fs(7));
     cols.forEach((c, ci) => {
@@ -215,47 +209,94 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
       doc.text(c.h.toUpperCase(), x, yy + headerH - fs(1.8), c.align === "right" ? { align: "right" } : undefined);
     });
   };
-  drawHeaderRow(y);
-  y += headerH;
-  const bodyTopY = y;
-
-  invoice.items.forEach((it, i) => {
+  const drawItemRow = (values, rowY) => {
+    doc.setFont("helvetica", "normal"); doc.setFontSize(fs(7.5));
+    cols.forEach((c, ci) => {
+      const x = c.align === "right" ? colX[ci + 1] - 1 : colX[ci] + 1;
+      const text = doc.splitTextToSize(String(values[ci] ?? ""), c.w - 2);
+      doc.text(text[0] || "", x, rowY + bodyRowH - fs(1.8), c.align === "right" ? { align: "right" } : undefined);
+    });
+  };
+  const itemValues = (it, i) => {
     const mode = it.mode || "UNIT";
     const unit = it.unit_label || (Pricing.MODES[mode] && Pricing.MODES[mode].unit) || "";
-    const values = showRate
+    return showRate
       ? [String(i + 1), it.name, it.brand || "-", it.hsn_code || "-", it.size_label || "-", unit,
          Pricing.formatQty(it.qty, mode).replace(" " + unit, ""), fmtPaise(it.rate).replace("Rs. ", ""),
          (it.gst_rate || 0) + "%", fmtPaise(it.qty * it.rate).replace("Rs. ", "")]
       : [String(i + 1), it.name, it.brand || "-", it.hsn_code || "-", it.size_label || "-", unit,
          Pricing.formatQty(it.qty, mode).replace(" " + unit, "")];
-    doc.setFont("helvetica", "normal"); doc.setFontSize(fs(7.5));
-    cols.forEach((c, ci) => {
-      const x = c.align === "right" ? colX[ci + 1] - 1 : colX[ci] + 1;
-      const text = doc.splitTextToSize(String(values[ci] ?? ""), c.w - 2);
-      doc.text(text[0] || "", x, y + bodyRowH - fs(1.8), c.align === "right" ? { align: "right" } : undefined);
-    });
-    y += bodyRowH;
-  });
+  };
 
-  const totalQty = Pricing.round2(invoice.items.reduce((s, it) => s + (Number(it.qty) || 0), 0));
-  doc.setFont("helvetica", "bold"); doc.setFontSize(fs(7.5));
-  doc.text("Total Quantity", colX[6] - 1, y + bodyRowH - fs(1.8), { align: "right" });
-  doc.text(String(totalQty), colX[7] - 1, y + bodyRowH - fs(1.8), { align: "right" });
-  y += bodyRowH;
+  let curTableTopY = tableTopY;
+  let idx = 0;
+  let tableBottom;
+  for (;;) {
+    drawHeaderRow(y);
+    y += headerH;
+    const bodyTopY = y;
+    let rowsDrawnThisPage = 0;
 
-  // Stretch: if the natural content is shorter than the reserved footer
-  // position, pad the table down to meet it exactly — never a blank gap
-  // between a short item list and the totals/signature/terms below.
-  const tableBottom = Math.max(y, tableTargetBottom);
+    // Does everything from here (remaining items + the Total Quantity row)
+    // fit on THIS page alongside the footer? If so, this is the last page.
+    const remaining = invoice.items.length - idx;
+    const roomWithFooter = tableTargetBottom - y;
+    const isLastPage = remaining * bodyRowH + bodyRowH <= roomWithFooter + 0.01;
 
-  doc.setDrawColor(0);
-  // Row separator lines (header + each body row + total-qty row), only across
-  // the actual content height drawn.
-  let ruleY = bodyTopY;
-  for (let i = 0; i <= invoice.items.length; i++) { line(ruleY, MARGIN, tableRight); ruleY += bodyRowH; }
-  colX.forEach(x => doc.line(x, tableTopY, x, tableBottom));
-  doc.rect(MARGIN, tableTopY, tableRight - MARGIN, tableBottom - tableTopY);
-  y = tableBottom;
+    // Rows this page can hold: reserve room for the footer only if it's the
+    // last page; otherwise use the full sheet, minus one row for a
+    // "Continued..." note when more pages will follow.
+    const maxRowsThisPage = isLastPage
+      ? remaining
+      : Math.max(1, Math.floor((PAGE_H - MARGIN - y) / bodyRowH) - 1);
+
+    while (rowsDrawnThisPage < maxRowsThisPage && idx < invoice.items.length) {
+      drawItemRow(itemValues(invoice.items[idx], idx), y);
+      y += bodyRowH;
+      idx++;
+      rowsDrawnThisPage++;
+    }
+
+    if (isLastPage) {
+      const totalQty = Pricing.round2(invoice.items.reduce((s, it) => s + (Number(it.qty) || 0), 0));
+      doc.setFont("helvetica", "bold"); doc.setFontSize(fs(7.5));
+      doc.text("Total Quantity", colX[6] - 1, y + bodyRowH - fs(1.8), { align: "right" });
+      doc.text(String(totalQty), colX[7] - 1, y + bodyRowH - fs(1.8), { align: "right" });
+      y += bodyRowH;
+      rowsDrawnThisPage++;
+
+      // Stretch: if this page's content is shorter than the reserved footer
+      // position, pad the table down to meet it exactly.
+      tableBottom = Math.max(y, tableTargetBottom);
+      doc.setDrawColor(0);
+      let ruleY = bodyTopY;
+      for (let i = 0; i <= rowsDrawnThisPage - 1; i++) { line(ruleY, MARGIN, tableRight); ruleY += bodyRowH; }
+      colX.forEach(x => doc.line(x, curTableTopY, x, tableBottom));
+      doc.rect(MARGIN, curTableTopY, tableRight - MARGIN, tableBottom - curTableTopY);
+      y = tableBottom;
+      break;
+    } else {
+      // Close out this page's table box, note it continues, then start a
+      // fresh page with its own frame + a compact repeated header.
+      doc.setDrawColor(0);
+      let ruleY = bodyTopY;
+      for (let i = 0; i <= rowsDrawnThisPage; i++) { line(ruleY, MARGIN, tableRight); ruleY += bodyRowH; }
+      colX.forEach(x => doc.line(x, curTableTopY, x, y));
+      doc.rect(MARGIN, curTableTopY, tableRight - MARGIN, y - curTableTopY);
+      doc.setFont("helvetica", "italic"); doc.setFontSize(fs(7)); doc.setTextColor(90);
+      doc.text("Continued on next page...", PAGE_W - MARGIN, y + fs(4), { align: "right" });
+      doc.setTextColor(0);
+
+      doc.addPage();
+      drawPageFrame();
+      y = MARGIN;
+      doc.setFont("helvetica", "bold"); doc.setFontSize(fs(10));
+      doc.text((settings.business_name || "Shop") + " — " + invoice.challan_no + " (Contd.)", PAGE_W / 2, y + fs(4), { align: "center" });
+      y += fs(4) + fs(3);
+      line(y); y += fs(3);
+      curTableTopY = y;
+    }
+  }
 
   // ---- Bottom: delivery info (left) + boxed totals (right) ----
   const bottomTopY = y;

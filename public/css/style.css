@@ -186,7 +186,23 @@ nav.bottom .tab.active{color:var(--navy);}
    CONTENT inside is styled ERP-document-plain (black borders, no colour) at
    all times, since html2canvas rasterises exactly this on-screen state for
    "Download PDF" — it never sees @media print rules. */
-.invoice-page{background:#fff;color:#000;margin-top:0;margin-right:16px;margin-bottom:16px;margin-left:16px;border-radius:10px;padding:10px;font-size:11px;flex:1;overflow-y:auto;}
+.invoice-page{
+  background:#fff;color:#000;margin-top:0;margin-right:16px;margin-bottom:16px;margin-left:16px;
+  border-radius:10px;padding:10px;font-size:11px;overflow-y:auto;
+  /* Structural flex layout applies on-screen too (not just @media print) so
+     the preview IS what "Download PDF" screenshots — that button rasterises
+     this exact on-screen state and never sees @media print rules. min-height
+     is set per paper size by applyPageSizeStyle() in app.js; a short item
+     list stretches the table (via .erp-table-wrap flex:1) to fill it, while
+     a long one simply grows taller than one page — never clipped, since
+     nothing here constrains a MAXIMUM height. */
+  /* flex-shrink:0 — same reason as .erp-table-wrap below: flex-grow:1 alone
+     still lets this shrink below its own content's natural height (overflow-
+     y:auto would then just silently hide/scroll past the difference, which
+     print and html2canvas both render as clipped content). Grow (fills the
+     sheet when short) stays; shrink (would truncate a long invoice) doesn't. */
+  display:flex;flex-direction:column;flex:1 0 auto;
+}
 .invoice-page.size-a5{max-width:360px;margin-left:auto;margin-right:auto;}
 
 /* The printed invoice/challan uses ONLY plain hex/grey colours, never the
@@ -212,11 +228,28 @@ nav.bottom .tab.active{color:var(--navy);}
 .erp-kv span{color:#333;}
 .erp-kv b{font-weight:800;}
 
-/* Product table: fills remaining page height in print (see @media print
-   below) so a short item list never leaves a large blank gap before the
-   footer. */
-.erp-table-wrap{border:1px solid #000;border-top:none;}
-table.erp-table{width:100%;height:100%;border-collapse:collapse;font-size:8.5px;}
+/* Product table: the ONE section allowed to grow — fills remaining page
+   height (via .invoice-page's min-height, set in JS) so a short item list
+   never leaves a large blank gap before the footer, while every other
+   section keeps its natural size. */
+.erp-banner,.erp-header,.erp-parties,.erp-bottom,.erp-sign-row,.erp-terms{flex:0 0 auto;}
+/* flex:1 alone grows this wrapper to fill leftover space when the table is
+   short — a percentage height on the <table> itself to match was tried and
+   dropped: with many rows the table's true content height can exceed the
+   flex-computed wrapper height while overflow stays visible, so rows spilled
+   out of the wrapper and overlapped the totals box below it. Plain block
+   flow avoids that: the wrapper is exactly as tall as its table, whether
+   that's shorter (stretched by flex-grow) or taller (grows normally, no cap,
+   no overlap) than the leftover space. */
+/* flex-shrink:0 is the actual fix here — flex-grow:1 alone still lets a
+   flex item shrink BELOW its own content's natural size once min-height:0
+   overrides the default protection against that, which is what caused rows
+   to visually spill past this wrapper's box when there wasn't enough
+   leftover space for all of them. Grow is still allowed (stretches a short
+   item list); shrink is not (a long one keeps every row, growing the page
+   instead of losing rows to overflow). */
+.erp-table-wrap{border:1px solid #000;border-top:none;flex:1 0 auto;min-height:0;}
+table.erp-table{width:100%;border-collapse:collapse;font-size:8.5px;}
 table.erp-table th{text-align:left;font-size:7.5px;text-transform:uppercase;letter-spacing:.02em;font-weight:800;padding:4px 5px;border:1px solid #000;}
 table.erp-table td{padding:4px 5px;border:1px solid #000;vertical-align:top;}
 table.erp-table th.c-sn,table.erp-table td.c-sn{width:22px;text-align:center;}
@@ -320,23 +353,17 @@ table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #000;}
   body *{visibility:hidden;}
   .invoice-page, .invoice-page *{visibility:visible;}
   .fullscreen{background:#fff !important;position:static !important;max-width:none !important;}
-  /* Stretches to fill the exact printable area (the @page margin box,
-     set dynamically in JS per A4/A5 — see applyPageSizeStyle in app.js) —
-     top/right/bottom/left:0 rather than a computed height, so it always
-     matches whatever page size/margins are actually in effect. */
+  /* top/left/right:0 but deliberately NO bottom:0 and no overflow:hidden —
+     min-height (set per paper size in applyPageSizeStyle, app.js) is what
+     stretches a SHORT item list to fill the page via the table's flex:1, but
+     a LONG one must be free to grow past one page so the browser's own print
+     pagination carries it onto page 2+. Clipping here was the previous bug:
+     any content past one page's height was silently cut off. */
   .invoice-page{
-    position:absolute;top:0;left:0;right:0;bottom:0;margin:0;
-    display:flex;flex-direction:column;
+    position:absolute;top:0;left:0;right:0;margin:0;
     border:1px solid #000;border-radius:0 !important;box-shadow:none !important;
     padding:3mm;box-sizing:border-box;background:#fff !important;
-    overflow:hidden;
   }
-  /* The product table is the one section allowed to grow — this is what
-     keeps the footer pinned to the bottom instead of leaving a blank gap
-     when there are only a few line items. */
-  .erp-table-wrap{flex:1 1 auto;min-height:0;}
-  .erp-table-wrap table{height:100%;}
-  .erp-banner,.erp-header,.erp-parties,.erp-bottom,.erp-sign-row,.erp-terms{flex:0 0 auto;}
 }
 
 /* ============================================================

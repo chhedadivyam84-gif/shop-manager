@@ -2154,7 +2154,12 @@ async function downloadInvoicePdf(){
           --bg:#fbfaf8; --bg-outer:#f0efeb; --card:#ffffff; --border:#e0dfda;
           --text:#262b38; --muted:#6b7280; --ok:#2e9e5b; --ok-bg:#dcf3e4;
           --warn-bg:#f5e7c9; --warn-text:#8a6a1f; --danger:#c0392b; --danger-bg:#f6dcd8;
-        }`;
+        }
+        /* This PDF path rasterises the on-screen card as-is, bypassing the
+           @media print rules entirely — reset the screen-only rounded-corner
+           card look here too so the downloaded PDF frames like a printed
+           sheet, not a floating app card. */
+        #invoice-page-content{border-radius:0 !important;box-shadow:none !important;border:1.5px solid #333 !important;}`;
         clonedDoc.head.appendChild(style);
       }
     });

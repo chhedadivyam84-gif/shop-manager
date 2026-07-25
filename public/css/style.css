@@ -340,9 +340,15 @@ table.inv-table tfoot td{font-weight:700;background:#f4f4f2;border-top:1.5px sol
 #toast.ok{background:var(--ok);}
 
 @media print{
+  html,body{background:#fff !important;}
   body *{visibility:hidden;}
   .invoice-page, .invoice-page *{visibility:visible;}
-  .invoice-page{position:absolute;top:0;left:0;margin:0;width:100%;border:1.5px solid #333;padding:14px 16px 16px;box-sizing:border-box;}
+  .fullscreen{background:#fff !important;position:static !important;max-width:none !important;}
+  .invoice-page{
+    position:absolute;top:0;left:0;margin:0;width:100%;
+    border:1.5px solid #333;border-radius:0 !important;box-shadow:none !important;
+    padding:14px 16px 16px;box-sizing:border-box;background:#fff !important;
+  }
 }
 
 /* ============================================================

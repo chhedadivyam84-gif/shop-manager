@@ -407,6 +407,15 @@ addColumn("invoices", "delivery_man", "TEXT DEFAULT ''");
 // so a later edit to a product's code never rewrites an already-printed bill.
 addColumn("invoice_items", "code", "TEXT DEFAULT ''");
 
+// Sale Payment form fields: which invoice the payment is against (optional —
+// a payment can still be a general on-account credit with no specific
+// invoice), a reference number (cheque/UPI transaction id), and an explicit,
+// editable payment date separate from created_at (which stays the true
+// record-creation timestamp used for ledger ordering).
+addColumn("payments", "invoice_id", "TEXT REFERENCES invoices(id) ON DELETE SET NULL");
+addColumn("payments", "reference_no", "TEXT DEFAULT ''");
+addColumn("payments", "payment_date", "TEXT DEFAULT ''");
+
 // node:sqlite has no built-in transaction wrapper the way better-sqlite3 does;
 // this shim keeps every route file's `db.transaction(() => {...})()` call working unchanged.
 db.transaction = function (fn) {

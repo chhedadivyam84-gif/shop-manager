@@ -1263,7 +1263,10 @@ async function openCustomerDetail(customerId){
       if(l.type==="invoice"){
         return `<div class="list-row" data-open-invoice="${l.id}" style="cursor:pointer;"><div><div class="row-title">${escapeHtml(l.label)}</div><div class="row-sub">${l.date} · Invoice</div></div><div class="row-right row-title" style="color:var(--danger);">+${fmt(l.amount)}</div></div>`;
       }
-      return `<div class="list-row"><div><div class="row-title">Payment received${l.note?" — "+escapeHtml(l.note):""}</div><div class="row-sub">${l.date} · ${escapeHtml(l.label)}</div></div>
+      const subParts = [l.date, l.label];
+      if(l.againstInvoiceNo) subParts.push("against "+l.againstInvoiceNo);
+      if(l.referenceNo) subParts.push("Ref# "+l.referenceNo);
+      return `<div class="list-row"><div><div class="row-title">Payment received${l.note?" — "+escapeHtml(l.note):""}</div><div class="row-sub">${subParts.map(escapeHtml).join(" · ")}</div></div>
         <div class="row-right" style="display:flex;align-items:center;gap:8px;">
           <span class="row-title" style="color:var(--ok);">${fmt(l.amount)}</span>
           ${isOwner() ? `<a href="#" data-void-payment="${l.id}" class="btn-danger-link" style="font-size:11px;">Void</a>` : ""}
@@ -1311,22 +1314,32 @@ async function openCustomerDetail(customerId){
    ============================================================ */
 function openRecordPayment(customer){
   const sheet = document.getElementById("sheet-record-payment");
+  const today = new Date().toISOString().slice(0,10);
   sheet.innerHTML = `
     <div class="sheet-handle"></div>
     <button class="sheet-close" data-sheetclose>✕</button>
     <div class="sheet-title">Record Payment</div>
     <div class="muted" style="font-size:12px;margin-bottom:10px;">${escapeHtml(customer.name)} · Due: ${fmt(customer.due)}</div>
+    <label class="field-label">Date</label>
+    <input type="date" id="rp-date" value="${today}">
+    <label class="field-label">Against Sales Invoice <span class="muted" style="font-weight:400;">— optional, leave blank for a general payment</span></label>
+    <select id="rp-invoice">
+      <option value="">— General payment (not tied to one invoice) —</option>
+      ${customer.history.map(h=>`<option value="${h.id}">${escapeHtml(h.challan_no)} · ${h.date} · ${fmt(h.total)}</option>`).join("")}
+    </select>
     <label class="field-label">Amount received (₹)</label>
     <input type="number" id="rp-amount" min="0" value="${customer.due}">
-    <label class="field-label">Method</label>
+    <label class="field-label">Payment Mode</label>
     <div class="chip-row" id="rp-method-chips">
       <button class="chip selected" data-method="Cash">Cash</button>
       <button class="chip" data-method="UPI">UPI</button>
-      <button class="chip" data-method="Card">Card</button>
-      <button class="chip" data-method="Bank Transfer">Bank Transfer</button>
+      <button class="chip" data-method="Bank">Bank</button>
+      <button class="chip" data-method="Cheque">Cheque</button>
     </div>
-    <label class="field-label">Note (optional)</label>
-    <input type="text" id="rp-note" placeholder="e.g. Cheque no., reference">
+    <label class="field-label">Reference No. <span class="muted" style="font-weight:400;">— optional, e.g. cheque or UPI transaction no.</span></label>
+    <input type="text" id="rp-reference" placeholder="e.g. 000123 or UPI txn id">
+    <label class="field-label">Remarks (optional)</label>
+    <input type="text" id="rp-note" placeholder="e.g. Advance against next order">
     <button class="btn btn-primary" id="rp-save" style="margin-top:16px;">Save Payment</button>
   `;
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
@@ -1339,6 +1352,9 @@ function openRecordPayment(customer){
     try{
       await api("POST", `/customers/${customer.id}/payments`, {
         amount, method: sheet.querySelector("[data-method].selected").dataset.method,
+        date: document.getElementById("rp-date").value,
+        invoiceId: document.getElementById("rp-invoice").value || null,
+        referenceNo: document.getElementById("rp-reference").value.trim(),
         note: document.getElementById("rp-note").value.trim()
       });
       await loadCustomers();

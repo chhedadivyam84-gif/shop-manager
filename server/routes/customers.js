@@ -1,6 +1,6 @@
 const express = require("express");
 const db = require("../db");
-const { uid, logAction, round2 } = require("../util");
+const { uid, logAction, round2, todayStr } = require("../util");
 const { requireRole } = require("../auth");
 
 const router = express.Router();
@@ -30,9 +30,14 @@ router.get("/:id", (req, res) => {
     SELECT id, challan_no, date, total, created_at FROM invoices
     WHERE customer_id = ? AND voided = 0 AND doc_type = 'invoice'
   `).all(c.id);
+  const invoiceNoById = Object.fromEntries(invoiceRows.map(h => [h.id, h.challan_no]));
   const ledger = [
     ...invoiceRows.map(h => ({ type: "invoice", id: h.id, label: h.challan_no, amount: h.total, date: h.date, at: h.created_at })),
-    ...payments.map(p => ({ type: "payment", id: p.id, label: p.method, amount: -p.amount, note: p.note, date: new Date(p.created_at).toISOString().slice(0, 10), at: p.created_at }))
+    ...payments.map(p => ({
+      type: "payment", id: p.id, label: p.method, amount: -p.amount, note: p.note,
+      referenceNo: p.reference_no, againstInvoiceNo: p.invoice_id ? (invoiceNoById[p.invoice_id] || null) : null,
+      date: p.payment_date || new Date(p.created_at).toISOString().slice(0, 10), at: p.created_at
+    }))
   ].sort((a, b) => b.at - a.at);
 
   res.json({ ...c, history, payments, ledger });
@@ -45,13 +50,22 @@ router.post("/:id/payments", (req, res) => {
   if (!amount || amount <= 0) return res.status(400).json({ error: "Enter a valid payment amount." });
   const method = req.body.method || "Cash";
   const note = (req.body.note || "").trim();
+  const referenceNo = (req.body.referenceNo || "").trim();
+  const paymentDate = (req.body.date || "").trim() || todayStr();
+
+  let invoiceId = null;
+  if (req.body.invoiceId) {
+    const inv = db.prepare("SELECT id FROM invoices WHERE id = ? AND customer_id = ? AND doc_type = 'invoice'").get(req.body.invoiceId, c.id);
+    if (!inv) return res.status(400).json({ error: "Selected invoice no longer exists for this customer." });
+    invoiceId = inv.id;
+  }
 
   const id = uid("PAY");
   db.transaction(() => {
     db.prepare(`
-      INSERT INTO payments (id, customer_id, amount, method, note, voided, created_at)
-      VALUES (?, ?, ?, ?, ?, 0, ?)
-    `).run(id, c.id, amount, method, note, Date.now());
+      INSERT INTO payments (id, customer_id, amount, method, note, invoice_id, reference_no, payment_date, voided, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+    `).run(id, c.id, amount, method, note, invoiceId, referenceNo, paymentDate, Date.now());
     db.prepare("UPDATE customers SET due = MAX(0, due - ?) WHERE id = ?").run(amount, c.id);
   })();
 

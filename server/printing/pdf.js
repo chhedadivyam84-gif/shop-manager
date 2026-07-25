@@ -53,14 +53,24 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
     doc.setFontSize(size);
     doc.text(String(text), PAGE_W - MARGIN, y1, { align: "right" });
   };
+  // Outer frame around the whole printed sheet, matching the shop's paper
+  // form — a fixed rectangle re-drawn on every page, independent of how far
+  // the content actually reaches.
+  const drawPageFrame = () => {
+    doc.setDrawColor(80);
+    doc.rect(MARGIN - 5, MARGIN - 5, PAGE_W - (MARGIN - 5) * 2, PAGE_H - (MARGIN - 5) * 2);
+    doc.setDrawColor(0);
+  };
   const newPageIfNeeded = (need) => {
     if (y + need > PAGE_H - MARGIN) {
       doc.addPage();
       y = MARGIN;
+      drawPageFrame();
       return true;
     }
     return false;
   };
+  drawPageFrame();
 
   // ---- Header ----
   doc.setFont("helvetica", "bold"); doc.setFontSize(16); doc.setTextColor(0);
@@ -194,39 +204,31 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
   doc.setDrawColor(0);
   y += 2;
 
-  // ---- Totals / challan footer ----
-  newPageIfNeeded(challan ? 30 : 45);
+  // ---- Totals / footer: boxed grid, GSTIN + amount-in-words, then a
+  // receiver/stamp/authorised-signatory row — same structure for both
+  // document types, matching the shop's paper form. For a challan, CGST/
+  // SGST/IGST are always zero and "G. Total" here is a print-only figure
+  // (goods value + transport/loading) — it is NEVER what's stored as the
+  // invoice's actual total or added to the customer's due (that stays
+  // transport+loading only, set server-side), so a challan can never
+  // function as a demand for payment regardless of what this box shows. ----
+  newPageIfNeeded(45);
+  const totalsX = PAGE_W - MARGIN - 65;
+  const boxTopY = y - 4;
+  const rows = [];
+  let displayTotal;
   if (challan) {
-    const totalPieces = invoice.items.reduce((s, it) => s + (Number(it.pieces) || 0), 0);
     const subtotal = invoice.items.reduce((s, it) => s + (it.qty * it.rate || 0), 0);
-    if (showRate && subtotal > 0) {
-      doc.setFont("helvetica", "normal"); doc.setFontSize(9);
-      rightText("Subtotal (reference only): " + fmtPaise(subtotal), y); y += 5;
-    }
-    if (invoice.transport > 0) {
-      doc.setFont("helvetica", "normal"); doc.setFontSize(9);
-      rightText("Transport: " + fmtPaise(invoice.transport), y); y += 5;
-    }
-    if (invoice.loading > 0) {
-      doc.setFont("helvetica", "normal"); doc.setFontSize(9);
-      rightText("Loading / Labour: " + fmtPaise(invoice.loading), y); y += 5;
-    }
-    doc.setFont("helvetica", "bold"); doc.setFontSize(10.5);
-    rightText("Total Pieces: " + totalPieces, y); y += 14;
-    doc.setFont("helvetica", "normal"); doc.setFontSize(9);
-    doc.text("Received the above goods in good condition.", MARGIN, y); y += 16;
-    doc.setFontSize(8.5);
-    doc.text("Receiver's Signature", MARGIN + 10, y);
-    rightText("For " + (settings.business_name || "Shop"), y);
-    doc.line(MARGIN, y - 2, MARGIN + 45, y - 2);
-    doc.line(PAGE_W - MARGIN - 45, y - 2, PAGE_W - MARGIN, y - 2);
-    y += 8;
+    displayTotal = subtotal + invoice.transport + invoice.loading;
+    rows.push(["Subtotal", fmtPaise(subtotal)]);
+    rows.push(["Transport", fmtPaise(invoice.transport)]);
+    rows.push(["Additional Charges", fmtPaise(invoice.loading)]);
+    rows.push(["CGST", fmtPaise(0)]);
+    rows.push(["SGST", fmtPaise(0)]);
+    rows.push(["IGST", fmtPaise(0)]);
+    rows.push(["G. Total", fmtPaise(displayTotal), true]);
   } else {
-    // Boxed totals grid — every row ruled off, outer border drawn once the
-    // final height is known, matching the shop's paper challan-cum-invoice.
-    const totalsX = PAGE_W - MARGIN - 65;
-    const boxTopY = y - 4;
-    const rows = [];
+    displayTotal = invoice.total;
     rows.push(["Subtotal", fmtPaise(invoice.subtotal)]);
     if (invoice.discount_amount > 0) rows.push(["Discount", "-" + fmtPaise(invoice.discount_amount)]);
     rows.push(["Transport", fmtPaise(invoice.transport)]);
@@ -239,38 +241,37 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
       rows.push(["Advance Paid", "-" + fmtPaise(invoice.advance)]);
       rows.push(["Balance Due", fmtPaise(invoice.balance_due), true]);
     }
-    rows.forEach(([label, value, bold]) => {
-      doc.setFont("helvetica", bold ? "bold" : "normal"); doc.setFontSize(bold ? 10 : 8.5);
-      doc.text(label, totalsX + 2, y);
-      doc.text(value, PAGE_W - MARGIN - 2, y, { align: "right" });
-      y += 5;
-      doc.setDrawColor(210); doc.line(totalsX, y - 1.5, PAGE_W - MARGIN, y - 1.5); doc.setDrawColor(0);
-    });
-    doc.setDrawColor(120); doc.rect(totalsX, boxTopY, PAGE_W - MARGIN - totalsX, y - 1.5 - boxTopY); doc.setDrawColor(0);
-    y += 3;
-
-    if (settings.gstin) {
-      doc.setFont("helvetica", "normal"); doc.setFontSize(8);
-      doc.text("GSTIN No: " + settings.gstin, MARGIN, y); y += 4;
-    }
-    doc.setFont("helvetica", "bold"); doc.setFontSize(8);
-    doc.text("Amount in words:", MARGIN, y); y += 4;
-    doc.setFont("helvetica", "normal");
-    const words = doc.splitTextToSize(Pricing.amountInWords(invoice.total), CONTENT_W);
-    doc.text(words, MARGIN, y); y += words.length * 4 + 2;
-
-    // Signature / stamp / authorised-signatory row, same treatment as the challan's.
-    newPageIfNeeded(30);
-    y += 14;
-    doc.setFontSize(8.5);
-    doc.text("Receiver's Signature", MARGIN + 10, y);
-    doc.text("Company Stamp", PAGE_W / 2, y, { align: "center" });
-    rightText("For " + (settings.business_name || "Shop") + "\nAuthorised Signatory", y);
-    doc.line(MARGIN, y - 2, MARGIN + 45, y - 2);
-    doc.line(PAGE_W / 2 - 22, y - 2, PAGE_W / 2 + 22, y - 2);
-    doc.line(PAGE_W - MARGIN - 45, y - 2, PAGE_W - MARGIN, y - 2);
-    y += 8;
   }
+  rows.forEach(([label, value, bold]) => {
+    doc.setFont("helvetica", bold ? "bold" : "normal"); doc.setFontSize(bold ? 10 : 8.5);
+    doc.text(label, totalsX + 2, y);
+    doc.text(value, PAGE_W - MARGIN - 2, y, { align: "right" });
+    y += 5;
+    doc.setDrawColor(210); doc.line(totalsX, y - 1.5, PAGE_W - MARGIN, y - 1.5); doc.setDrawColor(0);
+  });
+  doc.setDrawColor(120); doc.rect(totalsX, boxTopY, PAGE_W - MARGIN - totalsX, y - 1.5 - boxTopY); doc.setDrawColor(0);
+  y += 3;
+
+  if (settings.gstin) {
+    doc.setFont("helvetica", "normal"); doc.setFontSize(8);
+    doc.text("GSTIN No: " + settings.gstin, MARGIN, y); y += 4;
+  }
+  doc.setFont("helvetica", "bold"); doc.setFontSize(8);
+  doc.text("Amount in words:", MARGIN, y); y += 4;
+  doc.setFont("helvetica", "normal");
+  const words = doc.splitTextToSize(Pricing.amountInWords(displayTotal), CONTENT_W);
+  doc.text(words, MARGIN, y); y += words.length * 4 + 2;
+
+  newPageIfNeeded(30);
+  y += 14;
+  doc.setFontSize(8.5);
+  doc.text("Receiver's Signature", MARGIN + 10, y);
+  doc.text("Company Stamp", PAGE_W / 2, y, { align: "center" });
+  rightText("For " + (settings.business_name || "Shop") + "\nAuthorised Signatory", y);
+  doc.line(MARGIN, y - 2, MARGIN + 45, y - 2);
+  doc.line(PAGE_W / 2 - 22, y - 2, PAGE_W / 2 + 22, y - 2);
+  doc.line(PAGE_W - MARGIN - 45, y - 2, PAGE_W - MARGIN, y - 2);
+  y += 8;
 
   // ---- Footer: terms + contact ----
   newPageIfNeeded(20);

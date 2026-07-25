@@ -2027,27 +2027,34 @@ function renderInvoicePageContent(){
     <td colspan="${showRate?3:1}"></td>
   </tr></tfoot>`;
 
-  const taxRows = inv.tax_type==="IGST"
-    ? `<div class="tr"><span>IGST</span><span>${fmtPaise(inv.igst)}</span></div>`
-    : `<div class="tr"><span>CGST</span><span>${fmtPaise(inv.cgst)}</span></div><div class="tr"><span>SGST</span><span>${fmtPaise(inv.sgst)}</span></div>`;
-
-  // Priced invoice: full totals + amount in words. Challan: a total-pieces
-  // line (plus a reference subtotal if rates are shown) and a received-in-
-  // good-condition signature block instead — never GST, since a challan is
-  // never a tax invoice regardless of whether a rate was noted per line.
-  const totalPieces = inv.items.reduce((s,it)=>s+(Number(it.pieces)||0),0);
+  // Priced invoice: full totals + amount in words. Challan: same boxed layout
+  // for visual consistency with the shop's paper form, but CGST/SGST/IGST
+  // stay at zero here — a challan never carries real GST regardless of what
+  // the box shows, and this "G. Total" is a print-only figure (goods value +
+  // transport/loading) that is NEVER what's stored as the invoice's actual
+  // total or added to the customer's due — that stays transport+loading only,
+  // set server-side, so a challan can never function as a demand for payment.
   const challanSubtotal = inv.items.reduce((s,it)=>s+(it.qty*it.rate||0),0);
+  const challanDisplayTotal = challanSubtotal + inv.transport + inv.loading;
   const footer = challan
-    ? `<div class="inv-totals">
-         ${showRate && challanSubtotal>0 ? `<div class="tr"><span>Subtotal (reference only)</span><span>${fmtPaise(challanSubtotal)}</span></div>` : ""}
-         ${inv.transport>0 ? `<div class="tr"><span>Transport</span><span>${fmtPaise(inv.transport)}</span></div>` : ""}
-         ${inv.loading>0 ? `<div class="tr"><span>Loading / Labour</span><span>${fmtPaise(inv.loading)}</span></div>` : ""}
-         <div class="tr grand"><span>Total pieces</span><span>${totalPieces}</span></div>
-       </div>
-       <div class="challan-sign">
-         <div>Received the above goods in good condition.</div>
-         <div class="challan-sign-lines"><span>Receiver's Signature</span><span>For ${escapeHtml(cfg.business_name)}</span></div>
-       </div>`
+    ? `<div class="inv-totals-box">
+      <div class="tb-row"><span>Subtotal</span><span>${fmtPaise(challanSubtotal)}</span></div>
+      <div class="tb-row"><span>Transport</span><span>${fmtPaise(inv.transport)}</span></div>
+      <div class="tb-row"><span>Additional Charges</span><span>${fmtPaise(inv.loading)}</span></div>
+      <div class="tb-row"><span>CGST</span><span>${fmtPaise(0)}</span></div>
+      <div class="tb-row"><span>SGST</span><span>${fmtPaise(0)}</span></div>
+      <div class="tb-row"><span>IGST</span><span>${fmtPaise(0)}</span></div>
+      <div class="tb-row tb-grand"><span>G. Total</span><span>${fmtPaise(challanDisplayTotal)}</span></div>
+    </div>
+    <div class="inv-below-box">
+      ${cfg.gstin ? `<div class="inv-gstin-line">GSTIN No: <b>${escapeHtml(cfg.gstin)}</b></div>` : ""}
+      <div class="inv-words"><span>Amount in words:</span> ${Pricing.amountInWords(challanDisplayTotal)}</div>
+    </div>
+    <div class="doc-sign-lines">
+      <span>Receiver's Signature</span>
+      <span class="doc-stamp-box">Company Stamp</span>
+      <span>For ${escapeHtml(cfg.business_name)}<br>Authorised Signatory</span>
+    </div>`
     : `<div class="inv-totals-box">
       <div class="tb-row"><span>Subtotal</span><span>${fmtPaise(inv.subtotal)}</span></div>
       ${inv.discount_amount>0?`<div class="tb-row" style="color:#c0392b;"><span>Discount</span><span>-${fmtPaise(inv.discount_amount)}</span></div>`:""}

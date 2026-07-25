@@ -436,13 +436,16 @@ function addToCart(productId, sizeIdx){
   // toasts a clear fix instead of throwing on `size.price`.
   if(!p.sizes.length){ toast(`"${p.name}" has no price yet — open it and tap Edit to add one.`); return false; }
   const size = p.sizes[sizeIdx] || p.sizes[0];
-  const existing = state.cart.find(c=>c.productId===productId && c.sizeIdx===sizeIdx);
-  const piecesForProduct = state.cart.filter(c=>c.productId===productId).reduce((s,c)=>s+(c.pieces||0),0);
-  if(piecesForProduct >= p.stock){ return false; }
+  // Stock is tracked per SIZE — an "8x4" sheet and a "7x4" sheet are counted
+  // separately, so the cap check and the identity of a cart line both key off
+  // the specific size, not the product as a whole.
+  const existing = state.cart.find(c=>c.sizeId===size.id);
+  const piecesForSize = state.cart.filter(c=>c.sizeId===size.id).reduce((s,c)=>s+(c.pieces||0),0);
+  if(piecesForSize >= size.stock){ return false; }
   if(existing){ existing.pieces += 1; }
   else{
     state.cart.push({
-      productId, sizeIdx,
+      productId, sizeId: size.id, sizeIdx,
       name: p.name + (p.sizes.length>1 ? " ("+size.label+")" : ""),
       // Pre-fill the size the product master was set up with — counter staff
       // shouldn't retype 8 × 4 on every sale — but leave every field editable.
@@ -475,11 +478,15 @@ function refreshCartFromProducts(){
   state.cart = state.cart.filter(c=>{
     const p = state.products.find(x=>x.id===c.productId);
     if(!p) return false;
+    // The specific size a line was billing might itself have been removed in
+    // an edit even though the product survives — that line has nothing left
+    // to price or deduct stock from.
+    if(c.sizeId != null && !p.sizes.some(s=>s.id===c.sizeId)) return false;
     c.gstRate = p.gst;
     return true;
   });
   if(state.cart.length !== before){
-    toast("Removed "+(before-state.cart.length)+" bill line(s) — that product was deleted.");
+    toast("Removed "+(before-state.cart.length)+" bill line(s) — that product or size was deleted.");
   }
   renderCart(); renderTotals();
 }
@@ -532,7 +539,9 @@ function renderCart(){
   wrap.innerHTML = state.cart.map((c,idx)=>{
     const m = Pricing.MODES[Pricing.normaliseMode(c.mode)];
     const r = lineCalc(c);
-    const stock = (state.products.find(p=>p.id===c.productId)||{}).stock;
+    const cartProduct = state.products.find(p=>p.id===c.productId);
+    const cartSize = cartProduct && cartProduct.sizes.find(s=>s.id===c.sizeId);
+    const stock = cartSize ? cartSize.stock : undefined;
 
     // Only the dimensions this mode actually uses are shown. Rft has no width,
     // and only CFT asks for thickness — showing dead inputs invites wrong data.
@@ -746,7 +755,7 @@ async function completeSale(){
       // Only the raw inputs are sent — the server recomputes every derived
       // figure itself, so a tampered client cannot invent a billed quantity.
       items: state.cart.map(c=>({
-        productId:c.productId, name:c.name, mode:c.mode,
+        productId:c.productId, sizeId:c.sizeId, name:c.name, mode:c.mode,
         lengthFt:c.lengthFt, widthVal:c.widthVal, thicknessIn:c.thicknessIn,
         pieces:c.pieces, rate: c.rate
       })),
@@ -836,15 +845,16 @@ function openProductDetail(productId, context){
 function renderProductDetailSheet(context){
   const p = state.products.find(x=>x.id===state.ctx.productId);
   const sheet = document.getElementById("sheet-product-detail");
+  const selectedSize = p.sizes[state.ctx.selectedSizeIdx] || p.sizes[0];
   sheet.innerHTML = `
     <div class="sheet-handle"></div>
     <button class="sheet-close" data-sheetclose>✕</button>
     <div class="sheet-title">${escapeHtml(p.name)}</div>
     <div class="muted" style="font-size:12px;margin-bottom:8px;">${escapeHtml(p.brand||"")} · ${escapeHtml(p.category||"")}</div>
-    <span class="pill ${stockLevel(p.stock)}">${stockLabel(p.stock)}</span>
+    <span class="pill ${stockLevel(p.stock)}">${p.stock} ${escapeHtml(p.unit||"")} total, all sizes</span>
 
     <div class="chip-row" style="margin:12px 0;">
-      ${p.sizes.map((s,i)=>`<button class="chip ${i===state.ctx.selectedSizeIdx?'selected':''}" data-size="${i}">${escapeHtml(s.label)} · ${fmt(s.price)}</button>`).join("")}
+      ${p.sizes.map((s,i)=>`<button class="chip ${i===state.ctx.selectedSizeIdx?'selected':''}" data-size="${i}">${escapeHtml(s.label)} · ${fmt(s.price)} · ${s.stock} in stock</button>`).join("")}
     </div>
 
     <div class="card" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11.5px;">
@@ -866,7 +876,7 @@ function renderProductDetailSheet(context){
     ${context==="billing" ? (
       !p.sizes.length
         ? `<button class="btn btn-gold" id="add-to-invoice-btn" style="margin-top:14px;" disabled>No price set — tap Edit below</button>`
-        : `<button class="btn btn-gold" id="add-to-invoice-btn" style="margin-top:14px;" ${p.stock<=0?"disabled":""}>${p.stock<=0?"Out of stock":"Add to Invoice"}</button>`
+        : `<button class="btn btn-gold" id="add-to-invoice-btn" style="margin-top:14px;" ${selectedSize.stock<=0?"disabled":""}>${selectedSize.stock<=0?"Out of stock":"Add to Invoice"}</button>`
     ) : ""}
 
     <div class="action-row">
@@ -879,29 +889,36 @@ function renderProductDetailSheet(context){
   `;
   const stockArea = sheet.querySelector("#stock-editor-area");
   if(context==="inventory"){
+    // Every size gets its own row and its own +/- — there is no single
+    // "total stock" to correct anymore, only each size's own count.
     stockArea.innerHTML = `
-      <label class="field-label">Stock on hand (${escapeHtml(p.unit||"")})</label>
-      <div class="qty-step">
-        <button id="stock-dec">−</button>
-        <input type="number" id="stock-input" value="${p.stock}" style="width:70px;">
-        <button id="stock-inc">+</button>
-      </div>`;
-    stockArea.querySelector("#stock-dec").addEventListener("click", async ()=>{
-      const updated = await api("PATCH", `/products/${p.id}/stock`, {delta:-1});
+      <label class="field-label">Stock on hand, per size</label>
+      ${p.sizes.map(s=>`
+        <div class="list-row" style="padding:6px 0;">
+          <div style="flex:1;font-size:12.5px;font-weight:700;">${escapeHtml(s.label)}</div>
+          <div class="qty-step">
+            <button data-size-dec="${s.id}">−</button>
+            <input type="number" value="${s.stock}" data-size-stock-input="${s.id}" style="width:60px;">
+            <button data-size-inc="${s.id}">+</button>
+          </div>
+        </div>`).join("") || `<div class="empty-hint">No sizes on this product.</div>`}
+    `;
+    stockArea.querySelectorAll("[data-size-dec]").forEach(b=>b.addEventListener("click", async ()=>{
+      const updated = await api("PATCH", `/products/${p.id}/sizes/${b.dataset.sizeDec}/stock`, {delta:-1});
       Object.assign(p, updated); renderProductDetailSheet(context); renderInventoryList();
-    });
-    stockArea.querySelector("#stock-inc").addEventListener("click", async ()=>{
-      const updated = await api("PATCH", `/products/${p.id}/stock`, {delta:1});
+    }));
+    stockArea.querySelectorAll("[data-size-inc]").forEach(b=>b.addEventListener("click", async ()=>{
+      const updated = await api("PATCH", `/products/${p.id}/sizes/${b.dataset.sizeInc}/stock`, {delta:1});
       Object.assign(p, updated); renderProductDetailSheet(context); renderInventoryList();
-    });
-    stockArea.querySelector("#stock-input").addEventListener("change", async (e)=>{
-      const updated = await api("PATCH", `/products/${p.id}/stock`, {stock: parseInt(e.target.value)||0});
-      Object.assign(p, updated); renderInventoryList();
-    });
+    }));
+    stockArea.querySelectorAll("[data-size-stock-input]").forEach(inp=>inp.addEventListener("change", async (e)=>{
+      const updated = await api("PATCH", `/products/${p.id}/sizes/${inp.dataset.sizeStockInput}/stock`, {stock: parseInt(e.target.value)||0});
+      Object.assign(p, updated); renderProductDetailSheet(context); renderInventoryList();
+    }));
     sheet.querySelector("#stock-in-btn").addEventListener("click", ()=>openStockIn(p));
     loadStockInHistory(p.id);
   } else {
-    stockArea.innerHTML = `<div class="muted" style="font-size:11.5px;">${p.stock} ${escapeHtml(p.unit||"")} available · edit stock levels from Inventory</div>`;
+    stockArea.innerHTML = `<div class="muted" style="font-size:11.5px;">${selectedSize ? selectedSize.stock+" "+escapeHtml(p.unit||"")+" available in "+escapeHtml(selectedSize.label) : ""} · edit stock levels from Inventory</div>`;
   }
   sheet.querySelectorAll("[data-size]").forEach(b=>{
     b.addEventListener("click", ()=>{ state.ctx.selectedSizeIdx = parseInt(b.dataset.size); renderProductDetailSheet(context); });
@@ -912,7 +929,7 @@ function renderProductDetailSheet(context){
     addBtn.addEventListener("click", ()=>{
       const ok = addToCart(p.id, state.ctx.selectedSizeIdx);
       if(ok){ closeAllSheets(); renderBillingProducts(); }
-      else toast("Can't add more — that's all the stock we have.");
+      else toast("Can't add more — that's all the stock we have for this size.");
     });
   }
   sheet.querySelector("#edit-product-btn").addEventListener("click", ()=>{
@@ -1052,6 +1069,9 @@ function openFactoryResetSheet(){
 function openStockIn(p){
   const sheet = document.getElementById("sheet-stock-in");
   const ctx = {
+    // Stock lands on one specific size — auto-picked when there's only one,
+    // otherwise the counter staff must say which so it can't land nowhere.
+    sizeId: p.sizes.length===1 ? p.sizes[0].id : null,
     mode: Pricing.normaliseMode(p.default_mode),
     lengthFt: p.length_ft || "", widthVal: p.width_val || "", thicknessIn: p.thickness_in || "",
     pieces: 1, rate: 0, gst: p.gst, transport: 0
@@ -1089,6 +1109,11 @@ function openStockIn(p){
       </div>
       <label class="field-label">Supplier</label>
       <input type="text" id="si-supplier" placeholder="e.g. Century Ply Distributor">
+
+      <label class="field-label">Which size received this stock?</label>
+      <div class="chip-row" id="si-size-chips">
+        ${p.sizes.map(s=>`<button class="chip ${s.id===ctx.sizeId?'selected':''}" data-si-size="${s.id}">${escapeHtml(s.label)} · ${s.stock} in stock</button>`).join("") || `<span class="muted" style="font-size:12px;">No sizes on this product yet — add one via Edit first.</span>`}
+      </div>
 
       <label class="field-label">Billing mode</label>
       <div class="mode-row">
@@ -1128,6 +1153,9 @@ function openStockIn(p){
     `;
 
     sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+    sheet.querySelectorAll("[data-si-size]").forEach(b=>b.addEventListener("click", ()=>{
+      ctx.sizeId = Number(b.dataset.siSize); render();
+    }));
     sheet.querySelectorAll("[data-si-mode]").forEach(b=>b.addEventListener("click", ()=>{
       ctx.mode = b.dataset.siMode; render();
     }));
@@ -1136,6 +1164,7 @@ function openStockIn(p){
       renderCalcOnly();
     }));
     sheet.querySelector("#si-save").addEventListener("click", async ()=>{
+      if(ctx.sizeId == null){ toast("Choose which size received this stock."); return; }
       const bad = Pricing.validateLine({
         mode: ctx.mode, lengthFt: ctx.lengthFt, widthVal: ctx.widthVal,
         thicknessIn: ctx.thicknessIn, pieces: ctx.pieces, rate: ctx.rate
@@ -1145,6 +1174,7 @@ function openStockIn(p){
       btn.disabled = true;
       try{
         const result = await api("POST", `/products/${p.id}/stock-in`, {
+          sizeId: ctx.sizeId,
           purchaseDate: document.getElementById("si-date").value,
           invoiceNo: document.getElementById("si-invoice").value.trim(),
           supplier: document.getElementById("si-supplier").value.trim(),
@@ -1310,9 +1340,12 @@ const UNIT_OPTIONS = ["Sheet","Piece","Sq.ft","Sq.mtr","Cu.mtr","Running ft"];
  */
 function openProductForm(context, product){
   state.ctx.editingProductId = product ? product.id : null;
+  // `id` is carried along for existing sizes so the server can update the
+  // row in place (see PUT /products/:id) rather than delete-and-reinsert,
+  // which would otherwise sever the link a past sale/purchase keeps to it.
   state.ctx.addProductSizes = product && product.sizes.length
-    ? product.sizes.map(s=>({label:s.label, price:s.price}))
-    : [{label:"", price:""}];
+    ? product.sizes.map(s=>({id:s.id, label:s.label, price:s.price, stock:s.stock}))
+    : [{label:"", price:"", stock:0}];
   renderAddProductSheet(context);
   showSheet("sheet-add-product");
 }
@@ -1350,25 +1383,23 @@ function renderAddProductSheet(context){
     </div>
     <label class="field-label">Standard size <span class="muted" style="font-weight:400;">— pre-filled on every bill, still editable there</span></label>
     <div class="charge-grid" id="np-dims"></div>
-    <label class="field-label">Size / variant + price</label>
+    <label class="field-label">Size / variant, stock &amp; price <span class="muted" style="font-weight:400;">— every size keeps its own stock count</span></label>
     <div id="np-sizes"></div>
     <a href="#" id="np-add-size" style="font-size:12px;font-weight:700;">+ Add another size</a>
-    ${editing
-      ? `<label class="field-label">Stock on hand</label>
-         <input type="number" id="np-stock" value="${editing.stock}">
-         <div class="muted" style="font-size:11px;margin-top:4px;">Correcting a miscount is fine here. For goods actually received, use “Record Stock In” so the purchase is kept in the history.</div>`
-      : `<label class="field-label">Opening stock</label><input type="number" id="np-stock" value="0">`}
+    ${editing ? `<p class="muted" style="font-size:11px;margin-top:8px;">Correcting a miscount here is fine. For goods actually received, use “Record Stock In” so the purchase is kept in the history.</p>` : ""}
     <label class="field-label">Godown / Rack</label><input type="text" id="np-godown" placeholder="e.g. Godown A / R3" value="${v("godown")}">
     <button class="btn btn-primary" id="np-save" style="margin-top:16px;">${editing ? "Update Product" : "Save Product"}</button>
   `;
   function renderSizes(){
     document.getElementById("np-sizes").innerHTML = sizes.map((s,i)=>`
       <div style="display:flex;gap:6px;margin-bottom:6px;align-items:center;">
-        <input type="text" placeholder="Label (e.g. 8x4 ft)" value="${escapeHtml(s.label)}" data-size-label="${i}" style="flex:1;">
-        <input type="number" placeholder="Price" value="${s.price}" data-size-price="${i}" style="width:90px;">
+        <input type="text" placeholder="Label (e.g. 8x4 ft)" value="${escapeHtml(s.label)}" data-size-label="${i}" style="flex:1.4;">
+        <input type="number" placeholder="Stock" min="0" value="${s.stock ?? 0}" data-size-stock="${i}" style="width:64px;" title="Stock">
+        <input type="number" placeholder="Price" value="${s.price}" data-size-price="${i}" style="width:80px;" title="Price">
         ${sizes.length>1?`<a href="#" data-size-remove="${i}" class="btn-danger-link">✕</a>`:""}
       </div>`).join("");
     document.querySelectorAll("[data-size-label]").forEach(inp=>inp.addEventListener("input", e=>sizes[e.target.dataset.sizeLabel].label=e.target.value));
+    document.querySelectorAll("[data-size-stock]").forEach(inp=>inp.addEventListener("input", e=>sizes[e.target.dataset.sizeStock].stock=e.target.value));
     document.querySelectorAll("[data-size-price]").forEach(inp=>inp.addEventListener("input", e=>sizes[e.target.dataset.sizePrice].price=e.target.value));
     document.querySelectorAll("[data-size-remove]").forEach(a=>a.addEventListener("click", e=>{ e.preventDefault(); sizes.splice(e.target.dataset.sizeRemove,1); renderSizes(); }));
   }
@@ -1403,7 +1434,7 @@ function renderAddProductSheet(context){
     sheet.querySelectorAll("[data-mode]").forEach(x=>x.classList.remove("selected"));
     b.classList.add("selected"); renderDims();
   }));
-  sheet.querySelector("#np-add-size").addEventListener("click", (e)=>{ e.preventDefault(); sizes.push({label:"",price:""}); renderSizes(); });
+  sheet.querySelector("#np-add-size").addEventListener("click", (e)=>{ e.preventDefault(); sizes.push({label:"",price:"",stock:0}); renderSizes(); });
   sheet.querySelector("#np-save").addEventListener("click", async ()=>{
     const name = document.getElementById("np-name").value.trim();
     if(!name){ toast("Enter a product name."); return; }
@@ -1421,18 +1452,10 @@ function renderAddProductSheet(context){
     const saveBtn = document.getElementById("np-save");
     saveBtn.disabled = true;
     try{
-      if(editing){
-        await api("PUT", `/products/${editing.id}`, payload);
-        // Stock is not part of PUT — it has its own audited endpoint — so an
-        // edited count is pushed separately and only when it actually changed.
-        const newStock = parseFloat(document.getElementById("np-stock").value);
-        if(Number.isFinite(newStock) && newStock !== editing.stock){
-          await api("PATCH", `/products/${editing.id}/stock`, {stock: newStock});
-        }
-      } else {
-        payload.stock = parseInt(document.getElementById("np-stock").value)||0;
-        await api("POST","/products", payload);
-      }
+      // Each size row carries its own stock now, so create/update both send
+      // it as part of `sizes` — no separate stock call needed either way.
+      if(editing) await api("PUT", `/products/${editing.id}`, payload);
+      else await api("POST","/products", payload);
       await loadProducts();
       closeAllSheets();
       renderInventoryList(); renderBillingProducts();

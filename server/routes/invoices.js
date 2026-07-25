@@ -11,6 +11,14 @@ function getSettingsRow() {
   return db.prepare("SELECT * FROM settings WHERE id = 1").get();
 }
 
+// Stock lives on product_sizes; products.stock is kept as a denormalised sum
+// so the many places that still read the product-level total (reports,
+// inventory list, low-stock check) don't need rewriting to aggregate live.
+// Same statement used from create/void/delete below, one definition.
+const syncProductStockStmt = db.prepare(
+  "UPDATE products SET stock = (SELECT COALESCE(SUM(stock),0) FROM product_sizes WHERE product_id = products.id) WHERE id = ?"
+);
+
 // Tax invoices and delivery challans run on SEPARATE number series, so each has
 // its own clean, gap-free sequence. Mixing them would leave holes in both,
 // which looks wrong to a customer or an auditor.
@@ -119,17 +127,24 @@ router.post("/", (req, res) => {
   const taxType = (customer && customer.state && settings.state && customer.state.trim().toLowerCase() !== settings.state.trim().toLowerCase())
     ? "IGST" : "CGST_SGST";
 
-  // Look up authoritative product data (gst rate, stock) server-side; never trust client for these.
+  // Look up authoritative product/size data (gst rate, stock) server-side;
+  // never trust client for these. Stock lives on the SIZE, not the product —
+  // an "8x4" sheet and a "7x4" sheet are counted separately — so every line
+  // must identify which size it's selling.
   //
   // The billed quantity is likewise RECOMPUTED here from the raw geometry
   // rather than taken from the request. The browser sends length/width/
   // thickness/sheets; a client that posted its own `qty` could otherwise bill
   // 320 sq.ft while only drawing 1 sheet out of stock.
-  const piecesByProduct = {};
+  const piecesBySize = {};
   const items = [];
   for (const raw of rawItems) {
     const product = db.prepare("SELECT * FROM products WHERE id = ?").get(raw.productId);
     if (!product) return res.status(400).json({ error: `Product ${raw.productId} no longer exists.` });
+    const size = raw.sizeId != null
+      ? db.prepare("SELECT * FROM product_sizes WHERE id = ? AND product_id = ?").get(raw.sizeId, product.id)
+      : null;
+    if (!size) return res.status(400).json({ error: `Choose a size for ${product.name} — it may have been removed since you added it.` });
 
     const line = {
       mode: Pricing.normaliseMode(raw.mode),
@@ -139,24 +154,26 @@ router.post("/", (req, res) => {
       pieces: raw.pieces,
       rate: raw.rate
     };
-    const invalid = Pricing.validateLine(line, product.name);
+    const invalid = Pricing.validateLine(line, `${product.name} (${size.label})`);
     if (invalid) return res.status(400).json({ error: invalid });
 
     const calc = Pricing.computeLine(line);
-    piecesByProduct[product.id] = (piecesByProduct[product.id] || 0) + calc.pieces;
+    piecesBySize[size.id] = (piecesBySize[size.id] || 0) + calc.pieces;
     items.push({
       productId: product.id,
+      sizeId: size.id,
       name: raw.name || product.name,
       gstRate: product.gst_rate,
-      product,
+      product, size,
       ...calc
     });
   }
-  for (const [productId, pieces] of Object.entries(piecesByProduct)) {
-    const product = db.prepare("SELECT * FROM products WHERE id = ?").get(productId);
-    if (pieces > product.stock) {
+  for (const [sizeId, pieces] of Object.entries(piecesBySize)) {
+    const size = db.prepare("SELECT * FROM product_sizes WHERE id = ?").get(sizeId);
+    const product = db.prepare("SELECT * FROM products WHERE id = ?").get(size.product_id);
+    if (pieces > size.stock) {
       return res.status(400).json({
-        error: `Not enough stock for ${product.name}. Available: ${product.stock} ${product.unit || "Pc"}, needed: ${pieces}.`
+        error: `Not enough stock for ${product.name} (${size.label}). Available: ${size.stock} ${product.unit || "Pc"}, needed: ${pieces}.`
       });
     }
   }
@@ -191,11 +208,11 @@ router.post("/", (req, res) => {
   `);
   const insertItem = db.prepare(`
     INSERT INTO invoice_items
-      (invoice_id, product_id, name, mode, length_ft, width_val, thickness_in,
+      (invoice_id, product_id, size_id, name, mode, length_ft, width_val, thickness_in,
        size_label, pieces, per_piece, unit_label, qty, rate, gst_rate)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const deductStock = db.prepare("UPDATE products SET stock = stock - ? WHERE id = ?");
+  const deductStock = db.prepare("UPDATE product_sizes SET stock = stock - ? WHERE id = ?");
   const bumpDue = db.prepare("UPDATE customers SET due = due + ? WHERE id = ?");
 
   db.transaction(() => {
@@ -211,7 +228,7 @@ router.post("/", (req, res) => {
       paperSize: paperSize === "A4" ? "A4" : "A5"
     });
     items.forEach(it => insertItem.run(
-      id, it.productId, it.name, it.mode,
+      id, it.productId, it.sizeId, it.name, it.mode,
       it.lengthFt || null, it.widthVal || null, it.thicknessIn || null,
       it.sizeLabel, it.pieces, it.perPiece, it.unit,
       // A challan's item RATE is now kept (optional, defaults 0) so the print
@@ -221,8 +238,15 @@ router.post("/", (req, res) => {
       it.billedQty, it.rate, it.gstRate
     ));
     // Stock moves in pieces, not in billed area/length/volume — for a challan
-    // too, since the goods physically leave the shop.
-    Object.entries(piecesByProduct).forEach(([productId, pieces]) => deductStock.run(pieces, productId));
+    // too, since the goods physically leave the shop. Deducted per SIZE, then
+    // each touched product's total is resynced to match.
+    const touchedProducts = new Set();
+    Object.entries(piecesBySize).forEach(([sizeId, pieces]) => {
+      deductStock.run(pieces, sizeId);
+      const size = db.prepare("SELECT product_id FROM product_sizes WHERE id = ?").get(sizeId);
+      if (size) touchedProducts.add(size.product_id);
+    });
+    touchedProducts.forEach(pid => syncProductStockStmt.run(pid));
     if (customerId && totals.balanceDue > 0) bumpDue.run(totals.balanceDue, customerId);
   })();
 
@@ -239,14 +263,23 @@ router.post("/:id/void", requireRole("owner"), (req, res) => {
   if (inv.voided) return res.status(400).json({ error: "Invoice already voided." });
   const items = db.prepare("SELECT * FROM invoice_items WHERE invoice_id = ?").all(inv.id);
 
-  const restoreStock = db.prepare("UPDATE products SET stock = stock + ? WHERE id = ?");
+  const restoreSize = db.prepare("UPDATE product_sizes SET stock = stock + ? WHERE id = ?");
+  // Legacy fallback for invoice_items sold before size-level stock existed —
+  // those rows have no size_id, so the best that can be done is credit the
+  // product's total directly.
+  const restoreProduct = db.prepare("UPDATE products SET stock = stock + ? WHERE id = ?");
   const reduceDue = db.prepare("UPDATE customers SET due = MAX(0, due - ?) WHERE id = ?");
   const voidInvoice = db.prepare("UPDATE invoices SET voided = 1 WHERE id = ?");
 
   db.transaction(() => {
     // Restore the physical piece count, NOT `qty` — on an area-priced line qty
     // is a sq.ft figure and would put hundreds of phantom sheets into stock.
-    items.forEach(it => { if (it.product_id) restoreStock.run(it.pieces, it.product_id); });
+    const touchedProducts = new Set();
+    items.forEach(it => {
+      if (it.size_id) { restoreSize.run(it.pieces, it.size_id); touchedProducts.add(it.product_id); }
+      else if (it.product_id) restoreProduct.run(it.pieces, it.product_id);
+    });
+    touchedProducts.forEach(pid => syncProductStockStmt.run(pid));
     if (inv.customer_id && inv.balance_due > 0) reduceDue.run(inv.balance_due, inv.customer_id);
     voidInvoice.run(inv.id);
   })();
@@ -271,13 +304,19 @@ router.delete("/:id", requireRole("owner"), (req, res) => {
   const inv = db.prepare("SELECT * FROM invoices WHERE id = ?").get(req.params.id);
   if (!inv) return res.status(404).json({ error: "Document not found." });
   const items = db.prepare("SELECT * FROM invoice_items WHERE invoice_id = ?").all(inv.id);
-  const restoreStock = db.prepare("UPDATE products SET stock = stock + ? WHERE id = ?");
+  const restoreSize = db.prepare("UPDATE product_sizes SET stock = stock + ? WHERE id = ?");
+  const restoreProduct = db.prepare("UPDATE products SET stock = stock + ? WHERE id = ?");
   const reduceDue = db.prepare("UPDATE customers SET due = MAX(0, due - ?) WHERE id = ?");
 
   db.transaction(() => {
     if (!inv.voided) {
       // Only reverse stock/dues if a prior Void hasn't already done so.
-      items.forEach(it => { if (it.product_id) restoreStock.run(it.pieces, it.product_id); });
+      const touchedProducts = new Set();
+      items.forEach(it => {
+        if (it.size_id) { restoreSize.run(it.pieces, it.size_id); touchedProducts.add(it.product_id); }
+        else if (it.product_id) restoreProduct.run(it.pieces, it.product_id);
+      });
+      touchedProducts.forEach(pid => syncProductStockStmt.run(pid));
       if (inv.customer_id && inv.balance_due > 0) reduceDue.run(inv.balance_due, inv.customer_id);
     }
     db.prepare("DELETE FROM invoices WHERE id = ?").run(inv.id); // cascades to invoice_items

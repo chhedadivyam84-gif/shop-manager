@@ -44,11 +44,17 @@ CREATE TABLE IF NOT EXISTS products (
   created_at INTEGER NOT NULL
 );
 
+-- Stock lives on the SIZE, not the product — "8x4" and "7x4" of the same
+-- board are counted separately, since they're physically different sheets.
+-- products.stock is kept as a denormalised SUM of these, updated alongside
+-- every write here, purely so the many existing reports/inventory queries
+-- that read products.stock don't all need rewriting to aggregate on read.
 CREATE TABLE IF NOT EXISTS product_sizes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
   label TEXT NOT NULL,
   price REAL NOT NULL,
+  stock REAL NOT NULL DEFAULT 0,
   sort_order INTEGER NOT NULL DEFAULT 0
 );
 
@@ -107,6 +113,10 @@ CREATE TABLE IF NOT EXISTS invoice_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   invoice_id TEXT NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
   product_id TEXT,
+  -- Which SIZE variant this line sold, so void/delete can credit stock back
+  -- to the exact size it came from. NULL on rows sold before per-size stock
+  -- existed; those fall back to adjusting the product's total only.
+  size_id INTEGER REFERENCES product_sizes(id) ON DELETE SET NULL,
   name TEXT NOT NULL,
   mode TEXT NOT NULL DEFAULT 'UNIT',
   length_ft REAL,
@@ -163,6 +173,10 @@ CREATE TABLE IF NOT EXISTS payments (
 CREATE TABLE IF NOT EXISTS stock_ins (
   id TEXT PRIMARY KEY,
   product_id TEXT REFERENCES products(id) ON DELETE SET NULL,
+  -- Which SIZE variant received the stock. A purchase with no size chosen
+  -- (or of a UNIT-mode product with only one size) still requires one —
+  -- stock can no longer land on the product with nowhere specific to go.
+  size_id INTEGER REFERENCES product_sizes(id) ON DELETE SET NULL,
   product_name TEXT NOT NULL,
   purchase_date TEXT NOT NULL,
   invoice_no TEXT DEFAULT '',
@@ -278,6 +292,29 @@ addColumn("products", "length_ft", "REAL");
 addColumn("products", "width_val", "REAL");
 addColumn("products", "thickness_in", "REAL");
 addColumn("products", "hsn_code", "TEXT DEFAULT ''");
+
+// Per-size stock. Each size/variant of a product is counted separately now
+// (an "8x4" sheet and a "7x4" sheet are physically different stock), instead
+// of one shared count on the product.
+const addedSizeStock = addColumn("product_sizes", "stock", "REAL NOT NULL DEFAULT 0");
+addColumn("invoice_items", "size_id", "INTEGER REFERENCES product_sizes(id) ON DELETE SET NULL");
+addColumn("stock_ins", "size_id", "INTEGER REFERENCES product_sizes(id) ON DELETE SET NULL");
+
+if (addedSizeStock) {
+  // Existing products already carry a total in products.stock with no
+  // record of which size it belongs to. A product with exactly one size is
+  // unambiguous — give that size the whole total. A product with several
+  // sizes has no way to know the true split, so the whole total goes on the
+  // first size (by sort_order) as a documented best guess; the shop owner
+  // can redistribute it via Edit afterward if it's wrong for their stock.
+  const products = db.prepare("SELECT id, stock FROM products").all();
+  const firstSize = db.prepare("SELECT id FROM product_sizes WHERE product_id = ? ORDER BY sort_order ASC, id ASC LIMIT 1");
+  const setStock = db.prepare("UPDATE product_sizes SET stock = ? WHERE id = ?");
+  products.forEach(p => {
+    const s = firstSize.get(p.id);
+    if (s) setStock.run(p.stock, s.id);
+  });
+}
 
 // Full Purchase Entry (invoice no., GST, transport, auto Sq.ft) on top of the
 // original bare stock-in (qty + cost_price + supplier).

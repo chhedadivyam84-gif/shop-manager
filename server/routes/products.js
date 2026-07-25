@@ -15,11 +15,31 @@ function dim(v, fallback) {
 }
 
 function loadSizes(productId) {
-  return db.prepare("SELECT id, label, price FROM product_sizes WHERE product_id = ? ORDER BY sort_order ASC, id ASC").all(productId);
+  return db.prepare("SELECT id, label, price, stock FROM product_sizes WHERE product_id = ? ORDER BY sort_order ASC, id ASC").all(productId);
 }
 
 function serialize(p) {
   return { ...p, gst: p.gst_rate, sizes: loadSizes(p.id) };
+}
+
+/**
+ * products.stock is a denormalised total of its sizes' stock, kept in sync
+ * here rather than computed on every read — the alternative would be
+ * rewriting every report/inventory query that already reads products.stock
+ * directly to aggregate on the fly instead. Call this after ANY write that
+ * changes a size's stock.
+ */
+function syncProductStock(productId) {
+  const total = db.prepare(
+    "SELECT COALESCE(SUM(stock),0) AS t FROM product_sizes WHERE product_id = ?"
+  ).get(productId).t;
+  db.prepare("UPDATE products SET stock = ? WHERE id = ?").run(total, productId);
+}
+
+/** Non-negative number, defaulting to 0 for blank/invalid input. */
+function stockNum(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
 router.get("/", (req, res) => {
@@ -28,7 +48,7 @@ router.get("/", (req, res) => {
 });
 
 router.post("/", (req, res) => {
-  const { name, brand, category, unit, gst, stock, godown, rack, sizes,
+  const { name, brand, category, unit, gst, godown, rack, sizes,
           defaultMode, lengthFt, widthVal, thicknessIn, hsnCode } = req.body;
   if (!name || typeof name !== "string" || !name.trim()) {
     return res.status(400).json({ error: "Product name is required." });
@@ -42,6 +62,10 @@ router.post("/", (req, res) => {
   const id = uid("P");
   const sku = "SKU-" + Math.random().toString(36).slice(2, 8).toUpperCase();
   const gstRate = gst !== undefined && gst !== null && gst !== "" ? Number(gst) : 18;
+  // The product's total is the sum of what's being entered per size — there is
+  // no separate "opening stock" field anymore now that every size carries its
+  // own count.
+  const openingTotal = validSizes.reduce((sum, s) => sum + stockNum(s.stock), 0);
 
   const insertProduct = db.prepare(`
     INSERT INTO products (id, name, brand, category, sku, unit, hsn_code, gst_rate, stock, godown, rack,
@@ -49,18 +73,18 @@ router.post("/", (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insertSize = db.prepare(`
-    INSERT INTO product_sizes (product_id, label, price, sort_order) VALUES (?, ?, ?, ?)
+    INSERT INTO product_sizes (product_id, label, price, stock, sort_order) VALUES (?, ?, ?, ?, ?)
   `);
 
   db.transaction(() => {
     insertProduct.run(
       id, name.trim(), (brand || "Generic").trim(), (category || "General").trim(),
-      sku, (unit || "Piece").trim(), (hsnCode || "").trim(), gstRate, Number(stock) || 0,
+      sku, (unit || "Piece").trim(), (hsnCode || "").trim(), gstRate, openingTotal,
       (godown || "").trim(), (rack || "").trim(),
       Pricing.normaliseMode(defaultMode), dim(lengthFt), dim(widthVal), dim(thicknessIn),
       Date.now()
     );
-    validSizes.forEach((s, i) => insertSize.run(id, String(s.label).trim(), parseFloat(s.price), i));
+    validSizes.forEach((s, i) => insertSize.run(id, String(s.label).trim(), parseFloat(s.price), stockNum(s.stock), i));
   })();
 
   logAction(req, "product.create", name.trim());
@@ -89,8 +113,13 @@ router.put("/:id", (req, res) => {
     UPDATE products SET name=?, brand=?, category=?, unit=?, hsn_code=?, gst_rate=?, godown=?, rack=?,
       default_mode=?, length_ft=?, width_val=?, thickness_in=? WHERE id=?
   `);
-  const deleteSizes = db.prepare("DELETE FROM product_sizes WHERE product_id = ?");
-  const insertSize = db.prepare("INSERT INTO product_sizes (product_id, label, price, sort_order) VALUES (?, ?, ?, ?)");
+  // Sizes are updated IN PLACE by id, not delete-all-and-reinsert: a stock-in
+  // or a sold invoice_items row references a size_id, and destroying/
+  // recreating every row on each edit would silently null out that link
+  // (ON DELETE SET NULL) even for a size the owner didn't touch.
+  const updateSize = db.prepare("UPDATE product_sizes SET label=?, price=?, stock=?, sort_order=? WHERE id=? AND product_id=?");
+  const insertSize = db.prepare("INSERT INTO product_sizes (product_id, label, price, stock, sort_order) VALUES (?, ?, ?, ?, ?)");
+  const deleteSize = db.prepare("DELETE FROM product_sizes WHERE id = ? AND product_id = ?");
 
   db.transaction(() => {
     update.run(
@@ -104,8 +133,18 @@ router.put("/:id", (req, res) => {
     );
     if (Array.isArray(sizes)) {
       const validSizes = sizes.filter(s => s && s.label && s.price !== "" && s.price != null && !isNaN(parseFloat(s.price)));
-      deleteSizes.run(p.id);
-      validSizes.forEach((s, i) => insertSize.run(p.id, String(s.label).trim(), parseFloat(s.price), i));
+      const existingIds = new Set(loadSizes(p.id).map(s => s.id));
+      const keptIds = new Set();
+      validSizes.forEach((s, i) => {
+        if (s.id != null && existingIds.has(Number(s.id))) {
+          updateSize.run(String(s.label).trim(), parseFloat(s.price), stockNum(s.stock), i, Number(s.id), p.id);
+          keptIds.add(Number(s.id));
+        } else {
+          insertSize.run(p.id, String(s.label).trim(), parseFloat(s.price), stockNum(s.stock), i);
+        }
+      });
+      existingIds.forEach(id => { if (!keptIds.has(id)) deleteSize.run(id, p.id); });
+      syncProductStock(p.id);
     }
   })();
 
@@ -114,16 +153,28 @@ router.put("/:id", (req, res) => {
   res.json(serialize(updated));
 });
 
-router.patch("/:id/stock", (req, res) => {
+/**
+ * Correct ONE size's stock directly — every size carries its own count now,
+ * so there is no longer a single product-level number to adjust.
+ */
+router.patch("/:id/sizes/:sizeId/stock", (req, res) => {
   const p = db.prepare("SELECT * FROM products WHERE id = ?").get(req.params.id);
   if (!p) return res.status(404).json({ error: "Product not found." });
+  const size = db.prepare("SELECT * FROM product_sizes WHERE id = ? AND product_id = ?").get(req.params.sizeId, p.id);
+  if (!size) return res.status(404).json({ error: "Size not found on this product." });
+
   let newStock;
   if (req.body.stock !== undefined) newStock = Number(req.body.stock);
-  else if (req.body.delta !== undefined) newStock = p.stock + Number(req.body.delta);
+  else if (req.body.delta !== undefined) newStock = size.stock + Number(req.body.delta);
   else return res.status(400).json({ error: "Provide stock or delta." });
   newStock = Math.max(0, newStock);
-  db.prepare("UPDATE products SET stock = ? WHERE id = ?").run(newStock, p.id);
-  logAction(req, "product.stock_adjust", `${p.name}: ${p.stock} → ${newStock}`);
+
+  db.transaction(() => {
+    db.prepare("UPDATE product_sizes SET stock = ? WHERE id = ?").run(newStock, size.id);
+    syncProductStock(p.id);
+  })();
+
+  logAction(req, "product.stock_adjust", `${p.name} (${size.label}): ${size.stock} → ${newStock}`);
   res.json(serialize(db.prepare("SELECT * FROM products WHERE id = ?").get(p.id)));
 });
 
@@ -139,9 +190,19 @@ router.post("/:id/stock-in", (req, res) => {
   if (!p) return res.status(404).json({ error: "Product not found." });
 
   const {
-    purchaseDate, invoiceNo, supplier, note,
+    purchaseDate, invoiceNo, supplier, note, sizeId,
     mode, lengthFt, widthVal, thicknessIn, pieces, rate, gst, transport
   } = req.body;
+
+  // Stock lands on a specific size variant now. A product with only one
+  // size doesn't need it spelled out; anything else must say which.
+  const sizes = loadSizes(p.id);
+  let size = null;
+  if (sizeId != null) size = sizes.find(s => s.id === Number(sizeId));
+  else if (sizes.length === 1) size = sizes[0];
+  if (!size) {
+    return res.status(400).json({ error: "Choose which size/variant received this stock." });
+  }
 
   const line = {
     mode: Pricing.normaliseMode(mode || p.default_mode),
@@ -165,17 +226,18 @@ router.post("/:id/stock-in", (req, res) => {
   db.transaction(() => {
     db.prepare(`
       INSERT INTO stock_ins
-        (id, product_id, product_name, purchase_date, invoice_no, supplier, brand, category,
+        (id, product_id, size_id, product_name, purchase_date, invoice_no, supplier, brand, category,
          mode, length_ft, width_val, thickness_in, size_label, qty, per_piece, billed_qty,
          unit_label, rate, amount, gst_rate, gst_amount, transport, grand_total, cost_price, note, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      id, p.id, p.name, date, (invoiceNo || "").trim(), (supplier || "").trim(), p.brand, p.category,
-      calc.mode, calc.lengthFt || null, calc.widthVal || null, calc.thicknessIn || null, calc.sizeLabel,
+      id, p.id, size.id, p.name, date, (invoiceNo || "").trim(), (supplier || "").trim(), p.brand, p.category,
+      calc.mode, calc.lengthFt || null, calc.widthVal || null, calc.thicknessIn || null, calc.sizeLabel || size.label,
       calc.pieces, calc.perPiece, calc.billedQty, calc.unit, calc.rate, calc.amount,
       gstRate, gstAmount, transportAmt, grandTotal, costPrice, (note || "").trim(), Date.now()
     );
-    db.prepare("UPDATE products SET stock = stock + ? WHERE id = ?").run(calc.pieces, p.id);
+    db.prepare("UPDATE product_sizes SET stock = stock + ? WHERE id = ?").run(calc.pieces, size.id);
+    syncProductStock(p.id);
   })();
 
   logAction(req, "product.stock_in", `${p.name}: +${calc.pieces}${supplier ? " from " + supplier.trim() : ""} — Grand Total ${grandTotal}`);

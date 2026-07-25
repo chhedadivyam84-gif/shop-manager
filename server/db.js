@@ -88,11 +88,12 @@ CREATE TABLE IF NOT EXISTS invoices (
   cgst REAL NOT NULL DEFAULT 0,
   sgst REAL NOT NULL DEFAULT 0,
   igst REAL NOT NULL DEFAULT 0,
-  -- Post-tax charges. Freight and labour are not the shop's supply and are
-  -- billed at cost, so they sit outside the taxable value rather than being
-  -- folded into the subtotal.
+  -- Freight/labour charges. Whether GST applies to them is a per-invoice
+  -- choice (gst_on_charges) — some shops charge tax on delivery/loading,
+  -- others treat it as a pure at-cost pass-through with no markup or tax.
   transport REAL NOT NULL DEFAULT 0,
   loading REAL NOT NULL DEFAULT 0,
+  gst_on_charges INTEGER NOT NULL DEFAULT 1,
   round_off REAL NOT NULL DEFAULT 0,
   total REAL NOT NULL,
   advance REAL NOT NULL DEFAULT 0,
@@ -299,6 +300,9 @@ addColumn("products", "hsn_code", "TEXT DEFAULT ''");
 const addedSizeStock = addColumn("product_sizes", "stock", "REAL NOT NULL DEFAULT 0");
 addColumn("invoice_items", "size_id", "INTEGER REFERENCES product_sizes(id) ON DELETE SET NULL");
 addColumn("stock_ins", "size_id", "INTEGER REFERENCES product_sizes(id) ON DELETE SET NULL");
+
+// Per-invoice choice of whether GST applies to Transport/Loading charges.
+addColumn("invoices", "gst_on_charges", "INTEGER NOT NULL DEFAULT 1");
 
 if (addedSizeStock) {
   // Existing products already carry a total in products.stock with no

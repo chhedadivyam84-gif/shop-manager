@@ -49,7 +49,7 @@ function nextDocNo(docType) {
   return `DC-${year}-${String(next).padStart(4, "0")}`;
 }
 
-function computeTotals({ items, discountType, discountValue, advance, taxType, transport, loading, roundOff }) {
+function computeTotals({ items, discountType, discountValue, advance, taxType, transport, loading, roundOff, gstOnCharges }) {
   // `it.amount` is already (rounded billed qty × rate) from the shared pricing
   // module — summing that rather than recomputing keeps the invoice's line
   // amounts and its subtotal in exact agreement.
@@ -70,18 +70,18 @@ function computeTotals({ items, discountType, discountValue, advance, taxType, t
   });
   goodsTax = round2(goodsTax);
 
-  // Transport and loading/labour are taxed too, at the invoice's own EFFECTIVE
-  // rate (goods tax ÷ taxable goods value) rather than a rate typed in
-  // separately — there's no natural "GST%" on a freight charge the way there
-  // is on a priced item, and this keeps it consistent with whatever the goods
-  // on this invoice actually carry (12%, 18%, a mix, etc). GST is computed
-  // LAST, once transport/loading are known, and folded into one CGST/SGST or
-  // IGST figure — it is not split into a separate "GST on transport" line.
+  // Whether Transport/Loading are taxed is a per-invoice choice
+  // (gst_on_charges) — when on, they're taxed at the invoice's own EFFECTIVE
+  // rate (goods tax ÷ taxable goods value), since there's no natural "GST%"
+  // on a freight charge the way there is on a priced item; when off, they're
+  // a pure at-cost pass-through with no tax at all. GST is computed LAST,
+  // once transport/loading are known, and folded into one CGST/SGST or IGST
+  // figure — it is not split into a separate "GST on transport" line.
   const transportAmt = round2(Math.max(0, Number(transport) || 0));
   const loadingAmt = round2(Math.max(0, Number(loading) || 0));
   const taxableGoods = round2(subtotal - discountAmount);
   const effectiveRate = taxableGoods > 0 ? goodsTax / taxableGoods : 0;
-  const ancillaryTax = round2((transportAmt + loadingAmt) * effectiveRate);
+  const ancillaryTax = gstOnCharges ? round2((transportAmt + loadingAmt) * effectiveRate) : 0;
   const totalTax = round2(goodsTax + ancillaryTax);
 
   let cgst = 0, sgst = 0, igst = 0;
@@ -125,6 +125,9 @@ router.post("/", (req, res) => {
           paymentMethod, paperSize, transport, loading, roundOff } = req.body;
   const docType = req.body.docType === "challan" ? "challan" : "invoice";
   const isChallan = docType === "challan";
+  // Defaults ON (matches the always-taxed behaviour before this toggle
+  // existed) unless the client explicitly turns it off.
+  const gstOnCharges = req.body.gstOnCharges !== false;
 
   if (!Array.isArray(rawItems) || !rawItems.length) {
     return res.status(400).json({ error: `Add at least one item to the ${isChallan ? "challan" : "invoice"}.` });
@@ -205,17 +208,17 @@ router.post("/", (req, res) => {
   };
   const totals = isChallan
     ? challanTotals
-    : computeTotals({ items, discountType, discountValue, advance, taxType, transport, loading, roundOff });
+    : computeTotals({ items, discountType, discountValue, advance, taxType, transport, loading, roundOff, gstOnCharges });
   const id = uid(isChallan ? "DC" : "INV");
   const challanNo = nextDocNo(docType);
   const date = todayStr();
 
   const insertInvoice = db.prepare(`
     INSERT INTO invoices (id, challan_no, doc_type, date, created_at, customer_id, subtotal, discount_type, discount_value,
-      discount_amount, tax_type, cgst, sgst, igst, transport, loading, round_off, total, advance, balance_due,
+      discount_amount, tax_type, cgst, sgst, igst, transport, loading, gst_on_charges, round_off, total, advance, balance_due,
       payment_method, paper_size)
     VALUES (@id, @challanNo, @docType, @date, @createdAt, @customerId, @subtotal, @discountType, @discountValue,
-      @discountAmount, @taxType, @cgst, @sgst, @igst, @transport, @loading, @roundOffAmount, @total, @advance,
+      @discountAmount, @taxType, @cgst, @sgst, @igst, @transport, @loading, @gstOnCharges, @roundOffAmount, @total, @advance,
       @balanceDue, @paymentMethod, @paperSize)
   `);
   const insertItem = db.prepare(`
@@ -233,7 +236,8 @@ router.post("/", (req, res) => {
       subtotal: totals.subtotal, discountType: discountType === "flat" ? "flat" : "pct",
       discountValue: isChallan ? 0 : (Number(discountValue) || 0), discountAmount: totals.discountAmount,
       taxType, cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst,
-      transport: totals.transport, loading: totals.loading, roundOffAmount: totals.roundOffAmount,
+      transport: totals.transport, loading: totals.loading, gstOnCharges: gstOnCharges ? 1 : 0,
+      roundOffAmount: totals.roundOffAmount,
       total: totals.total, advance: totals.advance, balanceDue: totals.balanceDue,
       // A challan has no tender; store a dash rather than a misleading "Cash".
       paymentMethod: isChallan ? "—" : (paymentMethod || "Cash"),

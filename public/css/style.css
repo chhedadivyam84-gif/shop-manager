@@ -208,9 +208,11 @@ nav.bottom .tab.active{color:var(--navy);}
 .inv-party-doc>div{margin-bottom:3px;}
 .inv-party-doc b{font-weight:700;font-size:10.5px;}
 
-table.inv-table{width:100%;border-collapse:collapse;margin-top:4px;font-size:10.5px;}
-table.inv-table th{text-align:left;font-size:8.5px;text-transform:uppercase;letter-spacing:.02em;color:#555;font-weight:700;padding:5px 6px;border-top:1px solid #999;border-bottom:1px solid #999;}
-table.inv-table td{padding:5px 6px;border-bottom:1px solid #e5e5e5;}
+/* A full grid — outer border plus a line between every column and row, the
+   traditional printed-invoice look — not just underlines between rows. */
+table.inv-table{width:100%;border-collapse:collapse;margin-top:4px;font-size:10.5px;border:1px solid #999;}
+table.inv-table th{text-align:left;font-size:8.5px;text-transform:uppercase;letter-spacing:.02em;color:#555;font-weight:700;padding:5px 6px;border:1px solid #999;background:#f4f4f2;}
+table.inv-table td{padding:5px 6px;border:1px solid #ccc;}
 
 .inv-totals{width:58%;margin-left:auto;margin-top:10px;font-size:10.5px;}
 .inv-totals .tr{display:flex;justify-content:space-between;padding:2px 2px;}
@@ -279,12 +281,12 @@ table.inv-table td{padding:5px 6px;border-bottom:1px solid #e5e5e5;}
 /* ============================================================
    INVOICE DOCUMENT
    ============================================================ */
-table.inv-table th.c-sn,table.inv-table td.c-sn{width:16px;text-align:left;color:#888;}
+table.inv-table th.c-sn,table.inv-table td.c-sn{width:20px;text-align:center;color:#888;}
 table.inv-table th.c-size,table.inv-table td.c-size{white-space:nowrap;}
 table.inv-table th.c-num,table.inv-table td.c-num{text-align:right;white-space:nowrap;}
 table.inv-table td.c-amt,table.inv-table th.c-amt{font-weight:700;}
-table.inv-table th{border-bottom:1px solid #999;}
 table.inv-table td{vertical-align:top;}
+table.inv-table tfoot td{font-weight:700;background:#f4f4f2;border-top:1.5px solid #999;}
 /* Seven columns will not fit A5 at the base size — shrink the type rather than
    let the table overflow the paper. */
 .invoice-page.size-a5 table.inv-table{font-size:8.5px;}
@@ -323,4 +325,29 @@ table.inv-table td{vertical-align:top;}
   body *{visibility:hidden;}
   .invoice-page, .invoice-page *{visibility:visible;}
   .invoice-page{position:absolute;top:0;left:0;margin:0;width:100%;}
+}
+
+/* ============================================================
+   TABLET / LAPTOP — use the full screen instead of a phone-width
+   column pinned to the centre. The internal layout (card stack,
+   bottom nav) is unchanged; only how much horizontal room it gets
+   grows with the viewport, in two steps.
+   ============================================================ */
+@media (min-width: 768px){
+  #shell, nav.bottom, .sheet, .fullscreen, #toast{ max-width:900px; }
+  main{ padding-left:32px; padding-right:32px; }
+  .stat-grid{ grid-template-columns:repeat(4,1fr); }
+  .dim-grid, .charge-grid{ grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); }
+}
+@media (min-width: 1200px){
+  #shell, nav.bottom, .sheet, .fullscreen, #toast{ max-width:1180px; }
+  main{ padding-left:48px; padding-right:48px; }
+}
+/* A bottom tab bar and slide-up sheets both make sense on a touchscreen
+   tablet, but read as mistakes on a mouse-driven laptop this wide — nothing
+   about the app requires touch, so this doesn't change behaviour, only
+   which affordance looks native to the device. */
+@media (min-width: 1024px) and (pointer: fine){
+  nav.bottom{ position:sticky; bottom:0; }
+  .sheet{ border-radius:16px; }
 }

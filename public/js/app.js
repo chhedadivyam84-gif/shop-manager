@@ -37,7 +37,7 @@ let state = {
   products: [], customers: [], invoices: [], settings: null, dashboard: null,
   cart: [], selectedCustomerId: null,
   discountType: "pct", discountValue: 0, advance: 0, paymentMethod: "Cash",
-  transport: 0, loading: 0, roundOff: true, docType: "invoice", challanShowRate: false,
+  transport: 0, loading: 0, roundOff: true, docType: "invoice", challanShowRate: false, gstOnCharges: true,
   invBrandFilter: "All", reportType: "Sales",
   paperSize: "A5",
   me: { staffName: "", role: "" },
@@ -244,6 +244,9 @@ async function initApp(){
   });
   document.getElementById("roundoff-toggle").addEventListener("change", (e)=>{
     state.roundOff = e.target.checked; renderTotals();
+  });
+  document.getElementById("gst-on-charges-toggle").addEventListener("change", (e)=>{
+    state.gstOnCharges = e.target.checked; renderTotals();
   });
   document.querySelectorAll('[data-pay]').forEach(b=>{
     b.addEventListener("click", ()=>{
@@ -507,10 +510,13 @@ function setDocType(type){
     b.classList.toggle("selected", b.dataset.doctype === state.docType));
   const pricing = document.getElementById("billing-pricing");
   if(pricing) pricing.style.display = challan ? "none" : "";
-  // Round-off only makes sense against a GST grand total — hide it for a
-  // challan, but Transport & Loading stay visible either way (see index.html).
+  // Round-off and the GST-on-charges toggle only mean something against a
+  // GST grand total — hide both for a challan, but Transport & Loading stay
+  // visible either way (see index.html).
   const roundoffRow = document.getElementById("roundoff-toggle-row");
   if(roundoffRow) roundoffRow.style.display = challan ? "none" : "flex";
+  const gstChargesRow = document.getElementById("gst-on-charges-row");
+  if(gstChargesRow) gstChargesRow.style.display = challan ? "none" : "flex";
   const note = document.getElementById("challan-note");
   if(note) note.style.display = challan ? "block" : "none";
   const itemsTitle = document.getElementById("items-title");
@@ -679,17 +685,17 @@ function computeTotals(){
   });
   goodsTax = round2(goodsTax);
 
-  // Transport and loading/labour are taxed too, at the invoice's own
+  // Whether Transport/Loading are taxed is a per-invoice toggle
+  // (state.gstOnCharges). When on, they're taxed at the invoice's own
   // EFFECTIVE rate (goods tax ÷ taxable goods value) — there's no separate
-  // GST% typed in for a freight charge, so this keeps it consistent with
-  // whatever the goods on this bill actually carry. GST is computed LAST,
-  // once transport/loading are known, mirroring server/routes/invoices.js
-  // exactly so the preview and the saved invoice can never disagree.
+  // GST% typed in for a freight charge. GST is computed LAST, once
+  // transport/loading are known, mirroring server/routes/invoices.js exactly
+  // so the preview and the saved invoice can never disagree.
   const transport = round2(Math.max(0, state.transport||0));
   const loading = round2(Math.max(0, state.loading||0));
   const taxableGoods = round2(subtotal - discount);
   const effectiveRate = taxableGoods>0 ? goodsTax/taxableGoods : 0;
-  const ancillaryTax = round2((transport+loading) * effectiveRate);
+  const ancillaryTax = state.gstOnCharges ? round2((transport+loading) * effectiveRate) : 0;
   const totalTax = round2(goodsTax + ancillaryTax);
 
   let cgst=0, sgst=0, igst=0;
@@ -772,7 +778,8 @@ async function completeSale(){
       })),
       discountType: state.discountType, discountValue: state.discountValue,
       advance: state.advance, paymentMethod: state.paymentMethod, paperSize: state.paperSize,
-      transport: state.transport, loading: state.loading, roundOff: state.roundOff
+      transport: state.transport, loading: state.loading, roundOff: state.roundOff,
+      gstOnCharges: state.gstOnCharges
     });
     state.cart = []; state.advance = 0; state.discountValue = 0;
     state.transport = 0; state.loading = 0;
@@ -1562,6 +1569,15 @@ function openSettings(){
       <button class="btn btn-outline" id="st-recheck-print" style="margin-top:10px;">Recheck Printer</button>
       <p class="muted" style="font-size:11px;margin-top:8px;">Any phone can print an invoice straight to the shop's printer — no drivers needed on the phone. This checks whether the shop PC can currently reach it.</p>
 
+      <div class="section-title">Document Numbering</div>
+      <div class="card" id="numbering-status"><div class="empty-hint">Loading…</div></div>
+      <div class="charge-grid" style="margin-top:10px;">
+        <label class="dim"><span>Next Estimate No.</span><input type="number" min="1" id="st-next-estimate" placeholder="e.g. 250"></label>
+        <label class="dim"><span>Next Challan No.</span><input type="number" min="1" id="st-next-challan" placeholder="e.g. 80"></label>
+      </div>
+      <button class="btn btn-outline" id="st-save-numbering" style="margin-top:8px;">Set Starting Number</button>
+      <p class="muted" style="font-size:11px;margin-top:8px;">Only fill in what you want to change — leave the other blank. Use this once, e.g. to continue from where your paper records left off. Setting it wrong can create duplicate or out-of-order numbers, so double-check before saving.</p>
+
       <div class="section-title" style="color:var(--danger);">Danger Zone</div>
       <div class="card" style="border-color:var(--danger);">
         <div class="row-title" style="font-size:12.5px;">Factory Reset</div>
@@ -1623,6 +1639,25 @@ function openSettings(){
     });
     renderPrintServerStatus();
     sheet.querySelector("#st-recheck-print").addEventListener("click", renderPrintServerStatus);
+    renderNumberingStatus();
+    sheet.querySelector("#st-save-numbering").addEventListener("click", async (e)=>{
+      const nextEstimateNumber = document.getElementById("st-next-estimate").value.trim();
+      const nextChallanNumber = document.getElementById("st-next-challan").value.trim();
+      if(!nextEstimateNumber && !nextChallanNumber){ toast("Enter at least one number to change."); return; }
+      const parts = [];
+      if(nextEstimateNumber) parts.push(`the next Estimate will be SP${nextEstimateNumber.padStart(7,"0")}`);
+      if(nextChallanNumber) parts.push(`the next Challan will be DC-${new Date().getFullYear()}-${nextChallanNumber.padStart(4,"0")}`);
+      if(!confirm(`Confirm: ${parts.join(" and ")}. This can create duplicate or out-of-order numbers if set incorrectly. Continue?`)) return;
+      const btn = e.currentTarget; btn.disabled = true;
+      try{
+        await api("PUT", "/settings/numbering", { nextEstimateNumber, nextChallanNumber });
+        document.getElementById("st-next-estimate").value = "";
+        document.getElementById("st-next-challan").value = "";
+        await renderNumberingStatus();
+        toast("Numbering updated.", "ok");
+      }catch(err){ toast(err.message); }
+      finally{ btn.disabled = false; }
+    });
     sheet.querySelector("#st-factory-reset").addEventListener("click", openFactoryResetSheet);
   }
   sheet.querySelector("#st-logout").addEventListener("click", async ()=>{
@@ -1680,6 +1715,21 @@ async function renderPrintServerStatus(){
     `;
   }catch(e){
     if(box.isConnected) box.innerHTML = `<div class="empty-hint">Couldn't reach the print service.</div>`;
+  }
+}
+
+async function renderNumberingStatus(){
+  const box = document.getElementById("numbering-status");
+  if(!box) return;
+  try{
+    const s = await api("GET", "/settings/numbering");
+    if(!box.isConnected) return;
+    box.innerHTML = `
+      <div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Next Estimate</span><span style="font-weight:700;">${escapeHtml(s.nextEstimateNo)}</span></div>
+      <div class="inv-flex"><span class="muted">Next Challan</span><span style="font-weight:700;">${escapeHtml(s.nextChallanNo)}</span></div>
+    `;
+  }catch(e){
+    if(box.isConnected) box.innerHTML = `<div class="empty-hint">Couldn't load numbering.</div>`;
   }
 }
 
@@ -1952,13 +2002,21 @@ function renderInvoicePageContent(){
   // "Delivery Challan (With Rate)" vs "(Without Rate)" from the same entry.
   const showRate = !challan || state.challanShowRate;
   const head = showRate
-    ? `<th class="c-sn">#</th><th>Particulars</th><th class="c-size">Size</th><th class="c-num">Qty</th><th class="c-num">Total</th><th class="c-num">Rate</th><th class="c-num c-amt">Amount</th>`
-    : `<th class="c-sn">#</th><th>Particulars</th><th class="c-size">Size</th><th class="c-num">Qty</th><th class="c-num">Total</th>`;
+    ? `<th class="c-sn">Sr No.</th><th>Product Description</th><th class="c-size">Size</th><th class="c-num">Qty</th><th class="c-num">Total</th><th class="c-num">Rate</th><th class="c-num c-amt">Amount</th>`
+    : `<th class="c-sn">Sr No.</th><th>Product Description</th><th class="c-size">Size</th><th class="c-num">Qty</th><th class="c-num">Total</th>`;
   const rows = inv.items.map((it,i)=>{
     const mode = it.mode || "UNIT";
     const base = `<td class="c-sn">${i+1}</td><td>${escapeHtml(it.name)}</td><td class="c-size">${escapeHtml(it.size_label||"—")}</td><td class="c-num">${it.pieces||it.qty}</td><td class="c-num">${Pricing.formatQty(it.qty, mode)}</td>`;
     return `<tr>${base}${showRate ? `<td class="c-num">${Pricing.formatRate(it.rate, mode)}</td><td class="c-num c-amt">${fmtPaise(it.qty*it.rate)}</td>` : ""}</tr>`;
   }).join("");
+  // Total quantity sits right under the Qty column, inside the grid itself —
+  // not buried in the totals card further down the page.
+  const totalQtyForFoot = inv.items.reduce((s,it)=>s+(Number(it.pieces)||it.qty||0),0);
+  const tfoot = `<tfoot><tr>
+    <td colspan="3" style="text-align:right;">Total Quantity</td>
+    <td class="c-num">${totalQtyForFoot}</td>
+    <td colspan="${showRate?3:1}"></td>
+  </tr></tfoot>`;
 
   const taxRows = inv.tax_type==="IGST"
     ? `<div class="tr"><span>IGST</span><span>${fmtPaise(inv.igst)}</span></div>`
@@ -2027,6 +2085,7 @@ function renderInvoicePageContent(){
     <table class="inv-table">
       <thead><tr>${head}</tr></thead>
       <tbody>${rows}</tbody>
+      ${tfoot}
     </table>
     ${footer}
 

@@ -117,26 +117,41 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
   y = Math.max(y, partyTopY + 8) + 2;
   line(y); y += 6;
 
-  // ---- Table ----
+  // ---- Table (drawn as a full grid: outer border + a line between every
+  // column and row — jsPDF has no native table/border primitive, so the
+  // lines are placed by hand using each column's known x-position). ----
   const cols = showRate
-    ? [{ h: "#", w: 8 }, { h: "Particulars", w: 62 }, { h: "Size", w: 28 }, { h: "Qty", w: 16 },
+    ? [{ h: "Sr No.", w: 14 }, { h: "Product Description", w: 56 }, { h: "Size", w: 28 }, { h: "Qty", w: 16 },
        { h: "Total", w: 26, align: "right" }, { h: "Rate", w: 26, align: "right" }, { h: "Amount", w: 24, align: "right" }]
-    : [{ h: "#", w: 12 }, { h: "Particulars", w: 90 }, { h: "Size", w: 40 }, { h: "Qty", w: 20 },
-       { h: "Total", w: CONTENT_W - 12 - 90 - 40 - 20, align: "right" }];
+    : [{ h: "Sr No.", w: 16 }, { h: "Product Description", w: 86 }, { h: "Size", w: 40 }, { h: "Qty", w: 20 },
+       { h: "Total", w: CONTENT_W - 16 - 86 - 40 - 20, align: "right" }];
+  const colX = [MARGIN];
+  cols.forEach(c => colX.push(colX[colX.length - 1] + c.w));
+  const tableRight = colX[colX.length - 1];
+  const tableTopY = y - 3.5;
 
   const drawTableHeader = () => {
     doc.setFont("helvetica", "bold"); doc.setFontSize(8); doc.setTextColor(60);
-    let x = MARGIN;
-    cols.forEach(c => {
-      doc.text(c.h.toUpperCase(), c.align === "right" ? x + c.w : x, y, c.align === "right" ? { align: "right" } : undefined);
-      x += c.w;
+    cols.forEach((c, ci) => {
+      const x = c.align === "right" ? colX[ci + 1] - 1 : colX[ci] + 1;
+      doc.text(c.h.toUpperCase(), x, y, c.align === "right" ? { align: "right" } : undefined);
     });
     y += 2; line(y); y += 4.5;
     doc.setTextColor(0);
   };
   drawTableHeader();
 
-  doc.setFont("helvetica", "normal"); doc.setFontSize(8.5);
+  const drawRow = (values, bold) => {
+    doc.setFont("helvetica", bold ? "bold" : "normal"); doc.setFontSize(8.5);
+    cols.forEach((c, ci) => {
+      const x = c.align === "right" ? colX[ci + 1] - 1 : colX[ci] + 1;
+      const text = doc.splitTextToSize(String(values[ci] ?? ""), c.w - 2);
+      doc.text(text, x, y, c.align === "right" ? { align: "right" } : undefined);
+    });
+    y += 5;
+    doc.setDrawColor(210); doc.line(MARGIN, y - 1.5, tableRight, y - 1.5); doc.setDrawColor(0);
+  };
+
   invoice.items.forEach((it, i) => {
     newPageIfNeeded(6);
     if (y === MARGIN) drawTableHeader();
@@ -145,15 +160,22 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
       ? [String(i + 1), it.name, it.size_label || "-", String(it.pieces || it.qty),
          Pricing.formatQty(it.qty, mode), Pricing.formatRate(it.rate, mode), fmtPaise(it.qty * it.rate).replace("Rs. ", "")]
       : [String(i + 1), it.name, it.size_label || "-", String(it.pieces || it.qty), Pricing.formatQty(it.qty, mode)];
-    let x = MARGIN;
-    cols.forEach((c, ci) => {
-      const text = doc.splitTextToSize(String(values[ci] ?? ""), c.w - 1);
-      doc.text(text, c.align === "right" ? x + c.w : x, y, c.align === "right" ? { align: "right" } : undefined);
-      x += c.w;
-    });
-    y += 5;
-    doc.setDrawColor(230); doc.line(MARGIN, y - 1.5, PAGE_W - MARGIN, y - 1.5); doc.setDrawColor(0);
+    drawRow(values);
   });
+
+  // Total quantity sits right under the Qty column, inside the grid itself.
+  const totalQty = invoice.items.reduce((s, it) => s + (Number(it.pieces) || it.qty || 0), 0);
+  const totalRowValues = showRate
+    ? ["", "Total Quantity", "", String(totalQty), "", "", ""]
+    : ["", "Total Quantity", "", String(totalQty), ""];
+  drawRow(totalRowValues, true);
+
+  // Outer border + one vertical line per column boundary, spanning the full
+  // header+body+total-quantity height now that it's known.
+  doc.setDrawColor(120);
+  colX.forEach(x => doc.line(x, tableTopY, x, y - 1.5));
+  doc.rect(MARGIN, tableTopY, tableRight - MARGIN, (y - 1.5) - tableTopY);
+  doc.setDrawColor(0);
   y += 2;
 
   // ---- Totals / challan footer ----

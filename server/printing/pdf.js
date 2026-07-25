@@ -269,16 +269,12 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
       y += bodyRowH;
       rowsDrawnThisPage++;
 
-      // Stretch (Tally-style): pad the table down to the reserved footer
-      // position with real ruled blank rows — not just one big empty cell —
-      // so a short item list still reads as a full page of grid, matching
-      // the shop's paper form.
+      // Stretch: the bordered box (outer rect + vertical column lines) pads
+      // down to the reserved footer position, but stays visually BLANK in
+      // that gap — exactly as many ruled rows as there are items, nothing
+      // more, matching the shop's paper form precisely.
       doc.setDrawColor(0);
-      const filledBottom = y;
-      tableBottom = Math.max(filledBottom, tableTargetBottom);
-      for (let fy = filledBottom; fy < tableBottom - 0.01; fy += bodyRowH) {
-        line(Math.min(fy + bodyRowH, tableBottom), MARGIN, tableRight);
-      }
+      tableBottom = Math.max(y, tableTargetBottom);
       let ruleY = bodyTopY;
       for (let i = 0; i <= rowsDrawnThisPage - 1; i++) { line(ruleY, MARGIN, tableRight); ruleY += bodyRowH; }
       colX.forEach(x => doc.line(x, curTableTopY, x, tableBottom));

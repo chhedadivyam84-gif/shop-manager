@@ -233,12 +233,16 @@ nav.bottom .tab.active{color:var(--navy);}
    never leaves a large blank gap before the footer, while every other
    section keeps its natural size. */
 .erp-banner,.erp-header,.erp-parties,.erp-bottom,.erp-sign-row,.erp-terms{flex:0 0 auto;}
-/* Sized by its actual content (real blank filler rows fill short lists,
-   see fillTableToPageHeight in app.js) rather than CSS flex-grow, which
-   proved unreliable for this. flex-shrink:0 still guards against a flex
-   item being squeezed below its own content once min-height:0 is set —
-   the bug that let rows spill out of this wrapper on a long item list. */
-.erp-table-wrap{border:1px solid #000;border-top:none;flex:0 0 auto;min-height:0;}
+/* flex-grow:1 stretches this WRAPPER (not the <table> itself — a percentage
+   height or flex-grow on a <table> element specifically proved unreliable,
+   see git history) to fill leftover page space on a short item list. The
+   table inside stays its natural size — exactly as many ruled rows as
+   items, nothing more — with the extra space showing as blank area within
+   this wrapper's own border, matching the shop's paper form (no extra grid
+   lines in that gap). flex-shrink:0 guards against a flex item shrinking
+   below its own content once min-height:0 is set — the bug that let rows
+   spill out of this wrapper and overlap the totals box on a long list. */
+.erp-table-wrap{border:1px solid #000;border-top:none;flex:1 0 auto;min-height:0;}
 table.erp-table{width:100%;border-collapse:collapse;font-size:8.5px;}
 table.erp-table th{text-align:left;font-size:7.5px;text-transform:uppercase;letter-spacing:.02em;font-weight:800;padding:4px 5px;border:1px solid #000;}
 table.erp-table td{padding:4px 5px;border:1px solid #000;vertical-align:top;}

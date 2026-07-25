@@ -2179,66 +2179,6 @@ function renderInvoicePageContent(){
       ? `This is a delivery challan and not a tax invoice — it is not a demand for payment.<br><strong>PLYWOOD, BLACKBOARD, ARE MANUFACTURED FROM NATURAL WOOD WHICH IS BELOW BIO DEGRADEBLE, WE DONOT GUARANTEE AGAINST ANY NATURAL DECAY DEFICIENTY, DETORATION AND LIKE INCLUDING MANUFACTURING DEFACT AND/OR IMPERFACT QUALITY</strong>`
       : `<strong>NO GURANTEE AND WARRANTY FOR DECORATIVE PRODUCTS AND AIR BUBBLES IN LAMMINATES, ACRYLIC AND PVC LAMINATES OR ANY SHADE VARIATION AFTER INSTALLATION. NO EXCHANGE. NO RETURN IN ANY CONDITION. PLEASE CHECK THE MATERIAL ON DELIVERY.</strong>`}</div>
   `;
-  fillTableToPageHeight();
-}
-/**
- * Tally-style full-page fill: pad the item table with real blank rows (not
- * a CSS stretch trick — height:100%/flex-grow on a <table> proved unreliable,
- * see the git history on this function) until the page's actual content
- * height reaches its min-height target (set per paper size in
- * applyPageSizeStyle). A page that's already at or past that height (many
- * items) gets no filler rows — it just keeps growing normally.
- */
-function fillTableToPageHeight(){
-  const page = document.getElementById("invoice-page-content");
-  const tbody = page.querySelector("table.erp-table tbody");
-  const theadRow = page.querySelector("table.erp-table thead tr");
-  if(!tbody || !theadRow) return;
-  // A hidden ancestor (display:none) gives every measurement below a
-  // meaningless 0, which previously ran the loop to its guard limit adding
-  // thousands of blank rows. Bail rather than measure garbage.
-  if(page.offsetParent === null) return;
-
-  const targetHeight = parseFloat(getComputedStyle(page).minHeight);
-  if(!targetHeight) return;
-
-  const bodyRows = tbody.querySelectorAll("tr");
-  const sampleRowHeight = (bodyRows[0] || theadRow).offsetHeight;
-  if(!sampleRowHeight) return;
-  const colCount = theadRow.children.length;
-
-  // page.scrollHeight is NOT usable here — CSS min-height on `page` itself
-  // already forces its rendered box to at least targetHeight regardless of
-  // actual content, so that comparison is trivially satisfied from the
-  // start. Sum each direct child's own offsetHeight instead (banner/header/
-  // parties/table-wrap/bottom/sign-row/terms), which reflects their real
-  // stacked content size, unaffected by the parent's inflated min-height.
-  const naturalHeight = () => {
-    let sum = 0;
-    for (const child of page.children) sum += child.offsetHeight;
-    return sum;
-  };
-
-  let guard = 0;
-  let lastHeight = naturalHeight();
-  while(naturalHeight() < targetHeight - 1 && guard < 20){
-    const shortfall = targetHeight - naturalHeight();
-    const rowsNeeded = Math.max(1, Math.round(shortfall / sampleRowHeight));
-    // Individual empty cells (not one colspan'd cell) so the vertical
-    // column-divider lines still show through the blank rows, matching
-    // real ruled-grid ERP paper.
-    const cellsHtml = "<td>&nbsp;</td>".repeat(colCount);
-    for(let i=0;i<rowsNeeded;i++){
-      const filler = document.createElement("tr");
-      filler.className = "erp-filler-row";
-      filler.innerHTML = cellsHtml;
-      tbody.appendChild(filler);
-    }
-    const newHeight = naturalHeight();
-    if(newHeight <= lastHeight) break;
-    lastHeight = newHeight;
-    guard++;
-  }
 }
 async function downloadInvoicePdf(){
   const btn = document.getElementById("inv-download");

@@ -265,9 +265,9 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
       y += bodyRowH;
       rowsDrawnThisPage++;
 
-      // Stretch: if this page's content is shorter than the reserved footer
-      // position, pad the table down to meet it exactly.
-      tableBottom = Math.max(y, tableTargetBottom);
+      // Natural end — no padding to stretch a short table down to fill the
+      // page; the box is exactly as tall as the rows actually drawn.
+      tableBottom = y;
       doc.setDrawColor(0);
       let ruleY = bodyTopY;
       for (let i = 0; i <= rowsDrawnThisPage - 1; i++) { line(ruleY, MARGIN, tableRight); ruleY += bodyRowH; }

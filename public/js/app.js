@@ -1913,17 +1913,12 @@ function applyPageSizeStyle(){
   const style = document.getElementById("page-size-style");
   if(!style) return;
   const isA4 = state.paperSize === "A4";
-  const pageH = isA4 ? 297 : 210, margin = isA4 ? 6 : 5;
-  const contentH = pageH - margin * 2;
-  // min-height (not height/max-height) applies on-screen too, not just
-  // @media print — this is what "Download PDF" (html2canvas) rasterises
-  // as-is, so the screenshot already matches print without a separate
-  // stretch step. A short item list gets stretched to fill it (via the
-  // table's flex:1); a long one is free to grow taller, never clipped.
-  style.textContent = `
-    @page{ size:${isA4 ? "A4" : "A5"} portrait; margin:${margin}mm; }
-    .invoice-page{ min-height:${contentH}mm; }
-  `;
+  const margin = isA4 ? 6 : 5;
+  // No forced min-height — the page sizes to its actual content (a one-item
+  // challan shouldn't be padded out to a full blank A4 sheet). @page just
+  // sets the physical paper size/margin so printed content is scaled and
+  // positioned correctly for whichever size is selected.
+  style.textContent = `@page{ size:${isA4 ? "A4" : "A5"} portrait; margin:${margin}mm; }`;
 }
 function setPaper(size){
   state.paperSize = size;

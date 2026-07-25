@@ -403,9 +403,18 @@ addColumn("products", "code", "TEXT DEFAULT ''");
 // printed next to the document number.
 addColumn("invoices", "delivery_man", "TEXT DEFAULT ''");
 
+// Vehicle carrying the goods, a delivery address separate from the
+// customer's billing address (goods can ship somewhere else), and a free
+// remarks line — all optional, all printed on the document.
+addColumn("invoices", "vehicle_number", "TEXT DEFAULT ''");
+addColumn("invoices", "delivery_address", "TEXT DEFAULT ''");
+addColumn("invoices", "remarks", "TEXT DEFAULT ''");
+
 // Snapshotted from the product at sale time, same as `name`/`size_label` —
 // so a later edit to a product's code never rewrites an already-printed bill.
 addColumn("invoice_items", "code", "TEXT DEFAULT ''");
+addColumn("invoice_items", "brand", "TEXT DEFAULT ''");
+addColumn("invoice_items", "hsn_code", "TEXT DEFAULT ''");
 
 // Sale Payment form fields: which invoice the payment is against (optional —
 // a payment can still be a general on-account credit with no specific

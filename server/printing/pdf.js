@@ -7,11 +7,11 @@
    needs a live DOM and a user's browser tab — neither exists when the
    PC itself has to silently print a job a phone just submitted.
 
-   This module draws the SAME document (same fields, same section
-   order, same amount-in-words / terms / contact footer) directly with
-   jsPDF's text/line/rect primitives instead of rasterising HTML. It
-   won't be pixel-identical to the browser version, but it is the same
-   professional A4 layout with no dependency on a headless browser
+   This module draws the SAME ERP-style document (same fields, same
+   section order, same boxed layout as the browser's .erp-* template)
+   directly with jsPDF's text/line/rect primitives instead of
+   rasterising HTML. It won't be pixel-identical, but it is the same
+   bordered, full-page layout with no dependency on a headless browser
    (Puppeteer would drag in a ~300MB bundled Chromium onto a shop PC
    that otherwise runs nothing but Node + SQLite).
 
@@ -21,9 +21,6 @@
    ============================================================ */
 const { jsPDF } = require("jspdf");
 const Pricing = require("../../public/js/pricing.js");
-
-const PAGE_W = 210, PAGE_H = 297, MARGIN = 15;
-const CONTENT_W = PAGE_W - MARGIN * 2;
 
 function fmt(n) {
   const v = Math.round((Number(n) || 0) + Number.EPSILON);
@@ -45,246 +42,277 @@ function fmtPaise(n) {
 function buildInvoicePdf(invoice, settings, customer, opts = {}) {
   const challan = invoice.doc_type === "challan";
   const showRate = !challan || !!opts.showRate;
-  const doc = new jsPDF({ unit: "mm", format: "a4" });
+
+  // A5 support matches the browser's paper-size toggle — the server print
+  // path never had it before; each size gets its own tight margin per spec.
+  const isA5 = invoice.paper_size === "A5";
+  const PAGE_W = isA5 ? 148 : 210;
+  const PAGE_H = isA5 ? 210 : 297;
+  const MARGIN = isA5 ? 5 : 6;
+  const CONTENT_W = PAGE_W - MARGIN * 2;
+  const FS = isA5 ? 0.82 : 1; // font-scale factor so A5 doesn't overflow its narrower sheet
+  const fs = n => Math.max(5.5, n * FS);
+
+  const doc = new jsPDF({ unit: "mm", format: isA5 ? "a5" : "a4" });
   let y = MARGIN;
 
-  const line = (y1) => doc.line(MARGIN, y1, PAGE_W - MARGIN, y1);
-  const rightText = (text, y1, size = 9) => {
-    doc.setFontSize(size);
-    doc.text(String(text), PAGE_W - MARGIN, y1, { align: "right" });
-  };
-  // Outer frame around the whole printed sheet, matching the shop's paper
-  // form — a fixed rectangle re-drawn on every page, independent of how far
-  // the content actually reaches.
+  const line = (y1, x0 = MARGIN, x1 = PAGE_W - MARGIN) => doc.line(x0, y1, x1, y1);
   const drawPageFrame = () => {
-    doc.setDrawColor(80);
-    doc.rect(MARGIN - 5, MARGIN - 5, PAGE_W - (MARGIN - 5) * 2, PAGE_H - (MARGIN - 5) * 2);
     doc.setDrawColor(0);
+    doc.rect(MARGIN, MARGIN, CONTENT_W, PAGE_H - MARGIN * 2);
   };
-  const newPageIfNeeded = (need) => {
-    if (y + need > PAGE_H - MARGIN) {
-      doc.addPage();
-      y = MARGIN;
-      drawPageFrame();
-      return true;
-    }
-    return false;
-  };
-  drawPageFrame();
 
-  // ---- Header ----
-  doc.setFont("helvetica", "bold"); doc.setFontSize(16); doc.setTextColor(0);
-  doc.text(settings.business_name || "Shop", MARGIN, y);
-  y += 5;
+  // ---- Header: centered business identity, one full-width rule beneath ----
+  doc.setFont("helvetica", "bold"); doc.setFontSize(fs(11)); doc.setTextColor(0);
+  doc.text((challan ? "DELIVERY CHALLAN" : "ESTIMATE CHALLAN"), PAGE_W / 2, y + 4, { align: "center" });
+  y += 4 + fs(2.2);
+  line(y, MARGIN + 2, PAGE_W - MARGIN - 2); y += fs(4.5);
+
+  doc.setFont("helvetica", "bold"); doc.setFontSize(fs(13));
+  doc.text(settings.business_name || "Shop", PAGE_W / 2, y, { align: "center" }); y += fs(4.5);
   if (settings.tagline) {
-    doc.setFont("helvetica", "italic"); doc.setFontSize(9); doc.setTextColor(90);
-    doc.text(settings.tagline, MARGIN, y); y += 4.5;
+    doc.setFont("helvetica", "italic"); doc.setFontSize(fs(8));
+    doc.text(settings.tagline, PAGE_W / 2, y, { align: "center" }); y += fs(3.8);
   }
   if (settings.address) {
-    doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(60);
-    const addrLines = doc.splitTextToSize(settings.address, CONTENT_W * 0.6);
-    doc.text(addrLines, MARGIN, y); y += addrLines.length * 4;
+    doc.setFont("helvetica", "normal"); doc.setFontSize(fs(8));
+    const addrLines = doc.splitTextToSize(settings.address, CONTENT_W - 6);
+    addrLines.forEach(l => { doc.text(l, PAGE_W / 2, y, { align: "center" }); y += fs(3.6); });
   }
+  const contactBits = [
+    settings.gstin ? `GSTIN: ${settings.gstin}` : "",
+    settings.phones ? `Ph: ${settings.phones}` : "",
+    "Email: swagatply@gmail.com", "Website: www.swagatply.com"
+  ].filter(Boolean).join("   |   ");
+  doc.setFont("helvetica", "bold"); doc.setFontSize(fs(7));
+  doc.text(contactBits, PAGE_W / 2, y, { align: "center" }); y += fs(3.5);
+  y += fs(1.5);
+  line(y); y += 1;
+
+  // ---- Parties: two boxes, equal height (drawn AFTER both sides' content
+  // heights are known, so the shorter side's box still matches the taller). ----
+  const docColX = PAGE_W - MARGIN - CONTENT_W * 0.4;
+  const partyBoxTopY = y;
+  const rowH = fs(3.9);
+
+  // Left (buyer) side — collect lines first so height is known up front.
+  const buyerLines = [];
+  buyerLines.push({ text: challan ? "Deliver To" : "Buyer", bold: true, size: fs(7), label: true });
+  buyerLines.push({ text: customer ? customer.name : "Walk-in Customer", bold: true, size: fs(10) });
+  if (customer && customer.address) doc.splitTextToSize(customer.address, docColX - MARGIN - 6).forEach(l => buyerLines.push({ text: l, size: fs(8) }));
+  if (customer && customer.phone) buyerLines.push({ text: "Mobile: " + customer.phone, size: fs(8) });
+  if (customer && customer.gst) buyerLines.push({ text: "GSTIN: " + customer.gst, size: fs(8) });
+  if (customer && customer.state) buyerLines.push({ text: "State: " + customer.state, size: fs(8) });
+
+  // Right (document info) side.
+  const docLines = [];
+  docLines.push([challan ? "Challan No." : "Estimate No.", invoice.challan_no]);
+  docLines.push(["Date", invoice.date]);
+  if (invoice.delivery_man) docLines.push(["Salesperson", invoice.delivery_man]);
+  if (invoice.vehicle_number) docLines.push(["Vehicle No.", invoice.vehicle_number]);
+
+  const boxContentH = Math.max(buyerLines.length * rowH, docLines.length * rowH) + 3;
+  const boxBottomY = partyBoxTopY + boxContentH;
+
   doc.setTextColor(0);
-  const headerRightY = MARGIN + 5;
-  if (settings.phones) rightText("Ph: " + settings.phones, headerRightY);
-  if (settings.gstin) rightText("GSTIN: " + settings.gstin, headerRightY + 5);
-  y = Math.max(y, headerRightY + 10) + 2;
+  let by = partyBoxTopY + rowH;
+  buyerLines.forEach(l => {
+    doc.setFont("helvetica", l.bold ? "bold" : "normal"); doc.setFontSize(l.size);
+    doc.setTextColor(l.label ? 100 : 0);
+    doc.text(l.text, MARGIN + 3, by);
+    by += rowH;
+  });
+  doc.setTextColor(0);
+  let dy = partyBoxTopY + rowH;
+  docLines.forEach(([k, v]) => {
+    doc.setFont("helvetica", "normal"); doc.setFontSize(fs(8)); doc.setTextColor(90);
+    doc.text(k, docColX + 3, dy);
+    doc.setFont("helvetica", "bold"); doc.setTextColor(0);
+    doc.text(String(v), PAGE_W - MARGIN - 3, dy, { align: "right" });
+    dy += rowH;
+  });
 
-  // ---- Document banner ----
-  const bannerText = challan ? "DELIVERY CHALLAN" : "ESTIMATE CHALLAN";
-  line(y); y += 6;
-  doc.setFont("helvetica", "bold"); doc.setFontSize(12); doc.setTextColor(0);
-  doc.text(bannerText, PAGE_W / 2, y, { align: "center" });
-  y += 2; line(y); y += 7;
-
-  // ---- Parties row (boxed, sitting flush above the item table so the whole
-  // form reads as one continuous bordered document) ----
-  const partyBoxTopY = y - 2;
-  const docColX = PAGE_W - MARGIN - 55;
-  const partyLabel = challan ? "Deliver To" : "Bill To";
-  doc.setFont("helvetica", "bold"); doc.setFontSize(8); doc.setTextColor(120);
-  doc.text(partyLabel.toUpperCase(), MARGIN + 3, y);
-  const docLabel = challan ? "Challan No" : "Estimate No";
-  doc.text(docLabel.toUpperCase(), PAGE_W - MARGIN - 3, y, { align: "right" });
-  y += 4.5;
-
-  const partyTopY = y;
-  doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(0);
-  doc.text(customer ? customer.name : "Walk-in Customer", MARGIN + 3, y);
-  doc.setFontSize(10.5);
-  doc.text(invoice.challan_no, PAGE_W - MARGIN - 3, y, { align: "right" });
-  y += 4.5;
-  doc.setFont("helvetica", "normal"); doc.setFontSize(9);
-  doc.text("Date: " + invoice.date, PAGE_W - MARGIN - 3, y, { align: "right" });
-  y += 4;
-  if (invoice.delivery_man) {
-    doc.text("D. Man: " + invoice.delivery_man, PAGE_W - MARGIN - 3, y, { align: "right" });
-    y += 4;
-  }
-  y -= 1;
-
-  doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(60);
-  if (customer) {
-    const custLine = [customer.type, customer.phone].filter(Boolean).join(" - ");
-    if (custLine) { doc.text(custLine, MARGIN + 3, y); y += 4; }
-    if (customer.address) {
-      const custAddrLines = doc.splitTextToSize(customer.address, docColX - MARGIN - 8);
-      doc.text(custAddrLines, MARGIN + 3, y); y += custAddrLines.length * 4;
-    }
-    if (customer.gst) { doc.text("GSTIN: " + customer.gst, MARGIN + 3, y); y += 4; }
-  }
-  y = Math.max(y, partyTopY + 8) + 3;
-
-  doc.setDrawColor(153);
-  doc.rect(MARGIN, partyBoxTopY, CONTENT_W, y - partyBoxTopY);
-  doc.line(docColX, partyBoxTopY, docColX, y);
   doc.setDrawColor(0);
-  doc.setTextColor(0);
-  y += 3.5;
+  doc.rect(MARGIN, partyBoxTopY, CONTENT_W, boxContentH);
+  doc.line(docColX, partyBoxTopY, docColX, boxBottomY);
+  y = boxBottomY;
 
-  // ---- Table (drawn as a full grid: outer border + a line between every
-  // column and row — jsPDF has no native table/border primitive, so the
-  // lines are placed by hand using each column's known x-position). ----
+  // ---- Table columns ----
   const cols = showRate
-    ? [{ h: "Sr No.", w: 10 }, { h: "Product Description", w: 44 }, { h: "Code", w: 20 }, { h: "Size", w: 20 }, { h: "Qty", w: 12 },
-       { h: "Total", w: 24, align: "right" }, { h: "Rate", w: 26, align: "right" }, { h: "Amount", w: 24, align: "right" }]
-    : [{ h: "Sr No.", w: 12 }, { h: "Product Description", w: 62 }, { h: "Code", w: 26 }, { h: "Size", w: 28 }, { h: "Qty", w: 16 },
-       { h: "Total", w: CONTENT_W - 12 - 62 - 26 - 28 - 16, align: "right" }];
+    ? [{ h: "Sr No.", w: CONTENT_W * 0.045 }, { h: "Product Description", w: CONTENT_W * 0.235 },
+       { h: "Brand", w: CONTENT_W * 0.10 }, { h: "HSN", w: CONTENT_W * 0.08 }, { h: "Size", w: CONTENT_W * 0.09 },
+       { h: "Unit", w: CONTENT_W * 0.07 }, { h: "Qty", w: CONTENT_W * 0.075, align: "right" },
+       { h: "Rate", w: CONTENT_W * 0.09, align: "right" }, { h: "GST %", w: CONTENT_W * 0.065, align: "right" },
+       { h: "Amount", w: 0, align: "right" }]
+    : [{ h: "Sr No.", w: CONTENT_W * 0.06 }, { h: "Product Description", w: CONTENT_W * 0.34 },
+       { h: "Brand", w: CONTENT_W * 0.14 }, { h: "HSN", w: CONTENT_W * 0.12 }, { h: "Size", w: CONTENT_W * 0.13 },
+       { h: "Unit", w: CONTENT_W * 0.09 }, { h: "Qty", w: 0, align: "right" }];
+  const fixedW = cols.reduce((s, c) => s + c.w, 0);
+  cols[cols.length - 1].w = CONTENT_W - fixedW;
   const colX = [MARGIN];
   cols.forEach(c => colX.push(colX[colX.length - 1] + c.w));
   const tableRight = colX[colX.length - 1];
-  const tableTopY = y - 3.5;
+  const tableTopY = y;
 
-  const drawTableHeader = () => {
-    doc.setFont("helvetica", "bold"); doc.setFontSize(8); doc.setTextColor(60);
-    cols.forEach((c, ci) => {
-      const x = c.align === "right" ? colX[ci + 1] - 1 : colX[ci] + 1;
-      doc.text(c.h.toUpperCase(), x, y, c.align === "right" ? { align: "right" } : undefined);
-    });
-    y += 2; line(y); y += 4.5;
-    doc.setTextColor(0);
-  };
-  drawTableHeader();
+  const headerH = fs(6);
+  const idealBodyRowH = fs(5.2);
 
-  const drawRow = (values, bold) => {
-    doc.setFont("helvetica", bold ? "bold" : "normal"); doc.setFontSize(8.5);
-    cols.forEach((c, ci) => {
-      const x = c.align === "right" ? colX[ci + 1] - 1 : colX[ci] + 1;
-      const text = doc.splitTextToSize(String(values[ci] ?? ""), c.w - 2);
-      doc.text(text, x, y, c.align === "right" ? { align: "right" } : undefined);
-    });
-    y += 5;
-    doc.setDrawColor(210); doc.line(MARGIN, y - 1.5, tableRight, y - 1.5); doc.setDrawColor(0);
-  };
+  // ---- Pre-compute the footer block's height BEFORE drawing the table, so
+  // the table can be stretched to reach exactly where the footer must start
+  // — this is what keeps the footer pinned to the bottom of the page instead
+  // of leaving a blank gap under a short item list. ----
+  const challanSubtotal = invoice.items.reduce((s, it) => s + (it.qty * it.rate || 0), 0);
+  const displayTotal = challan ? (challanSubtotal + invoice.transport + invoice.loading) : invoice.total;
 
-  invoice.items.forEach((it, i) => {
-    newPageIfNeeded(6);
-    if (y === MARGIN) drawTableHeader();
-    const mode = it.mode || "UNIT";
-    const values = showRate
-      ? [String(i + 1), it.name, it.code || "-", it.size_label || "-", String(it.pieces || it.qty),
-         Pricing.formatQty(it.qty, mode), Pricing.formatRate(it.rate, mode).replace("₹", "Rs."), fmtPaise(it.qty * it.rate).replace("Rs. ", "")]
-      : [String(i + 1), it.name, it.code || "-", it.size_label || "-", String(it.pieces || it.qty), Pricing.formatQty(it.qty, mode)];
-    drawRow(values);
-  });
-
-  // Total quantity sits right under the Qty column, inside the grid itself.
-  const totalQty = invoice.items.reduce((s, it) => s + (Number(it.pieces) || it.qty || 0), 0);
-  const totalRowValues = showRate
-    ? ["", "Total Quantity", "", "", String(totalQty), "", "", ""]
-    : ["", "Total Quantity", "", "", String(totalQty), ""];
-  drawRow(totalRowValues, true);
-
-  // Outer border + one vertical line per column boundary, spanning the full
-  // header+body+total-quantity height now that it's known.
-  doc.setDrawColor(120);
-  colX.forEach(x => doc.line(x, tableTopY, x, y - 1.5));
-  doc.rect(MARGIN, tableTopY, tableRight - MARGIN, (y - 1.5) - tableTopY);
-  doc.setDrawColor(0);
-  y += 2;
-
-  // ---- Totals / footer: boxed grid, GSTIN + amount-in-words, then a
-  // receiver/stamp/authorised-signatory row — same structure for both
-  // document types, matching the shop's paper form. For a challan, CGST/
-  // SGST/IGST are always zero and "G. Total" here is a print-only figure
-  // (goods value + transport/loading) — it is NEVER what's stored as the
-  // invoice's actual total or added to the customer's due (that stays
-  // transport+loading only, set server-side), so a challan can never
-  // function as a demand for payment regardless of what this box shows. ----
-  newPageIfNeeded(45);
-  const totalsX = PAGE_W - MARGIN - 65;
-  const boxTopY = y - 4;
-  const rows = [];
-  let displayTotal;
-  if (challan) {
-    const subtotal = invoice.items.reduce((s, it) => s + (it.qty * it.rate || 0), 0);
-    displayTotal = subtotal + invoice.transport + invoice.loading;
-    rows.push(["Subtotal", fmtPaise(subtotal)]);
-    rows.push(["Transport", fmtPaise(invoice.transport)]);
-    rows.push(["Additional Charges", fmtPaise(invoice.loading)]);
-    rows.push(["CGST", fmtPaise(0)]);
-    rows.push(["SGST", fmtPaise(0)]);
-    rows.push(["IGST", fmtPaise(0)]);
-    rows.push(["G. Total", fmtPaise(displayTotal), true]);
-  } else {
-    displayTotal = invoice.total;
-    rows.push(["Subtotal", fmtPaise(invoice.subtotal)]);
-    if (invoice.discount_amount > 0) rows.push(["Discount", "-" + fmtPaise(invoice.discount_amount)]);
-    rows.push(["Transport", fmtPaise(invoice.transport)]);
-    rows.push(["Additional Charges", fmtPaise(invoice.loading)]);
-    if (invoice.tax_type === "IGST") rows.push(["IGST", fmtPaise(invoice.igst)]);
-    else { rows.push(["CGST", fmtPaise(invoice.cgst)]); rows.push(["SGST", fmtPaise(invoice.sgst)]); }
-    if (invoice.round_off) rows.push(["Round Off", (invoice.round_off > 0 ? "+" : "") + fmtPaise(invoice.round_off)]);
-    rows.push(["G. Total", fmtPaise(invoice.total), true]);
-    if (invoice.advance > 0) {
-      rows.push(["Advance Paid", "-" + fmtPaise(invoice.advance)]);
-      rows.push(["Balance Due", fmtPaise(invoice.balance_due), true]);
-    }
+  const totalsRows = [];
+  totalsRows.push(["Subtotal", fmtPaise(challan ? challanSubtotal : invoice.subtotal)]);
+  totalsRows.push(["Discount", (challan ? 0 : invoice.discount_amount) > 0 ? "-" + fmtPaise(invoice.discount_amount) : fmtPaise(0)]);
+  totalsRows.push(["Transport", fmtPaise(invoice.transport)]);
+  totalsRows.push(["Additional Charges", fmtPaise(invoice.loading)]);
+  if (!challan && invoice.tax_type === "IGST") totalsRows.push(["IGST", fmtPaise(invoice.igst)]);
+  else { totalsRows.push(["CGST", fmtPaise(challan ? 0 : invoice.cgst)]); totalsRows.push(["SGST", fmtPaise(challan ? 0 : invoice.sgst)]); }
+  if (!challan && invoice.round_off) totalsRows.push(["Round Off", (invoice.round_off > 0 ? "+" : "") + fmtPaise(invoice.round_off)]);
+  totalsRows.push(["Grand Total", fmtPaise(displayTotal), true]);
+  if (!challan && invoice.advance > 0) {
+    totalsRows.push(["Advance Paid", "-" + fmtPaise(invoice.advance)]);
+    totalsRows.push(["Balance Due", fmtPaise(invoice.balance_due), true]);
   }
-  rows.forEach(([label, value, bold]) => {
-    doc.setFont("helvetica", bold ? "bold" : "normal"); doc.setFontSize(bold ? 10 : 8.5);
-    doc.text(label, totalsX + 2, y);
-    doc.text(value, PAGE_W - MARGIN - 2, y, { align: "right" });
-    y += 5;
-    doc.setDrawColor(210); doc.line(totalsX, y - 1.5, PAGE_W - MARGIN, y - 1.5); doc.setDrawColor(0);
-  });
-  doc.setDrawColor(120); doc.rect(totalsX, boxTopY, PAGE_W - MARGIN - totalsX, y - 1.5 - boxTopY); doc.setDrawColor(0);
-  y += 3;
+  const totalsBoxH = totalsRows.length * fs(4.6);
 
-  if (settings.gstin) {
-    doc.setFont("helvetica", "normal"); doc.setFontSize(8);
-    doc.text("GSTIN No: " + settings.gstin, MARGIN, y); y += 4;
-  }
-  doc.setFont("helvetica", "bold"); doc.setFontSize(8);
-  doc.text("Amount in words:", MARGIN, y); y += 4;
-  doc.setFont("helvetica", "normal");
-  const words = doc.splitTextToSize(Pricing.amountInWords(displayTotal), CONTENT_W);
-  doc.text(words, MARGIN, y); y += words.length * 4 + 2;
+  const deliveryAddr = invoice.delivery_address || (customer && customer.address) || "";
+  const bottomLeftLines = [];
+  if (deliveryAddr) doc.splitTextToSize("Delivery Address: " + deliveryAddr, CONTENT_W * 0.58 - 6).forEach(l => bottomLeftLines.push(l));
+  if (invoice.remarks) doc.splitTextToSize("Remarks: " + invoice.remarks, CONTENT_W * 0.58 - 6).forEach(l => bottomLeftLines.push(l));
+  doc.splitTextToSize("Amount in Words: " + Pricing.amountInWords(displayTotal), CONTENT_W * 0.58 - 6).forEach(l => bottomLeftLines.push(l));
+  const bottomBoxH = Math.max(totalsBoxH, bottomLeftLines.length * fs(4) + 4) + 3;
 
-  newPageIfNeeded(30);
-  y += 14;
-  doc.setFontSize(8.5);
-  doc.text("Receiver's Signature", MARGIN + 10, y);
-  doc.text("Company Stamp", PAGE_W / 2, y, { align: "center" });
-  rightText("For " + (settings.business_name || "Shop") + "\nAuthorised Signatory", y);
-  doc.line(MARGIN, y - 2, MARGIN + 45, y - 2);
-  doc.line(PAGE_W / 2 - 22, y - 2, PAGE_W / 2 + 22, y - 2);
-  doc.line(PAGE_W - MARGIN - 45, y - 2, PAGE_W - MARGIN, y - 2);
-  y += 8;
-
-  // ---- Footer: terms + contact ----
-  newPageIfNeeded(20);
-  line(y); y += 5;
-  doc.setFont("helvetica", "bold"); doc.setFontSize(7.5); doc.setTextColor(20);
+  const signRowH = fs(16);
   const termsText = challan
     ? "This is a delivery challan and not a tax invoice - it is not a demand for payment.\nPLYWOOD, BLACKBOARD, ARE MANUFACTURED FROM NATURAL WOOD WHICH IS BELOW BIO DEGRADEBLE, WE DONOT GUARANTEE AGAINST ANY NATURAL DECAY DEFICIENTY, DETORATION AND LIKE INCLUDING MANUFACTURING DEFACT AND/OR IMPERFACT QUALITY"
     : "NO GURANTEE AND WARRANTY FOR DECORATIVE PRODUCTS AND AIR BUBBLES IN LAMMINATES, ACRYLIC AND PVC LAMINATES OR ANY SHADE VARIATION AFTER INSTALLATION. NO EXCHANGE. NO RETURN IN ANY CONDITION. PLEASE CHECK THE MATERIAL ON DELIVERY.";
-  const termLines = doc.splitTextToSize(termsText, CONTENT_W);
-  doc.text(termLines, MARGIN, y); y += termLines.length * 3.6 + 3;
+  const termLines = doc.splitTextToSize(termsText, CONTENT_W - 6);
+  const termsBoxH = termLines.length * fs(3.2) + fs(6);
 
-  doc.setFont("helvetica", "bold"); doc.setFontSize(8); doc.setTextColor(20);
-  doc.text("Email: swagatply@gmail.com     Website: www.swagatply.com", PAGE_W / 2, y, { align: "center" });
+  const footerReserve = bottomBoxH + signRowH + termsBoxH;
+  const tableTargetBottom = PAGE_H - MARGIN - footerReserve;
+
+  // No real pagination here — this layout is built to fill exactly one page
+  // (per spec). An unusually long item list would otherwise run the table
+  // (and everything below it) off the bottom of the sheet, so row height
+  // shrinks to whatever fits the fixed budget instead, down to a legibility
+  // floor. Genuinely huge orders beyond that floor are a known limitation.
+  const availableTableH = tableTargetBottom - y - headerH;
+  const neededRows = invoice.items.length + 1; // +1 for the Total Quantity row
+  const bodyRowH = neededRows > 0
+    ? Math.max(fs(3.2), Math.min(idealBodyRowH, availableTableH / neededRows))
+    : idealBodyRowH;
+
+  // ---- Draw the table ----
+  const drawHeaderRow = (yy) => {
+    doc.setFont("helvetica", "bold"); doc.setFontSize(fs(7));
+    cols.forEach((c, ci) => {
+      const x = c.align === "right" ? colX[ci + 1] - 1 : colX[ci] + 1;
+      doc.text(c.h.toUpperCase(), x, yy + headerH - fs(1.8), c.align === "right" ? { align: "right" } : undefined);
+    });
+  };
+  drawHeaderRow(y);
+  y += headerH;
+  const bodyTopY = y;
+
+  invoice.items.forEach((it, i) => {
+    const mode = it.mode || "UNIT";
+    const unit = it.unit_label || (Pricing.MODES[mode] && Pricing.MODES[mode].unit) || "";
+    const values = showRate
+      ? [String(i + 1), it.name, it.brand || "-", it.hsn_code || "-", it.size_label || "-", unit,
+         Pricing.formatQty(it.qty, mode).replace(" " + unit, ""), fmtPaise(it.rate).replace("Rs. ", ""),
+         (it.gst_rate || 0) + "%", fmtPaise(it.qty * it.rate).replace("Rs. ", "")]
+      : [String(i + 1), it.name, it.brand || "-", it.hsn_code || "-", it.size_label || "-", unit,
+         Pricing.formatQty(it.qty, mode).replace(" " + unit, "")];
+    doc.setFont("helvetica", "normal"); doc.setFontSize(fs(7.5));
+    cols.forEach((c, ci) => {
+      const x = c.align === "right" ? colX[ci + 1] - 1 : colX[ci] + 1;
+      const text = doc.splitTextToSize(String(values[ci] ?? ""), c.w - 2);
+      doc.text(text[0] || "", x, y + bodyRowH - fs(1.8), c.align === "right" ? { align: "right" } : undefined);
+    });
+    y += bodyRowH;
+  });
+
+  const totalQty = Pricing.round2(invoice.items.reduce((s, it) => s + (Number(it.qty) || 0), 0));
+  doc.setFont("helvetica", "bold"); doc.setFontSize(fs(7.5));
+  doc.text("Total Quantity", colX[6] - 1, y + bodyRowH - fs(1.8), { align: "right" });
+  doc.text(String(totalQty), colX[7] - 1, y + bodyRowH - fs(1.8), { align: "right" });
+  y += bodyRowH;
+
+  // Stretch: if the natural content is shorter than the reserved footer
+  // position, pad the table down to meet it exactly — never a blank gap
+  // between a short item list and the totals/signature/terms below.
+  const tableBottom = Math.max(y, tableTargetBottom);
+
+  doc.setDrawColor(0);
+  // Row separator lines (header + each body row + total-qty row), only across
+  // the actual content height drawn.
+  let ruleY = bodyTopY;
+  for (let i = 0; i <= invoice.items.length; i++) { line(ruleY, MARGIN, tableRight); ruleY += bodyRowH; }
+  colX.forEach(x => doc.line(x, tableTopY, x, tableBottom));
+  doc.rect(MARGIN, tableTopY, tableRight - MARGIN, tableBottom - tableTopY);
+  y = tableBottom;
+
+  // ---- Bottom: delivery info (left) + boxed totals (right) ----
+  const bottomTopY = y;
+  const bottomRightX = MARGIN + CONTENT_W * 0.58;
+  doc.setFont("helvetica", "normal"); doc.setFontSize(fs(7.5));
+  let bl = bottomTopY + fs(4);
+  bottomLeftLines.forEach(l => { doc.text(l, MARGIN + 3, bl); bl += fs(4); });
+
+  let tr = bottomTopY;
+  totalsRows.forEach(([label, value, bold]) => {
+    tr += fs(4.6);
+    doc.setFont("helvetica", bold ? "bold" : "normal"); doc.setFontSize(bold ? fs(9) : fs(7.5));
+    doc.text(label, bottomRightX + 2, tr - fs(1.2));
+    doc.text(value, PAGE_W - MARGIN - 2, tr - fs(1.2), { align: "right" });
+    doc.setDrawColor(0); line(tr, bottomRightX, PAGE_W - MARGIN);
+  });
+
+  doc.setDrawColor(0);
+  doc.rect(MARGIN, bottomTopY, CONTENT_W, bottomBoxH);
+  doc.line(bottomRightX, bottomTopY, bottomRightX, bottomTopY + bottomBoxH);
+  y = bottomTopY + bottomBoxH;
+
+  // ---- Signature row: Receiver / Customer / Stamp / Authorised Signatory ----
+  const signTopY = y;
+  const signW = CONTENT_W / 4;
+  const signLabelY = signTopY + signRowH - fs(3);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(fs(7));
+  const signLineY = signLabelY - fs(2);
+  [
+    ["Receiver Signature", MARGIN + signW * 0.5],
+    ["Customer Signature", MARGIN + signW * 1.5],
+    ["__STAMP__", MARGIN + signW * 2.5],
+    ["For " + (settings.business_name || "Shop") + "\nAuthorised Signatory", MARGIN + signW * 3.5]
+  ].forEach(([label, cx]) => {
+    if (label === "__STAMP__") {
+      doc.setDrawColor(160);
+      doc.setLineDashPattern([1, 1], 0);
+      doc.rect(cx - signW * 0.3, signTopY + fs(3), signW * 0.6, fs(7));
+      doc.setLineDashPattern([], 0);
+      doc.setTextColor(160); doc.setFontSize(fs(6.5));
+      doc.text("Company Stamp", cx, signTopY + fs(3) + fs(4.2), { align: "center" });
+      doc.setTextColor(0); doc.setFontSize(fs(7));
+    } else {
+      doc.line(cx - signW * 0.4, signLineY, cx + signW * 0.4, signLineY);
+      doc.text(label, cx, signLabelY, { align: "center" });
+    }
+    doc.setDrawColor(0);
+  });
+  doc.rect(MARGIN, signTopY, CONTENT_W, signRowH);
+  y = signTopY + signRowH;
+
+  // ---- Terms & conditions, full width ----
+  const termsTopY = y;
+  doc.setFont("helvetica", "bold"); doc.setFontSize(fs(6.5)); doc.setTextColor(0);
+  let ty = termsTopY + fs(3.2);
+  termLines.forEach(l => { doc.text(l, PAGE_W / 2, ty, { align: "center" }); ty += fs(3.2); });
+  doc.rect(MARGIN, termsTopY, CONTENT_W, termsBoxH);
 
   return Buffer.from(doc.output("arraybuffer"));
 }

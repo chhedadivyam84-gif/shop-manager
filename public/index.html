@@ -8,6 +8,7 @@
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/css/style.css">
+<style id="page-size-style"></style>
 </head>
 <body>
 
@@ -126,6 +127,12 @@
           </label>
           <label class="field-label" style="margin-top:10px;">Delivery Man <span class="muted" style="font-weight:400;">— optional</span></label>
           <input type="text" id="delivery-man-input" placeholder="e.g. Rahul">
+          <label class="field-label" style="margin-top:10px;">Vehicle No. <span class="muted" style="font-weight:400;">— optional</span></label>
+          <input type="text" id="vehicle-number-input" placeholder="e.g. MH 01 AB 1234">
+          <label class="field-label" style="margin-top:10px;">Delivery Address <span class="muted" style="font-weight:400;">— optional, if different from billing address</span></label>
+          <input type="text" id="delivery-address-input" placeholder="Leave blank to use the customer's address">
+          <label class="field-label" style="margin-top:10px;">Remarks <span class="muted" style="font-weight:400;">— optional</span></label>
+          <input type="text" id="remarks-input" placeholder="e.g. Handle with care">
         </div>
         <div class="card" id="challan-charge-total" style="display:none;margin-top:8px;"></div>
 

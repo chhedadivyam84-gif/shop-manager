@@ -38,6 +38,7 @@ let state = {
   cart: [], selectedCustomerId: null,
   discountType: "pct", discountValue: 0, advance: 0, paymentMethod: "Cash",
   transport: 0, loading: 0, roundOff: true, docType: "invoice", challanShowRate: false, gstOnCharges: true, deliveryMan: "",
+  vehicleNumber: "", deliveryAddress: "", remarks: "",
   invBrandFilter: "All", reportType: "Sales",
   paperSize: "A5",
   me: { staffName: "", role: "" },
@@ -247,6 +248,15 @@ async function initApp(){
   });
   document.getElementById("delivery-man-input").addEventListener("input", (e)=>{
     state.deliveryMan = e.target.value;
+  });
+  document.getElementById("vehicle-number-input").addEventListener("input", (e)=>{
+    state.vehicleNumber = e.target.value;
+  });
+  document.getElementById("delivery-address-input").addEventListener("input", (e)=>{
+    state.deliveryAddress = e.target.value;
+  });
+  document.getElementById("remarks-input").addEventListener("input", (e)=>{
+    state.remarks = e.target.value;
   });
   document.getElementById("gst-on-charges-toggle").addEventListener("change", (e)=>{
     state.gstOnCharges = e.target.checked; renderTotals();
@@ -782,15 +792,20 @@ async function completeSale(){
       discountType: state.discountType, discountValue: state.discountValue,
       advance: state.advance, paymentMethod: state.paymentMethod, paperSize: state.paperSize,
       transport: state.transport, loading: state.loading, roundOff: state.roundOff,
-      gstOnCharges: state.gstOnCharges, deliveryMan: state.deliveryMan
+      gstOnCharges: state.gstOnCharges, deliveryMan: state.deliveryMan,
+      vehicleNumber: state.vehicleNumber, deliveryAddress: state.deliveryAddress, remarks: state.remarks
     });
     state.cart = []; state.advance = 0; state.discountValue = 0;
     state.transport = 0; state.loading = 0; state.deliveryMan = "";
+    state.vehicleNumber = ""; state.deliveryAddress = ""; state.remarks = "";
     document.getElementById("advance-input").value = 0;
     document.getElementById("discount-value").value = 0;
     const tIn = document.getElementById("transport-input"); if(tIn) tIn.value = 0;
     const lIn = document.getElementById("loading-input"); if(lIn) lIn.value = 0;
     const dmIn = document.getElementById("delivery-man-input"); if(dmIn) dmIn.value = "";
+    const vnIn = document.getElementById("vehicle-number-input"); if(vnIn) vnIn.value = "";
+    const daIn = document.getElementById("delivery-address-input"); if(daIn) daIn.value = "";
+    const rmIn = document.getElementById("remarks-input"); if(rmIn) rmIn.value = "";
     await Promise.all([loadProducts(), loadCustomers()]);
     await renderBilling(); await renderHome();
     toast(`${challan?"Delivery Challan":"Sale"} created — ${invoice.challan_no}`, "ok");
@@ -1888,10 +1903,24 @@ function closeFullscreen(id){ document.getElementById(id).classList.remove("show
 /* ============================================================
    INVOICE PREVIEW
    ============================================================ */
+/**
+ * Named @page rules with a `page:` property per element are unreliable
+ * across browsers (especially the Android Chrome most staff will actually
+ * print from), so the selected paper size's @page block is injected fresh
+ * here instead — always exactly one @page rule in effect at print time.
+ */
+function applyPageSizeStyle(){
+  const style = document.getElementById("page-size-style");
+  if(!style) return;
+  style.textContent = state.paperSize === "A4"
+    ? "@page{ size:A4 portrait; margin:6mm; }"
+    : "@page{ size:A5 portrait; margin:5mm; }";
+}
 function setPaper(size){
   state.paperSize = size;
   document.getElementById("paper-a5").classList.toggle("selected", size==="A5");
   document.getElementById("paper-a4").classList.toggle("selected", size==="A4");
+  applyPageSizeStyle();
   renderInvoicePageContent();
 }
 let lastPreviewInvoice = null;
@@ -1911,7 +1940,8 @@ function openInvoicePreview(existingInvoice){
         const r = lineCalc(c);
         const p = state.products.find(p=>p.id===c.productId);
         return {
-          name:c.name, code:(p&&p.code)||"", mode:r.mode, size_label:r.sizeLabel,
+          name:c.name, code:(p&&p.code)||"", brand:(p&&p.brand)||"", hsn_code:(p&&p.hsn_code)||"",
+          mode:r.mode, size_label:r.sizeLabel,
           length_ft:r.lengthFt, width_val:r.widthVal, thickness_in:r.thicknessIn,
           pieces:r.pieces, per_piece:r.perPiece, unit_label:r.unit,
           qty:r.billedQty, rate:r.rate
@@ -1921,7 +1951,10 @@ function openInvoicePreview(existingInvoice){
       cgst:t.cgst, sgst:t.sgst, igst:t.igst,
       transport:t.transport, loading:t.loading, round_off:t.roundOffAmount,
       total:t.total, advance:t.advance, balance_due:t.balanceDue,
-      delivery_man: state.deliveryMan || ""
+      delivery_man: state.deliveryMan || "",
+      vehicle_number: state.vehicleNumber || "",
+      delivery_address: state.deliveryAddress || "",
+      remarks: state.remarks || ""
     };
   }
   const challan = lastPreviewInvoice.doc_type === "challan";
@@ -2022,125 +2055,115 @@ function renderInvoicePageContent(){
   const challan = inv.doc_type === "challan";
   document.getElementById("invoice-page-content").classList.toggle("size-a5", !isA4);
 
-  // A challan hides Rate/Amount by default (it carries no GST invoice
+  // A challan hides Rate/GST%/Amount by default (it carries no GST invoice
   // meaning) but can show them on this printout via the "Show Rate" toggle —
   // "Delivery Challan (With Rate)" vs "(Without Rate)" from the same entry.
   const showRate = !challan || state.challanShowRate;
-  const head = showRate
-    ? `<th class="c-sn">Sr No.</th><th>Product Description</th><th class="c-code">Code</th><th class="c-size">Size</th><th class="c-num">Qty</th><th class="c-num">Total</th><th class="c-num">Rate</th><th class="c-num c-amt">Amount</th>`
-    : `<th class="c-sn">Sr No.</th><th>Product Description</th><th class="c-code">Code</th><th class="c-size">Size</th><th class="c-num">Qty</th><th class="c-num">Total</th>`;
+  const head = `<th class="c-sn">Sr No.</th><th>Product Description</th><th class="c-brand">Brand</th><th class="c-hsn">HSN</th><th class="c-size">Size</th><th class="c-unit">Unit</th><th class="c-num">Qty</th>${showRate ? `<th class="c-num">Rate</th><th class="c-num">GST %</th><th class="c-num c-amt">Amount</th>` : ""}`;
   const rows = inv.items.map((it,i)=>{
     const mode = it.mode || "UNIT";
-    const base = `<td class="c-sn">${i+1}</td><td>${escapeHtml(it.name)}</td><td class="c-code">${escapeHtml(it.code||"—")}</td><td class="c-size">${escapeHtml(it.size_label||"—")}</td><td class="c-num">${it.pieces||it.qty}</td><td class="c-num">${Pricing.formatQty(it.qty, mode)}</td>`;
-    return `<tr>${base}${showRate ? `<td class="c-num">${Pricing.formatRate(it.rate, mode)}</td><td class="c-num c-amt">${fmtPaise(it.qty*it.rate)}</td>` : ""}</tr>`;
+    const unit = it.unit_label || (Pricing.MODES[mode] && Pricing.MODES[mode].unit) || "";
+    const base = `<td class="c-sn">${i+1}</td><td>${escapeHtml(it.name)}</td><td class="c-brand">${escapeHtml(it.brand||"—")}</td><td class="c-hsn">${escapeHtml(it.hsn_code||"—")}</td><td class="c-size">${escapeHtml(it.size_label||"—")}</td><td class="c-unit">${escapeHtml(unit)}</td><td class="c-num">${Pricing.formatQty(it.qty, mode).replace(" "+unit,"")}</td>`;
+    return `<tr>${base}${showRate ? `<td class="c-num">${fmtPaise(it.rate).replace("Rs. ","")}</td><td class="c-num">${it.gst_rate||0}%</td><td class="c-num c-amt">${fmtPaise(it.qty*it.rate)}</td>` : ""}</tr>`;
   }).join("");
-  // Total quantity sits right under the Qty column, inside the grid itself —
-  // not buried in the totals card further down the page.
-  const totalQtyForFoot = inv.items.reduce((s,it)=>s+(Number(it.pieces)||it.qty||0),0);
+  // Sums the SAME figure shown in the Qty column above (billed quantity —
+  // Sq.ft/Rft/pieces depending on mode), not the separate physical sheet
+  // count, so the row values and this total never disagree in units.
+  const totalQtyForFoot = round2(inv.items.reduce((s,it)=>s+(Number(it.qty)||0),0));
   const tfoot = `<tfoot><tr>
-    <td colspan="4" style="text-align:right;">Total Quantity</td>
+    <td colspan="6" style="text-align:right;">Total Quantity</td>
     <td class="c-num">${totalQtyForFoot}</td>
     <td colspan="${showRate?3:1}"></td>
   </tr></tfoot>`;
 
-  // Priced invoice: full totals + amount in words. Challan: same boxed layout
-  // for visual consistency with the shop's paper form, but CGST/SGST/IGST
-  // stay at zero here — a challan never carries real GST regardless of what
-  // the box shows, and this "G. Total" is a print-only figure (goods value +
+  // Priced invoice: full totals. Challan: same boxed layout for visual
+  // consistency with the shop's paper form, but CGST/SGST/IGST stay at zero
+  // here — a challan never carries real GST regardless of what the box
+  // shows, and this "Grand Total" is a print-only figure (goods value +
   // transport/loading) that is NEVER what's stored as the invoice's actual
   // total or added to the customer's due — that stays transport+loading only,
   // set server-side, so a challan can never function as a demand for payment.
   const challanSubtotal = inv.items.reduce((s,it)=>s+(it.qty*it.rate||0),0);
-  const challanDisplayTotal = challanSubtotal + inv.transport + inv.loading;
-  const footer = challan
-    ? `<div class="inv-totals-box">
-      <div class="tb-row"><span>Subtotal</span><span>${fmtPaise(challanSubtotal)}</span></div>
-      <div class="tb-row"><span>Transport</span><span>${fmtPaise(inv.transport)}</span></div>
-      <div class="tb-row"><span>Additional Charges</span><span>${fmtPaise(inv.loading)}</span></div>
-      <div class="tb-row"><span>CGST</span><span>${fmtPaise(0)}</span></div>
-      <div class="tb-row"><span>SGST</span><span>${fmtPaise(0)}</span></div>
-      <div class="tb-row"><span>IGST</span><span>${fmtPaise(0)}</span></div>
-      <div class="tb-row tb-grand"><span>G. Total</span><span>${fmtPaise(challanDisplayTotal)}</span></div>
-    </div>
-    <div class="inv-below-box">
-      ${cfg.gstin ? `<div class="inv-gstin-line">GSTIN No: <b>${escapeHtml(cfg.gstin)}</b></div>` : ""}
-      <div class="inv-words"><span>Amount in words:</span> ${Pricing.amountInWords(challanDisplayTotal)}</div>
-    </div>
-    <div class="doc-sign-lines">
-      <span>Receiver's Signature</span>
-      <span class="doc-stamp-box">Company Stamp</span>
-      <span>For ${escapeHtml(cfg.business_name)}<br>Authorised Signatory</span>
-    </div>`
-    : `<div class="inv-totals-box">
-      <div class="tb-row"><span>Subtotal</span><span>${fmtPaise(inv.subtotal)}</span></div>
-      ${inv.discount_amount>0?`<div class="tb-row" style="color:#c0392b;"><span>Discount</span><span>-${fmtPaise(inv.discount_amount)}</span></div>`:""}
-      <div class="tb-row"><span>Transport</span><span>${fmtPaise(inv.transport)}</span></div>
-      <div class="tb-row"><span>Additional Charges</span><span>${fmtPaise(inv.loading)}</span></div>
-      ${inv.tax_type==="IGST"
-        ? `<div class="tb-row"><span>IGST</span><span>${fmtPaise(inv.igst)}</span></div>`
-        : `<div class="tb-row"><span>CGST</span><span>${fmtPaise(inv.cgst)}</span></div><div class="tb-row"><span>SGST</span><span>${fmtPaise(inv.sgst)}</span></div>`}
-      ${inv.round_off?`<div class="tb-row"><span>Round Off</span><span>${inv.round_off>0?"+":""}${fmtPaise(inv.round_off)}</span></div>`:""}
-      <div class="tb-row tb-grand"><span>G. Total</span><span>${fmtPaise(inv.total)}</span></div>
-      ${inv.advance>0?`<div class="tb-row" style="color:#1e8e5a;"><span>Advance Paid</span><span>-${fmtPaise(inv.advance)}</span></div>
-      <div class="tb-row" style="font-weight:800;color:#c0392b;"><span>Balance Due</span><span>${fmtPaise(inv.balance_due)}</span></div>`:""}
-    </div>
-    <div class="inv-below-box">
-      ${cfg.gstin ? `<div class="inv-gstin-line">GSTIN No: <b>${escapeHtml(cfg.gstin)}</b></div>` : ""}
-      <div class="inv-words"><span>Amount in words:</span> ${Pricing.amountInWords(inv.total)}</div>
-    </div>
-    <div class="doc-sign-lines">
-      <span>Receiver's Signature</span>
-      <span class="doc-stamp-box">Company Stamp</span>
-      <span>For ${escapeHtml(cfg.business_name)}<br>Authorised Signatory</span>
-    </div>`;
+  const displayTotal = challan ? (challanSubtotal + inv.transport + inv.loading) : inv.total;
+  const discountAmt = challan ? 0 : (inv.discount_amount || 0);
+  const cgst = challan ? 0 : inv.cgst, sgst = challan ? 0 : inv.sgst, igst = challan ? 0 : inv.igst;
+  const isIGST = !challan && inv.tax_type === "IGST";
+
+  const totalsBox = `<div class="erp-totals-box">
+    <div class="erp-tb-row"><span>Subtotal</span><span>${fmtPaise(challan?challanSubtotal:inv.subtotal)}</span></div>
+    <div class="erp-tb-row"><span>Discount</span><span>${discountAmt>0?"-":""}${fmtPaise(discountAmt)}</span></div>
+    <div class="erp-tb-row"><span>Transport</span><span>${fmtPaise(inv.transport)}</span></div>
+    <div class="erp-tb-row"><span>Additional Charges</span><span>${fmtPaise(inv.loading)}</span></div>
+    ${isIGST
+      ? `<div class="erp-tb-row"><span>IGST</span><span>${fmtPaise(igst)}</span></div>`
+      : `<div class="erp-tb-row"><span>CGST</span><span>${fmtPaise(cgst)}</span></div><div class="erp-tb-row"><span>SGST</span><span>${fmtPaise(sgst)}</span></div>`}
+    ${!challan && inv.round_off ? `<div class="erp-tb-row"><span>Round Off</span><span>${inv.round_off>0?"+":""}${fmtPaise(inv.round_off)}</span></div>` : ""}
+    <div class="erp-tb-row erp-tb-grand"><span>Grand Total</span><span>${fmtPaise(displayTotal)}</span></div>
+    ${!challan && inv.advance>0 ? `<div class="erp-tb-row"><span>Advance Paid</span><span>-${fmtPaise(inv.advance)}</span></div>
+    <div class="erp-tb-row" style="font-weight:800;"><span>Balance Due</span><span>${fmtPaise(inv.balance_due)}</span></div>` : ""}
+  </div>`;
+
+  const deliveryAddr = inv.delivery_address || (cust && cust.address) || "";
+  const bottomLeft = `<div class="erp-bottom-left">
+    ${deliveryAddr ? `<div><b>Delivery Address:</b> ${escapeHtml(deliveryAddr)}</div>` : ""}
+    ${inv.remarks ? `<div><b>Remarks:</b> ${escapeHtml(inv.remarks)}</div>` : ""}
+    <div><b>Amount in Words:</b> ${Pricing.amountInWords(displayTotal)}</div>
+  </div>`;
 
   const bannerText = challan ? "DELIVERY CHALLAN" : "ESTIMATE CHALLAN";
   document.getElementById("invoice-page-content").innerHTML = `
-    <div class="inv-head">
-      <div class="inv-head-main">
-        <h2>${escapeHtml(cfg.business_name)}</h2>
-        ${cfg.tagline ? `<div class="inv-tag">${escapeHtml(cfg.tagline)}</div>` : ""}
-        ${cfg.address ? `<div class="addr">${escapeHtml(cfg.address)}</div>` : ""}
-      </div>
-      <div class="inv-head-meta">
-        ${cfg.phones ? `<div>Ph: ${escapeHtml(cfg.phones)}</div>` : ""}
-        ${cfg.gstin ? `<div>GSTIN: <strong>${escapeHtml(cfg.gstin)}</strong></div>` : ""}
-      </div>
+    <div class="erp-banner">${bannerText}</div>
+    <div class="erp-header">
+      <div class="erp-biz-name">${escapeHtml(cfg.business_name)}</div>
+      ${cfg.tagline ? `<div class="erp-tag">${escapeHtml(cfg.tagline)}</div>` : ""}
+      ${cfg.address ? `<div class="erp-addr">${escapeHtml(cfg.address)}</div>` : ""}
+      <div class="erp-contact-line">${[
+        cfg.gstin ? `GSTIN: ${escapeHtml(cfg.gstin)}` : "",
+        cfg.phones ? `Ph: ${escapeHtml(cfg.phones)}` : "",
+        "Email: swagatply@gmail.com", "Website: www.swagatply.com"
+      ].filter(Boolean).join("  |  ")}</div>
     </div>
 
-    <div class="doc-banner">${bannerText}</div>
-
-    <div class="inv-parties">
-      <div class="inv-party">
-        <span class="lbl">${challan ? "Deliver To" : "Bill To"}</span>
-        <div class="nm">${cust?escapeHtml(cust.name):"Walk-in Customer"}</div>
-        ${cust ? `<div>${escapeHtml(cust.type||"")}${cust.phone?" · "+escapeHtml(cust.phone):""}</div>` : ""}
+    <div class="erp-parties">
+      <div class="erp-party-box">
+        <div class="erp-box-label">${challan ? "Deliver To" : "Buyer"}</div>
+        <div class="erp-box-name">${cust?escapeHtml(cust.name):"Walk-in Customer"}</div>
         ${cust&&cust.address ? `<div>${escapeHtml(cust.address)}</div>` : ""}
+        ${cust&&cust.phone ? `<div>Mobile: ${escapeHtml(cust.phone)}</div>` : ""}
         ${cust&&cust.gst ? `<div>GSTIN: ${escapeHtml(cust.gst)}</div>` : ""}
+        ${cust&&cust.state ? `<div>State: ${escapeHtml(cust.state)}</div>` : ""}
       </div>
-      <div class="inv-party inv-party-doc">
-        <div><span class="lbl">${challan ? "Challan No" : "Estimate No"}</span><b>${inv.challan_no}</b></div>
-        <div><span class="lbl">Date</span><b>${inv.date}</b></div>
-        ${inv.delivery_man ? `<div><span class="lbl">D. Man</span><b>${escapeHtml(inv.delivery_man)}</b></div>` : ""}
+      <div class="erp-doc-box">
+        <div class="erp-kv"><span>${challan ? "Challan No." : "Estimate No."}</span><b>${inv.challan_no}</b></div>
+        <div class="erp-kv"><span>Date</span><b>${inv.date}</b></div>
+        ${inv.delivery_man ? `<div class="erp-kv"><span>Salesperson</span><b>${escapeHtml(inv.delivery_man)}</b></div>` : ""}
+        ${inv.vehicle_number ? `<div class="erp-kv"><span>Vehicle No.</span><b>${escapeHtml(inv.vehicle_number)}</b></div>` : ""}
       </div>
     </div>
 
-    <table class="inv-table">
-      <thead><tr>${head}</tr></thead>
-      <tbody>${rows}</tbody>
-      ${tfoot}
-    </table>
-    ${footer}
-
-    <div class="inv-foot">
-      <div class="inv-terms">${challan
-        ? `This is a delivery challan and not a tax invoice — it is not a demand for payment.<br><strong>PLYWOOD, BLACKBOARD, ARE MANUFACTURED FROM NATURAL WOOD WHICH IS BELOW BIO DEGRADEBLE, WE DONOT GUARANTEE AGAINST ANY NATURAL DECAY DEFICIENTY, DETORATION AND LIKE INCLUDING MANUFACTURING DEFACT AND/OR IMPERFACT QUALITY</strong>`
-        : `<strong>NO GURANTEE AND WARRANTY FOR DECORATIVE PRODUCTS AND AIR BUBBLES IN LAMMINATES, ACRYLIC AND PVC LAMINATES OR ANY SHADE VARIATION AFTER INSTALLATION. NO EXCHANGE. NO RETURN IN ANY CONDITION. PLEASE CHECK THE MATERIAL ON DELIVERY.</strong>`}</div>
-      <div class="inv-contact">
-        <span>Email: <a href="mailto:swagatply@gmail.com">swagatply@gmail.com</a></span>
-        <span>Website: <a href="https://www.swagatply.com" target="_blank" rel="noopener">www.swagatply.com</a></span>
-      </div>
+    <div class="erp-table-wrap">
+      <table class="erp-table">
+        <thead><tr>${head}</tr></thead>
+        <tbody>${rows}</tbody>
+        ${tfoot}
+      </table>
     </div>
+
+    <div class="erp-bottom">
+      ${bottomLeft}
+      ${totalsBox}
+    </div>
+
+    <div class="erp-sign-row">
+      <span>Receiver Signature</span>
+      <span>Customer Signature</span>
+      <span class="erp-stamp-box">Company Stamp</span>
+      <span>For ${escapeHtml(cfg.business_name)}<br>Authorised Signatory</span>
+    </div>
+
+    <div class="erp-terms">${challan
+      ? `This is a delivery challan and not a tax invoice — it is not a demand for payment.<br><strong>PLYWOOD, BLACKBOARD, ARE MANUFACTURED FROM NATURAL WOOD WHICH IS BELOW BIO DEGRADEBLE, WE DONOT GUARANTEE AGAINST ANY NATURAL DECAY DEFICIENTY, DETORATION AND LIKE INCLUDING MANUFACTURING DEFACT AND/OR IMPERFACT QUALITY</strong>`
+      : `<strong>NO GURANTEE AND WARRANTY FOR DECORATIVE PRODUCTS AND AIR BUBBLES IN LAMMINATES, ACRYLIC AND PVC LAMINATES OR ANY SHADE VARIATION AFTER INSTALLATION. NO EXCHANGE. NO RETURN IN ANY CONDITION. PLEASE CHECK THE MATERIAL ON DELIVERY.</strong>`}</div>
   `;
 }
 async function downloadInvoicePdf(){

@@ -32,19 +32,19 @@ router.put("/", requireRole("owner"), (req, res) => {
 });
 
 /**
- * Numbering: read/set where the Estimate (SP0000001…) and Delivery Challan
- * (DC-2026-####) series currently stand, so an owner switching from paper
- * records can make the NEXT digital number continue on from their last
- * paper one instead of restarting at 1.
+ * Numbering: read/set where the Estimate and Delivery Challan series
+ * currently stand, so an owner switching from paper records can make the
+ * NEXT digital number continue on from their last paper one instead of
+ * restarting at 1. Both series print as "SP" + 7 digits (SP0000001…) on
+ * their OWN independent counters — the same literal number can come up on
+ * both an Estimate and a Challan at once; the document banner (ESTIMATE
+ * CHALLAN vs DELIVERY CHALLAN) is what tells them apart, not the number.
  *
  * The stored counter is always "the last number ISSUED", not "the next
  * one" — nextDocNo() in routes/invoices.js reads it and adds 1. Setting a
  * new starting point of N therefore writes N-1 here, so the very next
  * document created is exactly N.
  */
-function currentChallanYear() {
-  return new Date().getFullYear();
-}
 function readCounter(name) {
   const row = db.prepare("SELECT value FROM counters WHERE name = ?").get(name);
   return row ? row.value : 0;
@@ -55,13 +55,14 @@ function writeCounter(name, value) {
     ON CONFLICT(name) DO UPDATE SET value = excluded.value
   `).run(name, value);
 }
+function formatDocNo(n) {
+  return "SP" + String(n).padStart(7, "0");
+}
 
 router.get("/numbering", requireRole("owner"), (req, res) => {
-  const estimateLast = readCounter("estimate-no");
-  const challanLast = readCounter(`deliverychallan-${currentChallanYear()}`);
   res.json({
-    nextEstimateNo: "SP" + String(estimateLast + 1).padStart(7, "0"),
-    nextChallanNo: `DC-${currentChallanYear()}-${String(challanLast + 1).padStart(4, "0")}`
+    nextEstimateNo: formatDocNo(readCounter("estimate-no") + 1),
+    nextChallanNo: formatDocNo(readCounter("challan-no") + 1)
   });
 });
 
@@ -73,13 +74,13 @@ router.put("/numbering", requireRole("owner"), (req, res) => {
     const n = parseInt(nextEstimateNumber, 10);
     if (!Number.isFinite(n) || n < 1) return res.status(400).json({ error: "Next Estimate No. must be a positive whole number." });
     writeCounter("estimate-no", n - 1);
-    result.nextEstimateNo = "SP" + String(n).padStart(7, "0");
+    result.nextEstimateNo = formatDocNo(n);
   }
   if (nextChallanNumber !== undefined && nextChallanNumber !== "") {
     const n = parseInt(nextChallanNumber, 10);
     if (!Number.isFinite(n) || n < 1) return res.status(400).json({ error: "Next Challan No. must be a positive whole number." });
-    writeCounter(`deliverychallan-${currentChallanYear()}`, n - 1);
-    result.nextChallanNo = `DC-${currentChallanYear()}-${String(n).padStart(4, "0")}`;
+    writeCounter("challan-no", n - 1);
+    result.nextChallanNo = formatDocNo(n);
   }
 
   logAction(req, "settings.numbering",

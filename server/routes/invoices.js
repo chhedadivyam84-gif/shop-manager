@@ -19,34 +19,22 @@ const syncProductStockStmt = db.prepare(
   "UPDATE products SET stock = (SELECT COALESCE(SUM(stock),0) FROM product_sizes WHERE product_id = products.id) WHERE id = ?"
 );
 
-// Tax invoices and delivery challans run on SEPARATE number series, so each has
-// its own clean, gap-free sequence. Mixing them would leave holes in both,
-// which looks wrong to a customer or an auditor.
-//
-// Estimate (invoice) numbers use a single ever-incrementing counter —
-// SP0000001, SP0000002, … — with no year component, so the counter is NOT
-// reset every January the way the delivery-challan series (DC-2026-0001…)
-// still is.
+// Tax invoices and delivery challans run on SEPARATE number series — each on
+// its own counter, so neither ever has a gap caused by the other — but both
+// now use the SAME "SP" + 7-digit format (SP0000001…), ever-incrementing with
+// no year component. Because the two series can independently land on the
+// same literal number (an Estimate and a Challan can both be "SP0000005" at
+// once), the printed document banner (ESTIMATE CHALLAN vs DELIVERY CHALLAN)
+// is what actually tells them apart — the number alone does not.
 function nextDocNo(docType) {
-  const isChallan = docType === "challan";
-  if (!isChallan) {
-    const row = db.prepare("SELECT value FROM counters WHERE name = 'estimate-no'").get();
-    const next = row ? row.value + 1 : 1;
-    db.prepare(`
-      INSERT INTO counters (name, value) VALUES ('estimate-no', ?)
-      ON CONFLICT(name) DO UPDATE SET value = excluded.value
-    `).run(next);
-    return `SP${String(next).padStart(7, "0")}`;
-  }
-  const year = new Date().getFullYear();
-  const counterName = `deliverychallan-${year}`;
+  const counterName = docType === "challan" ? "challan-no" : "estimate-no";
   const row = db.prepare("SELECT value FROM counters WHERE name = ?").get(counterName);
   const next = row ? row.value + 1 : 1;
   db.prepare(`
     INSERT INTO counters (name, value) VALUES (?, ?)
     ON CONFLICT(name) DO UPDATE SET value = excluded.value
   `).run(counterName, next);
-  return `DC-${year}-${String(next).padStart(4, "0")}`;
+  return `SP${String(next).padStart(7, "0")}`;
 }
 
 function computeTotals({ items, discountType, discountValue, advance, taxType, transport, loading, roundOff, gstOnCharges }) {

@@ -88,23 +88,28 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
   doc.text(bannerText, PAGE_W / 2, y, { align: "center" });
   y += 2; line(y); y += 7;
 
-  // ---- Parties row ----
+  // ---- Parties row (boxed, sitting flush above the item table so the whole
+  // form reads as one continuous bordered document) ----
+  const partyBoxTopY = y - 2;
+  const docColX = PAGE_W - MARGIN - 55;
   const partyLabel = challan ? "Deliver To" : "Bill To";
   doc.setFont("helvetica", "bold"); doc.setFontSize(8); doc.setTextColor(120);
-  doc.text(partyLabel.toUpperCase(), MARGIN, y);
+  doc.text(partyLabel.toUpperCase(), MARGIN + 3, y);
   const docLabel = challan ? "Challan No" : "Estimate No";
-  doc.text(docLabel.toUpperCase(), PAGE_W - MARGIN, y, { align: "right" });
+  doc.text(docLabel.toUpperCase(), PAGE_W - MARGIN - 3, y, { align: "right" });
   y += 4.5;
 
   const partyTopY = y;
   doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(0);
-  doc.text(customer ? customer.name : "Walk-in Customer", MARGIN, y);
-  rightText(invoice.challan_no, y, 10.5);
+  doc.text(customer ? customer.name : "Walk-in Customer", MARGIN + 3, y);
+  doc.setFontSize(10.5);
+  doc.text(invoice.challan_no, PAGE_W - MARGIN - 3, y, { align: "right" });
   y += 4.5;
-  rightText("Date: " + invoice.date, y, 9);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(9);
+  doc.text("Date: " + invoice.date, PAGE_W - MARGIN - 3, y, { align: "right" });
   y += 4;
   if (invoice.delivery_man) {
-    rightText("D. Man: " + invoice.delivery_man, y, 9);
+    doc.text("D. Man: " + invoice.delivery_man, PAGE_W - MARGIN - 3, y, { align: "right" });
     y += 4;
   }
   y -= 1;
@@ -112,15 +117,21 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
   doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(60);
   if (customer) {
     const custLine = [customer.type, customer.phone].filter(Boolean).join(" - ");
-    if (custLine) { doc.text(custLine, MARGIN, y); y += 4; }
+    if (custLine) { doc.text(custLine, MARGIN + 3, y); y += 4; }
     if (customer.address) {
-      const custAddrLines = doc.splitTextToSize(customer.address, CONTENT_W * 0.55);
-      doc.text(custAddrLines, MARGIN, y); y += custAddrLines.length * 4;
+      const custAddrLines = doc.splitTextToSize(customer.address, docColX - MARGIN - 8);
+      doc.text(custAddrLines, MARGIN + 3, y); y += custAddrLines.length * 4;
     }
-    if (customer.gst) { doc.text("GSTIN: " + customer.gst, MARGIN, y); y += 4; }
+    if (customer.gst) { doc.text("GSTIN: " + customer.gst, MARGIN + 3, y); y += 4; }
   }
-  y = Math.max(y, partyTopY + 8) + 2;
-  line(y); y += 6;
+  y = Math.max(y, partyTopY + 8) + 3;
+
+  doc.setDrawColor(153);
+  doc.rect(MARGIN, partyBoxTopY, CONTENT_W, y - partyBoxTopY);
+  doc.line(docColX, partyBoxTopY, docColX, y);
+  doc.setDrawColor(0);
+  doc.setTextColor(0);
+  y += 3.5;
 
   // ---- Table (drawn as a full grid: outer border + a line between every
   // column and row — jsPDF has no native table/border primitive, so the
@@ -266,8 +277,8 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
   line(y); y += 5;
   doc.setFont("helvetica", "bold"); doc.setFontSize(7.5); doc.setTextColor(20);
   const termsText = challan
-    ? "This is a delivery challan and not a tax invoice - it is not a demand for payment."
-    : "NO GURANTEE AND WARRANTY FOR DECORATIVE PRODUCTS AND AIR BUBBLES IN LAMMINATES, ACRYLIC AND PVC LAMINATES OR ANY SHADE VARIATION AFTER INSTALLATION. NO EXCHANGE. NO RETURN IN ANY CONDITION. PLEASE CHECK THE MATERIAL ON DELIVERY.\nPLYWOOD, BLACKBOARD, ARE MANUFACTURED FROM NATURAL WOOD WHICH IS BELOW BIO DEGRADEBLE, WE DONOT GUARANTEE AGAINST ANY NATURAL DECAY DEFICIENTY, DETORATION AND LIKE INCLUDING MANUFACTURING DEFACT AND/OR IMPERFACT QUALITY";
+    ? "This is a delivery challan and not a tax invoice - it is not a demand for payment.\nPLYWOOD, BLACKBOARD, ARE MANUFACTURED FROM NATURAL WOOD WHICH IS BELOW BIO DEGRADEBLE, WE DONOT GUARANTEE AGAINST ANY NATURAL DECAY DEFICIENTY, DETORATION AND LIKE INCLUDING MANUFACTURING DEFACT AND/OR IMPERFACT QUALITY"
+    : "NO GURANTEE AND WARRANTY FOR DECORATIVE PRODUCTS AND AIR BUBBLES IN LAMMINATES, ACRYLIC AND PVC LAMINATES OR ANY SHADE VARIATION AFTER INSTALLATION. NO EXCHANGE. NO RETURN IN ANY CONDITION. PLEASE CHECK THE MATERIAL ON DELIVERY.";
   const termLines = doc.splitTextToSize(termsText, CONTENT_W);
   doc.text(termLines, MARGIN, y); y += termLines.length * 3.6 + 3;
 

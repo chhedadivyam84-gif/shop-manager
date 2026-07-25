@@ -200,17 +200,19 @@ nav.bottom .tab.active{color:var(--navy);}
 .inv-rule{border:none;border-top:1px solid #ccc;margin:8px 0;}
 .inv-flex{display:flex;justify-content:space-between;font-size:10.5px;}
 
-/* Bill-to / document-info: plain two-column row, one rule underneath — no boxes. */
-.inv-parties{display:flex;justify-content:space-between;gap:12px;margin:10px 0;padding-bottom:8px;border-bottom:1px solid #ccc;font-size:10px;line-height:1.5;color:#333;}
+/* Bill-to / document-info: boxed, sitting flush above the item table so the
+   whole form reads as one continuous bordered document — not loose sections. */
+.inv-parties{display:flex;justify-content:space-between;gap:0;margin:8px 0 0;padding:8px 10px;border:1px solid #999;border-bottom:none;font-size:10px;line-height:1.5;color:#333;}
+.inv-party{flex:1;padding-right:10px;}
 .inv-party .lbl{display:block;font-size:8px;text-transform:uppercase;letter-spacing:.05em;color:#888;font-weight:700;margin-bottom:1px;}
 .inv-party .nm{font-weight:700;font-size:11px;color:#111;}
-.inv-party-doc{text-align:right;}
+.inv-party-doc{text-align:right;flex:0 0 auto;min-width:130px;border-left:1px solid #ccc;padding-left:10px;padding-right:0;}
 .inv-party-doc>div{margin-bottom:3px;}
 .inv-party-doc b{font-weight:700;font-size:10.5px;}
 
 /* A full grid — outer border plus a line between every column and row, the
    traditional printed-invoice look — not just underlines between rows. */
-table.inv-table{width:100%;border-collapse:collapse;margin-top:4px;font-size:10.5px;border:1px solid #999;}
+table.inv-table{width:100%;border-collapse:collapse;margin-top:0;font-size:10.5px;border:1px solid #999;}
 table.inv-table th{text-align:left;font-size:8.5px;text-transform:uppercase;letter-spacing:.02em;color:#555;font-weight:700;padding:5px 6px;border:1px solid #999;background:#f4f4f2;}
 table.inv-table td{padding:5px 6px;border:1px solid #ccc;}
 

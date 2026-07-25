@@ -1950,6 +1950,7 @@ function openInvoicePreview(existingInvoice){
         const p = state.products.find(p=>p.id===c.productId);
         return {
           name:c.name, code:(p&&p.code)||"", brand:(p&&p.brand)||"", hsn_code:(p&&p.hsn_code)||"",
+          gst_rate:c.gstRate||0,
           mode:r.mode, size_label:r.sizeLabel,
           length_ft:r.lengthFt, width_val:r.widthVal, thickness_in:r.thicknessIn,
           pieces:r.pieces, per_piece:r.perPiece, unit_label:r.unit,

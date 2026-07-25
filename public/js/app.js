@@ -671,22 +671,33 @@ function computeTotals(){
   discount = round2(Math.min(Math.max(0,discount), subtotal));
 
   const taxType = currentTaxType();
-  let totalTax = 0;
+  let goodsTax = 0;
   lines.forEach((r,i)=>{
     const share = subtotal>0 ? (r.amount/subtotal)*discount : 0;
     const taxable = Math.max(0, r.amount-share);
-    totalTax += taxable * ((state.cart[i].gstRate||18)/100);
+    goodsTax += taxable * ((state.cart[i].gstRate||18)/100);
   });
-  totalTax = round2(totalTax);
+  goodsTax = round2(goodsTax);
+
+  // Transport and loading/labour are taxed too, at the invoice's own
+  // EFFECTIVE rate (goods tax ÷ taxable goods value) — there's no separate
+  // GST% typed in for a freight charge, so this keeps it consistent with
+  // whatever the goods on this bill actually carry. GST is computed LAST,
+  // once transport/loading are known, mirroring server/routes/invoices.js
+  // exactly so the preview and the saved invoice can never disagree.
+  const transport = round2(Math.max(0, state.transport||0));
+  const loading = round2(Math.max(0, state.loading||0));
+  const taxableGoods = round2(subtotal - discount);
+  const effectiveRate = taxableGoods>0 ? goodsTax/taxableGoods : 0;
+  const ancillaryTax = round2((transport+loading) * effectiveRate);
+  const totalTax = round2(goodsTax + ancillaryTax);
 
   let cgst=0, sgst=0, igst=0;
   if(taxType==="IGST") igst = totalTax; else { cgst = round2(totalTax/2); sgst = round2(totalTax-cgst); }
 
-  // Freight and labour sit outside the taxable value — added after GST.
-  const transport = round2(Math.max(0, state.transport||0));
-  const loading = round2(Math.max(0, state.loading||0));
-
-  const preRound = subtotal - discount + cgst + sgst + igst + transport + loading;
+  // Transport/loading now sit BEFORE GST — GST is the last line before the
+  // grand total, computed on top of them rather than added after tax.
+  const preRound = subtotal - discount + transport + loading + cgst + sgst + igst;
   const total = round2(state.roundOff ? Math.round(preRound) : preRound);
   const roundOffAmount = round2(total - preRound);
 
@@ -720,11 +731,11 @@ function renderTotals(){
   document.getElementById("totals-card").innerHTML = `
     ${row("Subtotal", fmtPaise(t.subtotal))}
     ${t.discount>0 ? row("Discount", "-"+fmtPaise(t.discount), "color:var(--danger);") : ""}
+    ${t.transport>0 ? row("Transport", fmtPaise(t.transport)) : ""}
+    ${t.loading>0 ? row("Loading", fmtPaise(t.loading)) : ""}
     ${t.taxType==="IGST"
       ? row("IGST", fmtPaise(t.igst))
       : row("CGST", fmtPaise(t.cgst)) + row("SGST", fmtPaise(t.sgst))}
-    ${t.transport>0 ? row("Transport", fmtPaise(t.transport)) : ""}
-    ${t.loading>0 ? row("Loading", fmtPaise(t.loading)) : ""}
     ${t.roundOffAmount!==0 ? row("Round off", (t.roundOffAmount>0?"+":"")+fmtPaise(t.roundOffAmount)) : ""}
     <div class="inv-flex" style="font-weight:800;border-top:1px solid var(--border);padding-top:6px;font-size:15px;"><span>Grand Total</span><span>${fmtPaise(t.total)}</span></div>
     <div class="amount-words">${Pricing.amountInWords(t.total)}</div>
@@ -1973,9 +1984,9 @@ function renderInvoicePageContent(){
     : `<div class="inv-totals">
       <div class="tr"><span>Subtotal</span><span>${fmtPaise(inv.subtotal)}</span></div>
       ${inv.discount_amount>0?`<div class="tr" style="color:#c0392b;"><span>Discount</span><span>-${fmtPaise(inv.discount_amount)}</span></div>`:""}
-      ${taxRows}
       ${inv.transport>0?`<div class="tr"><span>Transport</span><span>${fmtPaise(inv.transport)}</span></div>`:""}
       ${inv.loading>0?`<div class="tr"><span>Loading / Labour</span><span>${fmtPaise(inv.loading)}</span></div>`:""}
+      ${taxRows}
       ${inv.round_off?`<div class="tr"><span>Round Off</span><span>${inv.round_off>0?"+":""}${fmtPaise(inv.round_off)}</span></div>`:""}
       <div class="tr grand"><span>Grand Total</span><span>${fmtPaise(inv.total)}</span></div>
       ${inv.advance>0?`<div class="tr" style="color:#1e8e5a;"><span>Advance Paid</span><span>-${fmtPaise(inv.advance)}</span></div>

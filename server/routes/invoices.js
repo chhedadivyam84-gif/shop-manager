@@ -59,27 +59,39 @@ function computeTotals({ items, discountType, discountValue, advance, taxType, t
   else discountAmount = subtotal * (Math.min(100, Math.max(0, Number(discountValue) || 0)) / 100);
   discountAmount = round2(Math.min(Math.max(0, discountAmount), subtotal));
 
-  let totalTax = 0;
+  let goodsTax = 0;
   const itemTax = items.map(it => {
     const lineTotal = it.amount;
     const share = subtotal > 0 ? (lineTotal / subtotal) * discountAmount : 0;
     const taxable = Math.max(0, lineTotal - share);
     const tax = taxable * (it.gstRate / 100);
-    totalTax += tax;
+    goodsTax += tax;
     return tax;
   });
-  totalTax = round2(totalTax);
+  goodsTax = round2(goodsTax);
+
+  // Transport and loading/labour are taxed too, at the invoice's own EFFECTIVE
+  // rate (goods tax ÷ taxable goods value) rather than a rate typed in
+  // separately — there's no natural "GST%" on a freight charge the way there
+  // is on a priced item, and this keeps it consistent with whatever the goods
+  // on this invoice actually carry (12%, 18%, a mix, etc). GST is computed
+  // LAST, once transport/loading are known, and folded into one CGST/SGST or
+  // IGST figure — it is not split into a separate "GST on transport" line.
+  const transportAmt = round2(Math.max(0, Number(transport) || 0));
+  const loadingAmt = round2(Math.max(0, Number(loading) || 0));
+  const taxableGoods = round2(subtotal - discountAmount);
+  const effectiveRate = taxableGoods > 0 ? goodsTax / taxableGoods : 0;
+  const ancillaryTax = round2((transportAmt + loadingAmt) * effectiveRate);
+  const totalTax = round2(goodsTax + ancillaryTax);
 
   let cgst = 0, sgst = 0, igst = 0;
   if (taxType === "IGST") igst = totalTax;
   else { cgst = round2(totalTax / 2); sgst = round2(totalTax - cgst); }
 
-  // Freight and labour are recovered at cost and are not part of the taxable
-  // supply, so they are added after GST rather than before it.
-  const transportAmt = round2(Math.max(0, Number(transport) || 0));
-  const loadingAmt = round2(Math.max(0, Number(loading) || 0));
-
-  const preRound = subtotal - discountAmount + cgst + sgst + igst + transportAmt + loadingAmt;
+  // Transport/loading sit BEFORE GST now (GST is computed on top of them),
+  // so the totals block reads Subtotal, Discount, Transport, Loading, GST,
+  // Grand Total — GST is deliberately the last line before the total.
+  const preRound = subtotal - discountAmount + transportAmt + loadingAmt + cgst + sgst + igst;
   const total = round2(roundOff ? Math.round(preRound) : preRound);
   const roundOffAmount = round2(total - preRound);
 

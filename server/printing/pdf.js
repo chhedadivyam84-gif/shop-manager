@@ -193,10 +193,10 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
     };
     row("Subtotal", fmtPaise(invoice.subtotal));
     if (invoice.discount_amount > 0) row("Discount", "-" + fmtPaise(invoice.discount_amount));
-    if (invoice.tax_type === "IGST") row("IGST", fmtPaise(invoice.igst));
-    else { row("CGST", fmtPaise(invoice.cgst)); row("SGST", fmtPaise(invoice.sgst)); }
     if (invoice.transport > 0) row("Transport", fmtPaise(invoice.transport));
     if (invoice.loading > 0) row("Loading", fmtPaise(invoice.loading));
+    if (invoice.tax_type === "IGST") row("IGST", fmtPaise(invoice.igst));
+    else { row("CGST", fmtPaise(invoice.cgst)); row("SGST", fmtPaise(invoice.sgst)); }
     if (invoice.round_off) row("Round Off", (invoice.round_off > 0 ? "+" : "") + fmtPaise(invoice.round_off));
     doc.setDrawColor(0); doc.line(totalsX, y - 4, PAGE_W - MARGIN, y - 4);
     row("Grand Total", fmtPaise(invoice.total), true);

@@ -395,6 +395,18 @@ if (staffCount === 0) {
   `).run("STAFF_owner", priorPinHash || hashPin("1234"), Date.now());
 }
 
+// A shop-chosen product code (e.g. "LV-888-CAA"), separate from the
+// auto-generated internal SKU — printed on invoices, freely editable.
+addColumn("products", "code", "TEXT DEFAULT ''");
+
+// Who physically delivered/carried the goods for this invoice or challan,
+// printed next to the document number.
+addColumn("invoices", "delivery_man", "TEXT DEFAULT ''");
+
+// Snapshotted from the product at sale time, same as `name`/`size_label` —
+// so a later edit to a product's code never rewrites an already-printed bill.
+addColumn("invoice_items", "code", "TEXT DEFAULT ''");
+
 // node:sqlite has no built-in transaction wrapper the way better-sqlite3 does;
 // this shim keeps every route file's `db.transaction(() => {...})()` call working unchanged.
 db.transaction = function (fn) {

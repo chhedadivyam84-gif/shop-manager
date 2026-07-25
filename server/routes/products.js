@@ -49,7 +49,7 @@ router.get("/", (req, res) => {
 
 router.post("/", (req, res) => {
   const { name, brand, category, unit, gst, godown, rack, sizes,
-          defaultMode, lengthFt, widthVal, thicknessIn, hsnCode } = req.body;
+          defaultMode, lengthFt, widthVal, thicknessIn, hsnCode, code } = req.body;
   if (!name || typeof name !== "string" || !name.trim()) {
     return res.status(400).json({ error: "Product name is required." });
   }
@@ -68,9 +68,9 @@ router.post("/", (req, res) => {
   const openingTotal = validSizes.reduce((sum, s) => sum + stockNum(s.stock), 0);
 
   const insertProduct = db.prepare(`
-    INSERT INTO products (id, name, brand, category, sku, unit, hsn_code, gst_rate, stock, godown, rack,
+    INSERT INTO products (id, name, brand, category, sku, unit, hsn_code, code, gst_rate, stock, godown, rack,
       default_mode, length_ft, width_val, thickness_in, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insertSize = db.prepare(`
     INSERT INTO product_sizes (product_id, label, price, stock, sort_order) VALUES (?, ?, ?, ?, ?)
@@ -79,7 +79,7 @@ router.post("/", (req, res) => {
   db.transaction(() => {
     insertProduct.run(
       id, name.trim(), (brand || "Generic").trim(), (category || "General").trim(),
-      sku, (unit || "Piece").trim(), (hsnCode || "").trim(), gstRate, openingTotal,
+      sku, (unit || "Piece").trim(), (hsnCode || "").trim(), (code || "").trim(), gstRate, openingTotal,
       (godown || "").trim(), (rack || "").trim(),
       Pricing.normaliseMode(defaultMode), dim(lengthFt), dim(widthVal), dim(thicknessIn),
       Date.now()
@@ -96,7 +96,7 @@ router.put("/:id", (req, res) => {
   const p = db.prepare("SELECT * FROM products WHERE id = ?").get(req.params.id);
   if (!p) return res.status(404).json({ error: "Product not found." });
   const { name, brand, category, unit, gst, godown, rack, sizes,
-          defaultMode, lengthFt, widthVal, thicknessIn, hsnCode } = req.body;
+          defaultMode, lengthFt, widthVal, thicknessIn, hsnCode, code } = req.body;
 
   // A product's price lives in its size rows, so an edit that supplies a `sizes`
   // array must leave at least one valid entry — otherwise the product becomes
@@ -110,7 +110,7 @@ router.put("/:id", (req, res) => {
   }
 
   const update = db.prepare(`
-    UPDATE products SET name=?, brand=?, category=?, unit=?, hsn_code=?, gst_rate=?, godown=?, rack=?,
+    UPDATE products SET name=?, brand=?, category=?, unit=?, hsn_code=?, code=?, gst_rate=?, godown=?, rack=?,
       default_mode=?, length_ft=?, width_val=?, thickness_in=? WHERE id=?
   `);
   // Sizes are updated IN PLACE by id, not delete-all-and-reinsert: a stock-in
@@ -124,7 +124,7 @@ router.put("/:id", (req, res) => {
   db.transaction(() => {
     update.run(
       (name || p.name).trim(), (brand ?? p.brand), (category ?? p.category),
-      (unit ?? p.unit), (hsnCode ?? p.hsn_code),
+      (unit ?? p.unit), (hsnCode ?? p.hsn_code), (code ?? p.code),
       gst !== undefined && gst !== "" ? Number(gst) : p.gst_rate,
       (godown ?? p.godown), (rack ?? p.rack),
       defaultMode !== undefined ? Pricing.normaliseMode(defaultMode) : p.default_mode,

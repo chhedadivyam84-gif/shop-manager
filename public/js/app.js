@@ -37,7 +37,7 @@ let state = {
   products: [], customers: [], invoices: [], settings: null, dashboard: null,
   cart: [], selectedCustomerId: null,
   discountType: "pct", discountValue: 0, advance: 0, paymentMethod: "Cash",
-  transport: 0, loading: 0, roundOff: true, docType: "invoice", challanShowRate: false, gstOnCharges: true,
+  transport: 0, loading: 0, roundOff: true, docType: "invoice", challanShowRate: false, gstOnCharges: true, deliveryMan: "",
   invBrandFilter: "All", reportType: "Sales",
   paperSize: "A5",
   me: { staffName: "", role: "" },
@@ -244,6 +244,9 @@ async function initApp(){
   });
   document.getElementById("roundoff-toggle").addEventListener("change", (e)=>{
     state.roundOff = e.target.checked; renderTotals();
+  });
+  document.getElementById("delivery-man-input").addEventListener("input", (e)=>{
+    state.deliveryMan = e.target.value;
   });
   document.getElementById("gst-on-charges-toggle").addEventListener("change", (e)=>{
     state.gstOnCharges = e.target.checked; renderTotals();
@@ -779,14 +782,15 @@ async function completeSale(){
       discountType: state.discountType, discountValue: state.discountValue,
       advance: state.advance, paymentMethod: state.paymentMethod, paperSize: state.paperSize,
       transport: state.transport, loading: state.loading, roundOff: state.roundOff,
-      gstOnCharges: state.gstOnCharges
+      gstOnCharges: state.gstOnCharges, deliveryMan: state.deliveryMan
     });
     state.cart = []; state.advance = 0; state.discountValue = 0;
-    state.transport = 0; state.loading = 0;
+    state.transport = 0; state.loading = 0; state.deliveryMan = "";
     document.getElementById("advance-input").value = 0;
     document.getElementById("discount-value").value = 0;
     const tIn = document.getElementById("transport-input"); if(tIn) tIn.value = 0;
     const lIn = document.getElementById("loading-input"); if(lIn) lIn.value = 0;
+    const dmIn = document.getElementById("delivery-man-input"); if(dmIn) dmIn.value = "";
     await Promise.all([loadProducts(), loadCustomers()]);
     await renderBilling(); await renderHome();
     toast(`${challan?"Delivery Challan":"Sale"} created — ${invoice.challan_no}`, "ok");
@@ -877,6 +881,7 @@ function renderProductDetailSheet(context){
 
     <div class="card" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11.5px;">
       <div><span class="muted">SKU</span><br>${escapeHtml(p.sku||"")}</div>
+      <div><span class="muted">Product Code</span><br>${escapeHtml(p.code||"—")}</div>
       <div><span class="muted">HSN Code</span><br>${escapeHtml(p.hsn_code||"—")}</div>
       <div><span class="muted">Unit</span><br>${escapeHtml(p.unit||"")}</div>
       <div><span class="muted">GST%</span><br>${p.gst}%</div>
@@ -1386,6 +1391,7 @@ function renderAddProductSheet(context){
     <div class="sheet-title">${editing ? "Edit Product" : "New Product"}</div>
     ${editing ? `<div class="muted" style="font-size:11.5px;margin-bottom:8px;">SKU ${escapeHtml(editing.sku||"")} · changes apply to future bills only — past invoices keep the price they were issued at.</div>` : ""}
     <label class="field-label">Product name</label><input type="text" id="np-name" value="${v("name")}">
+    <label class="field-label">Product Code <span class="muted" style="font-weight:400;">— printed on invoices, e.g. LV-888-CAA</span></label><input type="text" id="np-code" value="${v("code")}">
     <label class="field-label">Brand</label><input type="text" id="np-brand" value="${v("brand")}">
     <label class="field-label">Category</label><input type="text" id="np-category" value="${v("category")}" placeholder="Plywood, Laminate, MDF, Veneer…">
     <label class="field-label">Unit of measure</label>
@@ -1458,7 +1464,8 @@ function renderAddProductSheet(context){
     if(!name){ toast("Enter a product name."); return; }
     const unit = sheet.querySelector("[data-unit].selected").dataset.unit;
     const payload = {
-      name, brand: document.getElementById("np-brand").value.trim(),
+      name, code: document.getElementById("np-code").value.trim(),
+      brand: document.getElementById("np-brand").value.trim(),
       category: document.getElementById("np-category").value.trim(),
       unit, hsnCode: document.getElementById("np-hsn").value.trim(),
       gst: parseFloat(document.getElementById("np-gst").value)||18,
@@ -1886,8 +1893,9 @@ function openInvoicePreview(existingInvoice){
       // unsaved preview and a saved invoice re-opened from history.
       items: state.cart.map(c=>{
         const r = lineCalc(c);
+        const p = state.products.find(p=>p.id===c.productId);
         return {
-          name:c.name, mode:r.mode, size_label:r.sizeLabel,
+          name:c.name, code:(p&&p.code)||"", mode:r.mode, size_label:r.sizeLabel,
           length_ft:r.lengthFt, width_val:r.widthVal, thickness_in:r.thicknessIn,
           pieces:r.pieces, per_piece:r.perPiece, unit_label:r.unit,
           qty:r.billedQty, rate:r.rate
@@ -1896,7 +1904,8 @@ function openInvoicePreview(existingInvoice){
       tax_type: t.taxType, discount_amount:t.discount, subtotal:t.subtotal,
       cgst:t.cgst, sgst:t.sgst, igst:t.igst,
       transport:t.transport, loading:t.loading, round_off:t.roundOffAmount,
-      total:t.total, advance:t.advance, balance_due:t.balanceDue
+      total:t.total, advance:t.advance, balance_due:t.balanceDue,
+      delivery_man: state.deliveryMan || ""
     };
   }
   const challan = lastPreviewInvoice.doc_type === "challan";
@@ -2002,18 +2011,18 @@ function renderInvoicePageContent(){
   // "Delivery Challan (With Rate)" vs "(Without Rate)" from the same entry.
   const showRate = !challan || state.challanShowRate;
   const head = showRate
-    ? `<th class="c-sn">Sr No.</th><th>Product Description</th><th class="c-size">Size</th><th class="c-num">Qty</th><th class="c-num">Total</th><th class="c-num">Rate</th><th class="c-num c-amt">Amount</th>`
-    : `<th class="c-sn">Sr No.</th><th>Product Description</th><th class="c-size">Size</th><th class="c-num">Qty</th><th class="c-num">Total</th>`;
+    ? `<th class="c-sn">Sr No.</th><th>Product Description</th><th class="c-code">Code</th><th class="c-size">Size</th><th class="c-num">Qty</th><th class="c-num">Total</th><th class="c-num">Rate</th><th class="c-num c-amt">Amount</th>`
+    : `<th class="c-sn">Sr No.</th><th>Product Description</th><th class="c-code">Code</th><th class="c-size">Size</th><th class="c-num">Qty</th><th class="c-num">Total</th>`;
   const rows = inv.items.map((it,i)=>{
     const mode = it.mode || "UNIT";
-    const base = `<td class="c-sn">${i+1}</td><td>${escapeHtml(it.name)}</td><td class="c-size">${escapeHtml(it.size_label||"—")}</td><td class="c-num">${it.pieces||it.qty}</td><td class="c-num">${Pricing.formatQty(it.qty, mode)}</td>`;
+    const base = `<td class="c-sn">${i+1}</td><td>${escapeHtml(it.name)}</td><td class="c-code">${escapeHtml(it.code||"—")}</td><td class="c-size">${escapeHtml(it.size_label||"—")}</td><td class="c-num">${it.pieces||it.qty}</td><td class="c-num">${Pricing.formatQty(it.qty, mode)}</td>`;
     return `<tr>${base}${showRate ? `<td class="c-num">${Pricing.formatRate(it.rate, mode)}</td><td class="c-num c-amt">${fmtPaise(it.qty*it.rate)}</td>` : ""}</tr>`;
   }).join("");
   // Total quantity sits right under the Qty column, inside the grid itself —
   // not buried in the totals card further down the page.
   const totalQtyForFoot = inv.items.reduce((s,it)=>s+(Number(it.pieces)||it.qty||0),0);
   const tfoot = `<tfoot><tr>
-    <td colspan="3" style="text-align:right;">Total Quantity</td>
+    <td colspan="4" style="text-align:right;">Total Quantity</td>
     <td class="c-num">${totalQtyForFoot}</td>
     <td colspan="${showRate?3:1}"></td>
   </tr></tfoot>`;
@@ -2039,18 +2048,28 @@ function renderInvoicePageContent(){
          <div>Received the above goods in good condition.</div>
          <div class="challan-sign-lines"><span>Receiver's Signature</span><span>For ${escapeHtml(cfg.business_name)}</span></div>
        </div>`
-    : `<div class="inv-totals">
-      <div class="tr"><span>Subtotal</span><span>${fmtPaise(inv.subtotal)}</span></div>
-      ${inv.discount_amount>0?`<div class="tr" style="color:#c0392b;"><span>Discount</span><span>-${fmtPaise(inv.discount_amount)}</span></div>`:""}
-      ${inv.transport>0?`<div class="tr"><span>Transport</span><span>${fmtPaise(inv.transport)}</span></div>`:""}
-      ${inv.loading>0?`<div class="tr"><span>Loading / Labour</span><span>${fmtPaise(inv.loading)}</span></div>`:""}
-      ${taxRows}
-      ${inv.round_off?`<div class="tr"><span>Round Off</span><span>${inv.round_off>0?"+":""}${fmtPaise(inv.round_off)}</span></div>`:""}
-      <div class="tr grand"><span>Grand Total</span><span>${fmtPaise(inv.total)}</span></div>
-      ${inv.advance>0?`<div class="tr" style="color:#1e8e5a;"><span>Advance Paid</span><span>-${fmtPaise(inv.advance)}</span></div>
-      <div class="tr" style="font-weight:800;color:#c0392b;"><span>Balance Due</span><span>${fmtPaise(inv.balance_due)}</span></div>`:""}
+    : `<div class="inv-totals-box">
+      <div class="tb-row"><span>Subtotal</span><span>${fmtPaise(inv.subtotal)}</span></div>
+      ${inv.discount_amount>0?`<div class="tb-row" style="color:#c0392b;"><span>Discount</span><span>-${fmtPaise(inv.discount_amount)}</span></div>`:""}
+      <div class="tb-row"><span>Transport</span><span>${fmtPaise(inv.transport)}</span></div>
+      <div class="tb-row"><span>Additional Charges</span><span>${fmtPaise(inv.loading)}</span></div>
+      ${inv.tax_type==="IGST"
+        ? `<div class="tb-row"><span>IGST</span><span>${fmtPaise(inv.igst)}</span></div>`
+        : `<div class="tb-row"><span>CGST</span><span>${fmtPaise(inv.cgst)}</span></div><div class="tb-row"><span>SGST</span><span>${fmtPaise(inv.sgst)}</span></div>`}
+      ${inv.round_off?`<div class="tb-row"><span>Round Off</span><span>${inv.round_off>0?"+":""}${fmtPaise(inv.round_off)}</span></div>`:""}
+      <div class="tb-row tb-grand"><span>G. Total</span><span>${fmtPaise(inv.total)}</span></div>
+      ${inv.advance>0?`<div class="tb-row" style="color:#1e8e5a;"><span>Advance Paid</span><span>-${fmtPaise(inv.advance)}</span></div>
+      <div class="tb-row" style="font-weight:800;color:#c0392b;"><span>Balance Due</span><span>${fmtPaise(inv.balance_due)}</span></div>`:""}
     </div>
-    <div class="inv-words"><span>Amount in words:</span> ${Pricing.amountInWords(inv.total)}</div>`;
+    <div class="inv-below-box">
+      ${cfg.gstin ? `<div class="inv-gstin-line">GSTIN No: <b>${escapeHtml(cfg.gstin)}</b></div>` : ""}
+      <div class="inv-words"><span>Amount in words:</span> ${Pricing.amountInWords(inv.total)}</div>
+    </div>
+    <div class="doc-sign-lines">
+      <span>Receiver's Signature</span>
+      <span class="doc-stamp-box">Company Stamp</span>
+      <span>For ${escapeHtml(cfg.business_name)}<br>Authorised Signatory</span>
+    </div>`;
 
   const bannerText = challan ? "DELIVERY CHALLAN" : "ESTIMATE CHALLAN";
   document.getElementById("invoice-page-content").innerHTML = `
@@ -2079,6 +2098,7 @@ function renderInvoicePageContent(){
       <div class="inv-party inv-party-doc">
         <div><span class="lbl">${challan ? "Challan No" : "Estimate No"}</span><b>${inv.challan_no}</b></div>
         <div><span class="lbl">Date</span><b>${inv.date}</b></div>
+        ${inv.delivery_man ? `<div><span class="lbl">D. Man</span><b>${escapeHtml(inv.delivery_man)}</b></div>` : ""}
       </div>
     </div>
 

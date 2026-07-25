@@ -1,8 +1,6 @@
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
-const express = require("express");
-const session = require("express-session");
 
 // Load data/.env if present, before anything reads process.env. Node 20.12+/22
 // has this built in, so cloud-backup credentials need no dotenv dependency.
@@ -16,12 +14,31 @@ try {
   console.warn("Could not load data/.env:", err.message);
 }
 
-const db = require("./db");
-const backup = require("./backup");
-const { requireAuth, requireRole } = require("./auth");
+start().catch(err => {
+  console.error("Fatal startup error:", err);
+  process.exit(1);
+});
 
-const app = express();
-const PORT = process.env.PORT || 3000;
+async function start() {
+  // Must happen before anything requires ./db — on an ephemeral-disk host
+  // (Render free tier resets the filesystem on every redeploy) this is what
+  // puts shop.db back in place from the last cloud snapshot, before the
+  // database module opens (and would otherwise create empty) the file.
+  const restore = await require("./restore").restoreIfNeeded();
+  if (restore.restored) {
+    console.log(`[restore] Restored database from cloud backup: ${restore.file} (${restore.size} bytes)`);
+  } else {
+    console.log(`[restore] Skipped: ${restore.reason}`);
+  }
+
+  const express = require("express");
+  const session = require("express-session");
+  const db = require("./db");
+  const backup = require("./backup");
+  const { requireAuth, requireRole } = require("./auth");
+
+  const app = express();
+  const PORT = process.env.PORT || 3000;
 
 // Session secret persists across restarts in data/session-secret so logins
 // aren't wiped every time the shop PC reboots the app.
@@ -82,3 +99,4 @@ app.listen(PORT, "0.0.0.0", () => {
   // server is up so a backup can never delay accepting requests.
   backup.startSchedule();
 });
+}

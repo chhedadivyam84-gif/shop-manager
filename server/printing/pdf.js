@@ -102,7 +102,12 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
   rightText(invoice.challan_no, y, 10.5);
   y += 4.5;
   rightText("Date: " + invoice.date, y, 9);
-  y += 3;
+  y += 4;
+  if (invoice.delivery_man) {
+    rightText("D. Man: " + invoice.delivery_man, y, 9);
+    y += 4;
+  }
+  y -= 1;
 
   doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(60);
   if (customer) {
@@ -121,10 +126,10 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
   // column and row — jsPDF has no native table/border primitive, so the
   // lines are placed by hand using each column's known x-position). ----
   const cols = showRate
-    ? [{ h: "Sr No.", w: 14 }, { h: "Product Description", w: 56 }, { h: "Size", w: 28 }, { h: "Qty", w: 16 },
-       { h: "Total", w: 26, align: "right" }, { h: "Rate", w: 26, align: "right" }, { h: "Amount", w: 24, align: "right" }]
-    : [{ h: "Sr No.", w: 16 }, { h: "Product Description", w: 86 }, { h: "Size", w: 40 }, { h: "Qty", w: 20 },
-       { h: "Total", w: CONTENT_W - 16 - 86 - 40 - 20, align: "right" }];
+    ? [{ h: "Sr No.", w: 10 }, { h: "Product Description", w: 44 }, { h: "Code", w: 20 }, { h: "Size", w: 20 }, { h: "Qty", w: 12 },
+       { h: "Total", w: 24, align: "right" }, { h: "Rate", w: 26, align: "right" }, { h: "Amount", w: 24, align: "right" }]
+    : [{ h: "Sr No.", w: 12 }, { h: "Product Description", w: 62 }, { h: "Code", w: 26 }, { h: "Size", w: 28 }, { h: "Qty", w: 16 },
+       { h: "Total", w: CONTENT_W - 12 - 62 - 26 - 28 - 16, align: "right" }];
   const colX = [MARGIN];
   cols.forEach(c => colX.push(colX[colX.length - 1] + c.w));
   const tableRight = colX[colX.length - 1];
@@ -157,17 +162,17 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
     if (y === MARGIN) drawTableHeader();
     const mode = it.mode || "UNIT";
     const values = showRate
-      ? [String(i + 1), it.name, it.size_label || "-", String(it.pieces || it.qty),
-         Pricing.formatQty(it.qty, mode), Pricing.formatRate(it.rate, mode), fmtPaise(it.qty * it.rate).replace("Rs. ", "")]
-      : [String(i + 1), it.name, it.size_label || "-", String(it.pieces || it.qty), Pricing.formatQty(it.qty, mode)];
+      ? [String(i + 1), it.name, it.code || "-", it.size_label || "-", String(it.pieces || it.qty),
+         Pricing.formatQty(it.qty, mode), Pricing.formatRate(it.rate, mode).replace("₹", "Rs."), fmtPaise(it.qty * it.rate).replace("Rs. ", "")]
+      : [String(i + 1), it.name, it.code || "-", it.size_label || "-", String(it.pieces || it.qty), Pricing.formatQty(it.qty, mode)];
     drawRow(values);
   });
 
   // Total quantity sits right under the Qty column, inside the grid itself.
   const totalQty = invoice.items.reduce((s, it) => s + (Number(it.pieces) || it.qty || 0), 0);
   const totalRowValues = showRate
-    ? ["", "Total Quantity", "", String(totalQty), "", "", ""]
-    : ["", "Total Quantity", "", String(totalQty), ""];
+    ? ["", "Total Quantity", "", "", String(totalQty), "", "", ""]
+    : ["", "Total Quantity", "", "", String(totalQty), ""];
   drawRow(totalRowValues, true);
 
   // Outer border + one vertical line per column boundary, spanning the full
@@ -206,29 +211,54 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
     doc.line(PAGE_W - MARGIN - 45, y - 2, PAGE_W - MARGIN, y - 2);
     y += 8;
   } else {
+    // Boxed totals grid — every row ruled off, outer border drawn once the
+    // final height is known, matching the shop's paper challan-cum-invoice.
     const totalsX = PAGE_W - MARGIN - 65;
-    const row = (label, value, bold) => {
-      doc.setFont("helvetica", bold ? "bold" : "normal"); doc.setFontSize(bold ? 10.5 : 9);
-      doc.text(label, totalsX, y);
-      doc.text(value, PAGE_W - MARGIN, y, { align: "right" });
-      y += bold ? 6 : 5;
-    };
-    row("Subtotal", fmtPaise(invoice.subtotal));
-    if (invoice.discount_amount > 0) row("Discount", "-" + fmtPaise(invoice.discount_amount));
-    if (invoice.transport > 0) row("Transport", fmtPaise(invoice.transport));
-    if (invoice.loading > 0) row("Loading", fmtPaise(invoice.loading));
-    if (invoice.tax_type === "IGST") row("IGST", fmtPaise(invoice.igst));
-    else { row("CGST", fmtPaise(invoice.cgst)); row("SGST", fmtPaise(invoice.sgst)); }
-    if (invoice.round_off) row("Round Off", (invoice.round_off > 0 ? "+" : "") + fmtPaise(invoice.round_off));
-    doc.setDrawColor(0); doc.line(totalsX, y - 4, PAGE_W - MARGIN, y - 4);
-    row("Grand Total", fmtPaise(invoice.total), true);
-    if (invoice.advance > 0) { row("Advance Paid", "-" + fmtPaise(invoice.advance)); row("Balance Due", fmtPaise(invoice.balance_due), true); }
-    y += 2;
+    const boxTopY = y - 4;
+    const rows = [];
+    rows.push(["Subtotal", fmtPaise(invoice.subtotal)]);
+    if (invoice.discount_amount > 0) rows.push(["Discount", "-" + fmtPaise(invoice.discount_amount)]);
+    rows.push(["Transport", fmtPaise(invoice.transport)]);
+    rows.push(["Additional Charges", fmtPaise(invoice.loading)]);
+    if (invoice.tax_type === "IGST") rows.push(["IGST", fmtPaise(invoice.igst)]);
+    else { rows.push(["CGST", fmtPaise(invoice.cgst)]); rows.push(["SGST", fmtPaise(invoice.sgst)]); }
+    if (invoice.round_off) rows.push(["Round Off", (invoice.round_off > 0 ? "+" : "") + fmtPaise(invoice.round_off)]);
+    rows.push(["G. Total", fmtPaise(invoice.total), true]);
+    if (invoice.advance > 0) {
+      rows.push(["Advance Paid", "-" + fmtPaise(invoice.advance)]);
+      rows.push(["Balance Due", fmtPaise(invoice.balance_due), true]);
+    }
+    rows.forEach(([label, value, bold]) => {
+      doc.setFont("helvetica", bold ? "bold" : "normal"); doc.setFontSize(bold ? 10 : 8.5);
+      doc.text(label, totalsX + 2, y);
+      doc.text(value, PAGE_W - MARGIN - 2, y, { align: "right" });
+      y += 5;
+      doc.setDrawColor(210); doc.line(totalsX, y - 1.5, PAGE_W - MARGIN, y - 1.5); doc.setDrawColor(0);
+    });
+    doc.setDrawColor(120); doc.rect(totalsX, boxTopY, PAGE_W - MARGIN - totalsX, y - 1.5 - boxTopY); doc.setDrawColor(0);
+    y += 3;
+
+    if (settings.gstin) {
+      doc.setFont("helvetica", "normal"); doc.setFontSize(8);
+      doc.text("GSTIN No: " + settings.gstin, MARGIN, y); y += 4;
+    }
     doc.setFont("helvetica", "bold"); doc.setFontSize(8);
     doc.text("Amount in words:", MARGIN, y); y += 4;
     doc.setFont("helvetica", "normal");
     const words = doc.splitTextToSize(Pricing.amountInWords(invoice.total), CONTENT_W);
     doc.text(words, MARGIN, y); y += words.length * 4 + 2;
+
+    // Signature / stamp / authorised-signatory row, same treatment as the challan's.
+    newPageIfNeeded(30);
+    y += 14;
+    doc.setFontSize(8.5);
+    doc.text("Receiver's Signature", MARGIN + 10, y);
+    doc.text("Company Stamp", PAGE_W / 2, y, { align: "center" });
+    rightText("For " + (settings.business_name || "Shop") + "\nAuthorised Signatory", y);
+    doc.line(MARGIN, y - 2, MARGIN + 45, y - 2);
+    doc.line(PAGE_W / 2 - 22, y - 2, PAGE_W / 2 + 22, y - 2);
+    doc.line(PAGE_W - MARGIN - 45, y - 2, PAGE_W - MARGIN, y - 2);
+    y += 8;
   }
 
   // ---- Footer: terms + contact ----

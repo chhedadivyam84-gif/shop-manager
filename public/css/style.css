@@ -282,11 +282,21 @@ table.inv-table td{padding:5px 6px;border:1px solid #ccc;}
    INVOICE DOCUMENT
    ============================================================ */
 table.inv-table th.c-sn,table.inv-table td.c-sn{width:20px;text-align:center;color:#888;}
+table.inv-table th.c-code,table.inv-table td.c-code{white-space:nowrap;color:#555;}
 table.inv-table th.c-size,table.inv-table td.c-size{white-space:nowrap;}
 table.inv-table th.c-num,table.inv-table td.c-num{text-align:right;white-space:nowrap;}
 table.inv-table td.c-amt,table.inv-table th.c-amt{font-weight:700;}
 table.inv-table td{vertical-align:top;}
 table.inv-table tfoot td{font-weight:700;background:#f4f4f2;border-top:1.5px solid #999;}
+
+/* Bordered totals grid for the priced (Tax Invoice) document — mirrors the
+   shop's paper challan-cum-invoice format: every row boxed, not a bare list. */
+.inv-totals-box{width:58%;margin-left:auto;margin-top:10px;font-size:10px;border:1px solid #999;}
+.inv-totals-box .tb-row{display:flex;justify-content:space-between;padding:3px 8px;border-bottom:1px solid #ccc;}
+.inv-totals-box .tb-row:last-child{border-bottom:none;}
+.inv-totals-box .tb-grand{font-weight:800;font-size:11.5px;background:#f4f4f2;border-top:1.5px solid #111;}
+.inv-below-box{width:58%;margin-left:auto;margin-top:6px;font-size:9.5px;color:#333;}
+.inv-gstin-line{margin-bottom:3px;}
 /* Seven columns will not fit A5 at the base size — shrink the type rather than
    let the table overflow the paper. */
 .invoice-page.size-a5 table.inv-table{font-size:8.5px;}
@@ -306,6 +316,12 @@ table.inv-table tfoot td{font-weight:700;background:#f4f4f2;border-top:1.5px sol
 .challan-sign{margin-top:22px;font-size:9.5px;color:#222;}
 .challan-sign-lines{display:flex;justify-content:space-between;margin-top:34px;}
 .challan-sign-lines span{border-top:1px solid #333;padding-top:3px;font-size:9px;color:#555;min-width:42%;text-align:center;}
+
+/* Priced-document footer: receiver sign / stamp / authorised signatory,
+   three across, same treatment as the challan's signature row. */
+.doc-sign-lines{display:flex;justify-content:space-between;align-items:flex-end;margin-top:34px;gap:10px;}
+.doc-sign-lines span{border-top:1px solid #333;padding-top:3px;font-size:9px;color:#555;min-width:28%;text-align:center;line-height:1.35;}
+.doc-stamp-box{border:1px dashed #999 !important;border-top:1px dashed #999 !important;min-height:30px;display:flex;align-items:center;justify-content:center;color:#aaa !important;}
 /* Invoice footer: terms (bold) + shop contact line */
 .inv-foot{margin-top:12px;border-top:1px solid #ccc;padding-top:6px;}
 .inv-terms{font-size:9px;color:#333;line-height:1.45;}

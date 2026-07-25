@@ -110,7 +110,7 @@ router.get("/:id", (req, res) => {
 
 router.post("/", (req, res) => {
   const { customerId, items: rawItems, discountType, discountValue, advance,
-          paymentMethod, paperSize, transport, loading, roundOff } = req.body;
+          paymentMethod, paperSize, transport, loading, roundOff, deliveryMan } = req.body;
   const docType = req.body.docType === "challan" ? "challan" : "invoice";
   const isChallan = docType === "challan";
   // Defaults ON (matches the always-taxed behaviour before this toggle
@@ -166,6 +166,7 @@ router.post("/", (req, res) => {
       productId: product.id,
       sizeId: size.id,
       name: raw.name || product.name,
+      code: product.code || "",
       gstRate: product.gst_rate,
       product, size,
       ...calc
@@ -204,16 +205,16 @@ router.post("/", (req, res) => {
   const insertInvoice = db.prepare(`
     INSERT INTO invoices (id, challan_no, doc_type, date, created_at, customer_id, subtotal, discount_type, discount_value,
       discount_amount, tax_type, cgst, sgst, igst, transport, loading, gst_on_charges, round_off, total, advance, balance_due,
-      payment_method, paper_size)
+      payment_method, paper_size, delivery_man)
     VALUES (@id, @challanNo, @docType, @date, @createdAt, @customerId, @subtotal, @discountType, @discountValue,
       @discountAmount, @taxType, @cgst, @sgst, @igst, @transport, @loading, @gstOnCharges, @roundOffAmount, @total, @advance,
-      @balanceDue, @paymentMethod, @paperSize)
+      @balanceDue, @paymentMethod, @paperSize, @deliveryMan)
   `);
   const insertItem = db.prepare(`
     INSERT INTO invoice_items
-      (invoice_id, product_id, size_id, name, mode, length_ft, width_val, thickness_in,
+      (invoice_id, product_id, size_id, name, code, mode, length_ft, width_val, thickness_in,
        size_label, pieces, per_piece, unit_label, qty, rate, gst_rate)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const deductStock = db.prepare("UPDATE product_sizes SET stock = stock - ? WHERE id = ?");
   const bumpDue = db.prepare("UPDATE customers SET due = due + ? WHERE id = ?");
@@ -229,10 +230,11 @@ router.post("/", (req, res) => {
       total: totals.total, advance: totals.advance, balanceDue: totals.balanceDue,
       // A challan has no tender; store a dash rather than a misleading "Cash".
       paymentMethod: isChallan ? "—" : (paymentMethod || "Cash"),
-      paperSize: paperSize === "A4" ? "A4" : "A5"
+      paperSize: paperSize === "A4" ? "A4" : "A5",
+      deliveryMan: (deliveryMan || "").trim()
     });
     items.forEach(it => insertItem.run(
-      id, it.productId, it.sizeId, it.name, it.mode,
+      id, it.productId, it.sizeId, it.name, it.code, it.mode,
       it.lengthFt || null, it.widthVal || null, it.thicknessIn || null,
       it.sizeLabel, it.pieces, it.perPiece, it.unit,
       // A challan's item RATE is now kept (optional, defaults 0) so the print

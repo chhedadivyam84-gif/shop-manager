@@ -193,10 +193,14 @@ nav.bottom .tab.active{color:var(--navy);}
 .invoice-page{
   background:#fff;color:#000;margin-top:0;margin-right:16px;margin-bottom:16px;margin-left:16px;
   border-radius:10px;padding:10px;font-size:11px;overflow-y:auto;
-  /* No forced min-height — the page is exactly as tall as its content, not
-     padded out to fill a whole sheet. flex-grow:0 (no stretching); flex-
-     shrink:0 stays so a tall/many-item invoice is never squeezed smaller
-     than its own content (which would clip it or overlap the footer). */
+  /* min-height (set per paper size by applyPageSizeStyle, app.js) is the
+     Tally-style full-page target — reached by adding real blank filler
+     <tr> rows to the table (see fillTableToPageHeight in app.js), not by
+     CSS-stretching the table itself, which proved unreliable (a percentage
+     height or flex-grow on a <table> can size it smaller than its actual
+     rows once min-height:0 is in play — the exact bug that let a long
+     item list overlap the totals box). flex-shrink:0 still guards against
+     that regardless. */
   display:flex;flex-direction:column;flex:0 0 auto;
 }
 .invoice-page.size-a5{max-width:360px;margin-left:auto;margin-right:auto;}
@@ -229,19 +233,17 @@ nav.bottom .tab.active{color:var(--navy);}
    never leaves a large blank gap before the footer, while every other
    section keeps its natural size. */
 .erp-banner,.erp-header,.erp-parties,.erp-bottom,.erp-sign-row,.erp-terms{flex:0 0 auto;}
-/* No forced stretch (flex-grow:0) — the table is exactly as tall as its
-   rows, not padded out to fill leftover page space. flex-shrink:0 stays as
-   a safety net: without it, a flex item can be squeezed below its own
-   content's natural size once min-height:0 is set, which previously caused
-   rows to visually spill out of this wrapper and overlap the totals box
-   below it on a long item list. */
+/* Sized by its actual content (real blank filler rows fill short lists,
+   see fillTableToPageHeight in app.js) rather than CSS flex-grow, which
+   proved unreliable for this. flex-shrink:0 still guards against a flex
+   item being squeezed below its own content once min-height:0 is set —
+   the bug that let rows spill out of this wrapper on a long item list. */
 .erp-table-wrap{border:1px solid #000;border-top:none;flex:0 0 auto;min-height:0;}
 table.erp-table{width:100%;border-collapse:collapse;font-size:8.5px;}
 table.erp-table th{text-align:left;font-size:7.5px;text-transform:uppercase;letter-spacing:.02em;font-weight:800;padding:4px 5px;border:1px solid #000;}
 table.erp-table td{padding:4px 5px;border:1px solid #000;vertical-align:top;}
 table.erp-table th.c-sn,table.erp-table td.c-sn{width:22px;text-align:center;}
 table.erp-table th.c-brand,table.erp-table td.c-brand,
-table.erp-table th.c-hsn,table.erp-table td.c-hsn,
 table.erp-table th.c-size,table.erp-table td.c-size,
 table.erp-table th.c-unit,table.erp-table td.c-unit{white-space:nowrap;}
 table.erp-table th.c-num,table.erp-table td.c-num{text-align:right;white-space:nowrap;}

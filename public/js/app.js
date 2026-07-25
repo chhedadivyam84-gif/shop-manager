@@ -1913,12 +1913,17 @@ function applyPageSizeStyle(){
   const style = document.getElementById("page-size-style");
   if(!style) return;
   const isA4 = state.paperSize === "A4";
-  const margin = isA4 ? 6 : 5;
-  // No forced min-height — the page sizes to its actual content (a one-item
-  // challan shouldn't be padded out to a full blank A4 sheet). @page just
-  // sets the physical paper size/margin so printed content is scaled and
-  // positioned correctly for whichever size is selected.
-  style.textContent = `@page{ size:${isA4 ? "A4" : "A5"} portrait; margin:${margin}mm; }`;
+  const pageH = isA4 ? 297 : 210, margin = isA4 ? 6 : 5;
+  const contentH = pageH - margin * 2;
+  // min-height fills the whole sheet, Tally-style, even with just one item —
+  // the table's flex-grow (see .erp-table-wrap) is what actually stretches
+  // to reach it. flex-shrink stays disabled everywhere in this chain so a
+  // LONG item list is still free to grow past one page rather than being
+  // squeezed to fit (that was the "shit" print the row-shrinking caused).
+  style.textContent = `
+    @page{ size:${isA4 ? "A4" : "A5"} portrait; margin:${margin}mm; }
+    .invoice-page{ min-height:${contentH}mm; }
+  `;
 }
 function setPaper(size){
   state.paperSize = size;
@@ -2042,8 +2047,12 @@ function openInvoicePreview(existingInvoice){
       actionsBar.appendChild(del);
     }
   }
-  setPaper(state.paperSize);
+  // Sheet must be visible (display:none has no layout box at all) BEFORE
+  // setPaper()'s render measures real element heights to decide how many
+  // blank filler rows the table needs — measuring while hidden reads 0 for
+  // everything, which previously ran away adding thousands of rows.
   document.getElementById("fs-invoice").classList.add("show");
+  setPaper(state.paperSize);
 }
 async function openExistingInvoice(invoiceId){
   try{
@@ -2064,11 +2073,11 @@ function renderInvoicePageContent(){
   // meaning) but can show them on this printout via the "Show Rate" toggle —
   // "Delivery Challan (With Rate)" vs "(Without Rate)" from the same entry.
   const showRate = !challan || state.challanShowRate;
-  const head = `<th class="c-sn">Sr No.</th><th>Product Description</th><th class="c-brand">Brand</th><th class="c-hsn">HSN</th><th class="c-size">Size</th><th class="c-unit">Unit</th><th class="c-num">Qty</th>${showRate ? `<th class="c-num">Rate</th><th class="c-num">GST %</th><th class="c-num c-amt">Amount</th>` : ""}`;
+  const head = `<th class="c-sn">Sr No.</th><th>Product Description</th><th class="c-brand">Brand</th><th class="c-size">Size</th><th class="c-unit">Unit</th><th class="c-num">Qty</th>${showRate ? `<th class="c-num">Rate</th><th class="c-num">GST %</th><th class="c-num c-amt">Amount</th>` : ""}`;
   const rows = inv.items.map((it,i)=>{
     const mode = it.mode || "UNIT";
     const unit = it.unit_label || (Pricing.MODES[mode] && Pricing.MODES[mode].unit) || "";
-    const base = `<td class="c-sn">${i+1}</td><td>${escapeHtml(it.name)}</td><td class="c-brand">${escapeHtml(it.brand||"—")}</td><td class="c-hsn">${escapeHtml(it.hsn_code||"—")}</td><td class="c-size">${escapeHtml(it.size_label||"—")}</td><td class="c-unit">${escapeHtml(unit)}</td><td class="c-num">${Pricing.formatQty(it.qty, mode).replace(" "+unit,"")}</td>`;
+    const base = `<td class="c-sn">${i+1}</td><td>${escapeHtml(it.name)}</td><td class="c-brand">${escapeHtml(it.brand||"—")}</td><td class="c-size">${escapeHtml(it.size_label||"—")}</td><td class="c-unit">${escapeHtml(unit)}</td><td class="c-num">${Pricing.formatQty(it.qty, mode).replace(" "+unit,"")}</td>`;
     return `<tr>${base}${showRate ? `<td class="c-num">${fmtPaise(it.rate).replace("Rs. ","")}</td><td class="c-num">${it.gst_rate||0}%</td><td class="c-num c-amt">${fmtPaise(it.qty*it.rate)}</td>` : ""}</tr>`;
   }).join("");
   // Sums the SAME figure shown in the Qty column above (billed quantity —
@@ -2076,7 +2085,7 @@ function renderInvoicePageContent(){
   // count, so the row values and this total never disagree in units.
   const totalQtyForFoot = round2(inv.items.reduce((s,it)=>s+(Number(it.qty)||0),0));
   const tfoot = `<tfoot><tr>
-    <td colspan="6" style="text-align:right;">Total Quantity</td>
+    <td colspan="5" style="text-align:right;">Total Quantity</td>
     <td class="c-num">${totalQtyForFoot}</td>
     <td colspan="${showRate?3:1}"></td>
   </tr></tfoot>`;
@@ -2170,6 +2179,66 @@ function renderInvoicePageContent(){
       ? `This is a delivery challan and not a tax invoice — it is not a demand for payment.<br><strong>PLYWOOD, BLACKBOARD, ARE MANUFACTURED FROM NATURAL WOOD WHICH IS BELOW BIO DEGRADEBLE, WE DONOT GUARANTEE AGAINST ANY NATURAL DECAY DEFICIENTY, DETORATION AND LIKE INCLUDING MANUFACTURING DEFACT AND/OR IMPERFACT QUALITY</strong>`
       : `<strong>NO GURANTEE AND WARRANTY FOR DECORATIVE PRODUCTS AND AIR BUBBLES IN LAMMINATES, ACRYLIC AND PVC LAMINATES OR ANY SHADE VARIATION AFTER INSTALLATION. NO EXCHANGE. NO RETURN IN ANY CONDITION. PLEASE CHECK THE MATERIAL ON DELIVERY.</strong>`}</div>
   `;
+  fillTableToPageHeight();
+}
+/**
+ * Tally-style full-page fill: pad the item table with real blank rows (not
+ * a CSS stretch trick — height:100%/flex-grow on a <table> proved unreliable,
+ * see the git history on this function) until the page's actual content
+ * height reaches its min-height target (set per paper size in
+ * applyPageSizeStyle). A page that's already at or past that height (many
+ * items) gets no filler rows — it just keeps growing normally.
+ */
+function fillTableToPageHeight(){
+  const page = document.getElementById("invoice-page-content");
+  const tbody = page.querySelector("table.erp-table tbody");
+  const theadRow = page.querySelector("table.erp-table thead tr");
+  if(!tbody || !theadRow) return;
+  // A hidden ancestor (display:none) gives every measurement below a
+  // meaningless 0, which previously ran the loop to its guard limit adding
+  // thousands of blank rows. Bail rather than measure garbage.
+  if(page.offsetParent === null) return;
+
+  const targetHeight = parseFloat(getComputedStyle(page).minHeight);
+  if(!targetHeight) return;
+
+  const bodyRows = tbody.querySelectorAll("tr");
+  const sampleRowHeight = (bodyRows[0] || theadRow).offsetHeight;
+  if(!sampleRowHeight) return;
+  const colCount = theadRow.children.length;
+
+  // page.scrollHeight is NOT usable here — CSS min-height on `page` itself
+  // already forces its rendered box to at least targetHeight regardless of
+  // actual content, so that comparison is trivially satisfied from the
+  // start. Sum each direct child's own offsetHeight instead (banner/header/
+  // parties/table-wrap/bottom/sign-row/terms), which reflects their real
+  // stacked content size, unaffected by the parent's inflated min-height.
+  const naturalHeight = () => {
+    let sum = 0;
+    for (const child of page.children) sum += child.offsetHeight;
+    return sum;
+  };
+
+  let guard = 0;
+  let lastHeight = naturalHeight();
+  while(naturalHeight() < targetHeight - 1 && guard < 20){
+    const shortfall = targetHeight - naturalHeight();
+    const rowsNeeded = Math.max(1, Math.round(shortfall / sampleRowHeight));
+    // Individual empty cells (not one colspan'd cell) so the vertical
+    // column-divider lines still show through the blank rows, matching
+    // real ruled-grid ERP paper.
+    const cellsHtml = "<td>&nbsp;</td>".repeat(colCount);
+    for(let i=0;i<rowsNeeded;i++){
+      const filler = document.createElement("tr");
+      filler.className = "erp-filler-row";
+      filler.innerHTML = cellsHtml;
+      tbody.appendChild(filler);
+    }
+    const newHeight = naturalHeight();
+    if(newHeight <= lastHeight) break;
+    lastHeight = newHeight;
+    guard++;
+  }
 }
 async function downloadInvoicePdf(){
   const btn = document.getElementById("inv-download");

@@ -2097,10 +2097,11 @@ function renderInvoicePageContent(){
     const base = `<td class="c-sn">${i+1}</td><td>${escapeHtml(it.name)}</td><td class="c-size">${escapeHtml(it.size_label||"—")}</td><td class="c-unit">${escapeHtml(unit)}</td><td class="c-num">${qtyCell}</td>`;
     return `<tr>${base}${showRate ? `<td class="c-num">${fmtPaise(it.rate).replace("Rs. ","")}</td><td class="c-num">${it.gst_rate||0}%</td><td class="c-num c-amt">${fmtPaise(it.qty*it.rate)}</td>` : ""}</tr>`;
   }).join("");
-  // Sums the SAME figure shown in the Qty column above (billed quantity —
-  // Sq.ft/Rft/pieces depending on mode), not the separate physical sheet
-  // count, so the row values and this total never disagree in units.
-  const totalQtyForFoot = round2(inv.items.reduce((s,it)=>s+(Number(it.qty)||0),0));
+  // Total Quantity is the physical piece count across all items, not the
+  // billed area/length sum — matching what gets counted at load/unload,
+  // and staying meaningful even when items mix billing units (Sq.ft +
+  // Rft + Unit can't be summed together, but pieces always can).
+  const totalQtyForFoot = round2(inv.items.reduce((s,it)=>s+(Number(it.pieces)||0),0));
   const tfoot = `<tfoot><tr>
     <td colspan="4" style="text-align:right;">Total Quantity</td>
     <td class="c-num">${totalQtyForFoot}</td>

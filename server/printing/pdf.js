@@ -271,7 +271,11 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
     }
 
     if (isLastPage) {
-      const totalQty = Pricing.round2(invoice.items.reduce((s, it) => s + (Number(it.qty) || 0), 0));
+      // Total Quantity is the physical piece count across all items, not the
+      // billed area/length sum — matching what gets counted at load/unload,
+      // and staying meaningful even when items mix billing units (Sq.ft +
+      // Rft + Unit can't be summed together, but pieces always can).
+      const totalQty = Pricing.round2(invoice.items.reduce((s, it) => s + (Number(it.pieces) || 0), 0));
       doc.setFont("helvetica", "bold"); doc.setFontSize(fs(7.5));
       doc.text("Total Quantity", colX[4] - 1, y + bodyRowH - fs(1.8), { align: "right" });
       doc.text(String(totalQty), colX[5] - 1, y + bodyRowH - fs(1.8), { align: "right" });

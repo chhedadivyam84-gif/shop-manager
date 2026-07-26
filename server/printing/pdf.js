@@ -172,7 +172,7 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
   totalsRows.push(["Subtotal", fmtPaise(challan ? challanSubtotal : invoice.subtotal)]);
   totalsRows.push(["Discount", (challan ? 0 : invoice.discount_amount) > 0 ? "-" + fmtPaise(invoice.discount_amount) : fmtPaise(0)]);
   totalsRows.push(["Transport", fmtPaise(invoice.transport)]);
-  totalsRows.push(["Additional Charges", fmtPaise(invoice.loading)]);
+  if (invoice.loading) totalsRows.push(["Additional Charges", fmtPaise(invoice.loading)]);
   if (!challan && invoice.tax_type === "IGST") totalsRows.push(["IGST", fmtPaise(invoice.igst)]);
   else { totalsRows.push(["CGST", fmtPaise(challan ? 0 : invoice.cgst)]); totalsRows.push(["SGST", fmtPaise(challan ? 0 : invoice.sgst)]); }
   if (!challan && invoice.round_off) totalsRows.push(["Round Off", (invoice.round_off > 0 ? "+" : "") + fmtPaise(invoice.round_off)]);
@@ -225,12 +225,15 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
     const mode = it.mode || "UNIT";
     const unit = it.unit_label || (Pricing.MODES[mode] && Pricing.MODES[mode].unit) || "";
     // Area/length modes bill in a different unit than the physical piece
-    // count (e.g. 1 sheet at 8x4ft = 32 Sq.ft) — note the piece count inline
-    // so "32" doesn't read as a mismatch against the "1" the item was
-    // entered as. UNIT mode has no such split (qty already IS the piece
-    // count), so nothing extra.
-    const qtyText = Pricing.formatQty(it.qty, mode).replace(" " + unit, "")
-      + (mode !== "UNIT" && it.pieces ? ` (${it.pieces}pc)` : "");
+    // count (e.g. 4 sheets at 8x4ft = 32 Sq.ft) — note the piece count
+    // inline so "32" doesn't read as a mismatch against "4". A single piece
+    // is shown as just "1 pc" instead, since the billed number adds nothing
+    // when there's only one piece to begin with. UNIT mode has no such
+    // split (qty already IS the piece count), so nothing extra.
+    const qtyText = mode !== "UNIT" && it.pieces === 1
+      ? "1 pc"
+      : Pricing.formatQty(it.qty, mode).replace(" " + unit, "")
+        + (mode !== "UNIT" && it.pieces ? ` (${it.pieces}pc)` : "");
     return showRate
       ? [String(i + 1), it.name, it.size_label || "-", unit,
          qtyText, fmtPaise(it.rate).replace("Rs. ", ""),

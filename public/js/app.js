@@ -2086,11 +2086,15 @@ function renderInvoicePageContent(){
     const mode = it.mode || "UNIT";
     const unit = it.unit_label || (Pricing.MODES[mode] && Pricing.MODES[mode].unit) || "";
     // Area/length modes bill in a different unit than the physical piece
-    // count (e.g. 1 sheet at 8x4ft = 32 Sq.ft) — show both so "32" doesn't
-    // read as a mismatch against the "1" the item was entered as. UNIT mode
-    // has no such split (qty already IS the piece count), so nothing extra.
-    const pieceNote = mode !== "UNIT" && it.pieces ? `<div class="c-pieces">(${it.pieces} pc)</div>` : "";
-    const base = `<td class="c-sn">${i+1}</td><td>${escapeHtml(it.name)}</td><td class="c-size">${escapeHtml(it.size_label||"—")}</td><td class="c-unit">${escapeHtml(unit)}</td><td class="c-num">${Pricing.formatQty(it.qty, mode).replace(" "+unit,"")}${pieceNote}</td>`;
+    // count (e.g. 4 sheets at 8x4ft = 32 Sq.ft) — show both so "32" doesn't
+    // read as a mismatch against "4". A single piece is shown as just
+    // "1 pc" instead, since the billed number adds nothing when there's
+    // only one piece. UNIT mode has no such split (qty already IS the
+    // piece count), so nothing extra.
+    const qtyCell = mode !== "UNIT" && it.pieces === 1
+      ? "1 pc"
+      : `${Pricing.formatQty(it.qty, mode).replace(" "+unit,"")}${mode !== "UNIT" && it.pieces ? `<div class="c-pieces">(${it.pieces} pc)</div>` : ""}`;
+    const base = `<td class="c-sn">${i+1}</td><td>${escapeHtml(it.name)}</td><td class="c-size">${escapeHtml(it.size_label||"—")}</td><td class="c-unit">${escapeHtml(unit)}</td><td class="c-num">${qtyCell}</td>`;
     return `<tr>${base}${showRate ? `<td class="c-num">${fmtPaise(it.rate).replace("Rs. ","")}</td><td class="c-num">${it.gst_rate||0}%</td><td class="c-num c-amt">${fmtPaise(it.qty*it.rate)}</td>` : ""}</tr>`;
   }).join("");
   // Sums the SAME figure shown in the Qty column above (billed quantity —
@@ -2120,7 +2124,7 @@ function renderInvoicePageContent(){
     <div class="erp-tb-row"><span>Subtotal</span><span>${fmtPaise(challan?challanSubtotal:inv.subtotal)}</span></div>
     <div class="erp-tb-row"><span>Discount</span><span>${discountAmt>0?"-":""}${fmtPaise(discountAmt)}</span></div>
     <div class="erp-tb-row"><span>Transport</span><span>${fmtPaise(inv.transport)}</span></div>
-    <div class="erp-tb-row"><span>Additional Charges</span><span>${fmtPaise(inv.loading)}</span></div>
+    ${inv.loading ? `<div class="erp-tb-row"><span>Additional Charges</span><span>${fmtPaise(inv.loading)}</span></div>` : ""}
     ${isIGST
       ? `<div class="erp-tb-row"><span>IGST</span><span>${fmtPaise(igst)}</span></div>`
       : `<div class="erp-tb-row"><span>CGST</span><span>${fmtPaise(cgst)}</span></div><div class="erp-tb-row"><span>SGST</span><span>${fmtPaise(sgst)}</span></div>`}

@@ -269,6 +269,169 @@ router.post("/", (req, res) => {
   res.status(201).json({ ...invoice, items: savedItems });
 });
 
+/**
+ * Edit a saved (non-voided) invoice/challan: replace its line items and
+ * recompute totals, correctly reversing the OLD stock/due impact first and
+ * applying the NEW one — not just overwriting the print. challan_no,
+ * doc_type, date and created_at are immutable; editing never changes which
+ * document this is or its position in the numbered sequence.
+ */
+router.put("/:id", (req, res) => {
+  const inv = db.prepare("SELECT * FROM invoices WHERE id = ?").get(req.params.id);
+  if (!inv) return res.status(404).json({ error: "Invoice not found." });
+  if (inv.voided) return res.status(400).json({ error: "Cannot edit a voided document." });
+  const isChallan = inv.doc_type === "challan"; // fixed at creation, not editable
+
+  const { customerId, items: rawItems, discountType, discountValue, advance,
+          paymentMethod, paperSize, transport, loading, roundOff, deliveryMan,
+          vehicleNumber, deliveryAddress, remarks } = req.body;
+  const gstOnCharges = req.body.gstOnCharges !== false;
+
+  if (!Array.isArray(rawItems) || !rawItems.length) {
+    return res.status(400).json({ error: `Add at least one item to the ${isChallan ? "challan" : "invoice"}.` });
+  }
+
+  const settings = getSettingsRow();
+  let customer = null;
+  if (customerId) {
+    customer = db.prepare("SELECT * FROM customers WHERE id = ?").get(customerId);
+    if (!customer) return res.status(400).json({ error: "Selected customer no longer exists." });
+  }
+  const taxType = (customer && customer.state && settings.state && customer.state.trim().toLowerCase() !== settings.state.trim().toLowerCase())
+    ? "IGST" : "CGST_SGST";
+
+  const oldItems = db.prepare("SELECT * FROM invoice_items WHERE invoice_id = ?").all(inv.id);
+  const restoreSize = db.prepare("UPDATE product_sizes SET stock = stock + ? WHERE id = ?");
+  const restoreProduct = db.prepare("UPDATE products SET stock = stock + ? WHERE id = ?");
+  const insertItem = db.prepare(`
+    INSERT INTO invoice_items
+      (invoice_id, product_id, size_id, name, code, brand, hsn_code, mode, length_ft, width_val, thickness_in,
+       size_label, pieces, per_piece, unit_label, qty, rate, gst_rate)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const deductStock = db.prepare("UPDATE product_sizes SET stock = stock - ? WHERE id = ?");
+
+  const runEdit = db.transaction(() => {
+    // 1. Reverse the OLD stock impact — stock now reflects "as if this
+    //    document never existed", so the new items validate against true
+    //    availability rather than double-counting what this edit removes.
+    const touchedProducts = new Set();
+    oldItems.forEach(it => {
+      if (it.size_id) { restoreSize.run(it.pieces, it.size_id); touchedProducts.add(it.product_id); }
+      else if (it.product_id) restoreProduct.run(it.pieces, it.product_id);
+    });
+
+    // 2. Build + validate the NEW items — identical logic to creating a
+    //    fresh invoice (see POST / above).
+    const piecesBySize = {};
+    const items = [];
+    for (const raw of rawItems) {
+      const product = db.prepare("SELECT * FROM products WHERE id = ?").get(raw.productId);
+      if (!product) throw { status: 400, error: `Product ${raw.productId} no longer exists.` };
+      const size = raw.sizeId != null
+        ? db.prepare("SELECT * FROM product_sizes WHERE id = ? AND product_id = ?").get(raw.sizeId, product.id)
+        : null;
+      if (!size) throw { status: 400, error: `Choose a size for ${product.name} — it may have been removed since you added it.` };
+
+      const line = {
+        mode: Pricing.normaliseMode(raw.mode), lengthFt: raw.lengthFt, widthVal: raw.widthVal,
+        thicknessIn: raw.thicknessIn, pieces: raw.pieces, rate: raw.rate
+      };
+      const invalid = Pricing.validateLine(line, `${product.name} (${size.label})`);
+      if (invalid) throw { status: 400, error: invalid };
+
+      const calc = Pricing.computeLine(line);
+      piecesBySize[size.id] = (piecesBySize[size.id] || 0) + calc.pieces;
+      items.push({
+        productId: product.id, sizeId: size.id, name: raw.name || product.name,
+        code: product.code || "", brand: product.brand || "", hsnCode: product.hsn_code || "",
+        gstRate: product.gst_rate, product, size, ...calc
+      });
+    }
+    for (const [sizeId, pieces] of Object.entries(piecesBySize)) {
+      const size = db.prepare("SELECT * FROM product_sizes WHERE id = ?").get(sizeId);
+      const product = db.prepare("SELECT * FROM products WHERE id = ?").get(size.product_id);
+      if (pieces > size.stock) {
+        throw { status: 400, error: `Not enough stock for ${product.name} (${size.label}). Available: ${size.stock} ${product.unit || "Pc"}, needed: ${pieces}.` };
+      }
+    }
+
+    const challanTransport = round2(Math.max(0, Number(transport) || 0));
+    const challanLoading = round2(Math.max(0, Number(loading) || 0));
+    const challanTotals = {
+      subtotal: 0, discountAmount: 0, cgst: 0, sgst: 0, igst: 0,
+      transport: challanTransport, loading: challanLoading, roundOffAmount: 0,
+      total: round2(challanTransport + challanLoading), advance: 0, balanceDue: 0
+    };
+    const totals = isChallan
+      ? challanTotals
+      : computeTotals({ items, discountType, discountValue, advance, taxType, transport, loading, roundOff, gstOnCharges });
+
+    // 3. Reverse the OLD customer's due (whoever it was originally billed to).
+    if (inv.customer_id && inv.balance_due > 0) {
+      db.prepare("UPDATE customers SET due = MAX(0, due - ?) WHERE id = ?").run(inv.balance_due, inv.customer_id);
+    }
+
+    // 4. Replace the line items.
+    db.prepare("DELETE FROM invoice_items WHERE invoice_id = ?").run(inv.id);
+    items.forEach(it => insertItem.run(
+      inv.id, it.productId, it.sizeId, it.name, it.code, it.brand, it.hsnCode, it.mode,
+      it.lengthFt || null, it.widthVal || null, it.thicknessIn || null,
+      it.sizeLabel, it.pieces, it.perPiece, it.unit, it.billedQty, it.rate, it.gstRate
+    ));
+
+    // 5. Deduct stock for the NEW items and resync affected product totals.
+    Object.entries(piecesBySize).forEach(([sizeId, pieces]) => {
+      deductStock.run(pieces, sizeId);
+      const size = db.prepare("SELECT product_id FROM product_sizes WHERE id = ?").get(sizeId);
+      if (size) touchedProducts.add(size.product_id);
+    });
+    touchedProducts.forEach(pid => syncProductStockStmt.run(pid));
+
+    // 6. Update the invoice row itself — challan_no/doc_type/date/created_at
+    //    are never touched here, only content and money fields.
+    db.prepare(`
+      UPDATE invoices SET customer_id=@customerId, subtotal=@subtotal, discount_type=@discountType,
+        discount_value=@discountValue, discount_amount=@discountAmount, tax_type=@taxType,
+        cgst=@cgst, sgst=@sgst, igst=@igst, transport=@transport, loading=@loading,
+        gst_on_charges=@gstOnCharges, round_off=@roundOffAmount, total=@total, advance=@advance,
+        balance_due=@balanceDue, payment_method=@paymentMethod, paper_size=@paperSize,
+        delivery_man=@deliveryMan, vehicle_number=@vehicleNumber, delivery_address=@deliveryAddress,
+        remarks=@remarks
+      WHERE id=@id
+    `).run({
+      id: inv.id, customerId: customerId || null,
+      subtotal: totals.subtotal, discountType: discountType === "flat" ? "flat" : "pct",
+      discountValue: isChallan ? 0 : (Number(discountValue) || 0), discountAmount: totals.discountAmount,
+      taxType, cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst,
+      transport: totals.transport, loading: totals.loading, gstOnCharges: gstOnCharges ? 1 : 0,
+      roundOffAmount: totals.roundOffAmount, total: totals.total, advance: totals.advance,
+      balanceDue: totals.balanceDue,
+      paymentMethod: isChallan ? "—" : (paymentMethod || "Cash"),
+      paperSize: paperSize === "A4" ? "A4" : "A5",
+      deliveryMan: (deliveryMan || "").trim(), vehicleNumber: (vehicleNumber || "").trim(),
+      deliveryAddress: (deliveryAddress || "").trim(), remarks: (remarks || "").trim()
+    });
+
+    // 7. Bump the (possibly new) customer's due by the new balance.
+    if (customerId && totals.balanceDue > 0) {
+      db.prepare("UPDATE customers SET due = due + ? WHERE id = ?").run(totals.balanceDue, customerId);
+    }
+  });
+
+  try {
+    runEdit();
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.error });
+    throw err;
+  }
+
+  logAction(req, isChallan ? "challan.edit" : "invoice.edit", `${inv.challan_no}`);
+  const updated = db.prepare("SELECT * FROM invoices WHERE id = ?").get(inv.id);
+  const savedItems = db.prepare("SELECT * FROM invoice_items WHERE invoice_id = ?").all(inv.id);
+  res.json({ ...updated, items: savedItems });
+});
+
 router.post("/:id/void", requireRole("owner"), (req, res) => {
   const inv = db.prepare("SELECT * FROM invoices WHERE id = ?").get(req.params.id);
   if (!inv) return res.status(404).json({ error: "Invoice not found." });

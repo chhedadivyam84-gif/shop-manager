@@ -40,7 +40,7 @@ let state = {
   transport: 0, loading: 0, roundOff: true, docType: "invoice", challanShowRate: false, gstOnCharges: true, deliveryMan: "",
   vehicleNumber: "", deliveryAddress: "", remarks: "",
   invBrandFilter: "All", reportType: "Sales", partyMode: "customer",
-  paperSize: "A5",
+  paperSize: "A5", editingInvoiceId: null,
   me: { staffName: "", role: "" },
   ctx: {}
 };
@@ -549,11 +549,100 @@ function setDocType(type){
   const itemsTitle = document.getElementById("items-title");
   if(itemsTitle) itemsTitle.textContent = challan ? "Challan items" : "Invoice items";
   const completeBtn = document.getElementById("complete-sale-btn");
-  if(completeBtn) completeBtn.textContent = challan ? "Create Delivery Challan" : "Complete Sale & Update Stock";
+  if(completeBtn) completeBtn.textContent = state.editingInvoiceId
+    ? (challan ? "Update Delivery Challan" : "Update Invoice")
+    : (challan ? "Create Delivery Challan" : "Complete Sale & Update Stock");
   const previewBtn = document.getElementById("preview-invoice-btn");
   if(previewBtn) previewBtn.textContent = challan ? "Preview / Print Challan" : "Preview / Print Invoice";
+  // Which document TYPE this is can't change once saved — the number series
+  // and print banner are fixed at creation — so lock the toggle while editing.
+  const toggleWrap = document.getElementById("doctype-toggle");
+  if(toggleWrap) toggleWrap.style.pointerEvents = state.editingInvoiceId ? "none" : "";
+  if(toggleWrap) toggleWrap.style.opacity = state.editingInvoiceId ? "0.55" : "";
   renderCart();
   renderTotals();
+}
+
+/** Small dismissible banner shown atop Billing while an existing document is being edited. */
+function renderEditModeBanner(){
+  const el = document.getElementById("edit-mode-banner");
+  if(!el) return;
+  if(!state.editingInvoiceId){ el.style.display = "none"; el.innerHTML = ""; return; }
+  el.style.display = "block";
+  el.innerHTML = `
+    <div class="card" style="background:var(--warn-bg);border-color:var(--warn-text);margin-bottom:10px;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;gap:8px;">
+      <div style="font-size:12px;font-weight:700;color:var(--warn-text);">✎ Editing an existing document — Complete Sale below will UPDATE it, not create a new one.</div>
+      <a href="#" id="cancel-edit-link" style="font-size:12px;font-weight:800;color:var(--warn-text);white-space:nowrap;">Cancel</a>
+    </div>
+  `;
+  document.getElementById("cancel-edit-link").addEventListener("click", (e)=>{
+    e.preventDefault();
+    state.editingInvoiceId = null;
+    state.cart = []; state.selectedCustomerId = null; state.advance = 0; state.discountValue = 0;
+    state.transport = 0; state.loading = 0; state.deliveryMan = "";
+    state.vehicleNumber = ""; state.deliveryAddress = ""; state.remarks = "";
+    const set = (id, val) => { const inp=document.getElementById(id); if(inp) inp.value = val; };
+    set("advance-input", 0); set("discount-value", 0); set("transport-input", 0); set("loading-input", 0);
+    set("delivery-man-input", ""); set("vehicle-number-input", ""); set("delivery-address-input", ""); set("remarks-input", "");
+    renderEditModeBanner();
+    renderBilling();
+    toast("Edit cancelled.");
+  });
+}
+
+/**
+ * Loads a saved (non-voided) invoice/challan's items and settings back into
+ * the Billing screen for editing. Saving from here PUTs to the same
+ * document instead of creating a new one — see completeSale().
+ */
+async function editExistingInvoice(inv){
+  if(inv.voided){ toast("A voided document can't be edited."); return; }
+  await Promise.all([loadProducts(), loadCustomers()]);
+  state.cart = inv.items.map(it=>{
+    const product = state.products.find(p=>p.id===it.product_id);
+    const sizeIdx = product ? product.sizes.findIndex(s=>s.id===it.size_id) : -1;
+    return {
+      productId: it.product_id, sizeId: it.size_id, sizeIdx: sizeIdx>=0 ? sizeIdx : 0,
+      name: it.name, mode: it.mode, lengthFt: it.length_ft||"", widthVal: it.width_val||"",
+      thicknessIn: it.thickness_in||"", pieces: it.pieces, rate: it.rate, gstRate: it.gst_rate
+    };
+  });
+  state.selectedCustomerId = inv.customer_id || null;
+  state.docType = inv.doc_type;
+  state.discountType = inv.discount_type || "pct";
+  state.discountValue = inv.discount_value || 0;
+  state.advance = 0; // the original advance was already applied at creation time
+  state.paymentMethod = inv.payment_method || "Cash";
+  state.paperSize = inv.paper_size || "A5";
+  state.transport = inv.transport || 0;
+  state.loading = inv.loading || 0;
+  state.gstOnCharges = inv.gst_on_charges !== 0;
+  state.deliveryMan = inv.delivery_man || "";
+  state.vehicleNumber = inv.vehicle_number || "";
+  state.deliveryAddress = inv.delivery_address || "";
+  state.remarks = inv.remarks || "";
+  state.editingInvoiceId = inv.id;
+
+  closeAllSheets();
+  closeFullscreen("fs-invoice");
+  switchTab("billing");
+  await renderBilling();
+
+  const set = (id, val) => { const el=document.getElementById(id); if(el) el.value = val; };
+  set("discount-value", state.discountValue);
+  set("advance-input", 0);
+  set("transport-input", state.transport);
+  set("loading-input", state.loading);
+  set("delivery-man-input", state.deliveryMan);
+  set("vehicle-number-input", state.vehicleNumber);
+  set("delivery-address-input", state.deliveryAddress);
+  set("remarks-input", state.remarks);
+  document.querySelectorAll('[data-disc]').forEach(b=>b.classList.toggle("selected", b.dataset.disc===state.discountType));
+  const gstChargesToggle = document.getElementById("gst-on-charges-toggle");
+  if(gstChargesToggle) gstChargesToggle.checked = state.gstOnCharges;
+  renderEditModeBanner();
+  renderTotals();
+  toast(`Editing ${inv.challan_no} — make your changes, then save.`, "ok");
 }
 
 /** Live figures for a cart line, straight from the shared pricing module. */
@@ -792,8 +881,9 @@ async function completeSale(){
   }
   const btn = document.getElementById("complete-sale-btn");
   btn.disabled = true;
+  const editingId = state.editingInvoiceId;
   try{
-    const invoice = await api("POST","/invoices", {
+    const payload = {
       customerId: state.selectedCustomerId,
       docType: state.docType,
       // Only the raw inputs are sent — the server recomputes every derived
@@ -808,10 +898,14 @@ async function completeSale(){
       transport: state.transport, loading: state.loading, roundOff: state.roundOff,
       gstOnCharges: state.gstOnCharges, deliveryMan: state.deliveryMan,
       vehicleNumber: state.vehicleNumber, deliveryAddress: state.deliveryAddress, remarks: state.remarks
-    });
+    };
+    const invoice = editingId
+      ? await api("PUT", `/invoices/${editingId}`, payload)
+      : await api("POST", "/invoices", payload);
     state.cart = []; state.advance = 0; state.discountValue = 0;
     state.transport = 0; state.loading = 0; state.deliveryMan = "";
     state.vehicleNumber = ""; state.deliveryAddress = ""; state.remarks = "";
+    state.editingInvoiceId = null;
     document.getElementById("advance-input").value = 0;
     document.getElementById("discount-value").value = 0;
     const tIn = document.getElementById("transport-input"); if(tIn) tIn.value = 0;
@@ -820,9 +914,10 @@ async function completeSale(){
     const vnIn = document.getElementById("vehicle-number-input"); if(vnIn) vnIn.value = "";
     const daIn = document.getElementById("delivery-address-input"); if(daIn) daIn.value = "";
     const rmIn = document.getElementById("remarks-input"); if(rmIn) rmIn.value = "";
+    renderEditModeBanner();
     await Promise.all([loadProducts(), loadCustomers()]);
     await renderBilling(); await renderHome();
-    toast(`${challan?"Delivery Challan":"Sale"} created — ${invoice.challan_no}`, "ok");
+    toast(`${challan?"Delivery Challan":"Sale"} ${editingId?"updated":"created"} — ${invoice.challan_no}`, "ok");
     openExistingInvoice(invoice.id);
   }catch(e){
     toast(e.message);
@@ -2371,9 +2466,17 @@ function openInvoicePreview(existingInvoice){
     serverPrintBtn.title = canPrint ? "" : "Complete the sale first — printing needs a saved invoice.";
   }
 
-// Remove any void/delete buttons left over from a previously-opened document
-// before deciding which ones this one needs — the set differs by doc type.
-["inv-void", "inv-delete"].forEach(id => { const el = document.getElementById(id); if(el) el.remove(); });
+// Remove any edit/void/delete buttons left over from a previously-opened
+// document before deciding which ones this one needs — the set differs by
+// doc type and whether it's already voided.
+["inv-edit", "inv-void", "inv-delete"].forEach(id => { const el = document.getElementById(id); if(el) el.remove(); });
+  if(existingInvoice && existingInvoice.id && !existingInvoice.voided){
+    const actionsBar = document.querySelector(".inv-actions");
+    const editBtn = document.createElement("button");
+    editBtn.id = "inv-edit"; editBtn.textContent = "✎ Edit";
+    editBtn.onclick = ()=>{ closeFullscreen("fs-invoice"); editExistingInvoice(existingInvoice); };
+    actionsBar.appendChild(editBtn);
+  }
   if(existingInvoice && existingInvoice.id && isOwner()){
     const actionsBar = document.querySelector(".inv-actions");
     const afterDelete = async (msg) => {

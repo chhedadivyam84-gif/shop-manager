@@ -2081,11 +2081,11 @@ function renderInvoicePageContent(){
   // meaning) but can show them on this printout via the "Show Rate" toggle —
   // "Delivery Challan (With Rate)" vs "(Without Rate)" from the same entry.
   const showRate = !challan || state.challanShowRate;
-  const head = `<th class="c-sn">Sr No.</th><th>Product Description</th><th class="c-brand">Brand</th><th class="c-size">Size</th><th class="c-unit">Unit</th><th class="c-num">Qty</th>${showRate ? `<th class="c-num">Rate</th><th class="c-num">GST %</th><th class="c-num c-amt">Amount</th>` : ""}`;
+  const head = `<th class="c-sn">Sr No.</th><th>Product Description</th><th class="c-size">Size</th><th class="c-unit">Unit</th><th class="c-num">Qty</th>${showRate ? `<th class="c-num">Rate</th><th class="c-num">GST %</th><th class="c-num c-amt">Amount</th>` : ""}`;
   const rows = inv.items.map((it,i)=>{
     const mode = it.mode || "UNIT";
     const unit = it.unit_label || (Pricing.MODES[mode] && Pricing.MODES[mode].unit) || "";
-    const base = `<td class="c-sn">${i+1}</td><td>${escapeHtml(it.name)}</td><td class="c-brand">${escapeHtml(it.brand||"—")}</td><td class="c-size">${escapeHtml(it.size_label||"—")}</td><td class="c-unit">${escapeHtml(unit)}</td><td class="c-num">${Pricing.formatQty(it.qty, mode).replace(" "+unit,"")}</td>`;
+    const base = `<td class="c-sn">${i+1}</td><td>${escapeHtml(it.name)}</td><td class="c-size">${escapeHtml(it.size_label||"—")}</td><td class="c-unit">${escapeHtml(unit)}</td><td class="c-num">${Pricing.formatQty(it.qty, mode).replace(" "+unit,"")}</td>`;
     return `<tr>${base}${showRate ? `<td class="c-num">${fmtPaise(it.rate).replace("Rs. ","")}</td><td class="c-num">${it.gst_rate||0}%</td><td class="c-num c-amt">${fmtPaise(it.qty*it.rate)}</td>` : ""}</tr>`;
   }).join("");
   // Sums the SAME figure shown in the Qty column above (billed quantity —
@@ -2093,7 +2093,7 @@ function renderInvoicePageContent(){
   // count, so the row values and this total never disagree in units.
   const totalQtyForFoot = round2(inv.items.reduce((s,it)=>s+(Number(it.qty)||0),0));
   const tfoot = `<tfoot><tr>
-    <td colspan="5" style="text-align:right;">Total Quantity</td>
+    <td colspan="4" style="text-align:right;">Total Quantity</td>
     <td class="c-num">${totalQtyForFoot}</td>
     <td colspan="${showRate?3:1}"></td>
   </tr></tfoot>`;

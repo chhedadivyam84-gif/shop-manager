@@ -247,7 +247,6 @@ table.erp-table{width:100%;border-collapse:collapse;font-size:8.5px;}
 table.erp-table th{text-align:left;font-size:7.5px;text-transform:uppercase;letter-spacing:.02em;font-weight:800;padding:4px 5px;border:1px solid #000;}
 table.erp-table td{padding:4px 5px;border:1px solid #000;vertical-align:top;}
 table.erp-table th.c-sn,table.erp-table td.c-sn{width:22px;text-align:center;}
-table.erp-table th.c-brand,table.erp-table td.c-brand,
 table.erp-table th.c-size,table.erp-table td.c-size,
 table.erp-table th.c-unit,table.erp-table td.c-unit{white-space:nowrap;}
 table.erp-table th.c-num,table.erp-table td.c-num{text-align:right;white-space:nowrap;}

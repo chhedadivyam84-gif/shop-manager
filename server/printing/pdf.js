@@ -138,19 +138,19 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
   y = boxBottomY;
 
   // ---- Table columns ----
-  // Widths below are the original (pre-HSN-removal) fractions with HSN's
-  // share proportionally redistributed across the rest, so every column
-  // keeps the same relative ratio to the others as before — not just a gap
-  // left where HSN was, or all the freed space dumped into one column.
+  // Widths below are the original fractions with Brand's (and, before that,
+  // HSN's) share proportionally redistributed across the rest, so every
+  // column keeps the same relative ratio to the others as before — not
+  // just a gap left where the column was, or all the freed space dumped
+  // into one column.
   const cols = showRate
-    ? [{ h: "Sr No.", w: CONTENT_W * 0.05 }, { h: "Product Description", w: CONTENT_W * 0.26 },
-       { h: "Brand", w: CONTENT_W * 0.11 }, { h: "Size", w: CONTENT_W * 0.10 },
-       { h: "Unit", w: CONTENT_W * 0.075 }, { h: "Qty", w: CONTENT_W * 0.08, align: "right" },
-       { h: "Rate", w: CONTENT_W * 0.10, align: "right" }, { h: "GST %", w: CONTENT_W * 0.07, align: "right" },
+    ? [{ h: "Sr No.", w: CONTENT_W * 0.06 }, { h: "Product Description", w: CONTENT_W * 0.30 },
+       { h: "Size", w: CONTENT_W * 0.115 }, { h: "Unit", w: CONTENT_W * 0.085 },
+       { h: "Qty", w: CONTENT_W * 0.09, align: "right" },
+       { h: "Rate", w: CONTENT_W * 0.115, align: "right" }, { h: "GST %", w: CONTENT_W * 0.08, align: "right" },
        { h: "Amount", w: 0, align: "right" }]
-    : [{ h: "Sr No.", w: CONTENT_W * 0.07 }, { h: "Product Description", w: CONTENT_W * 0.39 },
-       { h: "Brand", w: CONTENT_W * 0.16 }, { h: "Size", w: CONTENT_W * 0.15 },
-       { h: "Unit", w: CONTENT_W * 0.10 }, { h: "Qty", w: 0, align: "right" }];
+    : [{ h: "Sr No.", w: CONTENT_W * 0.09 }, { h: "Product Description", w: CONTENT_W * 0.48 },
+       { h: "Size", w: CONTENT_W * 0.18 }, { h: "Unit", w: CONTENT_W * 0.12 }, { h: "Qty", w: 0, align: "right" }];
   const fixedW = cols.reduce((s, c) => s + c.w, 0);
   cols[cols.length - 1].w = CONTENT_W - fixedW;
   const colX = [MARGIN];
@@ -225,10 +225,10 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
     const mode = it.mode || "UNIT";
     const unit = it.unit_label || (Pricing.MODES[mode] && Pricing.MODES[mode].unit) || "";
     return showRate
-      ? [String(i + 1), it.name, it.brand || "-", it.size_label || "-", unit,
+      ? [String(i + 1), it.name, it.size_label || "-", unit,
          Pricing.formatQty(it.qty, mode).replace(" " + unit, ""), fmtPaise(it.rate).replace("Rs. ", ""),
          (it.gst_rate || 0) + "%", fmtPaise(it.qty * it.rate).replace("Rs. ", "")]
-      : [String(i + 1), it.name, it.brand || "-", it.size_label || "-", unit,
+      : [String(i + 1), it.name, it.size_label || "-", unit,
          Pricing.formatQty(it.qty, mode).replace(" " + unit, "")];
   };
 
@@ -264,8 +264,8 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
     if (isLastPage) {
       const totalQty = Pricing.round2(invoice.items.reduce((s, it) => s + (Number(it.qty) || 0), 0));
       doc.setFont("helvetica", "bold"); doc.setFontSize(fs(7.5));
-      doc.text("Total Quantity", colX[5] - 1, y + bodyRowH - fs(1.8), { align: "right" });
-      doc.text(String(totalQty), colX[6] - 1, y + bodyRowH - fs(1.8), { align: "right" });
+      doc.text("Total Quantity", colX[4] - 1, y + bodyRowH - fs(1.8), { align: "right" });
+      doc.text(String(totalQty), colX[5] - 1, y + bodyRowH - fs(1.8), { align: "right" });
       y += bodyRowH;
       rowsDrawnThisPage++;
 

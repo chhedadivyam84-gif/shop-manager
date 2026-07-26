@@ -2588,8 +2588,14 @@ function renderInvoicePageContent(){
   const challanSubtotal = inv.items.reduce((s,it)=>s+(it.qty*it.rate||0),0);
   const displayTotal = challan ? (challanSubtotal + inv.transport + inv.loading) : inv.total;
   const discountAmt = challan ? 0 : (inv.discount_amount || 0);
-  const cgst = challan ? 0 : inv.cgst, sgst = challan ? 0 : inv.sgst, igst = challan ? 0 : inv.igst;
+  const cgst = challan ? 0 : (inv.cgst || 0), sgst = challan ? 0 : (inv.sgst || 0), igst = challan ? 0 : (inv.igst || 0);
   const isIGST = !challan && inv.tax_type === "IGST";
+  // Effective rate shown next to the CGST/SGST/IGST label — derived from the
+  // actual stored tax and taxable value (works for a mixed-rate bill too,
+  // since it's a weighted average, not any single item's GST%), not hardcoded.
+  const taxableGoods = Math.max(0, (inv.subtotal||0) - (inv.discount_amount||0));
+  const effectiveRatePct = taxableGoods > 0 ? Math.round(((cgst+sgst+igst) / taxableGoods) * 100) : 0;
+  const halfRatePct = Math.round(effectiveRatePct / 2);
 
   const totalsBox = `<div class="erp-totals-box">
     <div class="erp-tb-row"><span>Subtotal</span><span>${fmtPaise(challan?challanSubtotal:inv.subtotal)}</span></div>
@@ -2597,8 +2603,8 @@ function renderInvoicePageContent(){
     <div class="erp-tb-row"><span>Transport</span><span>${fmtPaise(inv.transport)}</span></div>
     ${inv.loading ? `<div class="erp-tb-row"><span>Additional Charges</span><span>${fmtPaise(inv.loading)}</span></div>` : ""}
     ${isIGST
-      ? `<div class="erp-tb-row"><span>IGST</span><span>${fmtPaise(igst)}</span></div>`
-      : `<div class="erp-tb-row"><span>CGST</span><span>${fmtPaise(cgst)}</span></div><div class="erp-tb-row"><span>SGST</span><span>${fmtPaise(sgst)}</span></div>`}
+      ? `<div class="erp-tb-row"><span>IGST ${effectiveRatePct}%</span><span>${fmtPaise(igst)}</span></div>`
+      : `<div class="erp-tb-row"><span>CGST ${halfRatePct}%</span><span>${fmtPaise(cgst)}</span></div><div class="erp-tb-row"><span>SGST ${halfRatePct}%</span><span>${fmtPaise(sgst)}</span></div>`}
     ${!challan && inv.round_off ? `<div class="erp-tb-row"><span>Round Off</span><span>${inv.round_off>0?"+":""}${fmtPaise(inv.round_off)}</span></div>` : ""}
     <div class="erp-tb-row erp-tb-grand"><span>Grand Total</span><span>${fmtPaise(displayTotal)}</span></div>
     ${!challan && inv.advance>0 ? `<div class="erp-tb-row"><span>Advance Paid</span><span>-${fmtPaise(inv.advance)}</span></div>

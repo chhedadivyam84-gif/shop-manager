@@ -168,13 +168,21 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
   const challanSubtotal = invoice.items.reduce((s, it) => s + (it.qty * it.rate || 0), 0);
   const displayTotal = challan ? (challanSubtotal + invoice.transport + invoice.loading) : invoice.total;
 
+  // Effective rate shown next to the CGST/SGST/IGST label — derived from the
+  // actual stored tax and taxable value (a weighted average, so it's still
+  // correct on a mixed-rate bill), not hardcoded.
+  const cgstAmt = challan ? 0 : (invoice.cgst || 0), sgstAmt = challan ? 0 : (invoice.sgst || 0), igstAmt = challan ? 0 : (invoice.igst || 0);
+  const taxableGoods = Math.max(0, (invoice.subtotal || 0) - (invoice.discount_amount || 0));
+  const effectiveRatePct = taxableGoods > 0 ? Math.round(((cgstAmt + sgstAmt + igstAmt) / taxableGoods) * 100) : 0;
+  const halfRatePct = Math.round(effectiveRatePct / 2);
+
   const totalsRows = [];
   totalsRows.push(["Subtotal", fmtPaise(challan ? challanSubtotal : invoice.subtotal)]);
   totalsRows.push(["Discount", (challan ? 0 : invoice.discount_amount) > 0 ? "-" + fmtPaise(invoice.discount_amount) : fmtPaise(0)]);
   totalsRows.push(["Transport", fmtPaise(invoice.transport)]);
   if (invoice.loading) totalsRows.push(["Additional Charges", fmtPaise(invoice.loading)]);
-  if (!challan && invoice.tax_type === "IGST") totalsRows.push(["IGST", fmtPaise(invoice.igst)]);
-  else { totalsRows.push(["CGST", fmtPaise(challan ? 0 : invoice.cgst)]); totalsRows.push(["SGST", fmtPaise(challan ? 0 : invoice.sgst)]); }
+  if (!challan && invoice.tax_type === "IGST") totalsRows.push([`IGST ${effectiveRatePct}%`, fmtPaise(igstAmt)]);
+  else { totalsRows.push([`CGST ${halfRatePct}%`, fmtPaise(cgstAmt)]); totalsRows.push([`SGST ${halfRatePct}%`, fmtPaise(sgstAmt)]); }
   if (!challan && invoice.round_off) totalsRows.push(["Round Off", (invoice.round_off > 0 ? "+" : "") + fmtPaise(invoice.round_off)]);
   totalsRows.push(["Grand Total", fmtPaise(displayTotal), true]);
   if (!challan && invoice.advance > 0) {

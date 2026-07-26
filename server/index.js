@@ -82,7 +82,18 @@ app.use("/api/backup", requireAuth, requireRole("owner"), require("./routes/back
 app.use("/api/print", requireAuth, require("./routes/print"));
 app.use("/api/reset", requireAuth, requireRole("owner"), require("./routes/reset"));
 
-app.use(express.static(path.join(__dirname, "..", "public")));
+// Cache-Control: no-cache (not no-store) forces a revalidation round-trip on
+// EVERY load rather than trusting a locally-cached copy for a while — some
+// mobile browsers apply their own heuristic freshness lifetime to static
+// files even without an explicit max-age, silently serving a stale app.js/
+// style.css after a deploy until that heuristic expires. The revalidation
+// itself is cheap (a 304 with no body when the file hasn't changed, via the
+// ETag express.static already sets), so this doesn't add real cost.
+app.use(express.static(path.join(__dirname, "..", "public"), {
+  setHeaders: (res, filePath) => {
+    if (/\.(js|css)$/.test(filePath)) res.setHeader("Cache-Control", "no-cache");
+  }
+}));
 
 app.use((err, req, res, next) => {
   console.error(err);

@@ -2085,7 +2085,12 @@ function renderInvoicePageContent(){
   const rows = inv.items.map((it,i)=>{
     const mode = it.mode || "UNIT";
     const unit = it.unit_label || (Pricing.MODES[mode] && Pricing.MODES[mode].unit) || "";
-    const base = `<td class="c-sn">${i+1}</td><td>${escapeHtml(it.name)}</td><td class="c-size">${escapeHtml(it.size_label||"—")}</td><td class="c-unit">${escapeHtml(unit)}</td><td class="c-num">${Pricing.formatQty(it.qty, mode).replace(" "+unit,"")}</td>`;
+    // Area/length modes bill in a different unit than the physical piece
+    // count (e.g. 1 sheet at 8x4ft = 32 Sq.ft) — show both so "32" doesn't
+    // read as a mismatch against the "1" the item was entered as. UNIT mode
+    // has no such split (qty already IS the piece count), so nothing extra.
+    const pieceNote = mode !== "UNIT" && it.pieces ? `<div class="c-pieces">(${it.pieces} pc)</div>` : "";
+    const base = `<td class="c-sn">${i+1}</td><td>${escapeHtml(it.name)}</td><td class="c-size">${escapeHtml(it.size_label||"—")}</td><td class="c-unit">${escapeHtml(unit)}</td><td class="c-num">${Pricing.formatQty(it.qty, mode).replace(" "+unit,"")}${pieceNote}</td>`;
     return `<tr>${base}${showRate ? `<td class="c-num">${fmtPaise(it.rate).replace("Rs. ","")}</td><td class="c-num">${it.gst_rate||0}%</td><td class="c-num c-amt">${fmtPaise(it.qty*it.rate)}</td>` : ""}</tr>`;
   }).join("");
   // Sums the SAME figure shown in the Qty column above (billed quantity —

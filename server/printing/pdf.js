@@ -50,7 +50,7 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
   const PAGE_H = isA5 ? 210 : 297;
   const MARGIN = isA5 ? 3 : 6;
   const CONTENT_W = PAGE_W - MARGIN * 2;
-  const FS = isA5 ? 0.82 : 1; // font-scale factor so A5 doesn't overflow its narrower sheet
+  const FS = isA5 ? 0.94 : 1.14; // font-scale factor so A5 doesn't overflow its narrower sheet
   const fs = n => Math.max(5.5, n * FS);
 
   const doc = new jsPDF({ unit: "mm", format: isA5 ? "a5" : "a4" });
@@ -224,12 +224,18 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
   const itemValues = (it, i) => {
     const mode = it.mode || "UNIT";
     const unit = it.unit_label || (Pricing.MODES[mode] && Pricing.MODES[mode].unit) || "";
+    // Area/length modes bill in a different unit than the physical piece
+    // count (e.g. 1 sheet at 8x4ft = 32 Sq.ft) — note the piece count inline
+    // so "32" doesn't read as a mismatch against the "1" the item was
+    // entered as. UNIT mode has no such split (qty already IS the piece
+    // count), so nothing extra.
+    const qtyText = Pricing.formatQty(it.qty, mode).replace(" " + unit, "")
+      + (mode !== "UNIT" && it.pieces ? ` (${it.pieces}pc)` : "");
     return showRate
       ? [String(i + 1), it.name, it.size_label || "-", unit,
-         Pricing.formatQty(it.qty, mode).replace(" " + unit, ""), fmtPaise(it.rate).replace("Rs. ", ""),
+         qtyText, fmtPaise(it.rate).replace("Rs. ", ""),
          (it.gst_rate || 0) + "%", fmtPaise(it.qty * it.rate).replace("Rs. ", "")]
-      : [String(i + 1), it.name, it.size_label || "-", unit,
-         Pricing.formatQty(it.qty, mode).replace(" " + unit, "")];
+      : [String(i + 1), it.name, it.size_label || "-", unit, qtyText];
   };
 
   let curTableTopY = tableTopY;

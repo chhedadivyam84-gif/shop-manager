@@ -82,13 +82,40 @@ app.use("/api/backup", requireAuth, requireRole("owner"), require("./routes/back
 app.use("/api/print", requireAuth, require("./routes/print"));
 app.use("/api/reset", requireAuth, requireRole("owner"), require("./routes/reset"));
 
+// Belt-and-braces cache busting on top of the no-cache header below: every
+// script/stylesheet URL in index.html gets a ?v=<boot time> query string,
+// changed on every server restart (i.e. every deploy). A browser that
+// ignores Cache-Control entirely and just heuristically caches by URL still
+// can't serve a stale file after a deploy, since the URL itself is new —
+// this is what actually fixed reports of phones showing a redesign from
+// weeks earlier despite the no-cache header already being deployed.
+const BOOT_VERSION = Date.now();
+const INDEX_PATH = path.join(__dirname, "..", "public", "index.html");
+let versionedIndexHtml = null;
+function getVersionedIndexHtml() {
+  if (!versionedIndexHtml) {
+    const html = fs.readFileSync(INDEX_PATH, "utf8");
+    versionedIndexHtml = html.replace(
+      /(src|href)="(\/(?:js|css)\/[^"]+)"/g,
+      (match, attr, url) => `${attr}="${url}?v=${BOOT_VERSION}"`
+    );
+  }
+  return versionedIndexHtml;
+}
+app.get("/", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.type("html").send(getVersionedIndexHtml());
+});
+
 // Cache-Control: no-cache (not no-store) forces a revalidation round-trip on
 // EVERY load rather than trusting a locally-cached copy for a while — some
 // mobile browsers apply their own heuristic freshness lifetime to static
 // files even without an explicit max-age, silently serving a stale app.js/
 // style.css after a deploy until that heuristic expires. The revalidation
 // itself is cheap (a 304 with no body when the file hasn't changed, via the
-// ETag express.static already sets), so this doesn't add real cost.
+// ETag express.static already sets), so this doesn't add real cost. The
+// ?v= query string above is the primary defence; this is a second layer for
+// any request that somehow reaches these files without going through /.
 app.use(express.static(path.join(__dirname, "..", "public"), {
   setHeaders: (res, filePath) => {
     if (/\.(js|css)$/.test(filePath)) res.setHeader("Cache-Control", "no-cache");

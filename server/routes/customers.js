@@ -179,15 +179,15 @@ router.post("/:id/payments/:paymentId/void", requireRole("owner"), (req, res) =>
 });
 
 router.post("/", (req, res) => {
-  const { name, type, phone, address, gst, state, creditLimit } = req.body;
+  const { name, type, phone, address, gst, state, creditLimit, gstType } = req.body;
   if (!name || !String(name).trim() || !phone || !String(phone).trim()) {
     return res.status(400).json({ error: "Name and phone are required." });
   }
   const id = uid("C");
   db.prepare(`
-    INSERT INTO customers (id, name, type, phone, address, gst, state, credit_limit, due, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
-  `).run(id, name.trim(), type || "Retail Customer", phone.trim(), (address || "").trim(), (gst || "").trim(), (state || "").trim(), Number(creditLimit) || 0, Date.now());
+    INSERT INTO customers (id, name, type, phone, address, gst, state, credit_limit, due, created_at, gst_type)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+  `).run(id, name.trim(), type || "Retail Customer", phone.trim(), (address || "").trim(), (gst || "").trim(), (state || "").trim(), Number(creditLimit) || 0, Date.now(), gstType === "IGST" ? "IGST" : "CGST_SGST");
   logAction(req, "customer.create", name.trim());
   res.status(201).json(db.prepare("SELECT * FROM customers WHERE id = ?").get(id));
 });
@@ -195,12 +195,13 @@ router.post("/", (req, res) => {
 router.put("/:id", (req, res) => {
   const c = db.prepare("SELECT * FROM customers WHERE id = ?").get(req.params.id);
   if (!c) return res.status(404).json({ error: "Customer not found." });
-  const { name, type, phone, address, gst, state, creditLimit } = req.body;
+  const { name, type, phone, address, gst, state, creditLimit, gstType } = req.body;
   db.prepare(`
-    UPDATE customers SET name=?, type=?, phone=?, address=?, gst=?, state=?, credit_limit=? WHERE id=?
+    UPDATE customers SET name=?, type=?, phone=?, address=?, gst=?, state=?, credit_limit=?, gst_type=? WHERE id=?
   `).run(
     (name || c.name).trim(), type ?? c.type, (phone ?? c.phone), (address ?? c.address), (gst ?? c.gst),
-    (state ?? c.state), creditLimit !== undefined ? Number(creditLimit) : c.credit_limit, c.id
+    (state ?? c.state), creditLimit !== undefined ? Number(creditLimit) : c.credit_limit,
+    gstType === "IGST" ? "IGST" : gstType === "CGST_SGST" ? "CGST_SGST" : c.gst_type, c.id
   );
   logAction(req, "customer.update", c.name);
   res.json(db.prepare("SELECT * FROM customers WHERE id = ?").get(c.id));

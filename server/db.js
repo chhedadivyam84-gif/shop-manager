@@ -482,6 +482,32 @@ if (addedStockInTaxSplit) {
   db.exec(`UPDATE stock_ins SET cgst = round(gst_amount / 2, 2), sgst = round(gst_amount - round(gst_amount / 2, 2), 2) WHERE gst_amount > 0`);
 }
 
+// Explicit GST Type on the customer/supplier record itself, replacing the old
+// implicit "compare state to shop state" rule as the source of truth invoices
+// and purchases read from — a shop can now mark a party CGST_SGST or IGST
+// directly (e.g. when state is blank/wrong) instead of it being silently
+// inferred. Backfilled from that same old state-comparison rule so every
+// existing customer/supplier keeps computing the exact tax split it already
+// did, until someone explicitly edits it.
+const addedCustomerGstType = addColumn("customers", "gst_type", "TEXT NOT NULL DEFAULT 'CGST_SGST'");
+if (addedCustomerGstType) {
+  db.exec(`
+    UPDATE customers SET gst_type = CASE
+      WHEN TRIM(state) != '' AND TRIM((SELECT state FROM settings WHERE id = 1)) != ''
+        AND LOWER(TRIM(state)) != LOWER(TRIM((SELECT state FROM settings WHERE id = 1)))
+      THEN 'IGST' ELSE 'CGST_SGST' END
+  `);
+}
+const addedSupplierGstType = addColumn("suppliers", "gst_type", "TEXT NOT NULL DEFAULT 'CGST_SGST'");
+if (addedSupplierGstType) {
+  db.exec(`
+    UPDATE suppliers SET gst_type = CASE
+      WHEN TRIM(state) != '' AND TRIM((SELECT state FROM settings WHERE id = 1)) != ''
+        AND LOWER(TRIM(state)) != LOWER(TRIM((SELECT state FROM settings WHERE id = 1)))
+      THEN 'IGST' ELSE 'CGST_SGST' END
+  `);
+}
+
 // Payment & Receipt Entry: bank/UPI detail fields and an optional attachment
 // (receipt/cheque photo). attachment_path is a filename under
 // data/uploads/payments/, never a full path — so it stays portable if the

@@ -167,15 +167,15 @@ router.post("/:id/payments/:paymentId/void", requireRole("owner"), (req, res) =>
 });
 
 router.post("/", (req, res) => {
-  const { name, phone, address, gst, state } = req.body;
+  const { name, phone, address, gst, state, gstType } = req.body;
   if (!name || !String(name).trim()) {
     return res.status(400).json({ error: "Supplier name is required." });
   }
   const id = uid("SUP");
   db.prepare(`
-    INSERT INTO suppliers (id, name, phone, address, gst, state, due, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, 0, ?)
-  `).run(id, name.trim(), (phone || "").trim(), (address || "").trim(), (gst || "").trim(), (state || "").trim(), Date.now());
+    INSERT INTO suppliers (id, name, phone, address, gst, state, due, created_at, gst_type)
+    VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
+  `).run(id, name.trim(), (phone || "").trim(), (address || "").trim(), (gst || "").trim(), (state || "").trim(), Date.now(), gstType === "IGST" ? "IGST" : "CGST_SGST");
   logAction(req, "supplier.create", name.trim());
   res.status(201).json(db.prepare("SELECT * FROM suppliers WHERE id = ?").get(id));
 });
@@ -183,11 +183,12 @@ router.post("/", (req, res) => {
 router.put("/:id", (req, res) => {
   const s = db.prepare("SELECT * FROM suppliers WHERE id = ?").get(req.params.id);
   if (!s) return res.status(404).json({ error: "Supplier not found." });
-  const { name, phone, address, gst, state } = req.body;
+  const { name, phone, address, gst, state, gstType } = req.body;
   db.prepare(`
-    UPDATE suppliers SET name=?, phone=?, address=?, gst=?, state=? WHERE id=?
+    UPDATE suppliers SET name=?, phone=?, address=?, gst=?, state=?, gst_type=? WHERE id=?
   `).run(
-    (name || s.name).trim(), (phone ?? s.phone), (address ?? s.address), (gst ?? s.gst), (state ?? s.state), s.id
+    (name || s.name).trim(), (phone ?? s.phone), (address ?? s.address), (gst ?? s.gst), (state ?? s.state),
+    gstType === "IGST" ? "IGST" : gstType === "CGST_SGST" ? "CGST_SGST" : s.gst_type, s.id
   );
   logAction(req, "supplier.update", s.name);
   res.json(db.prepare("SELECT * FROM suppliers WHERE id = ?").get(s.id));

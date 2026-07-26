@@ -22,10 +22,6 @@ function serialize(p) {
   return { ...p, gst: p.gst_rate, sizes: loadSizes(p.id) };
 }
 
-function getSettingsRow() {
-  return db.prepare("SELECT * FROM settings WHERE id = 1").get();
-}
-
 /**
  * products.stock is a denormalised total of its sizes' stock, kept in sync
  * here rather than computed on every read — the alternative would be
@@ -241,14 +237,11 @@ router.post("/:id/stock-in", (req, res) => {
   const transportAmt = round2(Math.max(0, Number(transport) || 0));
   const grandTotal = round2(calc.amount + gstAmount + transportAmt);
 
-  // Same same-state-vs-different-state rule invoices use, just pointed at the
-  // supplier instead of the customer: a supplier with no state on file (most
-  // purchases, since Suppliers can be created with just a name) defaults to
-  // CGST_SGST rather than guessing at IGST.
-  const settings = getSettingsRow();
-  const taxType = (supplierRow && supplierRow.state && settings.state
-    && supplierRow.state.trim().toLowerCase() !== settings.state.trim().toLowerCase())
-    ? "IGST" : "CGST_SGST";
+  // GST Type is an explicit field on the supplier record (Supplier Master) —
+  // the source of truth for CGST_SGST vs IGST, not an inferred comparison of
+  // state text. No supplier (blank free-text field) has nothing to read, so
+  // it defaults to CGST_SGST same as always.
+  const taxType = supplierRow && supplierRow.gst_type === "IGST" ? "IGST" : "CGST_SGST";
   let cgst = 0, sgst = 0, igst = 0;
   if (taxType === "IGST") igst = gstAmount;
   else { cgst = round2(gstAmount / 2); sgst = round2(gstAmount - cgst); }

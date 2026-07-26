@@ -775,12 +775,11 @@ function renderLineCalc(idx){
     ` × ${Pricing.formatRate(r.rate, r.mode)}`;
   if(a) a.textContent = fmtPaise(r.amount);
 }
+// GST Type is an explicit field on the customer record (Customer Master),
+// the source of truth here — not an inferred comparison of state text.
 function currentTaxType(){
   const cust = state.customers.find(c=>c.id===state.selectedCustomerId);
-  const shopState = (state.settings.state||"").trim().toLowerCase();
-  const custState = (cust && cust.state || "").trim().toLowerCase();
-  if(custState && shopState && custState !== shopState) return "IGST";
-  return "CGST_SGST";
+  return (cust && cust.gst_type === "IGST") ? "IGST" : "CGST_SGST";
 }
 /* Mirrors computeTotals() in server/routes/invoices.js exactly, including the
    order of rounding — the preview must match what the server will store. */
@@ -1252,16 +1251,14 @@ function openStockIn(p){
     });
   }
 
-  // Same same-state-vs-different-state rule the billing screen uses
-  // (currentTaxType()), just matched against whatever's typed in the
-  // Supplier box instead of a picked customer — mirrors what the server
-  // will independently compute and store at save time.
+  // GST Type is an explicit field on the supplier record (Supplier Master),
+  // the source of truth here — matched against whatever's typed in the
+  // Supplier box, mirroring what the server independently computes at save
+  // time. A supplier not yet on file (still being typed) defaults CGST_SGST.
   function stockInTaxType(){
     const typed = (sheet.querySelector("#si-supplier")?.value || "").trim().toLowerCase();
     const sup = state.suppliers.find(s=>s.name.trim().toLowerCase()===typed);
-    const shopState = (state.settings.state||"").trim().toLowerCase();
-    const supState = (sup && sup.state || "").trim().toLowerCase();
-    return (supState && shopState && supState !== shopState) ? "IGST" : "CGST_SGST";
+    return (sup && sup.gst_type === "IGST") ? "IGST" : "CGST_SGST";
   }
   function splitGst(gstAmt){
     if(stockInTaxType()==="IGST") return {cgst:0, sgst:0, igst:gstAmt};
@@ -1426,6 +1423,7 @@ async function openCustomerDetail(customerId){
       <div class="stat-card plain"><div class="label">Outstanding Due</div><div class="value red">${fmt(detail.outstandingReceivable)}</div></div>
     </div>
     <div class="action-row" style="margin-top:10px;">
+      <button class="btn btn-outline" id="edit-cust-btn">✎ Edit</button>
       ${detail.due>0 ? `<button class="btn btn-gold" id="record-payment-btn">Sale Payment</button>` : ""}
       <button class="btn btn-outline" id="print-ledger-btn">Print Ledger</button>
       <button class="btn btn-outline" id="export-ledger-btn">Export Excel</button>
@@ -1437,6 +1435,7 @@ async function openCustomerDetail(customerId){
     </div>` : ""}
   `;
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  sheet.querySelector("#edit-cust-btn").addEventListener("click", ()=>{ closeAllSheets(); openAddCustomer(detail); });
   sheet.querySelectorAll("[data-open-invoice]").forEach(el=>{
     el.addEventListener("click", ()=>{ closeAllSheets(); openExistingInvoice(el.dataset.openInvoice); });
   });
@@ -1725,6 +1724,7 @@ async function openSupplierDetail(supplierId){
       <div class="stat-card plain"><div class="label">Outstanding Due</div><div class="value red">${fmt(detail.outstandingPayable)}</div></div>
     </div>
     <div class="action-row" style="margin-top:10px;">
+      <button class="btn btn-outline" id="edit-supplier-btn">✎ Edit</button>
       ${detail.due>0 ? `<button class="btn btn-gold" id="record-purchase-payment-btn">Purchase Payment</button>` : ""}
       <button class="btn btn-outline" id="print-ledger-btn">Print Ledger</button>
       <button class="btn btn-outline" id="export-ledger-btn">Export Excel</button>
@@ -1736,6 +1736,7 @@ async function openSupplierDetail(supplierId){
     </div>` : ""}
   `;
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  sheet.querySelector("#edit-supplier-btn").addEventListener("click", ()=>{ closeAllSheets(); openAddSupplier(detail); });
   const recordPaymentBtn = sheet.querySelector("#record-purchase-payment-btn");
   if(recordPaymentBtn) recordPaymentBtn.addEventListener("click", ()=>openRecordPurchasePayment(detail));
   sheet.querySelector("#print-ledger-btn").addEventListener("click", ()=>printPartyLedger(detail,"Supplier"));
@@ -1831,33 +1832,48 @@ function openRecordPurchasePayment(supplier, editEntry){
 /* ============================================================
    SHEET: Add Supplier
    ============================================================ */
-function openAddSupplier(){
+/** One form serves both "New Supplier" and "Edit Supplier" — `editing` is the
+ *  existing supplier row to prefill and PUT back, or omitted for a new one. */
+function openAddSupplier(editing){
   const sheet = document.getElementById("sheet-add-supplier");
+  const gstType = editing ? editing.gst_type : "CGST_SGST";
   sheet.innerHTML = `
     <div class="sheet-handle"></div>
     <button class="sheet-close" data-sheetclose>✕</button>
-    <div class="sheet-title">New Supplier</div>
-    <label class="field-label">Name</label><input type="text" id="ns-name">
-    <label class="field-label">Phone</label><input type="tel" id="ns-phone">
-    <label class="field-label">Address</label><textarea id="ns-address" rows="2"></textarea>
+    <div class="sheet-title">${editing ? "Edit Supplier" : "New Supplier"}</div>
+    <label class="field-label">Name</label><input type="text" id="ns-name" value="${editing?escapeHtml(editing.name):""}">
+    <label class="field-label">Phone</label><input type="tel" id="ns-phone" value="${editing?escapeHtml(editing.phone||""):""}">
+    <label class="field-label">Address</label><textarea id="ns-address" rows="2">${editing?escapeHtml(editing.address||""):""}</textarea>
     <label class="field-label">State (for GST)</label>
-    <select id="ns-state"><option value="">${state.settings.state ? "Same as shop ("+escapeHtml(state.settings.state)+")" : "Select state"}</option>${INDIAN_STATES.map(s=>`<option value="${s}">${s}</option>`).join("")}</select>
-    <label class="field-label">GSTIN (optional)</label><input type="text" id="ns-gst">
-    <button class="btn btn-primary" id="ns-save" style="margin-top:16px;">Save Supplier</button>
+    <select id="ns-state"><option value="">${state.settings.state ? "Same as shop ("+escapeHtml(state.settings.state)+")" : "Select state"}</option>${INDIAN_STATES.map(s=>`<option value="${s}" ${editing&&editing.state===s?'selected':''}>${s}</option>`).join("")}</select>
+    <label class="field-label">GST Type</label>
+    <div class="chip-row" id="ns-gsttype-chips">
+      <button class="chip ${gstType==="CGST_SGST"?'selected':''}" data-gsttype="CGST_SGST">CGST + SGST (9% + 9%)</button>
+      <button class="chip ${gstType==="IGST"?'selected':''}" data-gsttype="IGST">IGST (18%)</button>
+    </div>
+    <label class="field-label">GSTIN (optional)</label><input type="text" id="ns-gst" value="${editing?escapeHtml(editing.gst||""):""}">
+    <button class="btn btn-primary" id="ns-save" style="margin-top:16px;">${editing?"Update Supplier":"Save Supplier"}</button>
   `;
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  sheet.querySelectorAll("[data-gsttype]").forEach(b=>b.addEventListener("click", ()=>{
+    sheet.querySelectorAll("[data-gsttype]").forEach(x=>x.classList.remove("selected")); b.classList.add("selected");
+  }));
   sheet.querySelector("#ns-save").addEventListener("click", async ()=>{
     const name = document.getElementById("ns-name").value.trim();
     if(!name){ toast("Supplier name is required."); return; }
+    const payload = {
+      name, phone: document.getElementById("ns-phone").value.trim(),
+      address: document.getElementById("ns-address").value.trim(),
+      gst: document.getElementById("ns-gst").value.trim(),
+      state: document.getElementById("ns-state").value || state.settings.state,
+      gstType: sheet.querySelector("[data-gsttype].selected").dataset.gsttype
+    };
     try{
-      await api("POST","/suppliers", {
-        name, phone: document.getElementById("ns-phone").value.trim(),
-        address: document.getElementById("ns-address").value.trim(),
-        gst: document.getElementById("ns-gst").value.trim(),
-        state: document.getElementById("ns-state").value || state.settings.state
-      });
+      if(editing) await api("PUT", `/suppliers/${editing.id}`, payload);
+      else await api("POST","/suppliers", payload);
       await loadSuppliers();
       closeAllSheets(); renderSuppliersList();
+      toast(editing ? "Supplier updated." : "Supplier added.", "ok");
     }catch(err){ toast(err.message); }
   });
   showSheet("sheet-add-supplier");
@@ -2009,42 +2025,57 @@ function renderAddProductSheet(context){
 /* ============================================================
    SHEETS: Add Customer
    ============================================================ */
-function openAddCustomer(){
+/** One form serves both "New Customer" and "Edit Customer" — `editing` is the
+ *  existing customer row to prefill and PUT back, or omitted for a new one. */
+function openAddCustomer(editing){
   const sheet = document.getElementById("sheet-add-customer");
   const types = ["Retail Customer","Contractor","Architect","Interior Designer","Builder","Wholesaler","Dealer"];
+  const gstType = editing ? editing.gst_type : "CGST_SGST";
   sheet.innerHTML = `
     <div class="sheet-handle"></div>
     <button class="sheet-close" data-sheetclose>✕</button>
-    <div class="sheet-title">New Customer</div>
-    <label class="field-label">Name</label><input type="text" id="nc-name">
+    <div class="sheet-title">${editing ? "Edit Customer" : "New Customer"}</div>
+    <label class="field-label">Name</label><input type="text" id="nc-name" value="${editing?escapeHtml(editing.name):""}">
     <label class="field-label">Party type</label>
-    <div class="chip-row" id="nc-type-chips">${types.map((t,i)=>`<button class="chip ${i===0?'selected':''}" data-type="${t}">${t}</button>`).join("")}</div>
-    <label class="field-label">Phone / WhatsApp</label><input type="tel" id="nc-phone">
-    <label class="field-label">Address</label><textarea id="nc-address" rows="2" placeholder="Shop / site address — shown on the invoice"></textarea>
+    <div class="chip-row" id="nc-type-chips">${types.map(t=>`<button class="chip ${(editing?editing.type===t:t===types[0])?'selected':''}" data-type="${t}">${t}</button>`).join("")}</div>
+    <label class="field-label">Phone / WhatsApp</label><input type="tel" id="nc-phone" value="${editing?escapeHtml(editing.phone||""):""}">
+    <label class="field-label">Address</label><textarea id="nc-address" rows="2" placeholder="Shop / site address — shown on the invoice">${editing?escapeHtml(editing.address||""):""}</textarea>
     <label class="field-label">State (for GST)</label>
-    <select id="nc-state"><option value="">${state.settings.state ? "Same as shop ("+escapeHtml(state.settings.state)+")" : "Select state"}</option>${INDIAN_STATES.map(s=>`<option value="${s}">${s}</option>`).join("")}</select>
-    <label class="field-label">GSTIN (optional)</label><input type="text" id="nc-gst">
-    <label class="field-label">Credit limit</label><input type="number" id="nc-credit" value="0">
-    <button class="btn btn-primary" id="nc-save" style="margin-top:16px;">Save Customer</button>
+    <select id="nc-state"><option value="">${state.settings.state ? "Same as shop ("+escapeHtml(state.settings.state)+")" : "Select state"}</option>${INDIAN_STATES.map(s=>`<option value="${s}" ${editing&&editing.state===s?'selected':''}>${s}</option>`).join("")}</select>
+    <label class="field-label">GST Type</label>
+    <div class="chip-row" id="nc-gsttype-chips">
+      <button class="chip ${gstType==="CGST_SGST"?'selected':''}" data-gsttype="CGST_SGST">CGST + SGST (9% + 9%)</button>
+      <button class="chip ${gstType==="IGST"?'selected':''}" data-gsttype="IGST">IGST (18%)</button>
+    </div>
+    <label class="field-label">GSTIN (optional)</label><input type="text" id="nc-gst" value="${editing?escapeHtml(editing.gst||""):""}">
+    <label class="field-label">Credit limit</label><input type="number" id="nc-credit" value="${editing?editing.credit_limit:0}">
+    <button class="btn btn-primary" id="nc-save" style="margin-top:16px;">${editing?"Update Customer":"Save Customer"}</button>
   `;
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
   sheet.querySelectorAll("[data-type]").forEach(b=>b.addEventListener("click", ()=>{
     sheet.querySelectorAll("[data-type]").forEach(x=>x.classList.remove("selected")); b.classList.add("selected");
   }));
+  sheet.querySelectorAll("[data-gsttype]").forEach(b=>b.addEventListener("click", ()=>{
+    sheet.querySelectorAll("[data-gsttype]").forEach(x=>x.classList.remove("selected")); b.classList.add("selected");
+  }));
   sheet.querySelector("#nc-save").addEventListener("click", async ()=>{
     const name = document.getElementById("nc-name").value.trim();
     const phone = document.getElementById("nc-phone").value.trim();
     if(!name || !phone){ toast("Name and phone are required."); return; }
+    const payload = {
+      name, type: sheet.querySelector("[data-type].selected").dataset.type, phone,
+      address: document.getElementById("nc-address").value.trim(),
+      gst: document.getElementById("nc-gst").value.trim(),
+      state: document.getElementById("nc-state").value || state.settings.state,
+      gstType: sheet.querySelector("[data-gsttype].selected").dataset.gsttype,
+      creditLimit: parseFloat(document.getElementById("nc-credit").value)||0
+    };
     try{
-      await api("POST","/customers", {
-        name, type: sheet.querySelector("[data-type].selected").dataset.type, phone,
-        address: document.getElementById("nc-address").value.trim(),
-        gst: document.getElementById("nc-gst").value.trim(),
-        state: document.getElementById("nc-state").value || state.settings.state,
-        creditLimit: parseFloat(document.getElementById("nc-credit").value)||0
-      });
+      if(editing) await api("PUT", `/customers/${editing.id}`, payload);
+      else await api("POST","/customers", payload);
       await loadCustomers();
       closeAllSheets(); renderCustomersList(); renderBillingCustomers();
+      toast(editing ? "Customer updated." : "Customer added.", "ok");
     }catch(err){ toast(err.message); }
   });
   showSheet("sheet-add-customer");

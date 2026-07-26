@@ -128,8 +128,11 @@ router.post("/", (req, res) => {
     customer = db.prepare("SELECT * FROM customers WHERE id = ?").get(customerId);
     if (!customer) return res.status(400).json({ error: "Selected customer no longer exists." });
   }
-  const taxType = (customer && customer.state && settings.state && customer.state.trim().toLowerCase() !== settings.state.trim().toLowerCase())
-    ? "IGST" : "CGST_SGST";
+  // GST Type is an explicit field on the customer record (Customer Master) —
+  // the source of truth for CGST_SGST vs IGST, not an inferred comparison of
+  // state text. Walk-in (no customer) has nothing to read, so it defaults to
+  // CGST_SGST same as always.
+  const taxType = customer && customer.gst_type === "IGST" ? "IGST" : "CGST_SGST";
 
   // Look up authoritative product/size data (gst rate, stock) server-side;
   // never trust client for these. Stock lives on the SIZE, not the product —
@@ -297,8 +300,11 @@ router.put("/:id", (req, res) => {
     customer = db.prepare("SELECT * FROM customers WHERE id = ?").get(customerId);
     if (!customer) return res.status(400).json({ error: "Selected customer no longer exists." });
   }
-  const taxType = (customer && customer.state && settings.state && customer.state.trim().toLowerCase() !== settings.state.trim().toLowerCase())
-    ? "IGST" : "CGST_SGST";
+  // GST Type is an explicit field on the customer record (Customer Master) —
+  // the source of truth for CGST_SGST vs IGST, not an inferred comparison of
+  // state text. Walk-in (no customer) has nothing to read, so it defaults to
+  // CGST_SGST same as always.
+  const taxType = customer && customer.gst_type === "IGST" ? "IGST" : "CGST_SGST";
 
   const oldItems = db.prepare("SELECT * FROM invoice_items WHERE invoice_id = ?").all(inv.id);
   const restoreSize = db.prepare("UPDATE product_sizes SET stock = stock + ? WHERE id = ?");

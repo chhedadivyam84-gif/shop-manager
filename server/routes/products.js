@@ -22,6 +22,10 @@ function serialize(p) {
   return { ...p, gst: p.gst_rate, sizes: loadSizes(p.id) };
 }
 
+function getSettingsRow() {
+  return db.prepare("SELECT * FROM settings WHERE id = 1").get();
+}
+
 /**
  * products.stock is a denormalised total of its sizes' stock, kept in sync
  * here rather than computed on every read — the alternative would be
@@ -236,6 +240,18 @@ router.post("/:id/stock-in", (req, res) => {
   const gstAmount = round2(calc.amount * (gstRate / 100));
   const transportAmt = round2(Math.max(0, Number(transport) || 0));
   const grandTotal = round2(calc.amount + gstAmount + transportAmt);
+
+  // Same same-state-vs-different-state rule invoices use, just pointed at the
+  // supplier instead of the customer: a supplier with no state on file (most
+  // purchases, since Suppliers can be created with just a name) defaults to
+  // CGST_SGST rather than guessing at IGST.
+  const settings = getSettingsRow();
+  const taxType = (supplierRow && supplierRow.state && settings.state
+    && supplierRow.state.trim().toLowerCase() !== settings.state.trim().toLowerCase())
+    ? "IGST" : "CGST_SGST";
+  let cgst = 0, sgst = 0, igst = 0;
+  if (taxType === "IGST") igst = gstAmount;
+  else { cgst = round2(gstAmount / 2); sgst = round2(gstAmount - cgst); }
   const date = (purchaseDate && /^\d{4}-\d{2}-\d{2}$/.test(purchaseDate)) ? purchaseDate : todayStr();
   // Cost per physical piece — the basis the Profit Report uses for any future
   // sale of this product. Transport is included: it is a real cost of getting
@@ -249,13 +265,13 @@ router.post("/:id/stock-in", (req, res) => {
       INSERT INTO stock_ins
         (id, product_id, size_id, product_name, purchase_date, invoice_no, supplier, supplier_id, brand, category,
          mode, length_ft, width_val, thickness_in, size_label, qty, per_piece, billed_qty,
-         unit_label, rate, amount, gst_rate, gst_amount, transport, grand_total, cost_price, note, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         unit_label, rate, amount, gst_rate, gst_amount, tax_type, cgst, sgst, igst, transport, grand_total, cost_price, note, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id, p.id, size.id, p.name, date, (invoiceNo || "").trim(), supplierName, supplierRow ? supplierRow.id : null, p.brand, p.category,
       calc.mode, calc.lengthFt || null, calc.widthVal || null, calc.thicknessIn || null, calc.sizeLabel || size.label,
       calc.pieces, calc.perPiece, calc.billedQty, calc.unit, calc.rate, calc.amount,
-      gstRate, gstAmount, transportAmt, grandTotal, costPrice, (note || "").trim(), Date.now()
+      gstRate, gstAmount, taxType, cgst, sgst, igst, transportAmt, grandTotal, costPrice, (note || "").trim(), Date.now()
     );
     db.prepare("UPDATE product_sizes SET stock = stock + ? WHERE id = ?").run(calc.pieces, size.id);
     syncProductStock(p.id);

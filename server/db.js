@@ -465,6 +465,23 @@ addColumn("payments", "payment_date", "TEXT DEFAULT ''");
 addColumn("stock_ins", "supplier_id", "TEXT REFERENCES suppliers(id) ON DELETE SET NULL");
 db.exec("CREATE INDEX IF NOT EXISTS idx_stock_ins_supplier ON stock_ins(supplier_id)");
 
+// Splits the existing lump gst_amount into CGST/SGST (same-state supplier) or
+// IGST (different state), exactly mirroring invoices' tax_type/cgst/sgst/igst
+// — determined the same way, by comparing the supplier's state to the shop's.
+// gst_rate/gst_amount are kept as-is (gst_amount stays the source total that
+// cgst+sgst+igst always sums back to).
+const addedStockInTaxSplit = addColumn("stock_ins", "tax_type", "TEXT NOT NULL DEFAULT 'CGST_SGST'");
+addColumn("stock_ins", "cgst", "REAL NOT NULL DEFAULT 0");
+addColumn("stock_ins", "sgst", "REAL NOT NULL DEFAULT 0");
+addColumn("stock_ins", "igst", "REAL NOT NULL DEFAULT 0");
+// Backfill purchases recorded before this split existed: their supplier (if
+// any) has no state on file either, so CGST_SGST is exactly what the new
+// logic would compute for them anyway — this just makes the stored figures
+// match what a fresh read of gst_amount would already imply.
+if (addedStockInTaxSplit) {
+  db.exec(`UPDATE stock_ins SET cgst = round(gst_amount / 2, 2), sgst = round(gst_amount - round(gst_amount / 2, 2), 2) WHERE gst_amount > 0`);
+}
+
 // Payment & Receipt Entry: bank/UPI detail fields and an optional attachment
 // (receipt/cheque photo). attachment_path is a filename under
 // data/uploads/payments/, never a full path — so it stays portable if the

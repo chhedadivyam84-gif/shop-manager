@@ -1252,12 +1252,30 @@ function openStockIn(p){
     });
   }
 
+  // Same same-state-vs-different-state rule the billing screen uses
+  // (currentTaxType()), just matched against whatever's typed in the
+  // Supplier box instead of a picked customer — mirrors what the server
+  // will independently compute and store at save time.
+  function stockInTaxType(){
+    const typed = (sheet.querySelector("#si-supplier")?.value || "").trim().toLowerCase();
+    const sup = state.suppliers.find(s=>s.name.trim().toLowerCase()===typed);
+    const shopState = (state.settings.state||"").trim().toLowerCase();
+    const supState = (sup && sup.state || "").trim().toLowerCase();
+    return (supState && shopState && supState !== shopState) ? "IGST" : "CGST_SGST";
+  }
+  function splitGst(gstAmt){
+    if(stockInTaxType()==="IGST") return {cgst:0, sgst:0, igst:gstAmt};
+    const cgst = round2(gstAmt/2);
+    return {cgst, sgst: round2(gstAmt-cgst), igst:0};
+  }
+
   function render(){
     const m = Pricing.MODES[ctx.mode];
     const r = calc();
     const gstAmt = round2(r.amount * ((parseFloat(ctx.gst)||0)/100));
     const transportAmt = Math.max(0, parseFloat(ctx.transport)||0);
     const grandTotal = round2(r.amount + gstAmt + transportAmt);
+    const split = splitGst(gstAmt);
 
     const dim = (label, unit, key, val) => `
       <label class="dim">
@@ -1312,7 +1330,7 @@ function openStockIn(p){
       </div>
 
       <div class="line-calc" style="margin-top:10px;">
-        <div class="line-calc-formula">Amount ${fmtPaise(r.amount)} + GST ${fmtPaise(gstAmt)} + Transport ${fmtPaise(transportAmt)}</div>
+        <div class="line-calc-formula">Amount ${fmtPaise(r.amount)} + ${split.igst ? `IGST ${fmtPaise(split.igst)}` : `CGST ${fmtPaise(split.cgst)} + SGST ${fmtPaise(split.sgst)}`} + Transport ${fmtPaise(transportAmt)}</div>
         <div class="line-calc-amount">Grand Total ${fmtPaise(grandTotal)}</div>
       </div>
 
@@ -1328,6 +1346,7 @@ function openStockIn(p){
     sheet.querySelectorAll("[data-si-mode]").forEach(b=>b.addEventListener("click", ()=>{
       ctx.mode = b.dataset.siMode; render();
     }));
+    sheet.querySelector("#si-supplier").addEventListener("input", renderCalcOnly);
     sheet.querySelectorAll("[data-si-field]").forEach(inp=>inp.addEventListener("input", ()=>{
       ctx[inp.dataset.siField] = inp.value;
       renderCalcOnly();
@@ -1370,6 +1389,7 @@ function openStockIn(p){
     const gstAmt = round2(r.amount * ((parseFloat(ctx.gst)||0)/100));
     const transportAmt = Math.max(0, parseFloat(ctx.transport)||0);
     const grandTotal = round2(r.amount + gstAmt + transportAmt);
+    const split = splitGst(gstAmt);
     const blocks = sheet.querySelectorAll(".line-calc");
     if(blocks[0]){
       blocks[0].querySelector(".line-calc-formula").innerHTML =
@@ -1379,7 +1399,7 @@ function openStockIn(p){
       blocks[0].querySelector(".line-calc-amount").textContent = fmtPaise(r.amount);
     }
     if(blocks[1]){
-      blocks[1].querySelector(".line-calc-formula").textContent = `Amount ${fmtPaise(r.amount)} + GST ${fmtPaise(gstAmt)} + Transport ${fmtPaise(transportAmt)}`;
+      blocks[1].querySelector(".line-calc-formula").textContent = `Amount ${fmtPaise(r.amount)} + ${split.igst ? `IGST ${fmtPaise(split.igst)}` : `CGST ${fmtPaise(split.cgst)} + SGST ${fmtPaise(split.sgst)}`} + Transport ${fmtPaise(transportAmt)}`;
       blocks[1].querySelector(".line-calc-amount").textContent = `Grand Total ${fmtPaise(grandTotal)}`;
     }
   }

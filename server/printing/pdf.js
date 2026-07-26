@@ -338,17 +338,16 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
   doc.line(bottomRightX, bottomTopY, bottomRightX, bottomTopY + bottomBoxH);
   y = bottomTopY + bottomBoxH;
 
-  // ---- Signature row: Receiver / Customer / Stamp / Authorised Signatory ----
+  // ---- Signature row: Receiver / Stamp / Authorised Signatory ----
   const signTopY = y;
-  const signW = CONTENT_W / 4;
+  const signW = CONTENT_W / 3;
   const signLabelY = signTopY + signRowH - fs(3);
   doc.setFont("helvetica", "normal"); doc.setFontSize(fs(7));
   const signLineY = signLabelY - fs(2);
   [
     ["Receiver Signature", MARGIN + signW * 0.5],
-    ["Customer Signature", MARGIN + signW * 1.5],
-    ["__STAMP__", MARGIN + signW * 2.5],
-    ["For " + (settings.business_name || "Shop") + "\nAuthorised Signatory", MARGIN + signW * 3.5]
+    ["__STAMP__", MARGIN + signW * 1.5],
+    ["For " + (settings.business_name || "Shop") + "\nAuthorised Signatory", MARGIN + signW * 2.5]
   ].forEach(([label, cx]) => {
     if (label === "__STAMP__") {
       doc.setDrawColor(160);

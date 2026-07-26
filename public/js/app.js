@@ -2658,7 +2658,6 @@ function renderInvoicePageContent(){
 
     <div class="erp-sign-row">
       <span>Receiver Signature</span>
-      <span>Customer Signature</span>
       <span class="erp-stamp-box">Company Stamp</span>
       <span>For ${escapeHtml(cfg.business_name)}<br>Authorised Signatory</span>
     </div>

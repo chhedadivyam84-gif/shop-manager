@@ -138,16 +138,16 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
   y = boxBottomY;
 
   // ---- Table columns ----
-  // Widths below are the original fractions with Brand's (and, before that,
-  // HSN's) share proportionally redistributed across the rest, so every
-  // column keeps the same relative ratio to the others as before — not
-  // just a gap left where the column was, or all the freed space dumped
+  // Widths below are the original fractions with GST%'s (and, before that,
+  // Brand's and HSN's) share proportionally redistributed across the rest,
+  // so every column keeps the same relative ratio to the others as before —
+  // not just a gap left where the column was, or all the freed space dumped
   // into one column.
   const cols = showRate
-    ? [{ h: "Sr No.", w: CONTENT_W * 0.06 }, { h: "Product Description", w: CONTENT_W * 0.30 },
-       { h: "Size", w: CONTENT_W * 0.115 }, { h: "Unit", w: CONTENT_W * 0.085 },
-       { h: "Qty", w: CONTENT_W * 0.09, align: "right" },
-       { h: "Rate", w: CONTENT_W * 0.115, align: "right" }, { h: "GST %", w: CONTENT_W * 0.08, align: "right" },
+    ? [{ h: "Sr No.", w: CONTENT_W * 0.065 }, { h: "Product Description", w: CONTENT_W * 0.33 },
+       { h: "Size", w: CONTENT_W * 0.13 }, { h: "Unit", w: CONTENT_W * 0.095 },
+       { h: "Qty", w: CONTENT_W * 0.10, align: "right" },
+       { h: "Rate", w: CONTENT_W * 0.13, align: "right" },
        { h: "Amount", w: 0, align: "right" }]
     : [{ h: "Sr No.", w: CONTENT_W * 0.09 }, { h: "Product Description", w: CONTENT_W * 0.48 },
        { h: "Size", w: CONTENT_W * 0.18 }, { h: "Unit", w: CONTENT_W * 0.12 }, { h: "Qty", w: 0, align: "right" }];
@@ -237,7 +237,7 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
     return showRate
       ? [String(i + 1), it.name, it.size_label || "-", unit,
          qtyText, fmtPaise(it.rate).replace("Rs. ", ""),
-         (it.gst_rate || 0) + "%", fmtPaise(it.qty * it.rate).replace("Rs. ", "")]
+         fmtPaise(it.qty * it.rate).replace("Rs. ", "")]
       : [String(i + 1), it.name, it.size_label || "-", unit, qtyText];
   };
 

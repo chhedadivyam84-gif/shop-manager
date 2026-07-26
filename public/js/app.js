@@ -1914,7 +1914,15 @@ function applyPageSizeStyle(){
   if(!style) return;
   const isA4 = state.paperSize === "A4";
   const pageH = isA4 ? 297 : 210, margin = isA4 ? 6 : 5;
-  const contentH = pageH - margin * 2;
+  // A real safety margin, not just the @page margin — a physical printer's
+  // own default margins, "shrink to fit" being off, or a paper-size
+  // mismatch (Letter vs A4) can all shrink the actual printable area below
+  // what @page alone promises. Targeting slightly less than the full
+  // theoretical content height means real content that measures as exactly
+  // fitting on screen still has room to spare once it hits a real printer,
+  // instead of spilling one line onto a second page.
+  const safetyBuffer = isA4 ? 5 : 4;
+  const contentH = pageH - margin * 2 - safetyBuffer;
   // min-height fills the whole sheet, Tally-style, even with just one item —
   // the table's flex-grow (see .erp-table-wrap) is what actually stretches
   // to reach it. flex-shrink stays disabled everywhere in this chain so a

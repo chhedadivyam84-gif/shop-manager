@@ -48,7 +48,7 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
   const isA5 = invoice.paper_size === "A5";
   const PAGE_W = isA5 ? 148 : 210;
   const PAGE_H = isA5 ? 210 : 297;
-  const MARGIN = isA5 ? 5 : 6;
+  const MARGIN = isA5 ? 3 : 6;
   const CONTENT_W = PAGE_W - MARGIN * 2;
   const FS = isA5 ? 0.82 : 1; // font-scale factor so A5 doesn't overflow its narrower sheet
   const fs = n => Math.max(5.5, n * FS);

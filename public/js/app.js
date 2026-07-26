@@ -1913,7 +1913,7 @@ function applyPageSizeStyle(){
   const style = document.getElementById("page-size-style");
   if(!style) return;
   const isA4 = state.paperSize === "A4";
-  const pageH = isA4 ? 297 : 210, margin = isA4 ? 6 : 5;
+  const pageH = isA4 ? 297 : 210, margin = isA4 ? 6 : 3;
   // A real safety margin, not just the @page margin — a physical printer's
   // own default margins, "shrink to fit" being off, or a paper-size
   // mismatch (Letter vs A4) can all shrink the actual printable area below

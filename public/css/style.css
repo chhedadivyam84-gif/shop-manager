@@ -342,16 +342,22 @@ table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #000;}
 #toast.ok{background:var(--ok);}
 
 @media print{
-  html,body{background:#fff !important;}
-  body *{visibility:hidden;}
-  .invoice-page, .invoice-page *{visibility:visible;}
-  .fullscreen{background:#fff !important;position:static !important;max-width:none !important;}
-  /* top/left/right:0 but deliberately NO bottom:0 and no overflow:hidden —
-     the box is exactly as tall as its content (no forced min-height), and a
-     long item list must be free to grow past one page so the browser's own
-     print pagination carries it onto page 2+ rather than clipping it. */
+  html,body{background:#fff !important;margin:0;}
+  /* Isolating the printed page via position:absolute (the previous approach)
+     is a known source of print-pagination bugs in real browsers — an
+     absolutely positioned box taller than one page can print an extra,
+     almost-blank page instead of flowing cleanly onto page 2, even when the
+     on-screen DOM measures as fitting exactly one page's height. Using
+     display:none on everything except the invoice content keeps it in
+     NORMAL DOCUMENT FLOW for print, which paginates the way browsers
+     actually expect. */
+  #toast{display:none !important;}
+  #shell > *{display:none !important;}
+  #fs-invoice{display:block !important;position:static !important;background:#fff !important;max-width:none !important;margin:0 !important;}
+  #fs-invoice > *{display:none !important;}
+  #fs-invoice > .invoice-page{display:flex !important;}
   .invoice-page{
-    position:absolute;top:0;left:0;right:0;margin:0;
+    position:static;margin:0 !important;
     border:1px solid #000;border-radius:0 !important;box-shadow:none !important;
     padding:3mm;box-sizing:border-box;background:#fff !important;
   }

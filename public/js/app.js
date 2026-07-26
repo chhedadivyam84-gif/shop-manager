@@ -34,12 +34,12 @@ function toast(msg, kind){
    STATE
    ============================================================ */
 let state = {
-  products: [], customers: [], invoices: [], settings: null, dashboard: null,
+  products: [], customers: [], suppliers: [], invoices: [], settings: null, dashboard: null,
   cart: [], selectedCustomerId: null,
   discountType: "pct", discountValue: 0, advance: 0, paymentMethod: "Cash",
   transport: 0, loading: 0, roundOff: true, docType: "invoice", challanShowRate: false, gstOnCharges: true, deliveryMan: "",
   vehicleNumber: "", deliveryAddress: "", remarks: "",
-  invBrandFilter: "All", reportType: "Sales",
+  invBrandFilter: "All", reportType: "Sales", partyMode: "customer",
   paperSize: "A5",
   me: { staffName: "", role: "" },
   ctx: {}
@@ -278,7 +278,18 @@ async function initApp(){
   document.getElementById("inv-add-btn").addEventListener("click", ()=>openAddProduct("inventory"));
 
   document.getElementById("cust-search").addEventListener("input", renderCustomersList);
-  document.getElementById("cust-add-btn").addEventListener("click", openAddCustomer);
+  document.getElementById("cust-add-btn").addEventListener("click", ()=>{
+    if(state.partyMode==="supplier") openAddSupplier(); else openAddCustomer();
+  });
+  document.querySelectorAll('[data-party-mode]').forEach(b=>{
+    b.addEventListener("click", ()=>{
+      state.partyMode = b.dataset.partyMode;
+      document.querySelectorAll('[data-party-mode]').forEach(x=>x.classList.remove("selected"));
+      b.classList.add("selected");
+      document.getElementById("cust-search").value = "";
+      renderCustomersList();
+    });
+  });
 
   document.querySelectorAll('[data-report]').forEach(b=>{
     b.addEventListener("click", ()=>{
@@ -323,7 +334,7 @@ async function switchTab(tab){
 }
 
 async function renderAll(){
-  await Promise.all([loadProducts(), loadCustomers()]);
+  await Promise.all([loadProducts(), loadCustomers(), loadSuppliers()]);
   await renderHome();
   const activeTab = document.querySelector("nav.bottom .tab.active");
   const tab = activeTab ? activeTab.dataset.tab : "home";
@@ -334,6 +345,7 @@ async function renderAll(){
 }
 async function loadProducts(){ state.products = await api("GET","/products"); }
 async function loadCustomers(){ state.customers = await api("GET","/customers"); }
+async function loadSuppliers(){ state.suppliers = await api("GET","/suppliers"); }
 
 /* ============================================================
    HOME
@@ -346,6 +358,7 @@ async function renderHome(){
   document.getElementById("stat-sales").textContent = fmt(d.todaysSales);
   document.getElementById("stat-profit").textContent = fmt(d.todaysProfit);
   document.getElementById("stat-outstanding").textContent = fmt(d.outstandingTotal) + (d.outstandingCount? " · "+d.outstandingCount+" cust.":"");
+  document.getElementById("stat-payable").textContent = fmt(d.payableTotal) + (d.payableCount? " · "+d.payableCount+" supp.":"");
   document.getElementById("stat-lowstock").textContent = d.lowStockCount;
 
   const max = Math.max(1, ...d.revenueChart.map(x=>x.total));
@@ -853,6 +866,7 @@ async function renderInventoryList(){
    CUSTOMERS
    ============================================================ */
 async function renderCustomersList(){
+  if(state.partyMode==="supplier") return renderSuppliersList();
   const q = (document.getElementById("cust-search").value||"").toLowerCase();
   let list = state.customers;
   if(q) list = list.filter(c=>c.name.toLowerCase().includes(q) || (c.phone||"").includes(q) || (c.gst||"").toLowerCase().includes(q));
@@ -865,6 +879,26 @@ async function renderCustomersList(){
   }).join("") : `<div class="empty-hint">No customers found.</div>`) + `</div>`;
   document.querySelectorAll("[data-open-cust]").forEach(el=>{
     el.addEventListener("click", ()=>openCustomerDetail(el.dataset.openCust));
+  });
+}
+
+/* ============================================================
+   SUPPLIERS — same list/detail/ledger/payment pattern as Customers,
+   just pointed at the money the shop owes rather than what it's owed.
+   ============================================================ */
+async function renderSuppliersList(){
+  const q = (document.getElementById("cust-search").value||"").toLowerCase();
+  let list = state.suppliers;
+  if(q) list = list.filter(s=>s.name.toLowerCase().includes(q) || (s.phone||"").includes(q) || (s.gst||"").toLowerCase().includes(q));
+  document.getElementById("customers-list").innerHTML = `<div class="card">` + (list.length ? list.map(s=>{
+    return `<div class="list-row" data-open-supplier="${s.id}" style="cursor:pointer;">
+      <div class="avatar" style="width:34px;height:34px;font-size:12px;">${initials(s.name)}</div>
+      <div><div class="row-title">${escapeHtml(s.name)}</div><div class="row-sub">${escapeHtml(s.phone||"")}</div></div>
+      <div class="row-right ${s.due>0?'':'muted'}" style="font-weight:800;${s.due>0?'color:var(--danger);':''}">${fmt(s.due)}</div>
+    </div>`;
+  }).join("") : `<div class="empty-hint">No suppliers found.</div>`) + `</div>`;
+  document.querySelectorAll("[data-open-supplier]").forEach(el=>{
+    el.addEventListener("click", ()=>openSupplierDetail(el.dataset.openSupplier));
   });
 }
 
@@ -1146,7 +1180,8 @@ function openStockIn(p){
         <label class="dim"><span>Invoice No.</span><input type="text" id="si-invoice" placeholder="Supplier's invoice #"></label>
       </div>
       <label class="field-label">Supplier</label>
-      <input type="text" id="si-supplier" placeholder="e.g. Century Ply Distributor">
+      <input type="text" id="si-supplier" list="si-supplier-datalist" placeholder="e.g. Century Ply Distributor">
+      <datalist id="si-supplier-datalist">${state.suppliers.map(s=>`<option value="${escapeHtml(s.name)}">`).join("")}</datalist>
 
       <label class="field-label">Which size received this stock?</label>
       <div class="chip-row" id="si-size-chips">
@@ -1221,7 +1256,7 @@ function openStockIn(p){
           pieces: ctx.pieces, rate: ctx.rate, gst: ctx.gst, transport: ctx.transport
         });
         Object.assign(p, result.product);
-        await loadProducts();
+        await Promise.all([loadProducts(), loadSuppliers()]);
         closeAllSheets();
         openProductDetail(p.id, "inventory");
         renderInventoryList();
@@ -1269,24 +1304,18 @@ async function openCustomerDetail(customerId){
     <div class="sheet-title">${escapeHtml(detail.name)}</div>
     <div class="muted" style="font-size:12px;margin-bottom:10px;">${escapeHtml(detail.type||"")} · ${escapeHtml(detail.phone||"")}${detail.gst?" · GST "+escapeHtml(detail.gst):""}${detail.state?" · "+escapeHtml(detail.state):""}${detail.address?"<br>"+escapeHtml(detail.address):""}</div>
     <div class="stat-grid">
+      <div class="stat-card plain"><div class="label">Total Sales</div><div class="value">${fmt(detail.totalSales)}</div></div>
+      <div class="stat-card plain"><div class="label">Total Received</div><div class="value">${fmt(detail.totalPaymentReceived)}</div></div>
       <div class="stat-card plain"><div class="label">Credit Limit</div><div class="value">${fmt(detail.credit_limit)}</div></div>
-      <div class="stat-card plain"><div class="label">Outstanding Due</div><div class="value red">${fmt(detail.due)}</div></div>
+      <div class="stat-card plain"><div class="label">Outstanding Due</div><div class="value red">${fmt(detail.outstandingReceivable)}</div></div>
     </div>
-    ${detail.due>0 ? `<button class="btn btn-gold" id="record-payment-btn" style="margin-top:10px;">Record Payment</button>` : ""}
+    <div class="action-row" style="margin-top:10px;">
+      ${detail.due>0 ? `<button class="btn btn-gold" id="record-payment-btn">Sale Payment</button>` : ""}
+      <button class="btn btn-outline" id="print-ledger-btn">Print Ledger</button>
+      <button class="btn btn-outline" id="export-ledger-btn">Export Excel</button>
+    </div>
     <div class="section-title">Ledger</div>
-    <div class="card">${detail.ledger.length ? detail.ledger.map(l=>{
-      if(l.type==="invoice"){
-        return `<div class="list-row" data-open-invoice="${l.id}" style="cursor:pointer;"><div><div class="row-title">${escapeHtml(l.label)}</div><div class="row-sub">${l.date} · Invoice</div></div><div class="row-right row-title" style="color:var(--danger);">+${fmt(l.amount)}</div></div>`;
-      }
-      const subParts = [l.date, l.label];
-      if(l.againstInvoiceNo) subParts.push("against "+l.againstInvoiceNo);
-      if(l.referenceNo) subParts.push("Ref# "+l.referenceNo);
-      return `<div class="list-row"><div><div class="row-title">Payment received${l.note?" — "+escapeHtml(l.note):""}</div><div class="row-sub">${subParts.map(escapeHtml).join(" · ")}</div></div>
-        <div class="row-right" style="display:flex;align-items:center;gap:8px;">
-          <span class="row-title" style="color:var(--ok);">${fmt(l.amount)}</span>
-          ${isOwner() ? `<a href="#" data-void-payment="${l.id}" class="btn-danger-link" style="font-size:11px;">Void</a>` : ""}
-        </div></div>`;
-    }).join("") : `<div class="empty-hint">No activity yet.</div>`}</div>
+    <div class="card">${detail.ledger.length ? detail.ledger.map(l=>renderPartyLedgerRow(l,"customer",detail.id)).join("") : `<div class="empty-hint">No activity yet.</div>`}</div>
     ${isOwner() ? `<div style="margin-top:16px;text-align:center;">
       <a href="#" id="delete-cust-link" class="btn-danger-link">Delete this customer</a>
     </div>` : ""}
@@ -1297,19 +1326,11 @@ async function openCustomerDetail(customerId){
   });
   const recordPaymentBtn = sheet.querySelector("#record-payment-btn");
   if(recordPaymentBtn) recordPaymentBtn.addEventListener("click", ()=>openRecordPayment(detail));
-  sheet.querySelectorAll("[data-void-payment]").forEach(a=>{
-    a.addEventListener("click", async (e)=>{
-      e.preventDefault();
-      if(confirm("Void this payment? The customer's due will go back up.")){
-        try{
-          await api("POST", `/customers/${detail.id}/payments/${a.dataset.voidPayment}/void`);
-          await loadCustomers();
-          await openCustomerDetail(detail.id);
-          toast("Payment voided.", "ok");
-        }catch(err){ toast(err.message); }
-      }
-    });
+  sheet.querySelector("#print-ledger-btn").addEventListener("click", ()=>printPartyLedger(detail,"Customer"));
+  sheet.querySelector("#export-ledger-btn").addEventListener("click", ()=>{
+    window.open(`/api/customers/${detail.id}/ledger/export`, "_blank");
   });
+  wirePartyLedgerActions(sheet, detail, "customer");
   const deleteCustLink = sheet.querySelector("#delete-cust-link");
   if(deleteCustLink) deleteCustLink.addEventListener("click", async (e)=>{
     e.preventDefault();
@@ -1325,37 +1346,157 @@ async function openCustomerDetail(customerId){
 }
 
 /* ============================================================
-   SHEET: Record Payment (against customer due)
+   SHARED: Party Ledger row rendering + actions (Customers & Suppliers)
    ============================================================ */
-function openRecordPayment(customer){
+function renderPartyLedgerRow(l, partyType, partyId){
+  const isReceivable = partyType==="customer";
+  const debitLabel = isReceivable ? "invoice" : "purchase";
+  if(l.type===debitLabel){
+    const openAttr = isReceivable ? `data-open-invoice="${l.id}"` : "";
+    return `<div class="list-row" ${openAttr} style="${isReceivable?'cursor:pointer;':''}">
+      <div><div class="row-title">${escapeHtml(l.label)}</div><div class="row-sub">${l.date} · ${isReceivable?"Invoice":"Purchase"}</div></div>
+      <div class="row-right"><div class="row-title" style="color:var(--danger);">+${fmt(l.amount)}</div><div class="muted" style="font-size:10.5px;">Bal ${fmt(l.runningBalance)}</div></div>
+    </div>`;
+  }
+  const subParts = [l.date, l.label];
+  if(l.againstInvoiceNo) subParts.push("against "+l.againstInvoiceNo);
+  if(l.referenceNo) subParts.push("Ref# "+l.referenceNo);
+  if(l.bankName) subParts.push("Bank: "+l.bankName);
+  if(l.upiId) subParts.push("UPI: "+l.upiId);
+  const verb = isReceivable ? "Payment received" : "Payment made";
+  return `<div class="list-row"><div>
+      <div class="row-title">${verb}${l.note?" — "+escapeHtml(l.note):""}</div>
+      <div class="row-sub">${subParts.map(escapeHtml).join(" · ")}</div>
+      ${l.attachmentPath ? `<a href="/api/attachments/${l.attachmentPath}" target="_blank" style="font-size:11px;">📎 ${escapeHtml(l.attachmentName||"Attachment")}</a>` : ""}
+    </div>
+    <div class="row-right" style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
+      <div><span class="row-title" style="color:var(--ok);">${fmt(-l.amount)}</span></div>
+      <div class="muted" style="font-size:10.5px;">Bal ${fmt(l.runningBalance)}</div>
+      <div style="display:flex;gap:8px;">
+        <a href="#" data-edit-payment="${l.id}" class="btn-danger-link" style="font-size:11px;color:var(--navy);">Edit</a>
+        ${isOwner() ? `<a href="#" data-void-payment="${l.id}" class="btn-danger-link" style="font-size:11px;">Void</a>` : ""}
+      </div>
+    </div></div>`;
+}
+
+function wirePartyLedgerActions(sheet, detail, partyType){
+  const base = partyType==="customer" ? "customers" : "suppliers";
+  const reopen = partyType==="customer" ? openCustomerDetail : openSupplierDetail;
+  const reload = partyType==="customer" ? loadCustomers : loadSuppliers;
+  sheet.querySelectorAll("[data-void-payment]").forEach(a=>{
+    a.addEventListener("click", async (e)=>{
+      e.preventDefault();
+      if(confirm("Void this payment? The balance will go back up.")){
+        try{
+          await api("POST", `/${base}/${detail.id}/payments/${a.dataset.voidPayment}/void`);
+          await reload();
+          await reopen(detail.id);
+          toast("Payment voided.", "ok");
+        }catch(err){ toast(err.message); }
+      }
+    });
+  });
+  sheet.querySelectorAll("[data-edit-payment]").forEach(a=>{
+    a.addEventListener("click", (e)=>{
+      e.preventDefault();
+      const entry = detail.ledger.find(l=>l.type==="payment" && String(l.id)===a.dataset.editPayment);
+      if(!entry) return;
+      if(partyType==="customer") openRecordPayment(detail, entry);
+      else openRecordPurchasePayment(detail, entry);
+    });
+  });
+}
+
+/** Opens a formatted print view of the ledger in a new tab and triggers Browser Print. */
+function printPartyLedger(detail, partyLabel){
+  const rows = [...detail.ledger].reverse();
+  const isReceivable = partyLabel==="Customer";
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(detail.name)} — Ledger</title>
+    <style>
+      body{font-family:Arial,Helvetica,sans-serif;padding:20px;color:#000;}
+      h1{font-size:16px;margin:0 0 2px;} .sub{font-size:11px;color:#555;margin-bottom:14px;}
+      table{width:100%;border-collapse:collapse;font-size:11px;}
+      th,td{border:1px solid #000;padding:4px 6px;text-align:left;}
+      th{background:#eee;} .num{text-align:right;}
+      .totals{margin-top:10px;font-size:12px;}
+    </style></head><body>
+    <h1>${escapeHtml(detail.name)} — Party Ledger</h1>
+    <div class="sub">${partyLabel} · ${detail.phone?escapeHtml(detail.phone):""}${detail.gst?" · GST "+escapeHtml(detail.gst):""}</div>
+    <table><thead><tr><th>Date</th><th>Type</th><th>Invoice No</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th><th>Remarks</th></tr></thead>
+    <tbody>${rows.map(l=>{
+      const debitType = isReceivable ? "invoice" : "purchase";
+      const isDebit = l.type===debitType;
+      return `<tr><td>${l.date}</td><td>${isDebit?(isReceivable?"Invoice":"Purchase"):"Payment"}</td><td>${escapeHtml(l.label||"")}</td>
+        <td class="num">${isDebit?fmt(l.amount):""}</td><td class="num">${isDebit?"":fmt(-l.amount)}</td>
+        <td class="num">${fmt(l.runningBalance)}</td><td>${escapeHtml(l.note||"")}</td></tr>`;
+    }).join("")}</tbody></table>
+    <div class="totals">
+      ${isReceivable ? `Total Sales: ${fmt(detail.totalSales)} &nbsp; Total Received: ${fmt(detail.totalPaymentReceived)} &nbsp; <strong>Outstanding Receivable: ${fmt(detail.outstandingReceivable)}</strong>`
+        : `Total Purchases: ${fmt(detail.totalPurchases)} &nbsp; Total Paid: ${fmt(detail.totalPaymentPaid)} &nbsp; <strong>Outstanding Payable: ${fmt(detail.outstandingPayable)}</strong>`}
+    </div>
+    <script>window.onload=()=>window.print();</script>
+    </body></html>`;
+  const w = window.open("", "_blank");
+  w.document.write(html);
+  w.document.close();
+}
+
+/** Reads a <input type=file> into {filename, mimeType, dataBase64} for the payment attachment field, or null if empty. */
+function readAttachmentInput(inputEl){
+  return new Promise((resolve, reject)=>{
+    const file = inputEl && inputEl.files && inputEl.files[0];
+    if(!file){ resolve(null); return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result;
+      const base64 = dataUrl.slice(dataUrl.indexOf(",")+1);
+      resolve({ filename: file.name, mimeType: file.type, dataBase64: base64 });
+    };
+    reader.onerror = () => reject(new Error("Could not read the attached file."));
+    reader.readAsDataURL(file);
+  });
+}
+
+/* ============================================================
+   SHEET: Sale Payment (against customer due)
+   ============================================================ */
+const PAYMENT_MODES = ["Cash","UPI","Bank Transfer","Cheque","Credit Card","Other"];
+
+/** `editEntry` is a ledger entry (type:"payment") to edit in place, or omitted for a new payment. */
+function openRecordPayment(customer, editEntry){
   const sheet = document.getElementById("sheet-record-payment");
   const today = new Date().toISOString().slice(0,10);
+  const e = editEntry;
   sheet.innerHTML = `
     <div class="sheet-handle"></div>
     <button class="sheet-close" data-sheetclose>✕</button>
-    <div class="sheet-title">Record Payment</div>
+    <div class="sheet-title">${e?"Edit Sale Payment":"Sale Payment"}</div>
     <div class="muted" style="font-size:12px;margin-bottom:10px;">${escapeHtml(customer.name)} · Due: ${fmt(customer.due)}</div>
     <label class="field-label">Date</label>
-    <input type="date" id="rp-date" value="${today}">
+    <input type="date" id="rp-date" value="${e?e.date:today}">
     <label class="field-label">Against Sales Invoice <span class="muted" style="font-weight:400;">— optional, leave blank for a general payment</span></label>
-    <select id="rp-invoice">
+    <select id="rp-invoice" ${e?"disabled":""}>
       <option value="">— General payment (not tied to one invoice) —</option>
-      ${customer.history.map(h=>`<option value="${h.id}">${escapeHtml(h.challan_no)} · ${h.date} · ${fmt(h.total)}</option>`).join("")}
+      ${customer.history.map(h=>`<option value="${h.id}" ${e&&e.againstInvoiceNo===h.challan_no?"selected":""}>${escapeHtml(h.challan_no)} · ${h.date} · ${fmt(h.total)}</option>`).join("")}
     </select>
     <label class="field-label">Amount received (₹)</label>
-    <input type="number" id="rp-amount" min="0" value="${customer.due}">
+    <input type="number" id="rp-amount" min="0" value="${e?Math.abs(e.amount):customer.due}">
     <label class="field-label">Payment Mode</label>
     <div class="chip-row" id="rp-method-chips">
-      <button class="chip selected" data-method="Cash">Cash</button>
-      <button class="chip" data-method="UPI">UPI</button>
-      <button class="chip" data-method="Bank">Bank</button>
-      <button class="chip" data-method="Cheque">Cheque</button>
+      ${PAYMENT_MODES.map((m,i)=>`<button class="chip ${(e?e.label===m:i===0)?'selected':''}" data-method="${m}">${m}</button>`).join("")}
     </div>
-    <label class="field-label">Reference No. <span class="muted" style="font-weight:400;">— optional, e.g. cheque or UPI transaction no.</span></label>
-    <input type="text" id="rp-reference" placeholder="e.g. 000123 or UPI txn id">
+    <label class="field-label">Bank Name <span class="muted" style="font-weight:400;">— optional</span></label>
+    <input type="text" id="rp-bank" value="${escapeHtml(e?e.bankName||"":"")}" placeholder="e.g. HDFC Bank">
+    <label class="field-label">UPI ID <span class="muted" style="font-weight:400;">— optional</span></label>
+    <input type="text" id="rp-upi" value="${escapeHtml(e?e.upiId||"":"")}" placeholder="e.g. shop@okhdfcbank">
+    <label class="field-label">Reference No. <span class="muted" style="font-weight:400;">— optional, e.g. cheque, UTR or UPI transaction id</span></label>
+    <input type="text" id="rp-reference" value="${escapeHtml(e?e.referenceNo||"":"")}" placeholder="e.g. 000123 or UPI txn id">
+    <label class="field-label">Attachment <span class="muted" style="font-weight:400;">— optional, receipt/cheque photo or screenshot</span></label>
+    <input type="file" id="rp-attachment" accept="image/jpeg,image/png,image/webp,application/pdf">
+    ${e&&e.attachmentPath ? `<div class="muted" style="font-size:11px;margin-top:2px;">Current: <a href="/api/attachments/${e.attachmentPath}" target="_blank">${escapeHtml(e.attachmentName||"attachment")}</a> — choose a new file to replace it.</div>` : ""}
     <label class="field-label">Remarks (optional)</label>
-    <input type="text" id="rp-note" placeholder="e.g. Advance against next order">
-    <button class="btn btn-primary" id="rp-save" style="margin-top:16px;">Save Payment</button>
+    <input type="text" id="rp-note" value="${escapeHtml(e?e.note||"":"")}" placeholder="e.g. Advance against next order">
+    <button class="btn btn-primary" id="rp-save" style="margin-top:16px;">${e?"Update Payment":"Save Payment"}</button>
   `;
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
   sheet.querySelectorAll("[data-method]").forEach(b=>b.addEventListener("click", ()=>{
@@ -1364,21 +1505,184 @@ function openRecordPayment(customer){
   sheet.querySelector("#rp-save").addEventListener("click", async ()=>{
     const amount = parseFloat(document.getElementById("rp-amount").value);
     if(!amount || amount<=0){ toast("Enter a valid amount."); return; }
+    const btn = document.getElementById("rp-save");
+    btn.disabled = true;
     try{
-      await api("POST", `/customers/${customer.id}/payments`, {
+      const attachment = await readAttachmentInput(document.getElementById("rp-attachment"));
+      const body = {
         amount, method: sheet.querySelector("[data-method].selected").dataset.method,
         date: document.getElementById("rp-date").value,
-        invoiceId: document.getElementById("rp-invoice").value || null,
         referenceNo: document.getElementById("rp-reference").value.trim(),
-        note: document.getElementById("rp-note").value.trim()
-      });
+        bankName: document.getElementById("rp-bank").value.trim(),
+        upiId: document.getElementById("rp-upi").value.trim(),
+        note: document.getElementById("rp-note").value.trim(),
+        attachment
+      };
+      if(e) await api("PUT", `/customers/${customer.id}/payments/${e.id}`, body);
+      else await api("POST", `/customers/${customer.id}/payments`, { ...body, invoiceId: document.getElementById("rp-invoice").value || null });
       await loadCustomers();
       closeAllSheets();
       await openCustomerDetail(customer.id);
-      toast("Payment recorded.", "ok");
+      toast(e?"Payment updated.":"Payment recorded.", "ok");
     }catch(err){ toast(err.message); }
+    finally{ btn.disabled = false; }
   });
   showSheet("sheet-record-payment");
+}
+
+/* ============================================================
+   SHEET: Supplier Detail (ledger + Purchase Payment)
+   ============================================================ */
+async function openSupplierDetail(supplierId){
+  const detail = await api("GET", `/suppliers/${supplierId}`);
+  const sheet = document.getElementById("sheet-supplier-detail");
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">${escapeHtml(detail.name)}</div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px;">${escapeHtml(detail.phone||"")}${detail.gst?" · GST "+escapeHtml(detail.gst):""}${detail.state?" · "+escapeHtml(detail.state):""}${detail.address?"<br>"+escapeHtml(detail.address):""}</div>
+    <div class="stat-grid">
+      <div class="stat-card plain"><div class="label">Total Purchases</div><div class="value">${fmt(detail.totalPurchases)}</div></div>
+      <div class="stat-card plain"><div class="label">Total Paid</div><div class="value">${fmt(detail.totalPaymentPaid)}</div></div>
+      <div class="stat-card plain"><div class="label">Outstanding Due</div><div class="value red">${fmt(detail.outstandingPayable)}</div></div>
+    </div>
+    <div class="action-row" style="margin-top:10px;">
+      ${detail.due>0 ? `<button class="btn btn-gold" id="record-purchase-payment-btn">Purchase Payment</button>` : ""}
+      <button class="btn btn-outline" id="print-ledger-btn">Print Ledger</button>
+      <button class="btn btn-outline" id="export-ledger-btn">Export Excel</button>
+    </div>
+    <div class="section-title">Ledger</div>
+    <div class="card">${detail.ledger.length ? detail.ledger.map(l=>renderPartyLedgerRow(l,"supplier",detail.id)).join("") : `<div class="empty-hint">No activity yet.</div>`}</div>
+    ${isOwner() ? `<div style="margin-top:16px;text-align:center;">
+      <a href="#" id="delete-supplier-link" class="btn-danger-link">Delete this supplier</a>
+    </div>` : ""}
+  `;
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  const recordPaymentBtn = sheet.querySelector("#record-purchase-payment-btn");
+  if(recordPaymentBtn) recordPaymentBtn.addEventListener("click", ()=>openRecordPurchasePayment(detail));
+  sheet.querySelector("#print-ledger-btn").addEventListener("click", ()=>printPartyLedger(detail,"Supplier"));
+  sheet.querySelector("#export-ledger-btn").addEventListener("click", ()=>{
+    window.open(`/api/suppliers/${detail.id}/ledger/export`, "_blank");
+  });
+  wirePartyLedgerActions(sheet, detail, "supplier");
+  const deleteSupplierLink = sheet.querySelector("#delete-supplier-link");
+  if(deleteSupplierLink) deleteSupplierLink.addEventListener("click", async (e)=>{
+    e.preventDefault();
+    if(confirm("Delete "+detail.name+"? Past purchases will keep the supplier's name as text only.")){
+      try{
+        await api("DELETE", `/suppliers/${detail.id}`);
+        await loadSuppliers();
+        closeAllSheets(); renderSuppliersList();
+      }catch(err){ toast(err.message); }
+    }
+  });
+  showSheet("sheet-supplier-detail");
+}
+
+/* ============================================================
+   SHEET: Purchase Payment (against supplier due)
+   ============================================================ */
+/** `editEntry` is a ledger entry (type:"payment") to edit in place, or omitted for a new payment. */
+function openRecordPurchasePayment(supplier, editEntry){
+  const sheet = document.getElementById("sheet-record-purchase-payment");
+  const today = new Date().toISOString().slice(0,10);
+  const e = editEntry;
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">${e?"Edit Purchase Payment":"Purchase Payment"}</div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px;">${escapeHtml(supplier.name)} · Due: ${fmt(supplier.due)}</div>
+    <label class="field-label">Date</label>
+    <input type="date" id="pp-date" value="${e?e.date:today}">
+    <label class="field-label">Against Purchase Invoice <span class="muted" style="font-weight:400;">— optional, leave blank for a general payment</span></label>
+    <select id="pp-stockin" ${e?"disabled":""}>
+      <option value="">— General payment (not tied to one purchase) —</option>
+      ${supplier.history.map(h=>`<option value="${h.id}" ${e&&e.againstInvoiceNo===(h.invoice_no||h.product_name)?"selected":""}>${escapeHtml(h.invoice_no||h.product_name)} · ${h.date} · ${fmt(h.total)}</option>`).join("")}
+    </select>
+    <label class="field-label">Amount paid (₹)</label>
+    <input type="number" id="pp-amount" min="0" value="${e?Math.abs(e.amount):supplier.due}">
+    <label class="field-label">Payment Mode</label>
+    <div class="chip-row" id="pp-method-chips">
+      ${PAYMENT_MODES.map((m,i)=>`<button class="chip ${(e?e.label===m:i===0)?'selected':''}" data-method="${m}">${m}</button>`).join("")}
+    </div>
+    <label class="field-label">Bank Name <span class="muted" style="font-weight:400;">— optional</span></label>
+    <input type="text" id="pp-bank" value="${escapeHtml(e?e.bankName||"":"")}" placeholder="e.g. HDFC Bank">
+    <label class="field-label">UPI ID <span class="muted" style="font-weight:400;">— optional</span></label>
+    <input type="text" id="pp-upi" value="${escapeHtml(e?e.upiId||"":"")}" placeholder="e.g. shop@okhdfcbank">
+    <label class="field-label">Reference No. <span class="muted" style="font-weight:400;">— optional, e.g. cheque, UTR or UPI transaction id</span></label>
+    <input type="text" id="pp-reference" value="${escapeHtml(e?e.referenceNo||"":"")}" placeholder="e.g. 000123 or UPI txn id">
+    <label class="field-label">Attachment <span class="muted" style="font-weight:400;">— optional, receipt/cheque photo or screenshot</span></label>
+    <input type="file" id="pp-attachment" accept="image/jpeg,image/png,image/webp,application/pdf">
+    ${e&&e.attachmentPath ? `<div class="muted" style="font-size:11px;margin-top:2px;">Current: <a href="/api/attachments/${e.attachmentPath}" target="_blank">${escapeHtml(e.attachmentName||"attachment")}</a> — choose a new file to replace it.</div>` : ""}
+    <label class="field-label">Remarks (optional)</label>
+    <input type="text" id="pp-note" value="${escapeHtml(e?e.note||"":"")}" placeholder="e.g. Part payment against May bill">
+    <button class="btn btn-primary" id="pp-save" style="margin-top:16px;">${e?"Update Payment":"Save Payment"}</button>
+  `;
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  sheet.querySelectorAll("[data-method]").forEach(b=>b.addEventListener("click", ()=>{
+    sheet.querySelectorAll("[data-method]").forEach(x=>x.classList.remove("selected")); b.classList.add("selected");
+  }));
+  sheet.querySelector("#pp-save").addEventListener("click", async ()=>{
+    const amount = parseFloat(document.getElementById("pp-amount").value);
+    if(!amount || amount<=0){ toast("Enter a valid amount."); return; }
+    const btn = document.getElementById("pp-save");
+    btn.disabled = true;
+    try{
+      const attachment = await readAttachmentInput(document.getElementById("pp-attachment"));
+      const body = {
+        amount, method: sheet.querySelector("[data-method].selected").dataset.method,
+        date: document.getElementById("pp-date").value,
+        referenceNo: document.getElementById("pp-reference").value.trim(),
+        bankName: document.getElementById("pp-bank").value.trim(),
+        upiId: document.getElementById("pp-upi").value.trim(),
+        note: document.getElementById("pp-note").value.trim(),
+        attachment
+      };
+      if(e) await api("PUT", `/suppliers/${supplier.id}/payments/${e.id}`, body);
+      else await api("POST", `/suppliers/${supplier.id}/payments`, { ...body, stockInId: document.getElementById("pp-stockin").value || null });
+      await loadSuppliers();
+      closeAllSheets();
+      await openSupplierDetail(supplier.id);
+      toast(e?"Payment updated.":"Payment recorded.", "ok");
+    }catch(err){ toast(err.message); }
+    finally{ btn.disabled = false; }
+  });
+  showSheet("sheet-record-purchase-payment");
+}
+
+/* ============================================================
+   SHEET: Add Supplier
+   ============================================================ */
+function openAddSupplier(){
+  const sheet = document.getElementById("sheet-add-supplier");
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">New Supplier</div>
+    <label class="field-label">Name</label><input type="text" id="ns-name">
+    <label class="field-label">Phone</label><input type="tel" id="ns-phone">
+    <label class="field-label">Address</label><textarea id="ns-address" rows="2"></textarea>
+    <label class="field-label">State (for GST)</label>
+    <select id="ns-state"><option value="">${state.settings.state ? "Same as shop ("+escapeHtml(state.settings.state)+")" : "Select state"}</option>${INDIAN_STATES.map(s=>`<option value="${s}">${s}</option>`).join("")}</select>
+    <label class="field-label">GSTIN (optional)</label><input type="text" id="ns-gst">
+    <button class="btn btn-primary" id="ns-save" style="margin-top:16px;">Save Supplier</button>
+  `;
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  sheet.querySelector("#ns-save").addEventListener("click", async ()=>{
+    const name = document.getElementById("ns-name").value.trim();
+    if(!name){ toast("Supplier name is required."); return; }
+    try{
+      await api("POST","/suppliers", {
+        name, phone: document.getElementById("ns-phone").value.trim(),
+        address: document.getElementById("ns-address").value.trim(),
+        gst: document.getElementById("ns-gst").value.trim(),
+        state: document.getElementById("ns-state").value || state.settings.state
+      });
+      await loadSuppliers();
+      closeAllSheets(); renderSuppliersList();
+    }catch(err){ toast(err.message); }
+  });
+  showSheet("sheet-add-supplier");
 }
 
 /* ============================================================
@@ -2345,6 +2649,9 @@ async function renderReport(){
     if(state.reportType==="Purchase") return renderPurchaseReport(body);
     if(state.reportType==="Party") return renderPartyReport(body);
     if(state.reportType==="Profit") return renderProfitReport(body);
+    if(state.reportType==="Supplier") return renderSupplierReport(body);
+    if(state.reportType==="SalePayments") return renderSalePaymentsReport(body);
+    if(state.reportType==="PurchasePayments") return renderPurchasePaymentsReport(body);
 
     let title="", subtitle="", rows=[];
     if(state.reportType==="Sales"){
@@ -2395,6 +2702,39 @@ async function renderPartyReport(body){
         <div class="row-sub">${escapeHtml(r.type||"")} · ${r.invoices} invoice${r.invoices!==1?"s":""}${r.due>0?" · Due "+fmt(r.due):""}</div>
       </div><div class="row-right row-title">${fmt(r.value)}</div></div>
     `).join("") : `<div class="empty-hint">No customers yet.</div>`);
+}
+
+async function renderSupplierReport(body){
+  const rows = await api("GET","/reports/supplier-wise");
+  body.innerHTML = `<div style="font-weight:800;font-size:14px;">Supplier Report</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Total purchases and outstanding due per supplier</div>` +
+    (rows.length ? rows.map(r=>`
+      <div class="list-row"><div>
+        <div class="row-title">${escapeHtml(r.label)}</div>
+        <div class="row-sub">${r.purchases} purchase${r.purchases!==1?"s":""}${r.due>0?" · Due "+fmt(r.due):""}</div>
+      </div><div class="row-right row-title">${fmt(r.value)}</div></div>
+    `).join("") : `<div class="empty-hint">No suppliers yet.</div>`);
+}
+
+async function renderSalePaymentsReport(body){
+  const rows = await api("GET","/reports/sale-payments");
+  body.innerHTML = `<div style="font-weight:800;font-size:14px;">Sale Payments (Receipts)</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Payments received from customers, newest first</div>` +
+    (rows.length ? rows.map(r=>`
+      <div class="list-row"><div>
+        <div class="row-title">${escapeHtml(r.customer_name)}</div>
+        <div class="row-sub">${escapeHtml(r.payment_date||"")} · ${escapeHtml(r.method)}${r.reference_no?" · Ref# "+escapeHtml(r.reference_no):""}${r.note?" · "+escapeHtml(r.note):""}</div>
+      </div><div class="row-right row-title" style="color:var(--ok);">${fmt(r.amount)}</div></div>
+    `).join("") : `<div class="empty-hint">No payments recorded yet.</div>`);
+}
+
+async function renderPurchasePaymentsReport(body){
+  const rows = await api("GET","/reports/purchase-payments");
+  body.innerHTML = `<div style="font-weight:800;font-size:14px;">Purchase Payments</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Payments made to suppliers, newest first</div>` +
+    (rows.length ? rows.map(r=>`
+      <div class="list-row"><div>
+        <div class="row-title">${escapeHtml(r.supplier_name)}</div>
+        <div class="row-sub">${escapeHtml(r.payment_date||"")} · ${escapeHtml(r.method)}${r.reference_no?" · Ref# "+escapeHtml(r.reference_no):""}${r.note?" · "+escapeHtml(r.note):""}</div>
+      </div><div class="row-right row-title" style="color:var(--danger);">${fmt(r.amount)}</div></div>
+    `).join("") : `<div class="empty-hint">No payments recorded yet.</div>`);
 }
 
 async function renderProfitReport(body){

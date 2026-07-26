@@ -56,7 +56,8 @@
         <div class="stat-grid">
           <div class="stat-card navy"><div class="label">Today's Sales</div><div class="value" id="stat-sales">₹0</div></div>
           <div class="stat-card plain"><div class="label">Today's Profit (est.)</div><div class="value" id="stat-profit">₹0</div></div>
-          <div class="stat-card plain"><div class="label">Outstanding</div><div class="value red" id="stat-outstanding">₹0</div></div>
+          <div class="stat-card plain"><div class="label">Outstanding (Receivable)</div><div class="value red" id="stat-outstanding">₹0</div></div>
+          <div class="stat-card plain"><div class="label">Payable</div><div class="value red" id="stat-payable">₹0</div></div>
           <div class="stat-card plain"><div class="label">Low Stock</div><div class="value" id="stat-lowstock">0</div></div>
         </div>
 
@@ -183,9 +184,13 @@
         <div id="inventory-list"></div>
       </div>
 
-      <!-- CUSTOMERS -->
+      <!-- CUSTOMERS / SUPPLIERS -->
       <div class="screen" id="screen-customers">
-        <div class="searchbar" style="margin-top:0;">
+        <div class="chip-row" style="margin-top:0;" id="party-mode-chips">
+          <button class="chip selected" data-party-mode="customer">Customers</button>
+          <button class="chip" data-party-mode="supplier">Suppliers</button>
+        </div>
+        <div class="searchbar" style="margin-top:10px;">
           <span>&#128269;</span><input type="text" id="cust-search" placeholder="Search name, phone or GST">
           <button class="gold-fab" id="cust-add-btn">+</button>
         </div>
@@ -203,6 +208,9 @@
           <button class="chip" data-report="Brand">Brand-wise</button>
           <button class="chip" data-report="Party">Party-wise</button>
           <button class="chip" data-report="Profit">Profit</button>
+          <button class="chip" data-report="Supplier">Supplier</button>
+          <button class="chip" data-report="SalePayments">Sale Payments</button>
+          <button class="chip" data-report="PurchasePayments">Purchase Payments</button>
         </div>
         <div class="card" id="report-body" style="margin-top:10px;"></div>
         <div style="display:flex;gap:8px;margin-top:12px;">
@@ -225,13 +233,16 @@
 
   <div class="sheet" id="sheet-product-detail"></div>
   <div class="sheet" id="sheet-customer-detail"></div>
+  <div class="sheet" id="sheet-supplier-detail"></div>
   <div class="sheet" id="sheet-add-product"></div>
   <div class="sheet" id="sheet-add-customer"></div>
+  <div class="sheet" id="sheet-add-supplier"></div>
   <div class="sheet" id="sheet-settings"></div>
   <div class="sheet" id="sheet-staff"></div>
   <div class="sheet" id="sheet-add-staff"></div>
   <div class="sheet" id="sheet-audit-log"></div>
   <div class="sheet" id="sheet-record-payment"></div>
+  <div class="sheet" id="sheet-record-purchase-payment"></div>
   <div class="sheet" id="sheet-stock-in"></div>
   <div class="sheet" id="sheet-factory-reset"></div>
 

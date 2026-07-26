@@ -190,9 +190,29 @@ router.post("/:id/stock-in", (req, res) => {
   if (!p) return res.status(404).json({ error: "Product not found." });
 
   const {
-    purchaseDate, invoiceNo, supplier, note, sizeId,
+    purchaseDate, invoiceNo, supplier, supplierId, note, sizeId,
     mode, lengthFt, widthVal, thicknessIn, pieces, rate, gst, transport
   } = req.body;
+
+  // The Supplier field on Purchase Entry stays a single free-text box (no
+  // extra picker step) — but it now resolves to a real Supplier record
+  // behind the scenes: an exact case-insensitive name match reuses the
+  // existing supplier (and its running due), anything new is created on the
+  // spot. A blank supplier name records the purchase with no ledger effect,
+  // same as before this feature existed.
+  let supplierRow = null;
+  if (supplierId) {
+    supplierRow = db.prepare("SELECT * FROM suppliers WHERE id = ?").get(supplierId);
+    if (!supplierRow) return res.status(400).json({ error: "Selected supplier no longer exists." });
+  } else if (supplier && String(supplier).trim()) {
+    const name = String(supplier).trim();
+    supplierRow = db.prepare("SELECT * FROM suppliers WHERE LOWER(name) = LOWER(?)").get(name);
+    if (!supplierRow) {
+      const newId = uid("SUP");
+      db.prepare("INSERT INTO suppliers (id, name, due, created_at) VALUES (?, ?, 0, ?)").run(newId, name, Date.now());
+      supplierRow = db.prepare("SELECT * FROM suppliers WHERE id = ?").get(newId);
+    }
+  }
 
   // Stock lands on a specific size variant now. A product with only one
   // size doesn't need it spelled out; anything else must say which.
@@ -223,24 +243,28 @@ router.post("/:id/stock-in", (req, res) => {
   const costPrice = calc.pieces > 0 ? round2((calc.amount + transportAmt) / calc.pieces) : 0;
 
   const id = uid("SI");
+  const supplierName = supplierRow ? supplierRow.name : (supplier || "").trim();
   db.transaction(() => {
     db.prepare(`
       INSERT INTO stock_ins
-        (id, product_id, size_id, product_name, purchase_date, invoice_no, supplier, brand, category,
+        (id, product_id, size_id, product_name, purchase_date, invoice_no, supplier, supplier_id, brand, category,
          mode, length_ft, width_val, thickness_in, size_label, qty, per_piece, billed_qty,
          unit_label, rate, amount, gst_rate, gst_amount, transport, grand_total, cost_price, note, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      id, p.id, size.id, p.name, date, (invoiceNo || "").trim(), (supplier || "").trim(), p.brand, p.category,
+      id, p.id, size.id, p.name, date, (invoiceNo || "").trim(), supplierName, supplierRow ? supplierRow.id : null, p.brand, p.category,
       calc.mode, calc.lengthFt || null, calc.widthVal || null, calc.thicknessIn || null, calc.sizeLabel || size.label,
       calc.pieces, calc.perPiece, calc.billedQty, calc.unit, calc.rate, calc.amount,
       gstRate, gstAmount, transportAmt, grandTotal, costPrice, (note || "").trim(), Date.now()
     );
     db.prepare("UPDATE product_sizes SET stock = stock + ? WHERE id = ?").run(calc.pieces, size.id);
     syncProductStock(p.id);
+    // Purchases go on credit by default, mirroring how a sales invoice raises
+    // the customer's due — a Purchase Payment is what brings it back down.
+    if (supplierRow) db.prepare("UPDATE suppliers SET due = due + ? WHERE id = ?").run(grandTotal, supplierRow.id);
   })();
 
-  logAction(req, "product.stock_in", `${p.name}: +${calc.pieces}${supplier ? " from " + supplier.trim() : ""} — Grand Total ${grandTotal}`);
+  logAction(req, "product.stock_in", `${p.name}: +${calc.pieces}${supplierName ? " from " + supplierName : ""} — Grand Total ${grandTotal}`);
   res.status(201).json({
     product: serialize(db.prepare("SELECT * FROM products WHERE id = ?").get(p.id)),
     purchase: db.prepare("SELECT * FROM stock_ins WHERE id = ?").get(id)

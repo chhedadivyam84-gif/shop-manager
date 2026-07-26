@@ -57,7 +57,9 @@ const isProduction = process.env.NODE_ENV === "production";
 // over plain HTTP with X-Forwarded-Proto set — trust it so secure cookies work.
 app.set("trust proxy", 1);
 
-app.use(express.json());
+// Raised from Express's 100kb default so a payment's base64-encoded receipt
+// attachment (up to 8MB decoded, see attachments.js) fits in one JSON request.
+app.use(express.json({ limit: "12mb" }));
 app.use(session({
   secret: sessionSecret,
   resave: false,
@@ -74,12 +76,14 @@ app.use("/api/auth", require("./routes/auth"));
 app.use("/api/settings", requireAuth, require("./routes/settings"));
 app.use("/api/products", requireAuth, require("./routes/products"));
 app.use("/api/customers", requireAuth, require("./routes/customers"));
+app.use("/api/suppliers", requireAuth, require("./routes/suppliers"));
 app.use("/api/invoices", requireAuth, require("./routes/invoices"));
 app.use("/api/reports", requireAuth, require("./routes/reports"));
 app.use("/api/staff", requireAuth, requireRole("owner"), require("./routes/staff"));
 app.use("/api/audit", requireAuth, requireRole("owner"), require("./routes/audit"));
 app.use("/api/backup", requireAuth, requireRole("owner"), require("./routes/backup"));
 app.use("/api/print", requireAuth, require("./routes/print"));
+app.use("/api/attachments", requireAuth, require("./routes/attachments"));
 app.use("/api/reset", requireAuth, requireRole("owner"), require("./routes/reset"));
 
 // Belt-and-braces cache busting on top of the no-cache header below: every

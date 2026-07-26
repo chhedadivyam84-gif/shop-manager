@@ -1,0 +1,204 @@
+const express = require("express");
+const db = require("../db");
+const { uid, logAction, round2, todayStr } = require("../util");
+const { requireRole } = require("../auth");
+const { saveAttachment } = require("../attachments");
+const { buildXlsx } = require("../xlsx");
+
+const router = express.Router();
+
+router.get("/", (req, res) => {
+  const suppliers = db.prepare("SELECT * FROM suppliers ORDER BY name ASC").all();
+  res.json(suppliers);
+});
+
+/** Shared by GET /:id and the ledger Excel export — mirrors customers.js. */
+function buildSupplierDetail(id) {
+  const s = db.prepare("SELECT * FROM suppliers WHERE id = ?").get(id);
+  if (!s) return null;
+
+  const history = db.prepare(`
+    SELECT id, invoice_no, purchase_date AS date, grand_total AS total, product_name
+    FROM stock_ins WHERE supplier_id = ? ORDER BY created_at DESC
+  `).all(s.id);
+  const payments = db.prepare(`
+    SELECT * FROM purchase_payments WHERE supplier_id = ? AND voided = 0 ORDER BY created_at DESC
+  `).all(s.id);
+
+  // One chronological ledger — purchases raise the due, payments lower it —
+  // mirroring the customer ledger exactly (see customers.js).
+  const purchaseRows = db.prepare(`
+    SELECT id, invoice_no, purchase_date AS date, grand_total AS total, created_at
+    FROM stock_ins WHERE supplier_id = ?
+  `).all(s.id);
+  const invoiceNoById = Object.fromEntries(purchaseRows.map(h => [h.id, h.invoice_no]));
+  const chrono = [
+    ...purchaseRows.map(h => ({ type: "purchase", id: h.id, label: h.invoice_no || "(no invoice no.)", amount: h.total, date: h.date, at: h.created_at })),
+    ...payments.map(p => ({
+      type: "payment", id: p.id, label: p.method, amount: -p.amount, note: p.note,
+      referenceNo: p.reference_no, bankName: p.bank_name, upiId: p.upi_id,
+      attachmentPath: p.attachment_path, attachmentName: p.attachment_name,
+      againstInvoiceNo: p.stock_in_id ? (invoiceNoById[p.stock_in_id] || null) : null,
+      date: p.payment_date || new Date(p.created_at).toISOString().slice(0, 10), at: p.created_at
+    }))
+  ].sort((a, b) => a.at - b.at);
+  let running = 0;
+  const ledger = chrono.map(l => { running = round2(running + l.amount); return { ...l, runningBalance: running }; }).reverse();
+
+  const totalPurchases = round2(purchaseRows.reduce((sum, h) => sum + h.total, 0));
+  const totalPaymentPaid = round2(payments.reduce((sum, p) => sum + p.amount, 0));
+
+  return {
+    ...s, history, payments, ledger,
+    openingBalance: 0, totalPurchases, totalPaymentPaid,
+    outstandingPayable: s.due, closingBalance: s.due
+  };
+}
+
+router.get("/:id", (req, res) => {
+  const detail = buildSupplierDetail(req.params.id);
+  if (!detail) return res.status(404).json({ error: "Supplier not found." });
+  res.json(detail);
+});
+
+router.get("/:id/ledger/export", (req, res) => {
+  const detail = buildSupplierDetail(req.params.id);
+  if (!detail) return res.status(404).json({ error: "Supplier not found." });
+  const rows = [["Date", "Type", "Invoice No", "Debit", "Credit", "Running Balance", "Remarks"]];
+  [...detail.ledger].reverse().forEach(l => {
+    const isDebit = l.type === "purchase";
+    rows.push([
+      l.date, isDebit ? "Purchase" : "Payment", l.label,
+      isDebit ? l.amount : "", isDebit ? "" : -l.amount,
+      l.runningBalance, l.note || ""
+    ]);
+  });
+  const filename = `ledger-${(detail.name || "supplier").replace(/[^a-z0-9]+/gi, "-")}`;
+  const buf = buildXlsx(rows, filename);
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}.xlsx"`);
+  res.send(buf);
+});
+
+router.post("/:id/payments", (req, res) => {
+  const s = db.prepare("SELECT * FROM suppliers WHERE id = ?").get(req.params.id);
+  if (!s) return res.status(404).json({ error: "Supplier not found." });
+  const amount = round2(Number(req.body.amount));
+  if (!amount || amount <= 0) return res.status(400).json({ error: "Enter a valid payment amount." });
+  const method = req.body.method || "Cash";
+  const note = (req.body.note || "").trim();
+  const referenceNo = (req.body.referenceNo || "").trim();
+  const bankName = (req.body.bankName || "").trim();
+  const upiId = (req.body.upiId || "").trim();
+  const paymentDate = (req.body.date || "").trim() || todayStr();
+
+  let stockInId = null;
+  if (req.body.stockInId) {
+    const si = db.prepare("SELECT id FROM stock_ins WHERE id = ? AND supplier_id = ?").get(req.body.stockInId, s.id);
+    if (!si) return res.status(400).json({ error: "Selected purchase invoice no longer exists for this supplier." });
+    stockInId = si.id;
+  }
+
+  let attachment;
+  try { attachment = saveAttachment(req.body.attachment); }
+  catch (err) { return res.status(400).json({ error: err.message }); }
+
+  const id = uid("PPAY");
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO purchase_payments (id, supplier_id, stock_in_id, amount, method, reference_no, bank_name, upi_id, attachment_path, attachment_name, note, payment_date, voided, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+    `).run(id, s.id, stockInId, amount, method, referenceNo, bankName, upiId, attachment ? attachment.path : "", attachment ? attachment.name : "", note, paymentDate, Date.now());
+    db.prepare("UPDATE suppliers SET due = MAX(0, due - ?) WHERE id = ?").run(amount, s.id);
+  })();
+
+  logAction(req, "purchase_payment.record", `${s.name}: ${amount} (${method})`);
+  res.status(201).json(db.prepare("SELECT * FROM suppliers WHERE id = ?").get(s.id));
+});
+
+router.put("/:id/payments/:paymentId", (req, res) => {
+  const s = db.prepare("SELECT * FROM suppliers WHERE id = ?").get(req.params.id);
+  if (!s) return res.status(404).json({ error: "Supplier not found." });
+  const p = db.prepare("SELECT * FROM purchase_payments WHERE id = ? AND supplier_id = ?").get(req.params.paymentId, s.id);
+  if (!p) return res.status(404).json({ error: "Payment not found." });
+  if (p.voided) return res.status(400).json({ error: "Can't edit a voided payment." });
+
+  const amount = round2(Number(req.body.amount));
+  if (!amount || amount <= 0) return res.status(400).json({ error: "Enter a valid payment amount." });
+  const method = req.body.method || p.method;
+  const note = (req.body.note ?? p.note).trim();
+  const referenceNo = (req.body.referenceNo ?? p.reference_no).trim();
+  const bankName = (req.body.bankName ?? p.bank_name).trim();
+  const upiId = (req.body.upiId ?? p.upi_id).trim();
+  const paymentDate = (req.body.date || "").trim() || p.payment_date;
+
+  let attachmentPath = p.attachment_path, attachmentName = p.attachment_name;
+  try {
+    const attachment = saveAttachment(req.body.attachment);
+    if (attachment) { attachmentPath = attachment.path; attachmentName = attachment.name; }
+  } catch (err) { return res.status(400).json({ error: err.message }); }
+
+  const delta = round2(amount - p.amount);
+  db.transaction(() => {
+    db.prepare(`
+      UPDATE purchase_payments SET amount=?, method=?, note=?, reference_no=?, bank_name=?, upi_id=?, attachment_path=?, attachment_name=?, payment_date=? WHERE id=?
+    `).run(amount, method, note, referenceNo, bankName, upiId, attachmentPath, attachmentName, paymentDate, p.id);
+    if (delta) db.prepare("UPDATE suppliers SET due = MAX(0, due - ?) WHERE id = ?").run(delta, s.id);
+  })();
+
+  logAction(req, "purchase_payment.edit", `${s.name}: ${p.amount} -> ${amount}`);
+  res.json(db.prepare("SELECT * FROM suppliers WHERE id = ?").get(s.id));
+});
+
+router.post("/:id/payments/:paymentId/void", requireRole("owner"), (req, res) => {
+  const s = db.prepare("SELECT * FROM suppliers WHERE id = ?").get(req.params.id);
+  if (!s) return res.status(404).json({ error: "Supplier not found." });
+  const p = db.prepare("SELECT * FROM purchase_payments WHERE id = ? AND supplier_id = ?").get(req.params.paymentId, s.id);
+  if (!p) return res.status(404).json({ error: "Payment not found." });
+  if (p.voided) return res.status(400).json({ error: "Payment already voided." });
+
+  db.transaction(() => {
+    db.prepare("UPDATE purchase_payments SET voided = 1 WHERE id = ?").run(p.id);
+    db.prepare("UPDATE suppliers SET due = due + ? WHERE id = ?").run(p.amount, s.id);
+  })();
+
+  logAction(req, "purchase_payment.void", `${s.name}: ${p.amount} (${p.method})`);
+  res.json(db.prepare("SELECT * FROM suppliers WHERE id = ?").get(s.id));
+});
+
+router.post("/", (req, res) => {
+  const { name, phone, address, gst, state } = req.body;
+  if (!name || !String(name).trim()) {
+    return res.status(400).json({ error: "Supplier name is required." });
+  }
+  const id = uid("SUP");
+  db.prepare(`
+    INSERT INTO suppliers (id, name, phone, address, gst, state, due, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+  `).run(id, name.trim(), (phone || "").trim(), (address || "").trim(), (gst || "").trim(), (state || "").trim(), Date.now());
+  logAction(req, "supplier.create", name.trim());
+  res.status(201).json(db.prepare("SELECT * FROM suppliers WHERE id = ?").get(id));
+});
+
+router.put("/:id", (req, res) => {
+  const s = db.prepare("SELECT * FROM suppliers WHERE id = ?").get(req.params.id);
+  if (!s) return res.status(404).json({ error: "Supplier not found." });
+  const { name, phone, address, gst, state } = req.body;
+  db.prepare(`
+    UPDATE suppliers SET name=?, phone=?, address=?, gst=?, state=? WHERE id=?
+  `).run(
+    (name || s.name).trim(), (phone ?? s.phone), (address ?? s.address), (gst ?? s.gst), (state ?? s.state), s.id
+  );
+  logAction(req, "supplier.update", s.name);
+  res.json(db.prepare("SELECT * FROM suppliers WHERE id = ?").get(s.id));
+});
+
+router.delete("/:id", requireRole("owner"), (req, res) => {
+  const s = db.prepare("SELECT * FROM suppliers WHERE id = ?").get(req.params.id);
+  if (!s) return res.status(404).json({ error: "Supplier not found." });
+  db.prepare("DELETE FROM suppliers WHERE id = ?").run(s.id);
+  logAction(req, "supplier.delete", s.name);
+  res.json({ ok: true });
+});
+
+module.exports = router;

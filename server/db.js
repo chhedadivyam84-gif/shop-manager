@@ -166,6 +166,36 @@ CREATE TABLE IF NOT EXISTS payments (
   created_at INTEGER NOT NULL
 );
 
+-- Mirrors customers: the party the shop owes money TO, rather than the party
+-- that owes the shop. Same shape (name/phone/address/gst/state/due) so the
+-- Suppliers screen and its ledger can reuse the exact same UI/logic as
+-- Customers, just pointed at the other side of the books.
+CREATE TABLE IF NOT EXISTS suppliers (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  phone TEXT DEFAULT '',
+  address TEXT DEFAULT '',
+  gst TEXT DEFAULT '',
+  state TEXT DEFAULT '',
+  due REAL NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+
+-- Mirrors payments (Sale Payment) exactly, but against a supplier's due
+-- instead of a customer's — this is the Purchase Payment record.
+CREATE TABLE IF NOT EXISTS purchase_payments (
+  id TEXT PRIMARY KEY,
+  supplier_id TEXT NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
+  stock_in_id TEXT REFERENCES stock_ins(id) ON DELETE SET NULL,
+  amount REAL NOT NULL,
+  method TEXT NOT NULL DEFAULT 'Cash',
+  reference_no TEXT DEFAULT '',
+  note TEXT DEFAULT '',
+  payment_date TEXT DEFAULT '',
+  voided INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+
 -- A purchase entry, one product per row (mirrors how the product is sold: one
 -- board/size per line). qty is the physical sheet/piece count received --
 -- what products.stock goes up by. billed_qty/mode/geometry mirror
@@ -231,6 +261,7 @@ CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice ON invoice_items(invoice_id
 CREATE INDEX IF NOT EXISTS idx_product_sizes_product ON product_sizes(product_id);
 CREATE INDEX IF NOT EXISTS idx_audit_log_at ON audit_log(at);
 CREATE INDEX IF NOT EXISTS idx_payments_customer ON payments(customer_id);
+CREATE INDEX IF NOT EXISTS idx_purchase_payments_supplier ON purchase_payments(supplier_id);
 CREATE INDEX IF NOT EXISTS idx_stock_ins_product ON stock_ins(product_id);
 CREATE INDEX IF NOT EXISTS idx_print_jobs_created ON print_jobs(created_at);
 `);
@@ -424,6 +455,27 @@ addColumn("invoice_items", "hsn_code", "TEXT DEFAULT ''");
 addColumn("payments", "invoice_id", "TEXT REFERENCES invoices(id) ON DELETE SET NULL");
 addColumn("payments", "reference_no", "TEXT DEFAULT ''");
 addColumn("payments", "payment_date", "TEXT DEFAULT ''");
+
+// Links a purchase to a Supplier record so Purchase Payments have a real
+// balance to pay down. The old free-text `supplier` column on stock_ins is
+// kept as-is (a point-in-time name snapshot, same idea as invoice_items
+// snapshotting product name/brand) — purchases recorded before Suppliers
+// existed keep their text but have no supplier_id, so they never contributed
+// to any due and are left alone rather than retroactively inventing debt.
+addColumn("stock_ins", "supplier_id", "TEXT REFERENCES suppliers(id) ON DELETE SET NULL");
+db.exec("CREATE INDEX IF NOT EXISTS idx_stock_ins_supplier ON stock_ins(supplier_id)");
+
+// Payment & Receipt Entry: bank/UPI detail fields and an optional attachment
+// (receipt/cheque photo). attachment_path is a filename under
+// data/uploads/payments/, never a full path — so it stays portable if the
+// data directory ever moves. attachment_name is the original filename, kept
+// only for display (the on-disk name is a random id, see routes).
+for (const t of ["payments", "purchase_payments"]) {
+  addColumn(t, "bank_name", "TEXT DEFAULT ''");
+  addColumn(t, "upi_id", "TEXT DEFAULT ''");
+  addColumn(t, "attachment_path", "TEXT DEFAULT ''");
+  addColumn(t, "attachment_name", "TEXT DEFAULT ''");
+}
 
 // node:sqlite has no built-in transaction wrapper the way better-sqlite3 does;
 // this shim keeps every route file's `db.transaction(() => {...})()` call working unchanged.

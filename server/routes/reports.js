@@ -31,6 +31,10 @@ router.get("/dashboard", (req, res) => {
   const outstandingTotal = customers.reduce((s, c) => s + (c.due || 0), 0);
   const outstandingCount = customers.filter(c => c.due > 0).length;
 
+  const suppliers = db.prepare("SELECT * FROM suppliers").all();
+  const payableTotal = suppliers.reduce((s, x) => s + (x.due || 0), 0);
+  const payableCount = suppliers.filter(x => x.due > 0).length;
+
   const products = db.prepare("SELECT * FROM products").all();
   const lowStockCount = products.filter(p => p.stock < 15).length;
 
@@ -62,7 +66,7 @@ router.get("/dashboard", (req, res) => {
   `).all();
 
   res.json({
-    todaysSales, todaysProfit, outstandingTotal, outstandingCount, lowStockCount,
+    todaysSales, todaysProfit, outstandingTotal, outstandingCount, payableTotal, payableCount, lowStockCount,
     revenueChart: days, bestSellers: soldRows, topCustomers, recentInvoices
   });
 });
@@ -93,6 +97,45 @@ router.get("/stock-by-brand", (req, res) => {
 router.get("/customer-dues", (req, res) => {
   const rows = db.prepare(`
     SELECT name AS label, due AS value FROM customers WHERE due > 0 ORDER BY due DESC
+  `).all();
+  res.json(rows);
+});
+
+router.get("/supplier-dues", (req, res) => {
+  const rows = db.prepare(`
+    SELECT name AS label, due AS value FROM suppliers WHERE due > 0 ORDER BY due DESC
+  `).all();
+  res.json(rows);
+});
+
+/** Every supplier's total purchases — mirrors party-wise for the payable side. */
+router.get("/supplier-wise", (req, res) => {
+  const rows = db.prepare(`
+    SELECT s.id, s.name AS label, s.due,
+      COALESCE(SUM(si.grand_total),0) AS value, COUNT(si.id) AS purchases
+    FROM suppliers s
+    LEFT JOIN stock_ins si ON si.supplier_id = s.id
+    GROUP BY s.id ORDER BY value DESC
+  `).all();
+  res.json(rows);
+});
+
+/** Every Sale Payment (money received from customers) — the Receipt history. */
+router.get("/sale-payments", (req, res) => {
+  const rows = db.prepare(`
+    SELECT p.*, c.name AS customer_name FROM payments p
+    JOIN customers c ON c.id = p.customer_id
+    WHERE p.voided = 0 ORDER BY p.created_at DESC
+  `).all();
+  res.json(rows);
+});
+
+/** Every Purchase Payment (money paid to suppliers) — the Payment history. */
+router.get("/purchase-payments", (req, res) => {
+  const rows = db.prepare(`
+    SELECT pp.*, s.name AS supplier_name FROM purchase_payments pp
+    JOIN suppliers s ON s.id = pp.supplier_id
+    WHERE pp.voided = 0 ORDER BY pp.created_at DESC
   `).all();
   res.json(rows);
 });
@@ -213,6 +256,28 @@ router.get("/export", (req, res) => {
       FROM customers c LEFT JOIN invoices i ON i.customer_id = c.id AND i.voided = 0 AND i.doc_type = 'invoice'
       GROUP BY c.id ORDER BY total DESC
     `).all().forEach(r => rows.push([r.name, r.type, round2(r.total), r.invoices, r.due]));
+  } else if (type === "Supplier") {
+    filename = "supplier-report";
+    rows = [["Supplier", "Phone", "Outstanding Due"]];
+    db.prepare("SELECT * FROM suppliers ORDER BY name").all().forEach(s => rows.push([s.name, s.phone, s.due]));
+  } else if (type === "SalePayments") {
+    filename = "sale-payments-report";
+    rows = [["Date", "Customer", "Against Invoice", "Amount", "Mode", "Reference No", "Remarks"]];
+    db.prepare(`
+      SELECT p.*, c.name AS customer_name, i.challan_no FROM payments p
+      JOIN customers c ON c.id = p.customer_id
+      LEFT JOIN invoices i ON i.id = p.invoice_id
+      WHERE p.voided = 0 ORDER BY p.created_at DESC
+    `).all().forEach(p => rows.push([p.payment_date, p.customer_name, p.challan_no || "", p.amount, p.method, p.reference_no, p.note]));
+  } else if (type === "PurchasePayments") {
+    filename = "purchase-payments-report";
+    rows = [["Date", "Supplier", "Against Purchase Invoice", "Amount", "Mode", "Reference No", "Remarks"]];
+    db.prepare(`
+      SELECT pp.*, s.name AS supplier_name, si.invoice_no FROM purchase_payments pp
+      JOIN suppliers s ON s.id = pp.supplier_id
+      LEFT JOIN stock_ins si ON si.id = pp.stock_in_id
+      WHERE pp.voided = 0 ORDER BY pp.created_at DESC
+    `).all().forEach(p => rows.push([p.payment_date, p.supplier_name, p.invoice_no || "", p.amount, p.method, p.reference_no, p.note]));
   } else if (type === "Profit") {
     filename = "profit-report";
     rows = [["Date", "Challan No", "Product", "Qty Sold", "Revenue", "Cost", "Profit"]];

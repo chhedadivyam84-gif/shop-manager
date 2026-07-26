@@ -191,5 +191,5 @@ function startSchedule() {
 
 module.exports = {
   runBackup, status, snapshotForDownload, startSchedule,
-  cloudConfig, listLocal, BACKUP_DIR
+  cloudConfig, uploadToCloud, listLocal, BACKUP_DIR
 };

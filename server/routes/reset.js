@@ -43,8 +43,8 @@ const RESET_LOG_PATH = path.join(__dirname, "..", "..", "data", "reset-log.txt")
 const WIPE_TABLES = [
   // Children first — always safe regardless of the FK cascade settings on
   // any given table, so this order can't produce a foreign-key violation.
-  "invoice_items", "payments", "product_sizes", "stock_ins", "print_jobs",
-  "invoices", "customers", "products", "counters", "audit_log"
+  "invoice_items", "payments", "purchase_payments", "product_sizes", "stock_ins", "print_jobs",
+  "invoices", "customers", "suppliers", "products", "counters", "audit_log"
 ];
 
 router.post("/", requireRole("owner"), async (req, res) => {

@@ -187,6 +187,7 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
   totalsRows.push(["Discount", (challan ? 0 : invoice.discount_amount) > 0 ? "-" + fmtPaise(invoice.discount_amount) : fmtPaise(0)]);
   totalsRows.push(["Transport", fmtPaise(invoice.transport)]);
   if (invoice.loading) totalsRows.push(["Additional Charges", fmtPaise(invoice.loading)]);
+  if (!challan) totalsRows.push(["Taxable Amount", fmtPaise(taxableGoods)]);
   if (!challan && invoice.tax_type === "IGST") totalsRows.push([`IGST ${effectiveRatePct}%`, fmtPaise(igstAmt)]);
   else { totalsRows.push([`CGST ${halfRatePct}%`, fmtPaise(cgstAmt)]); totalsRows.push([`SGST ${halfRatePct}%`, fmtPaise(sgstAmt)]); }
   if (!challan && invoice.round_off) totalsRows.push(["Round Off", (invoice.round_off > 0 ? "+" : "") + fmtPaise(invoice.round_off)]);

@@ -36,6 +36,12 @@ function toast(msg, kind){
 let state = {
   products: [], customers: [], suppliers: [], invoices: [], settings: null, dashboard: null,
   cart: [], selectedCustomerId: null,
+  // Per-invoice GST Type override — null means "use the selected customer's
+  // Customer Master default (currentTaxType())"; set to "CGST_SGST"/"IGST"
+  // once staff explicitly picks one for THIS invoice, without touching the
+  // customer's stored default. Reset back to null whenever the customer
+  // changes or a new invoice starts, so it never silently leaks between bills.
+  taxTypeOverride: null,
   discountType: "pct", discountValue: 0, advance: 0, paymentMethod: "Cash",
   transport: 0, loading: 0, roundOff: true, docType: "invoice", challanShowRate: false, gstOnCharges: true, deliveryMan: "",
   vehicleNumber: "", deliveryAddress: "", remarks: "",
@@ -229,6 +235,13 @@ async function initApp(){
       state.discountType = b.dataset.disc;
       document.querySelectorAll('[data-disc]').forEach(x=>x.classList.remove("selected"));
       b.classList.add("selected");
+      renderTotals();
+    });
+  });
+  document.querySelectorAll('[data-gsttype]').forEach(b=>{
+    b.addEventListener("click", ()=>{
+      state.taxTypeOverride = b.dataset.gsttype;
+      renderGstTypeChips();
       renderTotals();
     });
   });
@@ -426,7 +439,14 @@ function renderBillingCustomers(){
   `).join("") || `<div class="empty-hint" style="padding:8px 4px;">No customer matches "${escapeHtml(q)}".</div>`;
 
   wrap.querySelectorAll("[data-cust]").forEach(b=>{
-    b.addEventListener("click", ()=>{ state.selectedCustomerId=b.dataset.cust||null; renderBillingCustomers(); renderTotals(); });
+    b.addEventListener("click", ()=>{
+      state.selectedCustomerId=b.dataset.cust||null;
+      // A new customer means a fresh GST Type default (their Customer Master
+      // setting) — any override picked for the previous customer shouldn't
+      // silently carry over.
+      state.taxTypeOverride = null;
+      renderBillingCustomers(); renderTotals();
+    });
   });
 }
 function renderBillingProducts(){
@@ -578,7 +598,7 @@ function renderEditModeBanner(){
   document.getElementById("cancel-edit-link").addEventListener("click", (e)=>{
     e.preventDefault();
     state.editingInvoiceId = null;
-    state.cart = []; state.selectedCustomerId = null; state.advance = 0; state.discountValue = 0;
+    state.cart = []; state.selectedCustomerId = null; state.taxTypeOverride = null; state.advance = 0; state.discountValue = 0;
     state.transport = 0; state.loading = 0; state.deliveryMan = "";
     state.vehicleNumber = ""; state.deliveryAddress = ""; state.remarks = "";
     const set = (id, val) => { const inp=document.getElementById(id); if(inp) inp.value = val; };
@@ -608,6 +628,10 @@ async function editExistingInvoice(inv){
     };
   });
   state.selectedCustomerId = inv.customer_id || null;
+  // Reflect what's actually stored on THIS invoice, not the customer's
+  // possibly-since-changed Customer Master default — editing shouldn't
+  // silently re-derive a different tax type than what was billed.
+  state.taxTypeOverride = inv.tax_type === "IGST" ? "IGST" : "CGST_SGST";
   state.docType = inv.doc_type;
   state.discountType = inv.discount_type || "pct";
   state.discountValue = inv.discount_value || 0;
@@ -775,11 +799,21 @@ function renderLineCalc(idx){
     ` × ${Pricing.formatRate(r.rate, r.mode)}`;
   if(a) a.textContent = fmtPaise(r.amount);
 }
-// GST Type is an explicit field on the customer record (Customer Master),
-// the source of truth here — not an inferred comparison of state text.
+// GST Type defaults from the selected customer's Customer Master record, but
+// staff can override it for just this one invoice via the GST Type chips in
+// Billing (state.taxTypeOverride) without changing the customer's default.
 function currentTaxType(){
+  if(state.taxTypeOverride === "IGST" || state.taxTypeOverride === "CGST_SGST") return state.taxTypeOverride;
   const cust = state.customers.find(c=>c.id===state.selectedCustomerId);
   return (cust && cust.gst_type === "IGST") ? "IGST" : "CGST_SGST";
+}
+function renderGstTypeChips(){
+  const wrap = document.getElementById("gst-type-chips");
+  if(!wrap) return;
+  const current = currentTaxType();
+  wrap.querySelectorAll("[data-gsttype]").forEach(b=>{
+    b.classList.toggle("selected", b.dataset.gsttype===current);
+  });
 }
 /* Mirrors computeTotals() in server/routes/invoices.js exactly, including the
    order of rounding — the preview must match what the server will store. */
@@ -825,11 +859,18 @@ function computeTotals(){
   const advance = round2(Math.min(Math.max(0,state.advance||0), total));
   const balanceDue = round2(total - advance);
 
+  // Effective rate for display only (e.g. "CGST (9%)") — a weighted average
+  // of whatever the cart's items actually carry, same as the printed invoice,
+  // not hardcoded to 18% (a mixed-rate cart still shows its true rate here).
+  const effectiveRatePct = Math.round(effectiveRate*100);
+
   return {subtotal, discount, taxType, cgst, sgst, igst, transport, loading,
-          roundOffAmount, total, advance, balanceDue};
+          roundOffAmount, total, advance, balanceDue, taxableGoods, effectiveRatePct};
 }
 function renderTotals(){
+  renderGstTypeChips();
   const t = computeTotals();
+  const halfRatePct = Math.round(t.effectiveRatePct/2);
   const row = (label, value, cls) =>
     `<div class="inv-flex" style="margin-bottom:4px;${cls||""}"><span class="muted">${label}</span><span>${value}</span></div>`;
 
@@ -854,9 +895,10 @@ function renderTotals(){
     ${t.discount>0 ? row("Discount", "-"+fmtPaise(t.discount), "color:var(--danger);") : ""}
     ${t.transport>0 ? row("Transport", fmtPaise(t.transport)) : ""}
     ${t.loading>0 ? row("Loading", fmtPaise(t.loading)) : ""}
+    ${row("Taxable Amount", fmtPaise(t.taxableGoods))}
     ${t.taxType==="IGST"
-      ? row("IGST", fmtPaise(t.igst))
-      : row("CGST", fmtPaise(t.cgst)) + row("SGST", fmtPaise(t.sgst))}
+      ? row(`IGST (${t.effectiveRatePct}%)`, fmtPaise(t.igst))
+      : row(`CGST (${halfRatePct}%)`, fmtPaise(t.cgst)) + row(`SGST (${halfRatePct}%)`, fmtPaise(t.sgst))}
     ${t.roundOffAmount!==0 ? row("Round off", (t.roundOffAmount>0?"+":"")+fmtPaise(t.roundOffAmount)) : ""}
     <div class="inv-flex" style="font-weight:800;border-top:1px solid var(--border);padding-top:6px;font-size:15px;"><span>Grand Total</span><span>${fmtPaise(t.total)}</span></div>
     <div class="amount-words">${Pricing.amountInWords(t.total)}</div>
@@ -896,12 +938,16 @@ async function completeSale(){
       advance: state.advance, paymentMethod: state.paymentMethod, paperSize: state.paperSize,
       transport: state.transport, loading: state.loading, roundOff: state.roundOff,
       gstOnCharges: state.gstOnCharges, deliveryMan: state.deliveryMan,
-      vehicleNumber: state.vehicleNumber, deliveryAddress: state.deliveryAddress, remarks: state.remarks
+      vehicleNumber: state.vehicleNumber, deliveryAddress: state.deliveryAddress, remarks: state.remarks,
+      // Only sent when staff explicitly picked a GST Type for this invoice —
+      // omitted (undefined) falls back to the customer's Customer Master
+      // default server-side, same as before this override existed.
+      taxType: state.taxTypeOverride || undefined
     };
     const invoice = editingId
       ? await api("PUT", `/invoices/${editingId}`, payload)
       : await api("POST", "/invoices", payload);
-    state.cart = []; state.advance = 0; state.discountValue = 0;
+    state.cart = []; state.advance = 0; state.discountValue = 0; state.taxTypeOverride = null;
     state.transport = 0; state.loading = 0; state.deliveryMan = "";
     state.vehicleNumber = ""; state.deliveryAddress = ""; state.remarks = "";
     state.editingInvoiceId = null;
@@ -2653,6 +2699,7 @@ function renderInvoicePageContent(){
     <div class="erp-tb-row"><span>Discount</span><span>${discountAmt>0?"-":""}${fmtPaise(discountAmt)}</span></div>
     <div class="erp-tb-row"><span>Transport</span><span>${fmtPaise(inv.transport)}</span></div>
     ${inv.loading ? `<div class="erp-tb-row"><span>Additional Charges</span><span>${fmtPaise(inv.loading)}</span></div>` : ""}
+    ${!challan ? `<div class="erp-tb-row"><span>Taxable Amount</span><span>${fmtPaise(taxableGoods)}</span></div>` : ""}
     ${isIGST
       ? `<div class="erp-tb-row"><span>IGST ${effectiveRatePct}%</span><span>${fmtPaise(igst)}</span></div>`
       : `<div class="erp-tb-row"><span>CGST ${halfRatePct}%</span><span>${fmtPaise(cgst)}</span></div><div class="erp-tb-row"><span>SGST ${halfRatePct}%</span><span>${fmtPaise(sgst)}</span></div>`}

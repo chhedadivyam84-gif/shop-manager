@@ -111,7 +111,7 @@ router.get("/:id", (req, res) => {
 router.post("/", (req, res) => {
   const { customerId, items: rawItems, discountType, discountValue, advance,
           paymentMethod, paperSize, transport, loading, roundOff, deliveryMan,
-          vehicleNumber, deliveryAddress, remarks } = req.body;
+          vehicleNumber, deliveryAddress, remarks, taxType: taxTypeOverride } = req.body;
   const docType = req.body.docType === "challan" ? "challan" : "invoice";
   const isChallan = docType === "challan";
   // Defaults ON (matches the always-taxed behaviour before this toggle
@@ -128,11 +128,13 @@ router.post("/", (req, res) => {
     customer = db.prepare("SELECT * FROM customers WHERE id = ?").get(customerId);
     if (!customer) return res.status(400).json({ error: "Selected customer no longer exists." });
   }
-  // GST Type is an explicit field on the customer record (Customer Master) —
-  // the source of truth for CGST_SGST vs IGST, not an inferred comparison of
-  // state text. Walk-in (no customer) has nothing to read, so it defaults to
-  // CGST_SGST same as always.
-  const taxType = customer && customer.gst_type === "IGST" ? "IGST" : "CGST_SGST";
+  // GST Type defaults from the customer record (Customer Master), but staff
+  // can override it for just this one invoice from the Billing screen —
+  // validated against the two known values so a bad/missing override can't
+  // silently corrupt tax_type; only ever falls back to the old behavior.
+  const taxType = (taxTypeOverride === "IGST" || taxTypeOverride === "CGST_SGST")
+    ? taxTypeOverride
+    : (customer && customer.gst_type === "IGST" ? "IGST" : "CGST_SGST");
 
   // Look up authoritative product/size data (gst rate, stock) server-side;
   // never trust client for these. Stock lives on the SIZE, not the product —
@@ -287,7 +289,7 @@ router.put("/:id", (req, res) => {
 
   const { customerId, items: rawItems, discountType, discountValue, advance,
           paymentMethod, paperSize, transport, loading, roundOff, deliveryMan,
-          vehicleNumber, deliveryAddress, remarks } = req.body;
+          vehicleNumber, deliveryAddress, remarks, taxType: taxTypeOverride } = req.body;
   const gstOnCharges = req.body.gstOnCharges !== false;
 
   if (!Array.isArray(rawItems) || !rawItems.length) {
@@ -300,11 +302,13 @@ router.put("/:id", (req, res) => {
     customer = db.prepare("SELECT * FROM customers WHERE id = ?").get(customerId);
     if (!customer) return res.status(400).json({ error: "Selected customer no longer exists." });
   }
-  // GST Type is an explicit field on the customer record (Customer Master) —
-  // the source of truth for CGST_SGST vs IGST, not an inferred comparison of
-  // state text. Walk-in (no customer) has nothing to read, so it defaults to
-  // CGST_SGST same as always.
-  const taxType = customer && customer.gst_type === "IGST" ? "IGST" : "CGST_SGST";
+  // GST Type defaults from the customer record (Customer Master), but staff
+  // can override it for just this one invoice from the Billing screen —
+  // validated against the two known values so a bad/missing override can't
+  // silently corrupt tax_type; only ever falls back to the old behavior.
+  const taxType = (taxTypeOverride === "IGST" || taxTypeOverride === "CGST_SGST")
+    ? taxTypeOverride
+    : (customer && customer.gst_type === "IGST" ? "IGST" : "CGST_SGST");
 
   const oldItems = db.prepare("SELECT * FROM invoice_items WHERE invoice_id = ?").all(inv.id);
   const restoreSize = db.prepare("UPDATE product_sizes SET stock = stock + ? WHERE id = ?");

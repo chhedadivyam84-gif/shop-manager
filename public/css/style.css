@@ -242,17 +242,17 @@ nav.bottom .tab.active{color:var(--navy);}
    lines in that gap). flex-shrink:0 guards against a flex item shrinking
    below its own content once min-height:0 is set — the bug that let rows
    spill out of this wrapper and overlap the totals box on a long list. */
-.erp-table-wrap{border:1px solid #000;border-top:none;flex:1 0 auto;min-height:0;}
+.erp-table-wrap{border:1px solid #178a6e;border-top:none;flex:1 0 auto;min-height:0;}
 table.erp-table{width:100%;border-collapse:collapse;font-size:10px;}
-table.erp-table th{text-align:left;font-size:9px;text-transform:uppercase;letter-spacing:.02em;font-weight:800;padding:4px 5px;border:1px solid #000;}
-table.erp-table td{padding:4px 5px;border:1px solid #000;vertical-align:top;}
+table.erp-table th{text-align:left;font-size:9px;text-transform:uppercase;letter-spacing:.02em;font-weight:800;padding:4px 5px;border:1px solid #178a6e;color:#000;}
+table.erp-table td{padding:4px 5px;border:1px solid #178a6e;vertical-align:top;color:#1e3a70;}
 table.erp-table th.c-sn,table.erp-table td.c-sn{width:22px;text-align:center;}
 table.erp-table th.c-size,table.erp-table td.c-size,
 table.erp-table th.c-unit,table.erp-table td.c-unit{white-space:nowrap;}
 table.erp-table th.c-num,table.erp-table td.c-num{text-align:right;white-space:nowrap;}
 table.erp-table td.c-amt,table.erp-table th.c-amt{font-weight:800;}
 .c-pieces{font-size:0.8em;font-weight:400;color:#555;white-space:nowrap;}
-table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #000;}
+table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #178a6e;color:#000;}
 .invoice-page.size-a5 table.erp-table{font-size:8.5px;}
 .invoice-page.size-a5 table.erp-table th{font-size:8px;}
 

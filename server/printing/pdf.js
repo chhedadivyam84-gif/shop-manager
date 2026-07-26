@@ -56,6 +56,12 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
   const doc = new jsPDF({ unit: "mm", format: isA5 ? "a5" : "a4" });
   let y = MARGIN;
 
+  // Item table only: teal grid lines + navy item text, matching the shop's
+  // reference layout. Every other box (header, parties, totals, signatures)
+  // stays plain black — only the item grid itself uses this accent.
+  const TABLE_BORDER = [23, 138, 110];
+  const TABLE_TEXT = [30, 58, 112];
+
   const line = (y1, x0 = MARGIN, x1 = PAGE_W - MARGIN) => doc.line(x0, y1, x1, y1);
   const drawPageFrame = () => {
     doc.setDrawColor(0);
@@ -215,19 +221,20 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
   const bodyRowH = idealBodyRowH;
 
   const drawHeaderRow = (yy) => {
-    doc.setFont("helvetica", "bold"); doc.setFontSize(fs(7));
+    doc.setFont("helvetica", "bold"); doc.setFontSize(fs(7)); doc.setTextColor(0);
     cols.forEach((c, ci) => {
       const x = c.align === "right" ? colX[ci + 1] - 1 : colX[ci] + 1;
       doc.text(c.h.toUpperCase(), x, yy + headerH - fs(1.8), c.align === "right" ? { align: "right" } : undefined);
     });
   };
   const drawItemRow = (values, rowY) => {
-    doc.setFont("helvetica", "normal"); doc.setFontSize(fs(7.5));
+    doc.setFont("helvetica", "normal"); doc.setFontSize(fs(7.5)); doc.setTextColor(...TABLE_TEXT);
     cols.forEach((c, ci) => {
       const x = c.align === "right" ? colX[ci + 1] - 1 : colX[ci] + 1;
       const text = doc.splitTextToSize(String(values[ci] ?? ""), c.w - 2);
       doc.text(text[0] || "", x, rowY + bodyRowH - fs(1.8), c.align === "right" ? { align: "right" } : undefined);
     });
+    doc.setTextColor(0);
   };
   const itemValues = (it, i) => {
     const mode = it.mode || "UNIT";
@@ -294,22 +301,24 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
       // down to the reserved footer position, but stays visually BLANK in
       // that gap — exactly as many ruled rows as there are items, nothing
       // more, matching the shop's paper form precisely.
-      doc.setDrawColor(0);
+      doc.setDrawColor(...TABLE_BORDER);
       tableBottom = Math.max(y, tableTargetBottom);
       let ruleY = bodyTopY;
       for (let i = 0; i <= rowsDrawnThisPage - 1; i++) { line(ruleY, MARGIN, tableRight); ruleY += bodyRowH; }
       colX.forEach(x => doc.line(x, curTableTopY, x, tableBottom));
       doc.rect(MARGIN, curTableTopY, tableRight - MARGIN, tableBottom - curTableTopY);
+      doc.setDrawColor(0);
       y = tableBottom;
       break;
     } else {
       // Close out this page's table box, note it continues, then start a
       // fresh page with its own frame + a compact repeated header.
-      doc.setDrawColor(0);
+      doc.setDrawColor(...TABLE_BORDER);
       let ruleY = bodyTopY;
       for (let i = 0; i <= rowsDrawnThisPage; i++) { line(ruleY, MARGIN, tableRight); ruleY += bodyRowH; }
       colX.forEach(x => doc.line(x, curTableTopY, x, y));
       doc.rect(MARGIN, curTableTopY, tableRight - MARGIN, y - curTableTopY);
+      doc.setDrawColor(0);
       doc.setFont("helvetica", "italic"); doc.setFontSize(fs(7)); doc.setTextColor(90);
       doc.text("Continued on next page...", PAGE_W - MARGIN, y + fs(4), { align: "right" });
       doc.setTextColor(0);

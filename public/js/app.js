@@ -216,6 +216,7 @@ async function initApp(){
   document.querySelectorAll("[data-goto]").forEach(el=>{
     el.addEventListener("click", ()=>switchTab(el.dataset.goto));
   });
+  document.getElementById("qa-payment").addEventListener("click", openQuickPayment);
 
   document.querySelectorAll("[data-close-fs]").forEach(b=>{
     b.addEventListener("click", ()=>closeFullscreen(b.dataset.closeFs));
@@ -1454,6 +1455,68 @@ function readAttachmentInput(inputEl){
     };
     reader.onerror = () => reject(new Error("Could not read the attached file."));
     reader.readAsDataURL(file);
+  });
+}
+
+/* ============================================================
+   SHEET: Quick Payment — dashboard shortcut that jumps straight to
+   Record Payment (Sale or Purchase) without going through the full
+   Customer/Supplier detail screen first.
+   ============================================================ */
+let quickPaymentMode = "sale"; // "sale" | "purchase"
+async function openQuickPayment(){
+  quickPaymentMode = "sale";
+  await Promise.all([loadCustomers(), loadSuppliers()]);
+  renderQuickPayment();
+  showSheet("sheet-quick-payment");
+}
+function renderQuickPayment(){
+  const sheet = document.getElementById("sheet-quick-payment");
+  const isSale = quickPaymentMode === "sale";
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">Record Payment</div>
+    <div class="chip-row" id="qp-mode-chips" style="margin-bottom:10px;">
+      <button class="chip ${isSale?'selected':''}" data-qp-mode="sale">Sale Payment — from customer</button>
+      <button class="chip ${!isSale?'selected':''}" data-qp-mode="purchase">Purchase Payment — to supplier</button>
+    </div>
+    <div class="searchbar">
+      <span>&#128269;</span><input type="text" id="qp-search" placeholder="Search ${isSale?"customer":"supplier"} by name or phone">
+    </div>
+    <div class="card" id="qp-results" style="max-height:340px;overflow-y:auto;margin-top:8px;"></div>
+  `;
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  sheet.querySelectorAll("[data-qp-mode]").forEach(b=>b.addEventListener("click", ()=>{
+    quickPaymentMode = b.dataset.qpMode;
+    renderQuickPayment();
+  }));
+  sheet.querySelector("#qp-search").addEventListener("input", renderQuickPaymentResults);
+  renderQuickPaymentResults();
+}
+function renderQuickPaymentResults(){
+  const isSale = quickPaymentMode === "sale";
+  const q = (document.getElementById("qp-search").value||"").toLowerCase();
+  let list = isSale ? state.customers : state.suppliers;
+  if(q) list = list.filter(p=>p.name.toLowerCase().includes(q) || (p.phone||"").includes(q));
+  const results = document.getElementById("qp-results");
+  results.innerHTML = list.length ? list.map(p=>`
+    <div class="list-row" data-qp-pick="${p.id}" style="cursor:pointer;">
+      <div class="avatar" style="width:34px;height:34px;font-size:12px;">${initials(p.name)}</div>
+      <div><div class="row-title">${escapeHtml(p.name)}</div><div class="row-sub">${escapeHtml(p.phone||"")}</div></div>
+      <div class="row-right ${p.due>0?'':'muted'}" style="font-weight:800;${p.due>0?'color:var(--danger);':''}">${fmt(p.due)}</div>
+    </div>
+  `).join("") : `<div class="empty-hint">No ${isSale?"customers":"suppliers"} found${q?` matching "${escapeHtml(q)}"`:""}.</div>`;
+  results.querySelectorAll("[data-qp-pick]").forEach(el=>{
+    el.addEventListener("click", async ()=>{
+      const id = el.dataset.qpPick;
+      try{
+        const detail = await api("GET", `/${isSale?"customers":"suppliers"}/${id}`);
+        closeAllSheets();
+        if(isSale) openRecordPayment(detail);
+        else openRecordPurchasePayment(detail);
+      }catch(err){ toast(err.message); }
+    });
   });
 }
 

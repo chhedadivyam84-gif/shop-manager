@@ -360,6 +360,11 @@ table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #000;}
     border:1px solid #000;border-radius:0 !important;box-shadow:none !important;
     padding:3mm;box-sizing:border-box;background:#fff !important;
   }
+  /* .size-a5's max-width:360px is a MOBILE SCREEN-width constraint (keeps
+     the on-screen preview from stretching edge-to-edge on a phone) — it has
+     no business applying to print, where it was leaving an unused gap on
+     the right instead of the content using the full physical A5 width. */
+  .invoice-page.size-a5{max-width:none !important;margin-left:0 !important;margin-right:0 !important;}
 }
 
 /* ============================================================

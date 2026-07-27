@@ -227,6 +227,33 @@
           <button class="btn btn-outline" id="export-csv-btn">Export Excel (.xlsx)</button>
         </div>
       </div>
+
+      <!-- CASH BOOK -->
+      <div class="screen" id="screen-cashbook">
+        <div class="card" id="cashbook-summary" style="margin-top:0;"></div>
+
+        <div class="charge-grid" style="margin-top:10px;">
+          <label class="dim"><span>From</span><input type="date" id="cb-filter-from"></label>
+          <label class="dim"><span>To</span><input type="date" id="cb-filter-to"></label>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px;">
+          <button class="btn btn-outline" id="cb-filter-today" style="flex:1;">Today</button>
+          <button class="btn btn-outline" id="cb-filter-clear" style="flex:1;">All</button>
+        </div>
+
+        <div style="display:flex;gap:8px;margin-top:14px;">
+          <button class="btn btn-gold" id="cb-add-in" style="flex:1;">+ Cash In</button>
+          <button class="btn btn-outline" id="cb-add-out" style="flex:1;border-color:var(--danger);color:var(--danger);">+ Cash Out</button>
+        </div>
+
+        <div class="section-title">Ledger</div>
+        <div class="card" id="cashbook-list"></div>
+
+        <div style="display:flex;gap:8px;margin-top:12px;">
+          <button class="btn btn-outline" id="cb-print-btn" style="flex:1;">Print</button>
+          <button class="btn btn-outline" id="cb-export-btn" style="flex:1;">Export Excel (.xlsx)</button>
+        </div>
+      </div>
     </main>
 
     <nav class="bottom">
@@ -235,6 +262,7 @@
       <button class="tab" data-tab="inventory"><span class="ic">&#128230;</span>Inventory</button>
       <button class="tab" data-tab="customers"><span class="ic">&#128100;</span>Customers</button>
       <button class="tab" data-tab="reports"><span class="ic">&#128202;</span>Reports</button>
+      <button class="tab" data-tab="cashbook"><span class="ic">&#128181;</span>Cash Book</button>
     </nav>
   </div>
 
@@ -255,6 +283,7 @@
   <div class="sheet" id="sheet-record-purchase-payment"></div>
   <div class="sheet" id="sheet-quick-payment"></div>
   <div class="sheet" id="sheet-stock-in"></div>
+  <div class="sheet" id="sheet-cash-entry"></div>
   <div class="sheet" id="sheet-factory-reset"></div>
 
   <!-- ============ FULLSCREEN: INVOICE PREVIEW ============ -->

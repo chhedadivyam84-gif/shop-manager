@@ -47,6 +47,7 @@ let state = {
   vehicleNumber: "", deliveryAddress: "", remarks: "",
   invBrandFilter: "All", reportType: "Sales", partyMode: "customer",
   paperSize: "A5", editingInvoiceId: null,
+  cbFrom: "", cbTo: "", cbEntries: [],
   me: { staffName: "", role: "" },
   ctx: {}
 };
@@ -317,6 +318,22 @@ async function initApp(){
     window.open("/api/reports/export?type="+encodeURIComponent(state.reportType), "_blank");
   });
 
+  document.getElementById("cb-add-in").addEventListener("click", ()=>openCashEntry("in"));
+  document.getElementById("cb-add-out").addEventListener("click", ()=>openCashEntry("out"));
+  document.getElementById("cb-filter-from").addEventListener("change", (e)=>{ state.cbFrom = e.target.value; renderCashBook(); });
+  document.getElementById("cb-filter-to").addEventListener("change", (e)=>{ state.cbTo = e.target.value; renderCashBook(); });
+  document.getElementById("cb-filter-today").addEventListener("click", ()=>{
+    const t = todayISO(); state.cbFrom = t; state.cbTo = t; renderCashBook();
+  });
+  document.getElementById("cb-filter-clear").addEventListener("click", ()=>{
+    state.cbFrom = ""; state.cbTo = ""; renderCashBook();
+  });
+  document.getElementById("cb-print-btn").addEventListener("click", printCashBook);
+  document.getElementById("cb-export-btn").addEventListener("click", ()=>{
+    const q = cashBookQuery();
+    window.open("/api/cashbook/export" + (q?"?"+q:""), "_blank");
+  });
+
   document.getElementById("scrim").addEventListener("click", closeAllSheets);
 
   document.getElementById("paper-a5").addEventListener("click", ()=>setPaper("A5"));
@@ -338,13 +355,14 @@ async function switchTab(tab){
   document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));
   document.getElementById("screen-"+tab).classList.add("active");
   document.querySelectorAll("nav.bottom .tab").forEach(t=>t.classList.toggle("active", t.dataset.tab===tab));
-  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports"};
+  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book"};
   document.getElementById("hdr-sub").textContent = subMap[tab];
   document.getElementById("hdr-main").textContent = tab==="home" ? greeting() : subMap[tab];
   if(tab==="billing") await renderBilling();
   if(tab==="inventory") await renderInventoryList();
   if(tab==="customers") await renderCustomersList();
   if(tab==="reports") await renderReport();
+  if(tab==="cashbook") await renderCashBook();
 }
 
 async function renderAll(){
@@ -3027,6 +3045,146 @@ async function renderProfitReport(body){
       </div><div class="row-right row-title" style="color:${r.profit>=0?'var(--ok)':'var(--danger)'};">${fmt(r.profit)}</div></div>
     `).join("") : `<div class="empty-hint">No sales yet.</div>`}
   `;
+}
+
+/* ============================================================
+   CASH BOOK
+   A standalone running cash ledger — independent of invoices, customers or
+   suppliers — for everyday cash in/out (petty cash, wages, expenses) the
+   shop still wants tracked. The running balance is always computed over
+   ALL history server-side (see server/routes/cashbook.js), so a filtered
+   date range still shows the true balance at each point.
+   ============================================================ */
+function cashBookQuery(){
+  const p = new URLSearchParams();
+  if(state.cbFrom) p.set("from", state.cbFrom);
+  if(state.cbTo) p.set("to", state.cbTo);
+  return p.toString();
+}
+async function renderCashBook(){
+  const fromEl = document.getElementById("cb-filter-from");
+  const toEl = document.getElementById("cb-filter-to");
+  if(fromEl) fromEl.value = state.cbFrom;
+  if(toEl) toEl.value = state.cbTo;
+
+  const q = cashBookQuery();
+  try{
+    const [summary, entries] = await Promise.all([
+      api("GET", "/cashbook/summary" + (q?"?"+q:"")),
+      api("GET", "/cashbook" + (q?"?"+q:""))
+    ]);
+    state.cbEntries = entries;
+    renderCashBookSummary(summary);
+    renderCashBookList(entries);
+  }catch(e){ toast(e.message); }
+}
+function renderCashBookSummary(s){
+  const row = (label, value, cls) =>
+    `<div class="inv-flex" style="margin-bottom:4px;${cls||""}"><span class="muted">${label}</span><span>${value}</span></div>`;
+  document.getElementById("cashbook-summary").innerHTML = `
+    <div style="font-weight:800;font-size:14px;margin-bottom:6px;">${s.from===s.to ? s.from : s.from+" to "+s.to}</div>
+    ${row("Opening Balance", fmt(s.openingBalance))}
+    ${row("Total Cash In", "+"+fmt(s.totalIn), "color:var(--ok);")}
+    ${row("Total Cash Out", "-"+fmt(s.totalOut), "color:var(--danger);")}
+    <div class="inv-flex" style="font-weight:800;border-top:1px solid var(--border);padding-top:6px;font-size:15px;"><span>Closing Balance</span><span>${fmt(s.closingBalance)}</span></div>
+  `;
+}
+function renderCashBookList(entries){
+  document.getElementById("cashbook-list").innerHTML = entries.length ? entries.map(e=>`
+    <div class="list-row" data-cb-entry="${e.id}" style="cursor:pointer;">
+      <div>
+        <div class="row-title">${escapeHtml(e.party || e.category || (e.type==="in"?"Cash In":"Cash Out"))}</div>
+        <div class="row-sub">${e.date}${e.category && e.party ? " · "+escapeHtml(e.category) : ""}${e.remarks ? " · "+escapeHtml(e.remarks) : ""}</div>
+        <div class="row-sub">Balance ${fmt(e.runningBalance)}</div>
+      </div>
+      <div class="row-right row-title" style="color:${e.type==="in"?"var(--ok)":"var(--danger)"};">${e.type==="in"?"+":"-"}${fmt(e.amount)}</div>
+    </div>
+  `).join("") : `<div class="empty-hint">No cash entries in this range yet.</div>`;
+  document.querySelectorAll("[data-cb-entry]").forEach(el=>{
+    el.addEventListener("click", ()=>{
+      const entry = state.cbEntries.find(e=>e.id===el.dataset.cbEntry);
+      if(entry) openCashEntry(entry.type, entry);
+    });
+  });
+}
+/** One sheet serves both "add" (editEntry omitted) and "edit" of a cash entry. */
+function openCashEntry(type, editEntry){
+  const sheet = document.getElementById("sheet-cash-entry");
+  const isIn = type==="in";
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">${editEntry ? "Edit " : ""}${isIn ? "Cash In" : "Cash Out"}</div>
+    <label class="field-label">Date</label>
+    <input type="date" id="cbe-date" value="${editEntry ? editEntry.date : todayISO()}">
+    <label class="field-label">Amount (₹)</label>
+    <input type="number" inputmode="decimal" step="any" min="0" id="cbe-amount" value="${editEntry ? editEntry.amount : ""}" placeholder="0">
+    <label class="field-label">Party / Person <span class="muted" style="font-weight:400;">— optional</span></label>
+    <input type="text" id="cbe-party" value="${editEntry ? escapeHtml(editEntry.party||"") : ""}" placeholder="e.g. Ramesh, Electricity Board">
+    <label class="field-label">Category <span class="muted" style="font-weight:400;">— optional</span></label>
+    <input type="text" id="cbe-category" value="${editEntry ? escapeHtml(editEntry.category||"") : ""}" placeholder="e.g. Wages, Electricity, Petty Cash">
+    <label class="field-label">Remarks <span class="muted" style="font-weight:400;">— optional</span></label>
+    <input type="text" id="cbe-remarks" value="${editEntry ? escapeHtml(editEntry.remarks||"") : ""}" placeholder="e.g. Advance for June">
+    <button class="btn btn-primary" id="cbe-save" style="margin-top:16px;">${editEntry ? "Update Entry" : "Save Entry"}</button>
+    ${editEntry && isOwner() ? `<div style="margin-top:12px;text-align:center;"><a href="#" id="cbe-delete-link" class="btn-danger-link">Delete this entry</a></div>` : ""}
+  `;
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  sheet.querySelector("#cbe-save").addEventListener("click", async ()=>{
+    const amount = parseFloat(document.getElementById("cbe-amount").value);
+    if(!amount || amount<=0){ toast("Enter a valid amount."); return; }
+    const payload = {
+      date: document.getElementById("cbe-date").value,
+      type,
+      amount,
+      party: document.getElementById("cbe-party").value.trim(),
+      category: document.getElementById("cbe-category").value.trim(),
+      remarks: document.getElementById("cbe-remarks").value.trim()
+    };
+    const btn = document.getElementById("cbe-save");
+    btn.disabled = true;
+    try{
+      if(editEntry) await api("PUT", `/cashbook/${editEntry.id}`, payload);
+      else await api("POST", "/cashbook", payload);
+      closeAllSheets();
+      await renderCashBook();
+      toast(editEntry ? "Entry updated." : "Entry saved.", "ok");
+    }catch(err){ toast(err.message); }
+    finally{ btn.disabled = false; }
+  });
+  const deleteLink = sheet.querySelector("#cbe-delete-link");
+  if(deleteLink) deleteLink.addEventListener("click", async (e)=>{
+    e.preventDefault();
+    if(confirm("Delete this cash entry? This can't be undone from here.")){
+      try{
+        await api("POST", `/cashbook/${editEntry.id}/void`);
+        closeAllSheets();
+        await renderCashBook();
+        toast("Entry deleted.", "ok");
+      }catch(err){ toast(err.message); }
+    }
+  });
+  showSheet("sheet-cash-entry");
+}
+function printCashBook(){
+  const rows = [...state.cbEntries].reverse();
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Cash Book</title>
+    <style>
+      body{font-family:Arial,Helvetica,sans-serif;padding:20px;color:#000;}
+      h1{font-size:16px;margin:0 0 2px;} .sub{font-size:11px;color:#555;margin-bottom:14px;}
+      table{width:100%;border-collapse:collapse;font-size:11px;}
+      th,td{border:1px solid #000;padding:4px 6px;text-align:left;}
+      th{background:#eee;} .num{text-align:right;}
+    </style></head><body>
+    <h1>Cash Book</h1>
+    <div class="sub">${state.cbFrom || state.cbTo ? (state.cbFrom||"…")+" to "+(state.cbTo||"…") : "All entries"}</div>
+    <table><thead><tr><th>Date</th><th>Party</th><th>Category</th><th>Remarks</th><th class="num">Cash In</th><th class="num">Cash Out</th><th class="num">Balance</th></tr></thead>
+    <tbody>${rows.map(e=>`<tr><td>${e.date}</td><td>${escapeHtml(e.party||"")}</td><td>${escapeHtml(e.category||"")}</td><td>${escapeHtml(e.remarks||"")}</td>
+      <td class="num">${e.type==="in"?fmt(e.amount):""}</td><td class="num">${e.type==="out"?fmt(e.amount):""}</td><td class="num">${fmt(e.runningBalance)}</td></tr>`).join("")}</tbody></table>
+    <script>window.onload=()=>window.print();</script>
+    </body></html>`;
+  const w = window.open("", "_blank");
+  w.document.write(html);
+  w.document.close();
 }
 
 })();

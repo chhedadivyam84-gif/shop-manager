@@ -196,6 +196,24 @@ CREATE TABLE IF NOT EXISTS purchase_payments (
   created_at INTEGER NOT NULL
 );
 
+-- Daily Cash Book: a standalone running cash ledger, independent of any
+-- customer/supplier/invoice — for everyday cash in/out (petty cash, wages,
+-- expenses, walk-in cash not tied to a bill) that the shop still wants
+-- tracked. "voided" (not a hard delete) matches how payments/invoices are
+-- removed everywhere else in this app, so a mistaken entry never erases
+-- the audit trail — it's just excluded from the running balance.
+CREATE TABLE IF NOT EXISTS cash_entries (
+  id TEXT PRIMARY KEY,
+  date TEXT NOT NULL,
+  type TEXT NOT NULL CHECK (type IN ('in', 'out')),
+  amount REAL NOT NULL,
+  party TEXT DEFAULT '',
+  category TEXT DEFAULT '',
+  remarks TEXT DEFAULT '',
+  voided INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+
 -- A purchase entry, one product per row (mirrors how the product is sold: one
 -- board/size per line). qty is the physical sheet/piece count received --
 -- what products.stock goes up by. billed_qty/mode/geometry mirror

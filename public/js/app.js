@@ -862,7 +862,9 @@ function computeTotals(){
   // Effective rate for display only (e.g. "CGST (9%)") — a weighted average
   // of whatever the cart's items actually carry, same as the printed invoice,
   // not hardcoded to 18% (a mixed-rate cart still shows its true rate here).
-  const effectiveRatePct = Math.round(effectiveRate*100);
+  // Before anything's in the cart there's nothing to average, so show the
+  // shop's standard 18% instead of a misleading "(0%)".
+  const effectiveRatePct = taxableGoods>0 ? Math.round(effectiveRate*100) : 18;
 
   return {subtotal, discount, taxType, cgst, sgst, igst, transport, loading,
           roundOffAmount, total, advance, balanceDue, taxableGoods, effectiveRatePct};

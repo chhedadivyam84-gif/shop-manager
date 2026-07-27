@@ -256,6 +256,69 @@ CREATE TABLE IF NOT EXISTS stock_ins (
   created_at INTEGER NOT NULL
 );
 
+-- Multi-line Purchase Entry — a full purchase invoice from a supplier with
+-- several products on it, mirroring invoices/invoice_items exactly (same
+-- header/lines split, same tax_type + cgst/sgst/igst pattern driven by the
+-- supplier's Customer-Master-style gst_type, same round-off handling).
+-- stock_ins (above) is NOT replaced by this — it's the older one-product-at-
+-- a-time "Record Purchase" flow, still used from a product's own Inventory
+-- page, and existing history there is untouched. This is a second, parallel
+-- path for entering a full multi-item supplier bill in one go.
+CREATE TABLE IF NOT EXISTS purchases (
+  id TEXT PRIMARY KEY,
+  purchase_no TEXT UNIQUE NOT NULL,
+  date TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  supplier_id TEXT REFERENCES suppliers(id) ON DELETE SET NULL,
+  -- The supplier's OWN invoice number (free text) — separate from purchase_no,
+  -- which is this shop's own sequential record number, same split as how a
+  -- sales invoice's challan_no differs from a customer's PO number.
+  supplier_invoice_no TEXT DEFAULT '',
+  purchase_type TEXT NOT NULL DEFAULT 'Local' CHECK (purchase_type IN ('Local', 'Interstate')),
+  tax_type TEXT NOT NULL DEFAULT 'CGST_SGST',
+  subtotal REAL NOT NULL DEFAULT 0,
+  discount_amount REAL NOT NULL DEFAULT 0,
+  cgst REAL NOT NULL DEFAULT 0,
+  sgst REAL NOT NULL DEFAULT 0,
+  igst REAL NOT NULL DEFAULT 0,
+  transport REAL NOT NULL DEFAULT 0,
+  loading REAL NOT NULL DEFAULT 0,
+  other_charges REAL NOT NULL DEFAULT 0,
+  round_off REAL NOT NULL DEFAULT 0,
+  total REAL NOT NULL DEFAULT 0,
+  payment_method TEXT NOT NULL DEFAULT 'Credit',
+  due_date TEXT DEFAULT '',
+  vehicle_number TEXT DEFAULT '',
+  transport_name TEXT DEFAULT '',
+  lr_number TEXT DEFAULT '',
+  remarks TEXT DEFAULT '',
+  voided INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS purchase_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  purchase_id TEXT NOT NULL REFERENCES purchases(id) ON DELETE CASCADE,
+  product_id TEXT REFERENCES products(id) ON DELETE SET NULL,
+  size_id INTEGER REFERENCES product_sizes(id) ON DELETE SET NULL,
+  name TEXT NOT NULL,
+  brand TEXT DEFAULT '',
+  category TEXT DEFAULT '',
+  mode TEXT NOT NULL DEFAULT 'UNIT',
+  length_ft REAL,
+  width_val REAL,
+  thickness_in REAL,
+  size_label TEXT NOT NULL DEFAULT '',
+  pieces REAL NOT NULL DEFAULT 0,
+  per_piece REAL NOT NULL DEFAULT 0,
+  unit_label TEXT NOT NULL DEFAULT 'Pc',
+  qty REAL NOT NULL,
+  rate REAL NOT NULL,
+  -- Stored as the resolved rupee amount either way — the line's own %-or-flat
+  -- choice at entry time doesn't need to survive, only what it worked out to.
+  discount_amount REAL NOT NULL DEFAULT 0,
+  gst_rate REAL NOT NULL DEFAULT 18
+);
+
 -- One row per silent print request sent to the shop PC's local printer. This
 -- is the audit trail behind "Printing… / Printed / Failed" on the phone —
 -- the phone polls this row's status rather than waiting on an open HTTP

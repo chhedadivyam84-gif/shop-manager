@@ -63,6 +63,7 @@
 
         <div class="quick-actions">
           <button class="qa-btn" data-goto="billing"><span class="ic">&#128220;</span>New Invoice</button>
+          <button class="qa-btn" data-goto="purchase"><span class="ic">&#128722;</span>New Purchase</button>
           <button class="qa-btn" data-goto="inventory"><span class="ic">&#128230;</span>Inventory</button>
           <button class="qa-btn" data-goto="customers"><span class="ic">&#128100;</span>Customers</button>
           <button class="qa-btn" data-goto="reports"><span class="ic">&#128202;</span>Reports</button>
@@ -252,6 +253,88 @@
         <div style="display:flex;gap:8px;margin-top:12px;">
           <button class="btn btn-outline" id="cb-print-btn" style="flex:1;">Print</button>
           <button class="btn btn-outline" id="cb-export-btn" style="flex:1;">Export Excel (.xlsx)</button>
+        </div>
+      </div>
+
+      <!-- PURCHASE ENTRY -->
+      <div class="screen" id="screen-purchase">
+        <a href="#" id="pur-back-link" class="muted" style="font-size:12px;font-weight:700;">&larr; Back to Home</a>
+
+        <div class="section-title" style="margin-top:10px;">Supplier</div>
+        <div class="searchbar" style="margin-top:0;">
+          <span>&#128269;</span><input type="text" id="pur-supplier-search" placeholder="Search supplier by name or phone">
+        </div>
+        <div class="chip-row" id="pur-suppliers" style="margin-top:8px;"></div>
+        <div class="card" id="pur-supplier-info" style="display:none;margin-top:8px;font-size:12px;"></div>
+
+        <div class="section-title">Purchase Details</div>
+        <div class="card">
+          <div class="charge-grid">
+            <label class="dim"><span>Purchase Date</span><input type="date" id="pur-date"></label>
+            <label class="dim"><span>Supplier Invoice #</span><input type="text" id="pur-invoice-no" placeholder="e.g. INV-1234"></label>
+          </div>
+          <label class="field-label" style="margin-top:10px;">Purchase Type</label>
+          <div class="chip-row" id="pur-type-chips">
+            <button class="chip selected" data-pur-type="Local">Local (CGST + SGST)</button>
+            <button class="chip" data-pur-type="Interstate">Interstate (IGST)</button>
+          </div>
+          <label class="field-label" style="margin-top:10px;">Payment Type</label>
+          <div class="chip-row" id="pur-pay-chips">
+            <button class="chip" data-pur-pay="Cash">Cash</button>
+            <button class="chip" data-pur-pay="UPI">UPI</button>
+            <button class="chip" data-pur-pay="Bank">Bank</button>
+            <button class="chip selected" data-pur-pay="Credit">Credit</button>
+          </div>
+          <div id="pur-due-date-row" style="margin-top:10px;">
+            <label class="field-label">Due Date <span class="muted" style="font-weight:400;">— for credit purchases</span></label>
+            <input type="date" id="pur-due-date">
+          </div>
+          <label class="field-label" style="margin-top:10px;">Vehicle Number <span class="muted" style="font-weight:400;">— optional</span></label>
+          <input type="text" id="pur-vehicle" placeholder="e.g. MH 01 AB 1234">
+          <label class="field-label" style="margin-top:10px;">Transport Name <span class="muted" style="font-weight:400;">— optional</span></label>
+          <input type="text" id="pur-transport-name" placeholder="e.g. Shree Transport">
+          <label class="field-label" style="margin-top:10px;">LR Number <span class="muted" style="font-weight:400;">— optional</span></label>
+          <input type="text" id="pur-lr" placeholder="e.g. LR-5678">
+          <label class="field-label" style="margin-top:10px;">Notes / Remarks <span class="muted" style="font-weight:400;">— optional</span></label>
+          <input type="text" id="pur-remarks" placeholder="e.g. Damaged sheet replaced">
+        </div>
+
+        <div class="section-title">Add products</div>
+        <div class="searchbar">
+          <span>&#128269;</span><input type="text" id="pur-search" placeholder="Search name, brand or SKU">
+        </div>
+        <div class="card" id="pur-product-list" style="max-height:260px;overflow-y:auto;margin-top:8px;"></div>
+
+        <div class="section-title">Purchase items</div>
+        <div class="card" id="pur-cart-list"><div class="empty-hint">No items yet. Add products above.</div></div>
+
+        <div class="section-title">Charges</div>
+        <div class="card">
+          <div class="charge-grid">
+            <label class="dim">
+              <span>Transport <em>(₹)</em></span>
+              <input type="number" inputmode="decimal" step="any" min="0" id="pur-transport-input" value="0" placeholder="0">
+            </label>
+            <label class="dim">
+              <span>Loading / Unloading <em>(₹)</em></span>
+              <input type="number" inputmode="decimal" step="any" min="0" id="pur-loading-input" value="0" placeholder="0">
+            </label>
+          </div>
+          <label class="dim" style="margin-top:10px;">
+            <span>Other Charges <em>(₹)</em></span>
+            <input type="number" inputmode="decimal" step="any" min="0" id="pur-other-input" value="0" placeholder="0">
+          </label>
+          <label class="check-row" style="margin-top:10px;">
+            <input type="checkbox" id="pur-roundoff-toggle" checked>
+            <span>Round off the grand total to the nearest rupee</span>
+          </label>
+        </div>
+
+        <div class="section-title">Summary</div>
+        <div class="card" id="pur-totals-card"></div>
+
+        <div style="margin-top:16px;">
+          <button class="btn btn-primary" id="pur-save-btn">Save Purchase &amp; Update Stock</button>
         </div>
       </div>
     </main>

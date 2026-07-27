@@ -48,6 +48,15 @@ let state = {
   invBrandFilter: "All", reportType: "Sales", partyMode: "customer",
   paperSize: "A5", editingInvoiceId: null,
   cbFrom: "", cbTo: "", cbEntries: [],
+  // Purchase Entry (Phase 1) — a standalone cart, separate from state.cart
+  // (Billing's sales cart), since a purchase invoice's line shape (per-line
+  // discount, GST computed forward not backed-out, no stock cap) differs from
+  // a sales line.
+  pur: {
+    supplierId: null, purchaseType: "Local", paymentMethod: "Credit",
+    date: "", invoiceNo: "", dueDate: "", vehicleNumber: "", transportName: "", lrNumber: "", remarks: "",
+    transport: 0, loading: 0, otherCharges: 0, roundOff: true, cart: []
+  },
   me: { staffName: "", role: "" },
   ctx: {}
 };
@@ -334,6 +343,46 @@ async function initApp(){
     window.open("/api/cashbook/export" + (q?"?"+q:""), "_blank");
   });
 
+  document.getElementById("pur-back-link").addEventListener("click", (e)=>{ e.preventDefault(); switchTab("home"); });
+  document.getElementById("pur-supplier-search").addEventListener("input", renderPurchaseSuppliers);
+  document.getElementById("pur-search").addEventListener("input", renderPurchaseProducts);
+  document.getElementById("pur-date").addEventListener("change", (e)=>{ state.pur.date = e.target.value; });
+  document.getElementById("pur-invoice-no").addEventListener("input", (e)=>{ state.pur.invoiceNo = e.target.value; });
+  document.getElementById("pur-due-date").addEventListener("change", (e)=>{ state.pur.dueDate = e.target.value; });
+  document.getElementById("pur-vehicle").addEventListener("input", (e)=>{ state.pur.vehicleNumber = e.target.value; });
+  document.getElementById("pur-transport-name").addEventListener("input", (e)=>{ state.pur.transportName = e.target.value; });
+  document.getElementById("pur-lr").addEventListener("input", (e)=>{ state.pur.lrNumber = e.target.value; });
+  document.getElementById("pur-remarks").addEventListener("input", (e)=>{ state.pur.remarks = e.target.value; });
+  document.querySelectorAll('[data-pur-type]').forEach(b=>{
+    b.addEventListener("click", ()=>{
+      state.pur.purchaseType = b.dataset.purType;
+      document.querySelectorAll('[data-pur-type]').forEach(x=>x.classList.remove("selected"));
+      b.classList.add("selected");
+      renderPurchaseTotals();
+    });
+  });
+  document.querySelectorAll('[data-pur-pay]').forEach(b=>{
+    b.addEventListener("click", ()=>{
+      state.pur.paymentMethod = b.dataset.purPay;
+      document.querySelectorAll('[data-pur-pay]').forEach(x=>x.classList.remove("selected"));
+      b.classList.add("selected");
+      renderPurchaseDueDateVisibility();
+    });
+  });
+  document.getElementById("pur-transport-input").addEventListener("input", (e)=>{
+    state.pur.transport = Math.max(0, parseFloat(e.target.value)||0); renderPurchaseTotals();
+  });
+  document.getElementById("pur-loading-input").addEventListener("input", (e)=>{
+    state.pur.loading = Math.max(0, parseFloat(e.target.value)||0); renderPurchaseTotals();
+  });
+  document.getElementById("pur-other-input").addEventListener("input", (e)=>{
+    state.pur.otherCharges = Math.max(0, parseFloat(e.target.value)||0); renderPurchaseTotals();
+  });
+  document.getElementById("pur-roundoff-toggle").addEventListener("change", (e)=>{
+    state.pur.roundOff = e.target.checked; renderPurchaseTotals();
+  });
+  document.getElementById("pur-save-btn").addEventListener("click", savePurchase);
+
   document.getElementById("scrim").addEventListener("click", closeAllSheets);
 
   document.getElementById("paper-a5").addEventListener("click", ()=>setPaper("A5"));
@@ -355,7 +404,7 @@ async function switchTab(tab){
   document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));
   document.getElementById("screen-"+tab).classList.add("active");
   document.querySelectorAll("nav.bottom .tab").forEach(t=>t.classList.toggle("active", t.dataset.tab===tab));
-  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book"};
+  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",purchase:"New Purchase"};
   document.getElementById("hdr-sub").textContent = subMap[tab];
   document.getElementById("hdr-main").textContent = tab==="home" ? greeting() : subMap[tab];
   if(tab==="billing") await renderBilling();
@@ -363,6 +412,7 @@ async function switchTab(tab){
   if(tab==="customers") await renderCustomersList();
   if(tab==="reports") await renderReport();
   if(tab==="cashbook") await renderCashBook();
+  if(tab==="purchase") await renderPurchaseScreen();
 }
 
 async function renderAll(){
@@ -1111,6 +1161,11 @@ function renderProductDetailSheet(context){
         ? `<button class="btn btn-gold" id="add-to-invoice-btn" style="margin-top:14px;" disabled>No price set — tap Edit below</button>`
         : `<button class="btn btn-gold" id="add-to-invoice-btn" style="margin-top:14px;" ${selectedSize.stock<=0?"disabled":""}>${selectedSize.stock<=0?"Out of stock":"Add to Invoice"}</button>`
     ) : ""}
+    ${context==="purchase" ? (
+      !p.sizes.length
+        ? `<button class="btn btn-gold" id="add-to-purchase-btn" style="margin-top:14px;" disabled>No price set — tap Edit below</button>`
+        : `<button class="btn btn-gold" id="add-to-purchase-btn" style="margin-top:14px;">Add to Purchase</button>`
+    ) : ""}
 
     <div class="action-row">
       <button class="btn btn-outline" id="edit-product-btn">✎ Edit</button>
@@ -1163,6 +1218,14 @@ function renderProductDetailSheet(context){
       const ok = addToCart(p.id, state.ctx.selectedSizeIdx);
       if(ok){ closeAllSheets(); renderBillingProducts(); }
       else toast("Can't add more — that's all the stock we have for this size.");
+    });
+  }
+  const addPurBtn = sheet.querySelector("#add-to-purchase-btn");
+  if(addPurBtn){
+    addPurBtn.addEventListener("click", ()=>{
+      addToPurchaseCart(p.id, state.ctx.selectedSizeIdx);
+      closeAllSheets();
+      renderPurchaseProducts();
     });
   }
   sheet.querySelector("#edit-product-btn").addEventListener("click", ()=>{
@@ -3185,6 +3248,351 @@ function printCashBook(){
   const w = window.open("", "_blank");
   w.document.write(html);
   w.document.close();
+}
+
+/* ============================================================
+   PURCHASE ENTRY (Phase 1 — core multi-line invoice)
+   ============================================================ */
+async function renderPurchaseScreen(){
+  if(!state.pur.date) state.pur.date = todayISO();
+  const dateEl = document.getElementById("pur-date");
+  if(dateEl && !dateEl.value) dateEl.value = state.pur.date;
+  renderPurchaseSuppliers();
+  renderPurchaseSupplierInfo();
+  renderPurchaseProducts();
+  renderPurchaseCart();
+  renderPurchaseDueDateVisibility();
+  renderPurchaseTotals();
+}
+function renderPurchaseSuppliers(){
+  const wrap = document.getElementById("pur-suppliers");
+  const searchEl = document.getElementById("pur-supplier-search");
+  const q = (searchEl && searchEl.value || "").trim().toLowerCase();
+
+  const selected = state.suppliers.find(s=>s.id===state.pur.supplierId);
+  let list = state.suppliers;
+  if(q) list = list.filter(s=>s.name.toLowerCase().includes(q) || (s.phone||"").includes(q));
+  if(selected && !list.includes(selected)) list = [selected, ...list];
+
+  wrap.innerHTML = list.map(s=>`
+    <button class="chip ${state.pur.supplierId===s.id?'selected':''}" data-pur-sup="${s.id}">${escapeHtml(s.name)}</button>
+  `).join("") || `<div class="empty-hint" style="padding:8px 4px;">${q ? `No supplier matches "${escapeHtml(q)}".` : "No suppliers yet — add one from the Suppliers tab."}</div>`;
+
+  wrap.querySelectorAll("[data-pur-sup]").forEach(b=>{
+    b.addEventListener("click", ()=>{
+      state.pur.supplierId = b.dataset.purSup;
+      // Default Purchase Type from the supplier's own GST Type, same first-guess
+      // pattern Billing uses for a customer — staff can still override via chips.
+      const sup = state.suppliers.find(s=>s.id===state.pur.supplierId);
+      state.pur.purchaseType = (sup && sup.gst_type === "IGST") ? "Interstate" : "Local";
+      document.querySelectorAll('[data-pur-type]').forEach(x=>x.classList.toggle("selected", x.dataset.purType===state.pur.purchaseType));
+      renderPurchaseSuppliers();
+      renderPurchaseSupplierInfo();
+      renderPurchaseTotals();
+    });
+  });
+}
+function renderPurchaseSupplierInfo(){
+  const box = document.getElementById("pur-supplier-info");
+  const sup = state.suppliers.find(s=>s.id===state.pur.supplierId);
+  if(!sup){ box.style.display = "none"; box.innerHTML = ""; return; }
+  box.style.display = "block";
+  box.innerHTML = `
+    <div><strong>${escapeHtml(sup.name)}</strong></div>
+    ${sup.phone ? `<div class="muted">${escapeHtml(sup.phone)}</div>` : ""}
+    ${sup.gst ? `<div class="muted">GST: ${escapeHtml(sup.gst)}</div>` : ""}
+    ${sup.state ? `<div class="muted">${escapeHtml(sup.state)}</div>` : ""}
+    ${sup.address ? `<div class="muted">${escapeHtml(sup.address)}</div>` : ""}
+    ${sup.due>0 ? `<div style="color:var(--danger);font-weight:700;margin-top:4px;">Payable due: ${fmt(sup.due)}</div>` : ""}
+  `;
+}
+function renderPurchaseProducts(){
+  const q = (document.getElementById("pur-search").value||"").toLowerCase();
+  const list = state.products.filter(p=>
+    !q || p.name.toLowerCase().includes(q) || (p.brand||"").toLowerCase().includes(q) || (p.sku||"").toLowerCase().includes(q)
+  );
+  const wrap = document.getElementById("pur-product-list");
+  wrap.innerHTML = list.map(p=>{
+    const priceLabel = !p.sizes.length ? "⚠ No price — tap Edit" : (p.sizes.length>1 ? "From "+fmt(Math.min(...p.sizes.map(s=>s.price))) : fmt(p.sizes[0].price));
+    return `<div class="list-row" data-open-pur-product="${p.id}" style="cursor:pointer;">
+      <div class="swatch"></div>
+      <div><div class="row-title">${escapeHtml(p.name)}</div><div class="row-sub">${escapeHtml(p.brand||"")} · ${priceLabel} · ${p.stock} ${escapeHtml(p.unit||"")} in stock</div></div>
+      <div class="row-right"><button class="gold-fab" data-pur-quickadd="${p.id}" style="width:30px;height:30px;">+</button></div>
+    </div>`;
+  }).join("") || `<div class="empty-hint">No matching products.</div>`;
+
+  wrap.querySelectorAll("[data-open-pur-product]").forEach(el=>{
+    el.addEventListener("click", (e)=>{
+      if(e.target.closest("[data-pur-quickadd]")) return;
+      openProductDetail(el.dataset.openPurProduct, "purchase");
+    });
+  });
+  wrap.querySelectorAll("[data-pur-quickadd]").forEach(b=>{
+    b.addEventListener("click", (e)=>{ e.stopPropagation(); openProductDetail(b.dataset.purQuickadd, "purchase"); });
+  });
+}
+/* A purchase line always gets pushed as a NEW row rather than merged into an
+   existing one for the same size — a real supplier invoice can legitimately
+   list the same product/size twice at different rates (different batch),
+   and merging would silently lose that. */
+function addToPurchaseCart(productId, sizeIdx){
+  const p = state.products.find(x=>x.id===productId);
+  if(!p) return false;
+  if(!p.sizes.length){ toast(`"${p.name}" has no price yet — open it and tap Edit to add one.`); return false; }
+  const size = p.sizes[sizeIdx] || p.sizes[0];
+  state.pur.cart.push({
+    productId, sizeId: size.id, sizeIdx,
+    name: p.name + (p.sizes.length>1 ? " ("+size.label+")" : ""),
+    mode: Pricing.normaliseMode(p.default_mode),
+    lengthFt: p.length_ft || "", widthVal: p.width_val || "", thicknessIn: p.thickness_in || "",
+    pieces: 1, rate: size.price, gstRate: p.gst,
+    discountType: "pct", discountValue: 0
+  });
+  renderPurchaseCart(); renderPurchaseTotals();
+  return true;
+}
+/* Live figures for a purchase line — mirrors computeTotals() in
+   server/routes/purchases.js exactly: discount is resolved to a rupee amount
+   first (pct of line amount, or a flat value clamped to the line amount),
+   then GST is computed forward on the taxable (post-discount) value. */
+function purchaseLineCalc(c){
+  const r = Pricing.computeLine({mode:c.mode, lengthFt:c.lengthFt, widthVal:c.widthVal, thicknessIn:c.thicknessIn, pieces:c.pieces, rate:c.rate});
+  const discountAmount = c.discountType === "flat"
+    ? round2(Math.min(Math.max(0, c.discountValue||0), r.amount))
+    : round2(r.amount * (Math.min(100, Math.max(0, c.discountValue||0))/100));
+  const taxable = round2(r.amount - discountAmount);
+  const gstAmt = round2(taxable * ((c.gstRate||18)/100));
+  const finalAmt = round2(taxable + gstAmt);
+  return {...r, discountAmount, taxable, gstAmt, finalAmt};
+}
+function renderPurchaseCart(){
+  const wrap = document.getElementById("pur-cart-list");
+  if(!state.pur.cart.length){
+    wrap.innerHTML = `<div class="empty-hint">No items yet. Add products above.</div>`;
+    return;
+  }
+  wrap.innerHTML = state.pur.cart.map((c,idx)=>{
+    const m = Pricing.MODES[Pricing.normaliseMode(c.mode)];
+    const r = purchaseLineCalc(c);
+
+    const dim = (label, unit, key, val) => `
+      <label class="dim">
+        <span>${label}${unit?` <em>(${unit})</em>`:""}</span>
+        <input type="number" inputmode="decimal" step="any" min="0"
+               value="${val===0||val?val:""}" data-pur-line-field="${key}" data-pur-line="${idx}" placeholder="0">
+      </label>`;
+
+    return `<div class="bill-line" data-pur-line-row="${idx}">
+      <div class="bill-line-head">
+        <div class="bill-line-name">${escapeHtml(c.name)}</div>
+        <div class="line-actions">
+          <a href="#" data-pur-dup="${idx}">Duplicate</a>
+          <a href="#" data-pur-remove="${idx}" class="btn-danger-link">Remove</a>
+        </div>
+      </div>
+
+      <div class="mode-row">
+        ${Pricing.MODE_KEYS.map(k=>`
+          <button class="chip sm ${k===m.key?'selected':''}" data-pur-line-mode="${k}" data-pur-line="${idx}"
+                  title="${Pricing.MODES[k].formula}">${Pricing.MODES[k].unit}</button>
+        `).join("")}
+      </div>
+
+      <div class="dim-grid">
+        ${m.needsThickness ? dim("Thickness", m.thicknessUnit, "thicknessIn", c.thicknessIn) : ""}
+        ${m.needsLength ? dim("Length", m.lengthUnit, "lengthFt", c.lengthFt) : ""}
+        ${m.needsWidth ? dim("Width", m.widthUnit, "widthVal", c.widthVal) : ""}
+        ${dim("Qty", "pcs", "pieces", c.pieces)}
+        ${dim("Rate", "₹/"+m.unit, "rate", c.rate)}
+      </div>
+
+      <div class="chip-row" style="margin-top:8px;">
+        <button class="chip sm ${c.discountType==="pct"?'selected':''}" data-pur-disc-type="pct" data-pur-line="${idx}">Discount %</button>
+        <button class="chip sm ${c.discountType==="flat"?'selected':''}" data-pur-disc-type="flat" data-pur-line="${idx}">Discount ₹</button>
+      </div>
+      <div class="dim-grid">
+        ${dim(c.discountType==="flat"?"Discount":"Discount", c.discountType==="flat"?"₹":"%", "discountValue", c.discountValue)}
+        <label class="dim"><span>GST <em>(%)</em></span><input type="number" value="${c.gstRate}" disabled style="opacity:0.6;"></label>
+      </div>
+
+      <div class="line-calc">
+        <div class="line-calc-formula">
+          ${r.sizeLabel ? `<strong>${escapeHtml(r.sizeLabel)}</strong> · ` : ""}
+          ${m.key!=="UNIT" ? `${Pricing.formatQty(r.perPiece, r.mode)}/pc × ${r.pieces} pcs = ` : ""}
+          <strong>${Pricing.formatQty(r.billedQty, r.mode)}</strong>
+          × ${Pricing.formatRate(r.rate, r.mode)}
+          ${r.discountAmount>0 ? ` − ${fmtPaise(r.discountAmount)} disc.` : ""}
+          + ${fmtPaise(r.gstAmt)} GST
+        </div>
+        <div class="line-calc-amount">${fmtPaise(r.finalAmt)}</div>
+      </div>
+    </div>`;
+  }).join("");
+
+  wrap.querySelectorAll("[data-pur-line-mode]").forEach(b=>b.addEventListener("click", ()=>{
+    const c = state.pur.cart[b.dataset.purLine];
+    const next = b.dataset.purLineMode;
+    if(c.mode === next) return;
+    c.rate = Pricing.isRateConvertible(c.mode, next)
+      ? Pricing.convertLineRate({mode:c.mode, lengthFt:c.lengthFt, widthVal:c.widthVal,
+                                 thicknessIn:c.thicknessIn, pieces:c.pieces, rate:c.rate}, next)
+      : "";
+    c.mode = next;
+    renderPurchaseCart(); renderPurchaseTotals();
+  }));
+
+  wrap.querySelectorAll("[data-pur-disc-type]").forEach(b=>b.addEventListener("click", ()=>{
+    const c = state.pur.cart[b.dataset.purLine];
+    c.discountType = b.dataset.purDiscType;
+    renderPurchaseCart(); renderPurchaseTotals();
+  }));
+
+  wrap.querySelectorAll("[data-pur-line-field]").forEach(inp=>{
+    inp.addEventListener("input", ()=>{
+      const c = state.pur.cart[inp.dataset.purLine];
+      const v = inp.value === "" ? "" : Math.max(0, parseFloat(inp.value)||0);
+      c[inp.dataset.purLineField] = v;
+      renderPurchaseLineCalc(inp.dataset.purLine);
+      renderPurchaseTotals();
+    });
+    // Re-render fully on blur so cleared fields settle back to a real number.
+    inp.addEventListener("blur", ()=>{ renderPurchaseCart(); renderPurchaseTotals(); });
+  });
+
+  wrap.querySelectorAll("[data-pur-dup]").forEach(a=>a.addEventListener("click", (e)=>{
+    e.preventDefault();
+    const i = Number(a.dataset.purDup);
+    state.pur.cart.splice(i+1, 0, Object.assign({}, state.pur.cart[i]));
+    renderPurchaseCart(); renderPurchaseTotals();
+  }));
+
+  wrap.querySelectorAll("[data-pur-remove]").forEach(a=>a.addEventListener("click", (e)=>{
+    e.preventDefault(); state.pur.cart.splice(a.dataset.purRemove,1); renderPurchaseCart(); renderPurchaseTotals();
+  }));
+}
+/* Repaint just one line's derived figures while typing — mirrors
+   renderLineCalc() on the Billing side, same reasoning: rebuilding the whole
+   cart on every keystroke would tear the focused input out from under the
+   caret. */
+function renderPurchaseLineCalc(idx){
+  const row = document.querySelector(`[data-pur-line-row="${idx}"]`);
+  if(!row) return;
+  const c = state.pur.cart[idx];
+  const m = Pricing.MODES[Pricing.normaliseMode(c.mode)];
+  const r = purchaseLineCalc(c);
+  const f = row.querySelector(".line-calc-formula");
+  const a = row.querySelector(".line-calc-amount");
+  if(f) f.innerHTML =
+    (r.sizeLabel ? `<strong>${escapeHtml(r.sizeLabel)}</strong> · ` : "") +
+    (m.key!=="UNIT" ? `${Pricing.formatQty(r.perPiece, r.mode)}/pc × ${r.pieces} pcs = ` : "") +
+    `<strong>${Pricing.formatQty(r.billedQty, r.mode)}</strong>` +
+    ` × ${Pricing.formatRate(r.rate, r.mode)}` +
+    (r.discountAmount>0 ? ` − ${fmtPaise(r.discountAmount)} disc.` : "") +
+    ` + ${fmtPaise(r.gstAmt)} GST`;
+  if(a) a.textContent = fmtPaise(r.finalAmt);
+}
+function renderPurchaseDueDateVisibility(){
+  const row = document.getElementById("pur-due-date-row");
+  if(row) row.style.display = state.pur.paymentMethod === "Credit" ? "block" : "none";
+}
+/* Mirrors computeTotals() in server/routes/purchases.js exactly, including
+   the order of rounding — the preview must match what the server will store. */
+function computePurchaseTotals(){
+  const lines = state.pur.cart.map(purchaseLineCalc);
+  const subtotal = round2(lines.reduce((s,r)=>s+r.amount,0));
+  const discountAmount = round2(lines.reduce((s,r)=>s+r.discountAmount,0));
+  const goodsTax = round2(lines.reduce((s,r)=>s+r.gstAmt,0));
+
+  const transport = round2(Math.max(0, state.pur.transport||0));
+  const loading = round2(Math.max(0, state.pur.loading||0));
+  const otherCharges = round2(Math.max(0, state.pur.otherCharges||0));
+
+  let cgst=0, sgst=0, igst=0;
+  if(state.pur.purchaseType==="Interstate") igst = goodsTax;
+  else { cgst = round2(goodsTax/2); sgst = round2(goodsTax-cgst); }
+
+  const preRound = subtotal - discountAmount + cgst + sgst + igst + transport + loading + otherCharges;
+  const total = round2(state.pur.roundOff ? Math.round(preRound) : preRound);
+  const roundOffAmount = round2(total - preRound);
+
+  return {subtotal, discountAmount, cgst, sgst, igst, transport, loading, otherCharges, roundOffAmount, total};
+}
+function renderPurchaseTotals(){
+  const t = computePurchaseTotals();
+  const row = (label, value, cls) =>
+    `<div class="inv-flex" style="margin-bottom:4px;${cls||""}"><span class="muted">${label}</span><span>${value}</span></div>`;
+  document.getElementById("pur-totals-card").innerHTML = `
+    ${row("Subtotal", fmtPaise(t.subtotal))}
+    ${t.discountAmount>0 ? row("Total Discount", "-"+fmtPaise(t.discountAmount), "color:var(--danger);") : ""}
+    ${t.transport>0 ? row("Transport", fmtPaise(t.transport)) : ""}
+    ${t.loading>0 ? row("Loading / Unloading", fmtPaise(t.loading)) : ""}
+    ${t.otherCharges>0 ? row("Other Charges", fmtPaise(t.otherCharges)) : ""}
+    ${state.pur.purchaseType==="Interstate"
+      ? row("IGST", fmtPaise(t.igst))
+      : row("CGST", fmtPaise(t.cgst)) + row("SGST", fmtPaise(t.sgst))}
+    ${t.roundOffAmount!==0 ? row("Round off", (t.roundOffAmount>0?"+":"")+fmtPaise(t.roundOffAmount)) : ""}
+    <div class="inv-flex" style="font-weight:800;border-top:1px solid var(--border);padding-top:6px;font-size:15px;"><span>Grand Total</span><span>${fmtPaise(t.total)}</span></div>
+    <div class="amount-words">${Pricing.amountInWords(t.total)}</div>
+  `;
+}
+async function savePurchase(){
+  if(!state.pur.supplierId){ toast("Select a supplier first."); return; }
+  if(!state.pur.cart.length){ toast("Add at least one product to the purchase."); return; }
+  for(const c of state.pur.cart){
+    const bad = Pricing.validateLine({
+      mode:c.mode, lengthFt:c.lengthFt, widthVal:c.widthVal,
+      thicknessIn:c.thicknessIn, pieces:c.pieces, rate: c.rate
+    }, c.name);
+    if(bad){ toast(bad); return; }
+  }
+  const btn = document.getElementById("pur-save-btn");
+  btn.disabled = true;
+  try{
+    const payload = {
+      supplierId: state.pur.supplierId,
+      supplierInvoiceNo: state.pur.invoiceNo,
+      date: document.getElementById("pur-date").value || state.pur.date,
+      purchaseType: state.pur.purchaseType,
+      paymentMethod: state.pur.paymentMethod,
+      dueDate: state.pur.dueDate,
+      vehicleNumber: state.pur.vehicleNumber,
+      transportName: state.pur.transportName,
+      lrNumber: state.pur.lrNumber,
+      remarks: state.pur.remarks,
+      transport: state.pur.transport,
+      loading: state.pur.loading,
+      otherCharges: state.pur.otherCharges,
+      roundOff: state.pur.roundOff,
+      // Only the raw inputs are sent — the server recomputes every derived
+      // figure itself, same principle as completeSale() on the Billing side.
+      items: state.pur.cart.map(c=>({
+        productId:c.productId, sizeId:c.sizeId, name:c.name, mode:c.mode,
+        lengthFt:c.lengthFt, widthVal:c.widthVal, thicknessIn:c.thicknessIn,
+        pieces:c.pieces, rate:c.rate, gstRate:c.gstRate,
+        discountType:c.discountType, discountValue:c.discountValue
+      }))
+    };
+    const saved = await api("POST", "/purchases", payload);
+    state.pur = {
+      supplierId: null, purchaseType: "Local", paymentMethod: "Credit",
+      date: "", invoiceNo: "", dueDate: "", vehicleNumber: "", transportName: "", lrNumber: "", remarks: "",
+      transport: 0, loading: 0, otherCharges: 0, roundOff: true, cart: []
+    };
+    const set = (id, val) => { const el=document.getElementById(id); if(el) el.value = val; };
+    set("pur-invoice-no", ""); set("pur-due-date", ""); set("pur-vehicle", "");
+    set("pur-transport-name", ""); set("pur-lr", ""); set("pur-remarks", "");
+    set("pur-transport-input", 0); set("pur-loading-input", 0); set("pur-other-input", 0);
+    document.querySelectorAll('[data-pur-type]').forEach(x=>x.classList.toggle("selected", x.dataset.purType==="Local"));
+    document.querySelectorAll('[data-pur-pay]').forEach(x=>x.classList.toggle("selected", x.dataset.purPay==="Credit"));
+    await Promise.all([loadProducts(), loadSuppliers()]);
+    await renderHome();
+    toast(`Purchase ${saved.purchase_no} saved — Grand Total ${fmt(saved.total)}`, "ok");
+    switchTab("home");
+  }catch(e){
+    toast(e.message);
+  }finally{
+    btn.disabled = false;
+  }
 }
 
 })();

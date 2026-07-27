@@ -99,6 +99,7 @@ async function uploadToCloud(filePath, objectName) {
       method: "POST",
       headers: {
         Authorization: `Bearer ${cfg.key}`,
+        apikey: cfg.key,
         "Content-Type": "application/octet-stream",
         // Overwrite yesterday-with-same-name rather than erroring on a re-run.
         "x-upsert": "true"

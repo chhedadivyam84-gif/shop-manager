@@ -35,7 +35,7 @@ async function restoreIfNeeded() {
 
   const listRes = await fetch(`${cfg.url}/storage/v1/object/list/${cfg.bucket}`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${cfg.key}`, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${cfg.key}`, apikey: cfg.key, "Content-Type": "application/json" },
     body: JSON.stringify({ prefix: "", limit: 1000, sortBy: { column: "name", order: "desc" } })
   });
   if (!listRes.ok) return { restored: false, reason: `could not list backups: ${listRes.status}` };
@@ -47,7 +47,7 @@ async function restoreIfNeeded() {
 
   const latest = files[0].name;
   const dlRes = await fetch(`${cfg.url}/storage/v1/object/${cfg.bucket}/${latest}`, {
-    headers: { Authorization: `Bearer ${cfg.key}` }
+    headers: { Authorization: `Bearer ${cfg.key}`, apikey: cfg.key }
   });
   if (!dlRes.ok) return { restored: false, reason: `download failed: ${dlRes.status}` };
 

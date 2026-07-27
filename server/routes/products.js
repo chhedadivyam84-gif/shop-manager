@@ -288,6 +288,50 @@ router.get("/:id/stock-in", (req, res) => {
 });
 
 /**
+ * Corrects which supplier a past purchase is attributed to — for when the
+ * Supplier field was left blank (or wrong) on the original Record Purchase.
+ * Nothing about the purchase itself (qty, price, stock already received)
+ * changes; only its supplier link and, correspondingly, each supplier's due
+ * (reversed off the old one if any, applied to the new one), same resolve-
+ * or-create-by-name logic as the original stock-in route.
+ */
+router.put("/:id/stock-in/:siId", requireRole("owner"), (req, res) => {
+  const p = db.prepare("SELECT * FROM products WHERE id = ?").get(req.params.id);
+  if (!p) return res.status(404).json({ error: "Product not found." });
+  const si = db.prepare("SELECT * FROM stock_ins WHERE id = ? AND product_id = ?").get(req.params.siId, p.id);
+  if (!si) return res.status(404).json({ error: "Purchase record not found." });
+
+  const { supplierId, supplier } = req.body;
+  let supplierRow = null;
+  if (supplierId) {
+    supplierRow = db.prepare("SELECT * FROM suppliers WHERE id = ?").get(supplierId);
+    if (!supplierRow) return res.status(400).json({ error: "Selected supplier no longer exists." });
+  } else if (supplier && String(supplier).trim()) {
+    const name = String(supplier).trim();
+    supplierRow = db.prepare("SELECT * FROM suppliers WHERE LOWER(name) = LOWER(?)").get(name);
+    if (!supplierRow) {
+      const newId = uid("SUP");
+      db.prepare("INSERT INTO suppliers (id, name, due, created_at) VALUES (?, ?, 0, ?)").run(newId, name, Date.now());
+      supplierRow = db.prepare("SELECT * FROM suppliers WHERE id = ?").get(newId);
+    }
+  }
+
+  db.transaction(() => {
+    if (si.supplier_id) {
+      db.prepare("UPDATE suppliers SET due = MAX(0, due - ?) WHERE id = ?").run(si.grand_total, si.supplier_id);
+    }
+    db.prepare("UPDATE stock_ins SET supplier = ?, supplier_id = ? WHERE id = ?")
+      .run(supplierRow ? supplierRow.name : "", supplierRow ? supplierRow.id : null, si.id);
+    if (supplierRow) {
+      db.prepare("UPDATE suppliers SET due = due + ? WHERE id = ?").run(si.grand_total, supplierRow.id);
+    }
+  })();
+
+  logAction(req, "product.stock_in.relink_supplier", `${p.name} (${si.id}): -> ${supplierRow ? supplierRow.name : "(none)"}`);
+  res.json(db.prepare("SELECT * FROM stock_ins WHERE id = ?").get(si.id));
+});
+
+/**
  * Copy a product into a new one — the fast way to add the next thickness or
  * grade of a board that is otherwise identical.
  *

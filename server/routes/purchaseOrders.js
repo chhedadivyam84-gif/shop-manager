@@ -1,6 +1,7 @@
 const express = require("express");
 const db = require("../db");
 const { uid, todayStr, round2, logAction } = require("../util");
+const inventory = require("../inventory");
 const Pricing = require("../../public/js/pricing.js");
 
 const router = express.Router();
@@ -272,7 +273,11 @@ router.post("/:id/convert", (req, res) => {
   if (!supplier) return res.status(400).json({ error: "This Purchase Order's supplier no longer exists." });
   const poItems = db.prepare("SELECT * FROM purchase_order_items WHERE po_id = ?").all(po.id);
 
-  const { paymentMethod, dueDate, vehicleNumber, transportName, lrNumber, supplierInvoiceNo } = req.body;
+  const { paymentMethod, dueDate, vehicleNumber, transportName, lrNumber, supplierInvoiceNo, locationId } = req.body;
+  // Same default as a direct New Purchase — Warehouse unless staff picks
+  // another active location for where these goods actually landed.
+  const targetLocation = inventory.getLocationById(locationId);
+  const resolvedLocationId = (targetLocation && targetLocation.active) ? targetLocation.id : inventory.getLocationByCode("warehouse").id;
 
   const syncProductStockStmt = db.prepare(
     "UPDATE products SET stock = (SELECT COALESCE(SUM(stock),0) FROM product_sizes WHERE product_id = products.id) WHERE id = ?"
@@ -283,7 +288,6 @@ router.post("/:id/convert", (req, res) => {
        size_label, pieces, per_piece, unit_label, qty, rate, discount_amount, gst_rate)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const addStock = db.prepare("UPDATE product_sizes SET stock = stock + ? WHERE id = ?");
   const bumpDue = db.prepare("UPDATE suppliers SET due = due + ? WHERE id = ?");
 
   function nextPurchaseNo() {
@@ -302,14 +306,14 @@ router.post("/:id/convert", (req, res) => {
       INSERT INTO purchases (id, purchase_no, date, created_at, supplier_id, supplier_invoice_no,
         purchase_type, tax_type, subtotal, discount_amount, cgst, sgst, igst, transport, loading,
         other_charges, round_off, total, payment_method, due_date, vehicle_number, transport_name,
-        lr_number, remarks, voided)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+        lr_number, remarks, voided, location_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
     `).run(
       purchaseId, nextPurchaseNo(), todayStr(), Date.now(), po.supplier_id, (supplierInvoiceNo || "").trim(),
       po.purchase_type, po.tax_type, po.subtotal, po.discount_amount, po.cgst, po.sgst, po.igst,
       po.other_charges, po.round_off, po.total, paymentMethod || "Credit", (dueDate || "").trim(),
       (vehicleNumber || "").trim(), (transportName || "").trim(), (lrNumber || "").trim(),
-      `Converted from ${po.po_no}`
+      `Converted from ${po.po_no}`, resolvedLocationId
     );
 
     const touchedProducts = new Set();
@@ -325,7 +329,7 @@ router.post("/:id/convert", (req, res) => {
         touchedProducts.add(it.product_id);
       }
     });
-    Object.entries(piecesBySize).forEach(([sizeId, pieces]) => addStock.run(pieces, sizeId));
+    Object.entries(piecesBySize).forEach(([sizeId, pieces]) => inventory.addStock(Number(sizeId), resolvedLocationId, pieces));
     touchedProducts.forEach(pid => syncProductStockStmt.run(pid));
     if ((paymentMethod || "Credit") === "Credit") bumpDue.run(po.total, po.supplier_id);
 

@@ -762,6 +762,18 @@ db.transaction(() => {
   });
 })();
 
+// Which location a purchase's stock landed in — every stock-in action asks.
+// Existing rows predate this column and get backfilled to Warehouse, since
+// that's this app's own default destination for a purchase (requirement:
+// "Purchased items should increase Warehouse Stock by default").
+const addedPurchaseLocation = addColumn("purchases", "location_id", "TEXT REFERENCES locations(id)");
+const addedStockInLocation = addColumn("stock_ins", "location_id", "TEXT REFERENCES locations(id)");
+if (addedPurchaseLocation || addedStockInLocation) {
+  const warehouseId = db.prepare("SELECT id FROM locations WHERE code = 'warehouse'").get().id;
+  if (addedPurchaseLocation) db.prepare("UPDATE purchases SET location_id = ? WHERE location_id IS NULL").run(warehouseId);
+  if (addedStockInLocation) db.prepare("UPDATE stock_ins SET location_id = ? WHERE location_id IS NULL").run(warehouseId);
+}
+
 // Where the data lives — the backup module needs the on-disk paths, and this
 // is the single place that knows them.
 db.dataDir = DATA_DIR;

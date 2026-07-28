@@ -2,6 +2,7 @@ const express = require("express");
 const db = require("../db");
 const { uid, todayStr, round2, logAction } = require("../util");
 const { requireRole } = require("../auth");
+const inventory = require("../inventory");
 const Pricing = require("../../public/js/pricing.js");
 
 const router = express.Router();
@@ -9,6 +10,17 @@ const router = express.Router();
 const syncProductStockStmt = db.prepare(
   "UPDATE products SET stock = (SELECT COALESCE(SUM(stock),0) FROM product_sizes WHERE product_id = products.id) WHERE id = ?"
 );
+
+/** A purchase lands in Warehouse unless staff explicitly picks another
+ *  active location — matches "Purchased items should increase Warehouse
+ *  Stock by default" while still asking (requirement #4) via the picker. */
+function resolveLocationId(requestedId) {
+  if (requestedId) {
+    const loc = inventory.getLocationById(requestedId);
+    if (loc && loc.active) return loc.id;
+  }
+  return inventory.getLocationByCode("warehouse").id;
+}
 
 /** A UNIT-mode line has no size_label, so this only appends the parens when there's one to show. */
 function itemLabel(it) {
@@ -98,7 +110,7 @@ router.post("/", (req, res) => {
   const {
     supplierId, supplierInvoiceNo, date, purchaseType, paymentMethod, dueDate,
     vehicleNumber, transportName, lrNumber, remarks,
-    transport, loading, otherCharges, roundOff,
+    transport, loading, otherCharges, roundOff, locationId,
     items: rawItems
   } = req.body;
 
@@ -166,16 +178,17 @@ router.post("/", (req, res) => {
   const id = uid("PUR");
   const purchaseNo = nextPurchaseNo();
   const purchaseDate = (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) ? date : todayStr();
+  const targetLocationId = resolveLocationId(locationId);
 
   const insertPurchase = db.prepare(`
     INSERT INTO purchases (id, purchase_no, date, created_at, supplier_id, supplier_invoice_no,
       purchase_type, tax_type, subtotal, discount_amount, cgst, sgst, igst, transport, loading,
       other_charges, round_off, total, payment_method, due_date, vehicle_number, transport_name,
-      lr_number, remarks, voided)
+      lr_number, remarks, voided, location_id)
     VALUES (@id, @purchaseNo, @date, @createdAt, @supplierId, @supplierInvoiceNo,
       @purchaseType, @taxType, @subtotal, @discountAmount, @cgst, @sgst, @igst, @transport, @loading,
       @otherCharges, @roundOffAmount, @total, @paymentMethod, @dueDate, @vehicleNumber, @transportName,
-      @lrNumber, @remarks, 0)
+      @lrNumber, @remarks, 0, @locationId)
   `);
   const insertItem = db.prepare(`
     INSERT INTO purchase_items
@@ -183,7 +196,6 @@ router.post("/", (req, res) => {
        size_label, pieces, per_piece, unit_label, qty, rate, discount_amount, gst_rate)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const addStock = db.prepare("UPDATE product_sizes SET stock = stock + ? WHERE id = ?");
   const bumpDue = db.prepare("UPDATE suppliers SET due = due + ? WHERE id = ?");
 
   db.transaction(() => {
@@ -196,7 +208,7 @@ router.post("/", (req, res) => {
       roundOffAmount: totals.roundOffAmount, total: totals.total,
       paymentMethod: paymentMethod || "Credit", dueDate: (dueDate || "").trim(),
       vehicleNumber: (vehicleNumber || "").trim(), transportName: (transportName || "").trim(),
-      lrNumber: (lrNumber || "").trim(), remarks: (remarks || "").trim()
+      lrNumber: (lrNumber || "").trim(), remarks: (remarks || "").trim(), locationId: targetLocationId
     });
 
     const touchedProducts = new Set();
@@ -208,7 +220,7 @@ router.post("/", (req, res) => {
       );
       touchedProducts.add(it.productId);
     });
-    Object.entries(piecesBySize).forEach(([sizeId, pieces]) => addStock.run(pieces, sizeId));
+    Object.entries(piecesBySize).forEach(([sizeId, pieces]) => inventory.addStock(Number(sizeId), targetLocationId, pieces));
     touchedProducts.forEach(pid => syncProductStockStmt.run(pid));
 
     // Only Credit leaves a payable balance — Cash/UPI/Bank are settled at the
@@ -238,7 +250,7 @@ router.put("/:id", (req, res) => {
   const {
     supplierId, supplierInvoiceNo, date, purchaseType, paymentMethod, dueDate,
     vehicleNumber, transportName, lrNumber, remarks,
-    transport, loading, otherCharges, roundOff,
+    transport, loading, otherCharges, roundOff, locationId,
     items: rawItems
   } = req.body;
 
@@ -261,6 +273,12 @@ router.put("/:id", (req, res) => {
 
   const purchaseTypeVal = purchaseType === "Interstate" ? "Interstate" : "Local";
   const taxType = purchaseTypeVal === "Interstate" ? "IGST" : "CGST_SGST";
+  // The OLD location this purchase actually put stock into — a purchase
+  // saved before this column existed falls back to Warehouse, same as the
+  // one-time schema backfill did. The NEW location (possibly changed by
+  // this edit) is resolved separately below.
+  const oldLocationId = p.location_id || inventory.getLocationByCode("warehouse").id;
+  const newLocationId = resolveLocationId(locationId);
 
   const oldItems = db.prepare("SELECT * FROM purchase_items WHERE purchase_id = ?").all(p.id);
   const insertItem = db.prepare(`
@@ -269,24 +287,23 @@ router.put("/:id", (req, res) => {
        size_label, pieces, per_piece, unit_label, qty, rate, discount_amount, gst_rate)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const addStock = db.prepare("UPDATE product_sizes SET stock = stock + ? WHERE id = ?");
-  const takeStock = db.prepare("UPDATE product_sizes SET stock = stock - ? WHERE id = ?");
   const bumpDue = db.prepare("UPDATE suppliers SET due = due + ? WHERE id = ?");
   const reduceDue = db.prepare("UPDATE suppliers SET due = MAX(0, due - ?) WHERE id = ?");
 
   const runEdit = db.transaction(() => {
     const touchedProducts = new Set();
 
-    // 1. Reverse the OLD stock impact — checked first, before touching
-    //    anything, so a blocked edit leaves the purchase exactly as it was.
+    // 1. Reverse the OLD stock impact at the OLD location — checked first,
+    //    before touching anything, so a blocked edit leaves the purchase
+    //    exactly as it was.
     oldItems.forEach(it => {
-      const size = db.prepare("SELECT * FROM product_sizes WHERE id = ?").get(it.size_id);
-      if (size && size.stock < it.pieces) {
-        throw { status: 400, error: `Can't edit this purchase — ${itemLabel(it)} stock has already been used elsewhere (only ${size.stock} left, this purchase added ${it.pieces}).` };
+      const atLocation = inventory.getStock(it.size_id, oldLocationId);
+      if (atLocation < it.pieces) {
+        throw { status: 400, error: `Can't edit this purchase — ${itemLabel(it)} stock has already been used elsewhere (only ${atLocation} left at that location, this purchase added ${it.pieces}).` };
       }
     });
     oldItems.forEach(it => {
-      takeStock.run(it.pieces, it.size_id);
+      inventory.addStock(it.size_id, oldLocationId, -it.pieces);
       touchedProducts.add(it.product_id);
     });
 
@@ -341,8 +358,9 @@ router.put("/:id", (req, res) => {
       touchedProducts.add(it.productId);
     });
 
-    // 5. Apply stock for the NEW items and resync affected product totals.
-    Object.entries(piecesBySize).forEach(([sizeId, pieces]) => addStock.run(pieces, sizeId));
+    // 5. Apply stock for the NEW items (at the NEW location) and resync
+    //    affected product totals.
+    Object.entries(piecesBySize).forEach(([sizeId, pieces]) => inventory.addStock(Number(sizeId), newLocationId, pieces));
     touchedProducts.forEach(pid => syncProductStockStmt.run(pid));
 
     // 6. Update the purchase row itself — purchase_no/created_at are never
@@ -352,7 +370,8 @@ router.put("/:id", (req, res) => {
         purchase_type=@purchaseType, tax_type=@taxType, subtotal=@subtotal, discount_amount=@discountAmount,
         cgst=@cgst, sgst=@sgst, igst=@igst, transport=@transport, loading=@loading, other_charges=@otherCharges,
         round_off=@roundOffAmount, total=@total, payment_method=@paymentMethod, due_date=@dueDate,
-        vehicle_number=@vehicleNumber, transport_name=@transportName, lr_number=@lrNumber, remarks=@remarks
+        vehicle_number=@vehicleNumber, transport_name=@transportName, lr_number=@lrNumber, remarks=@remarks,
+        location_id=@locationId
       WHERE id=@id
     `).run({
       id: p.id, supplierId, supplierInvoiceNo: trimmedSupplierInvoiceNo, date: purchaseDate,
@@ -361,7 +380,7 @@ router.put("/:id", (req, res) => {
       otherCharges: totals.otherCharges, roundOffAmount: totals.roundOffAmount, total: totals.total,
       paymentMethod: paymentMethod || "Credit", dueDate: (dueDate || "").trim(),
       vehicleNumber: (vehicleNumber || "").trim(), transportName: (transportName || "").trim(),
-      lrNumber: (lrNumber || "").trim(), remarks: (remarks || "").trim()
+      lrNumber: (lrNumber || "").trim(), remarks: (remarks || "").trim(), locationId: newLocationId
     });
 
     // 7. Bump the (possibly new) supplier's due, only if Credit.
@@ -394,17 +413,18 @@ router.post("/:id/void", requireRole("owner"), (req, res) => {
   const items = db.prepare("SELECT * FROM purchase_items WHERE purchase_id = ?").all(p.id);
 
   const reduceDue = db.prepare("UPDATE suppliers SET due = MAX(0, due - ?) WHERE id = ?");
+  const purchaseLocationId = p.location_id || inventory.getLocationByCode("warehouse").id;
 
   const runVoid = db.transaction(() => {
     const touchedProducts = new Set();
     items.forEach(it => {
-      const size = db.prepare("SELECT * FROM product_sizes WHERE id = ?").get(it.size_id);
-      if (size && size.stock < it.pieces) {
-        throw { status: 400, error: `Can't void this purchase — ${itemLabel(it)} stock has already been used elsewhere (only ${size.stock} left, this purchase added ${it.pieces}).` };
+      const atLocation = inventory.getStock(it.size_id, purchaseLocationId);
+      if (atLocation < it.pieces) {
+        throw { status: 400, error: `Can't void this purchase — ${itemLabel(it)} stock has already been used elsewhere (only ${atLocation} left at that location, this purchase added ${it.pieces}).` };
       }
     });
     items.forEach(it => {
-      db.prepare("UPDATE product_sizes SET stock = stock - ? WHERE id = ?").run(it.pieces, it.size_id);
+      inventory.addStock(it.size_id, purchaseLocationId, -it.pieces);
       touchedProducts.add(it.product_id);
     });
     touchedProducts.forEach(pid => syncProductStockStmt.run(pid));
@@ -435,18 +455,19 @@ router.delete("/:id", requireRole("owner"), (req, res) => {
   if (!p) return res.status(404).json({ error: "Purchase not found." });
   const items = db.prepare("SELECT * FROM purchase_items WHERE purchase_id = ?").all(p.id);
   const reduceDue = db.prepare("UPDATE suppliers SET due = MAX(0, due - ?) WHERE id = ?");
+  const purchaseLocationId = p.location_id || inventory.getLocationByCode("warehouse").id;
 
   const runDelete = db.transaction(() => {
     if (!p.voided) {
       const touchedProducts = new Set();
       items.forEach(it => {
-        const size = db.prepare("SELECT * FROM product_sizes WHERE id = ?").get(it.size_id);
-        if (size && size.stock < it.pieces) {
-          throw { status: 400, error: `Can't delete this purchase — ${itemLabel(it)} stock has already been used elsewhere (only ${size.stock} left, this purchase added ${it.pieces}). Void it after correcting stock, or edit it instead.` };
+        const atLocation = inventory.getStock(it.size_id, purchaseLocationId);
+        if (atLocation < it.pieces) {
+          throw { status: 400, error: `Can't delete this purchase — ${itemLabel(it)} stock has already been used elsewhere (only ${atLocation} left at that location, this purchase added ${it.pieces}). Void it after correcting stock, or edit it instead.` };
         }
       });
       items.forEach(it => {
-        db.prepare("UPDATE product_sizes SET stock = stock - ? WHERE id = ?").run(it.pieces, it.size_id);
+        inventory.addStock(it.size_id, purchaseLocationId, -it.pieces);
         touchedProducts.add(it.product_id);
       });
       touchedProducts.forEach(pid => syncProductStockStmt.run(pid));

@@ -13,9 +13,14 @@ function getAllLocations() {
   return db.prepare("SELECT * FROM locations ORDER BY sort_order ASC, name ASC").all();
 }
 function getLocationByCode(code) {
+  if (code == null) return undefined;
   return db.prepare("SELECT * FROM locations WHERE code = ?").get(code);
 }
 function getLocationById(id) {
+  // node:sqlite throws on an undefined bind param (unlike null) — callers
+  // pass this straight through from an optional request body field, so
+  // "not provided" must resolve to "not found" rather than a 500.
+  if (id == null) return undefined;
   return db.prepare("SELECT * FROM locations WHERE id = ?").get(id);
 }
 

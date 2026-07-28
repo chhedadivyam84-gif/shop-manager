@@ -2,6 +2,7 @@ const express = require("express");
 const db = require("../db");
 const { uid, logAction, todayStr, round2 } = require("../util");
 const { requireRole } = require("../auth");
+const inventory = require("../inventory");
 const Pricing = require("../../public/js/pricing.js");
 
 const router = express.Router();
@@ -191,8 +192,12 @@ router.post("/:id/stock-in", (req, res) => {
 
   const {
     purchaseDate, invoiceNo, supplier, supplierId, note, sizeId,
-    mode, lengthFt, widthVal, thicknessIn, pieces, rate, gst, transport
+    mode, lengthFt, widthVal, thicknessIn, pieces, rate, gst, transport, locationId
   } = req.body;
+  // Same default as New Purchase/Purchase Order — Warehouse unless staff
+  // picks another active location.
+  const targetLocation = inventory.getLocationById(locationId);
+  const resolvedLocationId = (targetLocation && targetLocation.active) ? targetLocation.id : inventory.getLocationByCode("warehouse").id;
 
   // The Supplier field on Purchase Entry stays a single free-text box (no
   // extra picker step) — but it now resolves to a real Supplier record
@@ -258,15 +263,15 @@ router.post("/:id/stock-in", (req, res) => {
       INSERT INTO stock_ins
         (id, product_id, size_id, product_name, purchase_date, invoice_no, supplier, supplier_id, brand, category,
          mode, length_ft, width_val, thickness_in, size_label, qty, per_piece, billed_qty,
-         unit_label, rate, amount, gst_rate, gst_amount, tax_type, cgst, sgst, igst, transport, grand_total, cost_price, note, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         unit_label, rate, amount, gst_rate, gst_amount, tax_type, cgst, sgst, igst, transport, grand_total, cost_price, note, created_at, location_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id, p.id, size.id, p.name, date, (invoiceNo || "").trim(), supplierName, supplierRow ? supplierRow.id : null, p.brand, p.category,
       calc.mode, calc.lengthFt || null, calc.widthVal || null, calc.thicknessIn || null, calc.sizeLabel || size.label,
       calc.pieces, calc.perPiece, calc.billedQty, calc.unit, calc.rate, calc.amount,
-      gstRate, gstAmount, taxType, cgst, sgst, igst, transportAmt, grandTotal, costPrice, (note || "").trim(), Date.now()
+      gstRate, gstAmount, taxType, cgst, sgst, igst, transportAmt, grandTotal, costPrice, (note || "").trim(), Date.now(), resolvedLocationId
     );
-    db.prepare("UPDATE product_sizes SET stock = stock + ? WHERE id = ?").run(calc.pieces, size.id);
+    inventory.addStock(size.id, resolvedLocationId, calc.pieces);
     syncProductStock(p.id);
     // Purchases go on credit by default, mirroring how a sales invoice raises
     // the customer's due — a Purchase Payment is what brings it back down.
@@ -312,8 +317,15 @@ router.put("/:id/stock-in/:siId", requireRole("owner"), (req, res) => {
 
   const {
     purchaseDate, invoiceNo, supplier, supplierId, note, sizeId,
-    mode, lengthFt, widthVal, thicknessIn, pieces, rate, gst, transport
+    mode, lengthFt, widthVal, thicknessIn, pieces, rate, gst, transport, locationId
   } = req.body;
+  // The OLD location this stock-in actually put stock into — a row saved
+  // before this column existed falls back to Warehouse, same as the schema
+  // backfill did. The NEW location (possibly changed by this edit) is
+  // resolved separately.
+  const oldLocationId = si.location_id || inventory.getLocationByCode("warehouse").id;
+  const requestedNewLocation = inventory.getLocationById(locationId);
+  const newLocationId = (requestedNewLocation && requestedNewLocation.active) ? requestedNewLocation.id : oldLocationId;
 
   let supplierRow = null;
   if (supplierId) {
@@ -347,13 +359,13 @@ router.put("/:id/stock-in/:siId", requireRole("owner"), (req, res) => {
   if (invalid) return res.status(400).json({ error: invalid });
 
   const runEdit = db.transaction(() => {
-    // 1. Reverse the OLD stock impact — guarded, same reasoning as
-    //    purchases.js: refuse if that would drive the size negative.
-    const oldSize = db.prepare("SELECT * FROM product_sizes WHERE id = ?").get(si.size_id);
-    if (oldSize && oldSize.stock < si.qty) {
-      throw { status: 400, error: `Can't edit this purchase — ${p.name} stock has already been used elsewhere (only ${oldSize.stock} left, this purchase added ${si.qty}).` };
+    // 1. Reverse the OLD stock impact at the OLD location — guarded, same
+    //    reasoning as purchases.js: refuse if that would drive it negative.
+    const atOldLocation = inventory.getStock(si.size_id, oldLocationId);
+    if (atOldLocation < si.qty) {
+      throw { status: 400, error: `Can't edit this purchase — ${p.name} stock has already been used elsewhere (only ${atOldLocation} left at that location, this purchase added ${si.qty}).` };
     }
-    if (oldSize) db.prepare("UPDATE product_sizes SET stock = stock - ? WHERE id = ?").run(si.qty, oldSize.id);
+    inventory.addStock(si.size_id, oldLocationId, -si.qty);
 
     // 2. Reverse the OLD supplier's due.
     if (si.supplier_id) db.prepare("UPDATE suppliers SET due = MAX(0, due - ?) WHERE id = ?").run(si.grand_total, si.supplier_id);
@@ -372,13 +384,13 @@ router.put("/:id/stock-in/:siId", requireRole("owner"), (req, res) => {
     const costPrice = calc.pieces > 0 ? round2((calc.amount + transportAmt) / calc.pieces) : 0;
     const supplierName = supplierRow ? supplierRow.name : (supplier !== undefined ? String(supplier || "").trim() : si.supplier);
 
-    // 4. Apply the NEW stock and update the row.
-    db.prepare("UPDATE product_sizes SET stock = stock + ? WHERE id = ?").run(calc.pieces, size.id);
+    // 4. Apply the NEW stock (at the NEW location) and update the row.
+    inventory.addStock(size.id, newLocationId, calc.pieces);
     db.prepare(`
       UPDATE stock_ins SET size_id=?, purchase_date=?, invoice_no=?, supplier=?, supplier_id=?,
         mode=?, length_ft=?, width_val=?, thickness_in=?, size_label=?, qty=?, per_piece=?, billed_qty=?,
         unit_label=?, rate=?, amount=?, gst_rate=?, gst_amount=?, tax_type=?, cgst=?, sgst=?, igst=?,
-        transport=?, grand_total=?, cost_price=?, note=?
+        transport=?, grand_total=?, cost_price=?, note=?, location_id=?
       WHERE id=?
     `).run(
       size.id, date, invoiceNo !== undefined ? String(invoiceNo || "").trim() : si.invoice_no, supplierName,
@@ -386,7 +398,7 @@ router.put("/:id/stock-in/:siId", requireRole("owner"), (req, res) => {
       calc.mode, calc.lengthFt || null, calc.widthVal || null, calc.thicknessIn || null, calc.sizeLabel || size.label,
       calc.pieces, calc.perPiece, calc.billedQty, calc.unit, calc.rate, calc.amount,
       gstRate, gstAmount, taxType, cgst, sgst, igst, transportAmt, grandTotal, costPrice,
-      note !== undefined ? String(note || "").trim() : si.note, si.id
+      note !== undefined ? String(note || "").trim() : si.note, newLocationId, si.id
     );
     syncProductStock(p.id);
 
@@ -417,11 +429,12 @@ router.delete("/:id/stock-in/:siId", requireRole("owner"), (req, res) => {
   if (!si) return res.status(404).json({ error: "Purchase record not found." });
 
   const runDelete = db.transaction(() => {
-    const size = db.prepare("SELECT * FROM product_sizes WHERE id = ?").get(si.size_id);
-    if (size && size.stock < si.qty) {
-      throw { status: 400, error: `Can't delete this purchase — ${p.name} stock has already been used elsewhere (only ${size.stock} left, this purchase added ${si.qty}).` };
+    const locationId = si.location_id || inventory.getLocationByCode("warehouse").id;
+    const atLocation = inventory.getStock(si.size_id, locationId);
+    if (atLocation < si.qty) {
+      throw { status: 400, error: `Can't delete this purchase — ${p.name} stock has already been used elsewhere (only ${atLocation} left at that location, this purchase added ${si.qty}).` };
     }
-    if (size) db.prepare("UPDATE product_sizes SET stock = stock - ? WHERE id = ?").run(si.qty, size.id);
+    inventory.addStock(si.size_id, locationId, -si.qty);
     syncProductStock(p.id);
     if (si.supplier_id) db.prepare("UPDATE suppliers SET due = MAX(0, due - ?) WHERE id = ?").run(si.grand_total, si.supplier_id);
     db.prepare("DELETE FROM stock_ins WHERE id = ?").run(si.id);

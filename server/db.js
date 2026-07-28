@@ -601,6 +601,13 @@ for (const t of ["payments", "purchase_payments"]) {
   addColumn(t, "attachment_name", "TEXT DEFAULT ''");
 }
 
+// A customer/supplier linked to any transaction can't be hard-deleted (see
+// routes) — Deactivate is the alternative, so the record stops showing up as
+// a live option while every historical invoice/purchase/payment keeps
+// referencing it correctly.
+addColumn("customers", "active", "INTEGER NOT NULL DEFAULT 1");
+addColumn("suppliers", "active", "INTEGER NOT NULL DEFAULT 1");
+
 // node:sqlite has no built-in transaction wrapper the way better-sqlite3 does;
 // this shim keeps every route file's `db.transaction(() => {...})()` call working unchanged.
 db.transaction = function (fn) {

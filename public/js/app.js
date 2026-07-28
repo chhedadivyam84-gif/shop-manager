@@ -1082,9 +1082,9 @@ async function renderCustomersList(){
   let list = state.customers;
   if(q) list = list.filter(c=>c.name.toLowerCase().includes(q) || (c.phone||"").includes(q) || (c.gst||"").toLowerCase().includes(q));
   document.getElementById("customers-list").innerHTML = `<div class="card">` + (list.length ? list.map(c=>{
-    return `<div class="list-row" data-open-cust="${c.id}" style="cursor:pointer;">
+    return `<div class="list-row" data-open-cust="${c.id}" style="cursor:pointer;${c.active===0?'opacity:0.55;':''}">
       <div class="avatar" style="width:34px;height:34px;font-size:12px;">${initials(c.name)}</div>
-      <div><div class="row-title">${escapeHtml(c.name)}</div><div class="row-sub">${escapeHtml(c.type||"")} · ${escapeHtml(c.phone||"")}</div></div>
+      <div><div class="row-title">${escapeHtml(c.name)}${c.active===0?' <span class="pill">Inactive</span>':''}</div><div class="row-sub">${escapeHtml(c.type||"")} · ${escapeHtml(c.phone||"")}</div></div>
       <div class="row-right ${c.due>0?'':'muted'}" style="font-weight:800;${c.due>0?'color:var(--danger);':''}">${fmt(c.due)}</div>
     </div>`;
   }).join("") : `<div class="empty-hint">No customers found.</div>`) + `</div>`;
@@ -1102,9 +1102,9 @@ async function renderSuppliersList(){
   let list = state.suppliers;
   if(q) list = list.filter(s=>s.name.toLowerCase().includes(q) || (s.phone||"").includes(q) || (s.gst||"").toLowerCase().includes(q));
   document.getElementById("customers-list").innerHTML = `<div class="card">` + (list.length ? list.map(s=>{
-    return `<div class="list-row" data-open-supplier="${s.id}" style="cursor:pointer;">
+    return `<div class="list-row" data-open-supplier="${s.id}" style="cursor:pointer;${s.active===0?'opacity:0.55;':''}">
       <div class="avatar" style="width:34px;height:34px;font-size:12px;">${initials(s.name)}</div>
-      <div><div class="row-title">${escapeHtml(s.name)}</div><div class="row-sub">${escapeHtml(s.phone||"")}</div></div>
+      <div><div class="row-title">${escapeHtml(s.name)}${s.active===0?' <span class="pill">Inactive</span>':''}</div><div class="row-sub">${escapeHtml(s.phone||"")}</div></div>
       <div class="row-right ${s.due>0?'':'muted'}" style="font-weight:800;${s.due>0?'color:var(--danger);':''}">${fmt(s.due)}</div>
     </div>`;
   }).join("") : `<div class="empty-hint">No suppliers found.</div>`) + `</div>`;
@@ -1543,7 +1543,7 @@ async function openCustomerDetail(customerId){
   sheet.innerHTML = `
     <div class="sheet-handle"></div>
     <button class="sheet-close" data-sheetclose>✕</button>
-    <div class="sheet-title">${escapeHtml(detail.name)}</div>
+    <div class="sheet-title">${escapeHtml(detail.name)} ${detail.active===0?'<span class="pill">Inactive</span>':''}</div>
     <div class="muted" style="font-size:12px;margin-bottom:10px;">${escapeHtml(detail.type||"")} · ${escapeHtml(detail.phone||"")}${detail.gst?" · GST "+escapeHtml(detail.gst):""}${detail.state?" · "+escapeHtml(detail.state):""}${detail.address?"<br>"+escapeHtml(detail.address):""}</div>
     <div class="stat-grid">
       <div class="stat-card plain"><div class="label">Total Sales</div><div class="value">${fmt(detail.totalSales)}</div></div>
@@ -1559,7 +1559,8 @@ async function openCustomerDetail(customerId){
     </div>
     <div class="section-title">Ledger</div>
     <div class="card">${detail.ledger.length ? detail.ledger.map(l=>renderPartyLedgerRow(l,"customer",detail.id)).join("") : `<div class="empty-hint">No activity yet.</div>`}</div>
-    ${isOwner() ? `<div style="margin-top:16px;text-align:center;">
+    ${isOwner() ? `<div style="margin-top:16px;display:flex;flex-direction:column;gap:8px;align-items:center;">
+      <a href="#" id="toggle-active-cust-link">${detail.active===0?"Reactivate this customer":"Deactivate this customer"}</a>
       <a href="#" id="delete-cust-link" class="btn-danger-link">Delete this customer</a>
     </div>` : ""}
   `;
@@ -1575,10 +1576,31 @@ async function openCustomerDetail(customerId){
     window.open(`/api/customers/${detail.id}/ledger/export`, "_blank");
   });
   wirePartyLedgerActions(sheet, detail, "customer");
+  const toggleActiveCustLink = sheet.querySelector("#toggle-active-cust-link");
+  if(toggleActiveCustLink) toggleActiveCustLink.addEventListener("click", async (e)=>{
+    e.preventDefault();
+    const nextActive = detail.active===0;
+    try{
+      await api("PATCH", `/customers/${detail.id}/active`, {active: nextActive});
+      await loadCustomers();
+      closeAllSheets(); renderCustomersList(); renderBillingCustomers();
+      toast(nextActive?"Customer reactivated.":"Customer deactivated.", "ok");
+    }catch(err){ toast(err.message); }
+  });
   const deleteCustLink = sheet.querySelector("#delete-cust-link");
   if(deleteCustLink) deleteCustLink.addEventListener("click", async (e)=>{
     e.preventDefault();
-    if(confirm("Delete "+detail.name+"? Past invoices will show as Walk-in.")){
+    // Ask the server what this customer carries first, so a linked record is
+    // refused here with the real reason rather than after a confirm dialog
+    // the user just clicked through — mirrors the product delete flow.
+    try{
+      const u = await api("GET", `/customers/${detail.id}/usage`);
+      if(u.total > 0){
+        toast("This Customer cannot be deleted because it is linked to existing transactions. You may deactivate or edit the record instead.");
+        return;
+      }
+    }catch(_){ /* fall back to the plain confirmation; server still enforces the rule */ }
+    if(confirm("Delete "+detail.name+"? This can't be undone.")){
       try{
         await api("DELETE", `/customers/${detail.id}`);
         await loadCustomers();
@@ -1845,7 +1867,7 @@ async function openSupplierDetail(supplierId){
   sheet.innerHTML = `
     <div class="sheet-handle"></div>
     <button class="sheet-close" data-sheetclose>✕</button>
-    <div class="sheet-title">${escapeHtml(detail.name)}</div>
+    <div class="sheet-title">${escapeHtml(detail.name)} ${detail.active===0?'<span class="pill">Inactive</span>':''}</div>
     <div class="muted" style="font-size:12px;margin-bottom:10px;">${escapeHtml(detail.phone||"")}${detail.gst?" · GST "+escapeHtml(detail.gst):""}${detail.state?" · "+escapeHtml(detail.state):""}${detail.address?"<br>"+escapeHtml(detail.address):""}</div>
     <div class="stat-grid">
       <div class="stat-card plain"><div class="label">Total Purchases</div><div class="value">${fmt(detail.totalPurchases)}</div></div>
@@ -1860,7 +1882,8 @@ async function openSupplierDetail(supplierId){
     </div>
     <div class="section-title">Ledger</div>
     <div class="card">${detail.ledger.length ? detail.ledger.map(l=>renderPartyLedgerRow(l,"supplier",detail.id)).join("") : `<div class="empty-hint">No activity yet.</div>`}</div>
-    ${isOwner() ? `<div style="margin-top:16px;text-align:center;">
+    ${isOwner() ? `<div style="margin-top:16px;display:flex;flex-direction:column;gap:8px;align-items:center;">
+      <a href="#" id="toggle-active-supplier-link">${detail.active===0?"Reactivate this supplier":"Deactivate this supplier"}</a>
       <a href="#" id="delete-supplier-link" class="btn-danger-link">Delete this supplier</a>
     </div>` : ""}
   `;
@@ -1873,10 +1896,28 @@ async function openSupplierDetail(supplierId){
     window.open(`/api/suppliers/${detail.id}/ledger/export`, "_blank");
   });
   wirePartyLedgerActions(sheet, detail, "supplier");
+  const toggleActiveSupplierLink = sheet.querySelector("#toggle-active-supplier-link");
+  if(toggleActiveSupplierLink) toggleActiveSupplierLink.addEventListener("click", async (e)=>{
+    e.preventDefault();
+    const nextActive = detail.active===0;
+    try{
+      await api("PATCH", `/suppliers/${detail.id}/active`, {active: nextActive});
+      await loadSuppliers();
+      closeAllSheets(); renderSuppliersList();
+      toast(nextActive?"Supplier reactivated.":"Supplier deactivated.", "ok");
+    }catch(err){ toast(err.message); }
+  });
   const deleteSupplierLink = sheet.querySelector("#delete-supplier-link");
   if(deleteSupplierLink) deleteSupplierLink.addEventListener("click", async (e)=>{
     e.preventDefault();
-    if(confirm("Delete "+detail.name+"? Past purchases will keep the supplier's name as text only.")){
+    try{
+      const u = await api("GET", `/suppliers/${detail.id}/usage`);
+      if(u.total > 0){
+        toast("This Supplier cannot be deleted because it is linked to existing transactions. You may deactivate or edit the record instead.");
+        return;
+      }
+    }catch(_){ /* fall back to the plain confirmation; server still enforces the rule */ }
+    if(confirm("Delete "+detail.name+"? This can't be undone.")){
       try{
         await api("DELETE", `/suppliers/${detail.id}`);
         await loadSuppliers();

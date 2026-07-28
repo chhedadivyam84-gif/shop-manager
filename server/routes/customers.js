@@ -207,9 +207,37 @@ router.put("/:id", (req, res) => {
   res.json(db.prepare("SELECT * FROM customers WHERE id = ?").get(c.id));
 });
 
+/** Any Sales, Payment or Receipt record naming this customer — deleting would
+ *  either orphan or (for payments, via ON DELETE CASCADE) silently destroy
+ *  that history, so this gates both the DELETE route and the usage endpoint
+ *  the UI checks before showing a delete confirmation. */
+function customerUsage(id) {
+  const invoiceCount = db.prepare("SELECT COUNT(*) AS n FROM invoices WHERE customer_id = ?").get(id).n;
+  const paymentCount = db.prepare("SELECT COUNT(*) AS n FROM payments WHERE customer_id = ?").get(id).n;
+  return { invoiceCount, paymentCount, total: invoiceCount + paymentCount };
+}
+
+router.get("/:id/usage", (req, res) => {
+  const c = db.prepare("SELECT id FROM customers WHERE id = ?").get(req.params.id);
+  if (!c) return res.status(404).json({ error: "Customer not found." });
+  res.json(customerUsage(c.id));
+});
+
+router.patch("/:id/active", requireRole("owner"), (req, res) => {
+  const c = db.prepare("SELECT * FROM customers WHERE id = ?").get(req.params.id);
+  if (!c) return res.status(404).json({ error: "Customer not found." });
+  const active = req.body.active ? 1 : 0;
+  db.prepare("UPDATE customers SET active = ? WHERE id = ?").run(active, c.id);
+  logAction(req, active ? "customer.activate" : "customer.deactivate", c.name);
+  res.json(db.prepare("SELECT * FROM customers WHERE id = ?").get(c.id));
+});
+
 router.delete("/:id", requireRole("owner"), (req, res) => {
   const c = db.prepare("SELECT * FROM customers WHERE id = ?").get(req.params.id);
   if (!c) return res.status(404).json({ error: "Customer not found." });
+  if (customerUsage(c.id).total > 0) {
+    return res.status(400).json({ error: "This Customer cannot be deleted because it is linked to existing transactions. You may deactivate or edit the record instead." });
+  }
   db.prepare("DELETE FROM customers WHERE id = ?").run(c.id);
   logAction(req, "customer.delete", c.name);
   res.json({ ok: true });

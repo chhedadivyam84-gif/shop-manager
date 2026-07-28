@@ -194,9 +194,36 @@ router.put("/:id", (req, res) => {
   res.json(db.prepare("SELECT * FROM suppliers WHERE id = ?").get(s.id));
 });
 
+/** Any Purchase, Payment or stock-in record naming this supplier — see
+ *  customers.js's customerUsage() for the mirrored reasoning. */
+function supplierUsage(id) {
+  const stockInCount = db.prepare("SELECT COUNT(*) AS n FROM stock_ins WHERE supplier_id = ?").get(id).n;
+  const purchaseCount = db.prepare("SELECT COUNT(*) AS n FROM purchases WHERE supplier_id = ?").get(id).n;
+  const paymentCount = db.prepare("SELECT COUNT(*) AS n FROM purchase_payments WHERE supplier_id = ?").get(id).n;
+  return { stockInCount, purchaseCount, paymentCount, total: stockInCount + purchaseCount + paymentCount };
+}
+
+router.get("/:id/usage", (req, res) => {
+  const s = db.prepare("SELECT id FROM suppliers WHERE id = ?").get(req.params.id);
+  if (!s) return res.status(404).json({ error: "Supplier not found." });
+  res.json(supplierUsage(s.id));
+});
+
+router.patch("/:id/active", requireRole("owner"), (req, res) => {
+  const s = db.prepare("SELECT * FROM suppliers WHERE id = ?").get(req.params.id);
+  if (!s) return res.status(404).json({ error: "Supplier not found." });
+  const active = req.body.active ? 1 : 0;
+  db.prepare("UPDATE suppliers SET active = ? WHERE id = ?").run(active, s.id);
+  logAction(req, active ? "supplier.activate" : "supplier.deactivate", s.name);
+  res.json(db.prepare("SELECT * FROM suppliers WHERE id = ?").get(s.id));
+});
+
 router.delete("/:id", requireRole("owner"), (req, res) => {
   const s = db.prepare("SELECT * FROM suppliers WHERE id = ?").get(req.params.id);
   if (!s) return res.status(404).json({ error: "Supplier not found." });
+  if (supplierUsage(s.id).total > 0) {
+    return res.status(400).json({ error: "This Supplier cannot be deleted because it is linked to existing transactions. You may deactivate or edit the record instead." });
+  }
   db.prepare("DELETE FROM suppliers WHERE id = ?").run(s.id);
   logAction(req, "supplier.delete", s.name);
   res.json({ ok: true });

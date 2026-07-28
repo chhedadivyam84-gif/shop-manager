@@ -1361,10 +1361,19 @@ function openFactoryResetSheet(){
  * mode picker billing uses (with live Sq.ft auto-calc), GST and transport,
  * ending in a Grand Total — mirrors a sales invoice line but for stock coming
  * IN rather than going out.
+ *
+ * `editingSi` (optional) is an existing stock_ins row to edit in place —
+ * Save then PUTs to that record instead of creating a new one, and a Delete
+ * link appears (owner-only, enforced server-side either way).
  */
-function openStockIn(p){
+function openStockIn(p, editingSi){
   const sheet = document.getElementById("sheet-stock-in");
-  const ctx = {
+  const ctx = editingSi ? {
+    sizeId: editingSi.size_id,
+    mode: Pricing.normaliseMode(editingSi.mode),
+    lengthFt: editingSi.length_ft || "", widthVal: editingSi.width_val || "", thicknessIn: editingSi.thickness_in || "",
+    pieces: editingSi.qty, rate: editingSi.rate, gst: editingSi.gst_rate, transport: editingSi.transport
+  } : {
     // Stock lands on one specific size — auto-picked when there's only one,
     // otherwise the counter staff must say which so it can't land nowhere.
     sizeId: p.sizes.length===1 ? p.sizes[0].id : null,
@@ -1412,15 +1421,15 @@ function openStockIn(p){
     sheet.innerHTML = `
       <div class="sheet-handle"></div>
       <button class="sheet-close" data-sheetclose>✕</button>
-      <div class="sheet-title">Record Purchase</div>
+      <div class="sheet-title">${editingSi?"Edit Purchase":"Record Purchase"}</div>
       <div class="muted" style="font-size:12px;margin-bottom:10px;">${escapeHtml(p.name)} · Current stock: ${p.stock} ${escapeHtml(p.unit||"")}</div>
 
       <div class="charge-grid">
-        <label class="dim"><span>Purchase Date</span><input type="date" id="si-date" value="${todayISO()}"></label>
-        <label class="dim"><span>Invoice No.</span><input type="text" id="si-invoice" placeholder="Supplier's invoice #"></label>
+        <label class="dim"><span>Purchase Date</span><input type="date" id="si-date" value="${editingSi?editingSi.purchase_date:todayISO()}"></label>
+        <label class="dim"><span>Invoice No.</span><input type="text" id="si-invoice" value="${escapeHtml(editingSi?editingSi.invoice_no||"":"")}" placeholder="Supplier's invoice #"></label>
       </div>
       <label class="field-label">Supplier</label>
-      <input type="text" id="si-supplier" list="si-supplier-datalist" placeholder="e.g. Century Ply Distributor">
+      <input type="text" id="si-supplier" list="si-supplier-datalist" value="${escapeHtml(editingSi?editingSi.supplier||"":"")}" placeholder="e.g. Century Ply Distributor">
       <datalist id="si-supplier-datalist">${state.suppliers.map(s=>`<option value="${escapeHtml(s.name)}">`).join("")}</datalist>
 
       <label class="field-label">Which size received this stock?</label>
@@ -1461,8 +1470,9 @@ function openStockIn(p){
       </div>
 
       <label class="field-label">Note (optional)</label>
-      <input type="text" id="si-note" placeholder="e.g. LR number, remarks">
-      <button class="btn btn-primary" id="si-save" style="margin-top:16px;">Save Purchase</button>
+      <input type="text" id="si-note" value="${escapeHtml(editingSi?editingSi.note||"":"")}" placeholder="e.g. LR number, remarks">
+      <button class="btn btn-primary" id="si-save" style="margin-top:16px;">${editingSi?"Update Purchase":"Save Purchase"}</button>
+      ${editingSi && isOwner() ? `<div style="margin-top:12px;text-align:center;"><a href="#" id="si-delete-link" class="btn-danger-link">Delete this purchase</a></div>` : ""}
     `;
 
     sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
@@ -1487,7 +1497,7 @@ function openStockIn(p){
       const btn = document.getElementById("si-save");
       btn.disabled = true;
       try{
-        const result = await api("POST", `/products/${p.id}/stock-in`, {
+        const payload = {
           sizeId: ctx.sizeId,
           purchaseDate: document.getElementById("si-date").value,
           invoiceNo: document.getElementById("si-invoice").value.trim(),
@@ -1495,15 +1505,35 @@ function openStockIn(p){
           note: document.getElementById("si-note").value.trim(),
           mode: ctx.mode, lengthFt: ctx.lengthFt, widthVal: ctx.widthVal, thicknessIn: ctx.thicknessIn,
           pieces: ctx.pieces, rate: ctx.rate, gst: ctx.gst, transport: ctx.transport
-        });
-        Object.assign(p, result.product);
-        await Promise.all([loadProducts(), loadSuppliers()]);
-        closeAllSheets();
-        openProductDetail(p.id, "inventory");
-        renderInventoryList();
-        toast(`Purchase recorded — Grand Total ${fmt(result.purchase.grand_total)}`, "ok");
+        };
+        if(editingSi){
+          await api("PUT", `/products/${p.id}/stock-in/${editingSi.id}`, payload);
+          await Promise.all([loadProducts(), loadSuppliers()]);
+          closeAllSheets();
+          toast("Purchase updated.", "ok");
+        } else {
+          const result = await api("POST", `/products/${p.id}/stock-in`, payload);
+          Object.assign(p, result.product);
+          await Promise.all([loadProducts(), loadSuppliers()]);
+          closeAllSheets();
+          openProductDetail(p.id, "inventory");
+          renderInventoryList();
+          toast(`Purchase recorded — Grand Total ${fmt(result.purchase.grand_total)}`, "ok");
+        }
       }catch(err){ toast(err.message); }
       finally{ btn.disabled = false; }
+    });
+    const deleteLink = sheet.querySelector("#si-delete-link");
+    if(deleteLink) deleteLink.addEventListener("click", async (e)=>{
+      e.preventDefault();
+      if(confirm(`Delete this purchase permanently? Stock and the supplier's due will be reversed. This can't be undone.`)){
+        try{
+          await api("DELETE", `/products/${p.id}/stock-in/${editingSi.id}`);
+          await Promise.all([loadProducts(), loadSuppliers()]);
+          closeAllSheets();
+          toast("Purchase deleted.", "ok");
+        }catch(err){ toast(err.message); }
+      }
     });
   }
 
@@ -1618,12 +1648,15 @@ function renderPartyLedgerRow(l, partyType, partyId){
   const isReceivable = partyType==="customer";
   const debitLabel = isReceivable ? "invoice" : "purchase";
   if(l.type===debitLabel){
-    // Suppliers have two purchase sources (see suppliers.js) — only the
-    // newer multi-line kind (`source:"purchases"`) has an Edit/Void/Delete
-    // detail view to open; legacy single-line stock_ins stay read-only here.
-    const clickable = isReceivable || l.source==="purchases";
-    const openAttr = isReceivable ? `data-open-invoice="${l.id}"` : (l.source==="purchases" ? `data-open-purchase="${l.id}"` : "");
-    return `<div class="list-row" ${openAttr} style="${clickable?'cursor:pointer;':''}">
+    // Suppliers have two purchase sources (see suppliers.js): the newer
+    // multi-line kind (`source:"purchases"`, opens the New Purchase
+    // Edit/Void/Delete flow) and the older single-line stock_ins
+    // (`source:"stock_in"`, opens the Record Purchase sheet in edit mode).
+    let openAttr = "";
+    if(isReceivable) openAttr = `data-open-invoice="${l.id}"`;
+    else if(l.source==="purchases") openAttr = `data-open-purchase="${l.id}"`;
+    else if(l.source==="stock_in") openAttr = `data-open-stock-in="${l.id}" data-product-id="${l.productId||""}"`;
+    return `<div class="list-row" ${openAttr} style="cursor:pointer;">
       <div><div class="row-title">${escapeHtml(l.label)}</div><div class="row-sub">${l.date} · ${isReceivable?"Invoice":"Purchase"}</div></div>
       <div class="row-right"><div class="row-title" style="color:var(--danger);">+${fmt(l.amount)}</div><div class="muted" style="font-size:10.5px;">Bal ${fmt(l.runningBalance)}</div></div>
     </div>`;
@@ -1902,6 +1935,20 @@ async function openSupplierDetail(supplierId){
   wirePartyLedgerActions(sheet, detail, "supplier");
   sheet.querySelectorAll("[data-open-purchase]").forEach(el=>{
     el.addEventListener("click", ()=>{ closeAllSheets(); openPurchaseDetail(el.dataset.openPurchase); });
+  });
+  sheet.querySelectorAll("[data-open-stock-in]").forEach(el=>{
+    el.addEventListener("click", async ()=>{
+      const productId = el.dataset.productId;
+      if(!productId){ toast("That product no longer exists — can't open this purchase."); return; }
+      try{
+        await loadProducts();
+        const product = state.products.find(x=>x.id===productId);
+        if(!product){ toast("That product no longer exists — can't open this purchase."); return; }
+        const si = await api("GET", `/products/${productId}/stock-in/${el.dataset.openStockIn}`);
+        closeAllSheets();
+        openStockIn(product, si);
+      }catch(err){ toast(err.message); }
+    });
   });
   const toggleActiveSupplierLink = sheet.querySelector("#toggle-active-supplier-link");
   if(toggleActiveSupplierLink) toggleActiveSupplierLink.addEventListener("click", async (e)=>{

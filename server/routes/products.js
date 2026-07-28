@@ -287,13 +287,22 @@ router.get("/:id/stock-in", (req, res) => {
   res.json(rows);
 });
 
+router.get("/:id/stock-in/:siId", (req, res) => {
+  const p = db.prepare("SELECT * FROM products WHERE id = ?").get(req.params.id);
+  if (!p) return res.status(404).json({ error: "Product not found." });
+  const si = db.prepare("SELECT * FROM stock_ins WHERE id = ? AND product_id = ?").get(req.params.siId, p.id);
+  if (!si) return res.status(404).json({ error: "Purchase record not found." });
+  res.json(si);
+});
+
 /**
- * Corrects which supplier a past purchase is attributed to — for when the
- * Supplier field was left blank (or wrong) on the original Record Purchase.
- * Nothing about the purchase itself (qty, price, stock already received)
- * changes; only its supplier link and, correspondingly, each supplier's due
- * (reversed off the old one if any, applied to the new one), same resolve-
- * or-create-by-name logic as the original stock-in route.
+ * Full edit of a past Record Stock In purchase — quantity, rate, size,
+ * supplier, dates, everything. Reverses the OLD stock/due impact first (with
+ * the same already-used-elsewhere guard as purchases.js: if the size no
+ * longer has enough stock to take back, some of what this purchase brought
+ * in has since left, and the edit is refused), then applies the new one.
+ * A body with only `supplier`/`supplierId` set (nothing else) behaves exactly
+ * like the old relink-only route this replaces.
  */
 router.put("/:id/stock-in/:siId", requireRole("owner"), (req, res) => {
   const p = db.prepare("SELECT * FROM products WHERE id = ?").get(req.params.id);
@@ -301,7 +310,11 @@ router.put("/:id/stock-in/:siId", requireRole("owner"), (req, res) => {
   const si = db.prepare("SELECT * FROM stock_ins WHERE id = ? AND product_id = ?").get(req.params.siId, p.id);
   if (!si) return res.status(404).json({ error: "Purchase record not found." });
 
-  const { supplierId, supplier } = req.body;
+  const {
+    purchaseDate, invoiceNo, supplier, supplierId, note, sizeId,
+    mode, lengthFt, widthVal, thicknessIn, pieces, rate, gst, transport
+  } = req.body;
+
   let supplierRow = null;
   if (supplierId) {
     supplierRow = db.prepare("SELECT * FROM suppliers WHERE id = ?").get(supplierId);
@@ -316,19 +329,113 @@ router.put("/:id/stock-in/:siId", requireRole("owner"), (req, res) => {
     }
   }
 
-  db.transaction(() => {
-    if (si.supplier_id) {
-      db.prepare("UPDATE suppliers SET due = MAX(0, due - ?) WHERE id = ?").run(si.grand_total, si.supplier_id);
-    }
-    db.prepare("UPDATE stock_ins SET supplier = ?, supplier_id = ? WHERE id = ?")
-      .run(supplierRow ? supplierRow.name : "", supplierRow ? supplierRow.id : null, si.id);
-    if (supplierRow) {
-      db.prepare("UPDATE suppliers SET due = due + ? WHERE id = ?").run(si.grand_total, supplierRow.id);
-    }
-  })();
+  const sizes = loadSizes(p.id);
+  let size = null;
+  if (sizeId != null) size = sizes.find(s => s.id === Number(sizeId));
+  else size = sizes.find(s => s.id === si.size_id) || (sizes.length === 1 ? sizes[0] : null);
+  if (!size) return res.status(400).json({ error: "Choose which size/variant received this stock." });
 
-  logAction(req, "product.stock_in.relink_supplier", `${p.name} (${si.id}): -> ${supplierRow ? supplierRow.name : "(none)"}`);
+  const line = {
+    mode: Pricing.normaliseMode(mode || si.mode),
+    lengthFt: lengthFt !== undefined ? lengthFt : si.length_ft,
+    widthVal: widthVal !== undefined ? widthVal : si.width_val,
+    thicknessIn: thicknessIn !== undefined ? thicknessIn : si.thickness_in,
+    pieces: pieces !== undefined ? pieces : si.qty,
+    rate: rate !== undefined ? rate : si.rate
+  };
+  const invalid = Pricing.validateLine(line, p.name);
+  if (invalid) return res.status(400).json({ error: invalid });
+
+  const runEdit = db.transaction(() => {
+    // 1. Reverse the OLD stock impact — guarded, same reasoning as
+    //    purchases.js: refuse if that would drive the size negative.
+    const oldSize = db.prepare("SELECT * FROM product_sizes WHERE id = ?").get(si.size_id);
+    if (oldSize && oldSize.stock < si.qty) {
+      throw { status: 400, error: `Can't edit this purchase — ${p.name} stock has already been used elsewhere (only ${oldSize.stock} left, this purchase added ${si.qty}).` };
+    }
+    if (oldSize) db.prepare("UPDATE product_sizes SET stock = stock - ? WHERE id = ?").run(si.qty, oldSize.id);
+
+    // 2. Reverse the OLD supplier's due.
+    if (si.supplier_id) db.prepare("UPDATE suppliers SET due = MAX(0, due - ?) WHERE id = ?").run(si.grand_total, si.supplier_id);
+
+    // 3. Recompute, identical math to POST /:id/stock-in.
+    const calc = Pricing.computeLine(line);
+    const gstRate = gst !== undefined && gst !== "" ? Number(gst) : si.gst_rate;
+    const gstAmount = round2(calc.amount * (gstRate / 100));
+    const transportAmt = transport !== undefined ? round2(Math.max(0, Number(transport) || 0)) : si.transport;
+    const grandTotal = round2(calc.amount + gstAmount + transportAmt);
+    const taxType = supplierRow ? (supplierRow.gst_type === "IGST" ? "IGST" : "CGST_SGST") : si.tax_type;
+    let cgst = 0, sgst = 0, igst = 0;
+    if (taxType === "IGST") igst = gstAmount;
+    else { cgst = round2(gstAmount / 2); sgst = round2(gstAmount - cgst); }
+    const date = (purchaseDate && /^\d{4}-\d{2}-\d{2}$/.test(purchaseDate)) ? purchaseDate : si.purchase_date;
+    const costPrice = calc.pieces > 0 ? round2((calc.amount + transportAmt) / calc.pieces) : 0;
+    const supplierName = supplierRow ? supplierRow.name : (supplier !== undefined ? String(supplier || "").trim() : si.supplier);
+
+    // 4. Apply the NEW stock and update the row.
+    db.prepare("UPDATE product_sizes SET stock = stock + ? WHERE id = ?").run(calc.pieces, size.id);
+    db.prepare(`
+      UPDATE stock_ins SET size_id=?, purchase_date=?, invoice_no=?, supplier=?, supplier_id=?,
+        mode=?, length_ft=?, width_val=?, thickness_in=?, size_label=?, qty=?, per_piece=?, billed_qty=?,
+        unit_label=?, rate=?, amount=?, gst_rate=?, gst_amount=?, tax_type=?, cgst=?, sgst=?, igst=?,
+        transport=?, grand_total=?, cost_price=?, note=?
+      WHERE id=?
+    `).run(
+      size.id, date, invoiceNo !== undefined ? String(invoiceNo || "").trim() : si.invoice_no, supplierName,
+      supplierRow ? supplierRow.id : null,
+      calc.mode, calc.lengthFt || null, calc.widthVal || null, calc.thicknessIn || null, calc.sizeLabel || size.label,
+      calc.pieces, calc.perPiece, calc.billedQty, calc.unit, calc.rate, calc.amount,
+      gstRate, gstAmount, taxType, cgst, sgst, igst, transportAmt, grandTotal, costPrice,
+      note !== undefined ? String(note || "").trim() : si.note, si.id
+    );
+    syncProductStock(p.id);
+
+    // 5. Apply the (possibly new) supplier's due.
+    if (supplierRow) db.prepare("UPDATE suppliers SET due = due + ? WHERE id = ?").run(grandTotal, supplierRow.id);
+  });
+
+  try {
+    runEdit();
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.error });
+    throw err;
+  }
+
+  logAction(req, "product.stock_in.edit", `${p.name} (${si.id})`);
   res.json(db.prepare("SELECT * FROM stock_ins WHERE id = ?").get(si.id));
+});
+
+/**
+ * Deletes a past Record Stock In purchase, owner-only — reverses stock and
+ * the supplier's due first (same already-used-elsewhere guard as edit),
+ * then removes the row.
+ */
+router.delete("/:id/stock-in/:siId", requireRole("owner"), (req, res) => {
+  const p = db.prepare("SELECT * FROM products WHERE id = ?").get(req.params.id);
+  if (!p) return res.status(404).json({ error: "Product not found." });
+  const si = db.prepare("SELECT * FROM stock_ins WHERE id = ? AND product_id = ?").get(req.params.siId, p.id);
+  if (!si) return res.status(404).json({ error: "Purchase record not found." });
+
+  const runDelete = db.transaction(() => {
+    const size = db.prepare("SELECT * FROM product_sizes WHERE id = ?").get(si.size_id);
+    if (size && size.stock < si.qty) {
+      throw { status: 400, error: `Can't delete this purchase — ${p.name} stock has already been used elsewhere (only ${size.stock} left, this purchase added ${si.qty}).` };
+    }
+    if (size) db.prepare("UPDATE product_sizes SET stock = stock - ? WHERE id = ?").run(si.qty, size.id);
+    syncProductStock(p.id);
+    if (si.supplier_id) db.prepare("UPDATE suppliers SET due = MAX(0, due - ?) WHERE id = ?").run(si.grand_total, si.supplier_id);
+    db.prepare("DELETE FROM stock_ins WHERE id = ?").run(si.id);
+  });
+
+  try {
+    runDelete();
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.error });
+    throw err;
+  }
+
+  logAction(req, "product.stock_in.delete", `${p.name} (${si.id})`);
+  res.json({ ok: true });
 });
 
 /**

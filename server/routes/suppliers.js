@@ -33,7 +33,7 @@ function buildSupplierDetail(id) {
   // an id the client can open for Edit/Void/Delete — stock_ins rows stay
   // read-only here, same as before this feature existed.
   const stockInRows = db.prepare(`
-    SELECT id, invoice_no, purchase_date AS date, grand_total AS total, created_at
+    SELECT id, product_id, invoice_no, purchase_date AS date, grand_total AS total, created_at
     FROM stock_ins WHERE supplier_id = ?
   `).all(s.id);
   const purchaseInvoiceRows = db.prepare(`
@@ -42,7 +42,7 @@ function buildSupplierDetail(id) {
   `).all(s.id);
   const invoiceNoById = Object.fromEntries(stockInRows.map(h => [h.id, h.invoice_no]));
   const chrono = [
-    ...stockInRows.map(h => ({ type: "purchase", source: "stock_in", id: h.id, label: h.invoice_no || "(no invoice no.)", amount: h.total, date: h.date, at: h.created_at })),
+    ...stockInRows.map(h => ({ type: "purchase", source: "stock_in", id: h.id, productId: h.product_id, label: h.invoice_no || "(no invoice no.)", amount: h.total, date: h.date, at: h.created_at })),
     ...purchaseInvoiceRows.map(h => ({ type: "purchase", source: "purchases", id: h.id, label: h.invoice_no || "(no invoice no.)", amount: h.total, date: h.date, at: h.created_at })),
     ...payments.map(p => ({
       type: "payment", id: p.id, label: p.method, amount: -p.amount, note: p.note,

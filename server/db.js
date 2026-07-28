@@ -295,6 +295,58 @@ CREATE TABLE IF NOT EXISTS purchases (
   voided INTEGER NOT NULL DEFAULT 0
 );
 
+-- Purchase Order: a request SENT TO a supplier, before any goods or money
+-- move — no stock or supplier-due impact, unlike the purchases table above.
+-- Its status is a real STORED column (not derived) because Draft/Approved are
+-- genuine workflow steps driven by explicit actions (Save Draft, Approve),
+-- not something computable from payment state the way an invoice's status
+-- is. "Convert to Purchase Entry" creates a real row in purchases and marks
+-- this Completed — see server/routes/purchaseOrders.js.
+CREATE TABLE IF NOT EXISTS purchase_orders (
+  id TEXT PRIMARY KEY,
+  po_no TEXT UNIQUE NOT NULL,
+  date TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  supplier_id TEXT REFERENCES suppliers(id) ON DELETE SET NULL,
+  delivery_address TEXT DEFAULT '',
+  expected_delivery_date TEXT DEFAULT '',
+  purchase_type TEXT NOT NULL DEFAULT 'Local' CHECK (purchase_type IN ('Local', 'Interstate')),
+  tax_type TEXT NOT NULL DEFAULT 'CGST_SGST',
+  subtotal REAL NOT NULL DEFAULT 0,
+  discount_amount REAL NOT NULL DEFAULT 0,
+  cgst REAL NOT NULL DEFAULT 0,
+  sgst REAL NOT NULL DEFAULT 0,
+  igst REAL NOT NULL DEFAULT 0,
+  freight REAL NOT NULL DEFAULT 0,
+  other_charges REAL NOT NULL DEFAULT 0,
+  round_off REAL NOT NULL DEFAULT 0,
+  total REAL NOT NULL DEFAULT 0,
+  payment_terms TEXT DEFAULT '',
+  delivery_terms TEXT DEFAULT '',
+  remarks TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'Draft'
+    CHECK (status IN ('Draft', 'Pending', 'Approved', 'Partially Completed', 'Completed', 'Cancelled')),
+  -- Set once Convert to Purchase Entry runs — lets the UI link straight to
+  -- the resulting purchase instead of making staff go find it.
+  converted_purchase_id TEXT REFERENCES purchases(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS purchase_order_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  po_id TEXT NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+  product_id TEXT REFERENCES products(id) ON DELETE SET NULL,
+  size_id INTEGER REFERENCES product_sizes(id) ON DELETE SET NULL,
+  name TEXT NOT NULL, brand TEXT DEFAULT '', category TEXT DEFAULT '',
+  mode TEXT NOT NULL DEFAULT 'UNIT',
+  length_ft REAL, width_val REAL, thickness_in REAL,
+  size_label TEXT NOT NULL DEFAULT '',
+  pieces REAL NOT NULL DEFAULT 0, per_piece REAL NOT NULL DEFAULT 0,
+  unit_label TEXT NOT NULL DEFAULT 'Pc',
+  qty REAL NOT NULL, rate REAL NOT NULL,
+  discount_amount REAL NOT NULL DEFAULT 0,
+  gst_rate REAL NOT NULL DEFAULT 18
+);
+
 CREATE TABLE IF NOT EXISTS purchase_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   purchase_id TEXT NOT NULL REFERENCES purchases(id) ON DELETE CASCADE,

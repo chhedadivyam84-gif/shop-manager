@@ -64,19 +64,34 @@ function computeTotals({ items, taxType, transport, loading, otherCharges, round
   };
 }
 
+/**
+ * Status Tracking — automatic, derived (see the matching deriveDocStatus() in
+ * invoices.js for the full reasoning). Purchases only track an aggregate due
+ * on the SUPPLIER, not a paid amount per purchase, so "Partially Completed"
+ * can't be honestly derived here — attributing a supplier-level payment to
+ * one specific purchase would be a guess, and a wrong one is worse than no
+ * label at all. A Credit purchase is Pending until it's Cash/UPI/Bank
+ * (settled at purchase time) or voided.
+ */
+function derivePurchaseStatus(p) {
+  if (p.voided) return "Cancelled";
+  return p.payment_method === "Credit" ? "Pending" : "Completed";
+}
+function withStatus(p) { return { ...p, status: derivePurchaseStatus(p) }; }
+
 router.get("/", (req, res) => {
   const { supplierId } = req.query;
   const rows = supplierId
     ? db.prepare("SELECT * FROM purchases WHERE supplier_id = ? AND voided = 0 ORDER BY created_at DESC").all(supplierId)
     : db.prepare("SELECT * FROM purchases WHERE voided = 0 ORDER BY created_at DESC").all();
-  res.json(rows);
+  res.json(rows.map(withStatus));
 });
 
 router.get("/:id", (req, res) => {
   const p = db.prepare("SELECT * FROM purchases WHERE id = ?").get(req.params.id);
   if (!p) return res.status(404).json({ error: "Purchase not found." });
   const items = db.prepare("SELECT * FROM purchase_items WHERE purchase_id = ?").all(p.id);
-  res.json({ ...p, items });
+  res.json({ ...withStatus(p), items });
 });
 
 router.post("/", (req, res) => {
@@ -204,7 +219,7 @@ router.post("/", (req, res) => {
   logAction(req, "purchase.create", `${purchaseNo}: ${supplier.name} — ${totals.total}`);
   const saved = db.prepare("SELECT * FROM purchases WHERE id = ?").get(id);
   const savedItems = db.prepare("SELECT * FROM purchase_items WHERE purchase_id = ?").all(id);
-  res.status(201).json({ ...saved, items: savedItems });
+  res.status(201).json({ ...withStatus(saved), items: savedItems });
 });
 
 /**
@@ -363,7 +378,7 @@ router.put("/:id", (req, res) => {
   logAction(req, "purchase.edit", `${p.purchase_no}`);
   const updated = db.prepare("SELECT * FROM purchases WHERE id = ?").get(p.id);
   const savedItems = db.prepare("SELECT * FROM purchase_items WHERE purchase_id = ?").all(p.id);
-  res.json({ ...updated, items: savedItems });
+  res.json({ ...withStatus(updated), items: savedItems });
 });
 
 /**

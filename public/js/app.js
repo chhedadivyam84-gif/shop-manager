@@ -57,6 +57,11 @@ let state = {
     date: "", invoiceNo: "", dueDate: "", vehicleNumber: "", transportName: "", lrNumber: "", remarks: "",
     transport: 0, loading: 0, otherCharges: 0, roundOff: true, cart: [], editingPurchaseId: null
   },
+  po: {
+    supplierId: null, purchaseType: "Local", date: "", deliveryAddress: "", expectedDeliveryDate: "",
+    paymentTerms: "", deliveryTerms: "", remarks: "", freight: 0, otherCharges: 0, roundOff: true,
+    cart: [], editingPoId: null
+  },
   me: { staffName: "", role: "" },
   ctx: {}
 };
@@ -383,6 +388,35 @@ async function initApp(){
   });
   document.getElementById("pur-save-btn").addEventListener("click", savePurchase);
 
+  document.getElementById("po-back-link").addEventListener("click", (e)=>{ e.preventDefault(); switchTab("home"); });
+  document.getElementById("po-supplier-search").addEventListener("input", renderPoSuppliers);
+  document.getElementById("po-search").addEventListener("input", renderPoProducts);
+  document.getElementById("po-date").addEventListener("change", (e)=>{ state.po.date = e.target.value; });
+  document.getElementById("po-expected-date").addEventListener("change", (e)=>{ state.po.expectedDeliveryDate = e.target.value; });
+  document.getElementById("po-delivery-address").addEventListener("input", (e)=>{ state.po.deliveryAddress = e.target.value; });
+  document.getElementById("po-payment-terms").addEventListener("input", (e)=>{ state.po.paymentTerms = e.target.value; });
+  document.getElementById("po-delivery-terms").addEventListener("input", (e)=>{ state.po.deliveryTerms = e.target.value; });
+  document.getElementById("po-remarks").addEventListener("input", (e)=>{ state.po.remarks = e.target.value; });
+  document.querySelectorAll('[data-po-type]').forEach(b=>{
+    b.addEventListener("click", ()=>{
+      state.po.purchaseType = b.dataset.poType;
+      document.querySelectorAll('[data-po-type]').forEach(x=>x.classList.remove("selected"));
+      b.classList.add("selected");
+      renderPoTotals();
+    });
+  });
+  document.getElementById("po-freight-input").addEventListener("input", (e)=>{
+    state.po.freight = Math.max(0, parseFloat(e.target.value)||0); renderPoTotals();
+  });
+  document.getElementById("po-other-input").addEventListener("input", (e)=>{
+    state.po.otherCharges = Math.max(0, parseFloat(e.target.value)||0); renderPoTotals();
+  });
+  document.getElementById("po-roundoff-toggle").addEventListener("change", (e)=>{
+    state.po.roundOff = e.target.checked; renderPoTotals();
+  });
+  document.getElementById("po-save-btn").addEventListener("click", ()=>savePo(false));
+  document.getElementById("po-save-draft-btn").addEventListener("click", ()=>savePo(true));
+
   document.getElementById("scrim").addEventListener("click", closeAllSheets);
 
   document.getElementById("paper-a5").addEventListener("click", ()=>setPaper("A5"));
@@ -404,7 +438,7 @@ async function switchTab(tab){
   document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));
   document.getElementById("screen-"+tab).classList.add("active");
   document.querySelectorAll("nav.bottom .tab").forEach(t=>t.classList.toggle("active", t.dataset.tab===tab));
-  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",purchase:"New Purchase"};
+  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",purchase:"New Purchase",po:"Purchase Order"};
   document.getElementById("hdr-sub").textContent = subMap[tab];
   document.getElementById("hdr-main").textContent = tab==="home" ? greeting() : subMap[tab];
   if(tab==="billing") await renderBilling();
@@ -413,6 +447,7 @@ async function switchTab(tab){
   if(tab==="reports") await renderReport();
   if(tab==="cashbook") await renderCashBook();
   if(tab==="purchase") await renderPurchaseScreen();
+  if(tab==="po") await renderPoScreen();
 }
 
 async function renderAll(){
@@ -1166,6 +1201,11 @@ function renderProductDetailSheet(context){
         ? `<button class="btn btn-gold" id="add-to-purchase-btn" style="margin-top:14px;" disabled>No price set — tap Edit below</button>`
         : `<button class="btn btn-gold" id="add-to-purchase-btn" style="margin-top:14px;">Add to Purchase</button>`
     ) : ""}
+    ${context==="po" ? (
+      !p.sizes.length
+        ? `<button class="btn btn-gold" id="add-to-po-btn" style="margin-top:14px;" disabled>No price set — tap Edit below</button>`
+        : `<button class="btn btn-gold" id="add-to-po-btn" style="margin-top:14px;">Add to Order</button>`
+    ) : ""}
 
     <div class="action-row">
       <button class="btn btn-outline" id="edit-product-btn">✎ Edit</button>
@@ -1226,6 +1266,14 @@ function renderProductDetailSheet(context){
       addToPurchaseCart(p.id, state.ctx.selectedSizeIdx);
       closeAllSheets();
       renderPurchaseProducts();
+    });
+  }
+  const addPoBtn = sheet.querySelector("#add-to-po-btn");
+  if(addPoBtn){
+    addPoBtn.addEventListener("click", ()=>{
+      addToPoCart(p.id, state.ctx.selectedSizeIdx);
+      closeAllSheets();
+      renderPoProducts();
     });
   }
   sheet.querySelector("#edit-product-btn").addEventListener("click", ()=>{
@@ -1899,7 +1947,10 @@ function openRecordPayment(customer, editEntry){
    SHEET: Supplier Detail (ledger + Purchase Payment)
    ============================================================ */
 async function openSupplierDetail(supplierId){
-  const detail = await api("GET", `/suppliers/${supplierId}`);
+  const [detail, pos] = await Promise.all([
+    api("GET", `/suppliers/${supplierId}`),
+    api("GET", `/purchase-orders?supplierId=${supplierId}`)
+  ]);
   const sheet = document.getElementById("sheet-supplier-detail");
   sheet.innerHTML = `
     <div class="sheet-handle"></div>
@@ -1917,6 +1968,14 @@ async function openSupplierDetail(supplierId){
       <button class="btn btn-outline" id="print-ledger-btn">Print Ledger</button>
       <button class="btn btn-outline" id="export-ledger-btn">Export Excel</button>
     </div>
+    ${pos.length ? `
+    <div class="section-title">Purchase Orders</div>
+    <div class="card">${pos.map(po=>`
+      <div class="list-row" data-open-po="${po.id}" style="cursor:pointer;">
+        <div><div class="row-title">${escapeHtml(po.po_no)}</div><div class="row-sub">${po.date}</div></div>
+        <div class="row-right"><div class="row-title">${fmt(po.total)}</div><span class="pill ${PO_STATUS_PILL[po.status]||''}">${escapeHtml(po.status)}</span></div>
+      </div>`).join("")}
+    </div>` : ""}
     <div class="section-title">Ledger</div>
     <div class="card">${detail.ledger.length ? detail.ledger.map(l=>renderPartyLedgerRow(l,"supplier",detail.id)).join("") : `<div class="empty-hint">No activity yet.</div>`}</div>
     ${isOwner() ? `<div style="margin-top:16px;display:flex;flex-direction:column;gap:8px;align-items:center;">
@@ -1931,6 +1990,9 @@ async function openSupplierDetail(supplierId){
   sheet.querySelector("#print-ledger-btn").addEventListener("click", ()=>printPartyLedger(detail,"Supplier"));
   sheet.querySelector("#export-ledger-btn").addEventListener("click", ()=>{
     window.open(`/api/suppliers/${detail.id}/ledger/export`, "_blank");
+  });
+  sheet.querySelectorAll("[data-open-po]").forEach(el=>{
+    el.addEventListener("click", ()=>{ closeAllSheets(); openPoDetail(el.dataset.openPo); });
   });
   wirePartyLedgerActions(sheet, detail, "supplier");
   sheet.querySelectorAll("[data-open-purchase]").forEach(el=>{
@@ -3740,7 +3802,7 @@ async function openPurchaseDetail(purchaseId){
   sheet.innerHTML = `
     <div class="sheet-handle"></div>
     <button class="sheet-close" data-sheetclose>✕</button>
-    <div class="sheet-title">${escapeHtml(p.purchase_no)} ${p.voided?'<span class="pill danger">Voided</span>':''}</div>
+    <div class="sheet-title">${escapeHtml(p.purchase_no)} ${p.voided?'<span class="pill danger">Voided</span>':`<span class="pill ${p.status==='Completed'?'ok':p.status==='Pending'?'warn':''}">${escapeHtml(p.status)}</span>`}</div>
     <div class="muted" style="font-size:12px;margin-bottom:10px;">${p.date} · ${escapeHtml(p.supplier_invoice_no||"(no invoice no.)")} · ${escapeHtml(p.purchase_type)} · ${escapeHtml(p.payment_method)}</div>
     <div class="card">${p.items.map(it=>`
       <div class="list-row">
@@ -3854,6 +3916,538 @@ async function editExistingPurchase(p){
   renderPurchaseDueDateVisibility();
   renderPurchaseEditBanner();
   toast(`Editing ${p.purchase_no} — make your changes, then save.`, "ok");
+}
+
+/* ============================================================
+   PURCHASE ORDER — pre-transaction request to a supplier. No stock or due
+   impact until Convert to Purchase Entry runs; mirrors New Purchase's cart
+   pattern closely (see above) but with its own status lifecycle
+   (Draft/Pending/Approved/Completed/Cancelled) instead of an immediate save.
+   ============================================================ */
+async function renderPoScreen(){
+  if(!state.po.date) state.po.date = todayISO();
+  const dateEl = document.getElementById("po-date");
+  if(dateEl && !dateEl.value) dateEl.value = state.po.date;
+  renderPoEditBanner();
+  renderPoSuppliers();
+  renderPoSupplierInfo();
+  renderPoProducts();
+  renderPoCart();
+  renderPoTotals();
+}
+function renderPoEditBanner(){
+  const el = document.getElementById("po-edit-mode-banner");
+  if(!el) return;
+  if(!state.po.editingPoId){ el.style.display = "none"; el.innerHTML = ""; return; }
+  el.style.display = "block";
+  el.innerHTML = `
+    <div class="card" style="background:var(--warn-bg);border-color:var(--warn-text);margin-bottom:10px;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;gap:8px;">
+      <div style="font-size:12px;font-weight:700;color:var(--warn-text);">✎ Editing an existing Purchase Order — Save below will UPDATE it, not create a new one.</div>
+      <a href="#" id="cancel-po-edit-link" style="font-size:12px;font-weight:800;color:var(--warn-text);white-space:nowrap;">Cancel</a>
+    </div>
+  `;
+  document.getElementById("cancel-po-edit-link").addEventListener("click", (e)=>{
+    e.preventDefault();
+    resetPoState();
+    renderPoScreen();
+    toast("Edit cancelled.");
+  });
+}
+function resetPoState(){
+  state.po = {
+    supplierId: null, purchaseType: "Local", date: "", deliveryAddress: "", expectedDeliveryDate: "",
+    paymentTerms: "", deliveryTerms: "", remarks: "", freight: 0, otherCharges: 0, roundOff: true,
+    cart: [], editingPoId: null
+  };
+  const set = (id, val) => { const el=document.getElementById(id); if(el) el.value = val; };
+  set("po-delivery-address", ""); set("po-expected-date", ""); set("po-payment-terms", "");
+  set("po-delivery-terms", ""); set("po-remarks", ""); set("po-freight-input", 0); set("po-other-input", 0);
+  document.querySelectorAll('[data-po-type]').forEach(x=>x.classList.toggle("selected", x.dataset.poType==="Local"));
+}
+function renderPoSuppliers(){
+  const wrap = document.getElementById("po-suppliers");
+  const searchEl = document.getElementById("po-supplier-search");
+  const q = (searchEl && searchEl.value || "").trim().toLowerCase();
+
+  const selected = state.suppliers.find(s=>s.id===state.po.supplierId);
+  let list = state.suppliers;
+  if(q) list = list.filter(s=>s.name.toLowerCase().includes(q) || (s.phone||"").includes(q));
+  if(selected && !list.includes(selected)) list = [selected, ...list];
+
+  wrap.innerHTML = list.map(s=>`
+    <button class="chip ${state.po.supplierId===s.id?'selected':''}" data-po-sup="${s.id}">${escapeHtml(s.name)}</button>
+  `).join("") || `<div class="empty-hint" style="padding:8px 4px;">${q ? `No supplier matches "${escapeHtml(q)}".` : "No suppliers yet — add one from the Suppliers tab."}</div>`;
+
+  wrap.querySelectorAll("[data-po-sup]").forEach(b=>{
+    b.addEventListener("click", ()=>{
+      state.po.supplierId = b.dataset.poSup;
+      const sup = state.suppliers.find(s=>s.id===state.po.supplierId);
+      state.po.purchaseType = (sup && sup.gst_type === "IGST") ? "Interstate" : "Local";
+      document.querySelectorAll('[data-po-type]').forEach(x=>x.classList.toggle("selected", x.dataset.poType===state.po.purchaseType));
+      renderPoSuppliers();
+      renderPoSupplierInfo();
+      renderPoTotals();
+    });
+  });
+}
+function renderPoSupplierInfo(){
+  const box = document.getElementById("po-supplier-info");
+  const sup = state.suppliers.find(s=>s.id===state.po.supplierId);
+  if(!sup){ box.style.display = "none"; box.innerHTML = ""; return; }
+  box.style.display = "block";
+  box.innerHTML = `
+    <div><strong>${escapeHtml(sup.name)}</strong></div>
+    ${sup.phone ? `<div class="muted">${escapeHtml(sup.phone)}</div>` : ""}
+    ${sup.gst ? `<div class="muted">GST: ${escapeHtml(sup.gst)}</div>` : ""}
+    ${sup.state ? `<div class="muted">${escapeHtml(sup.state)}</div>` : ""}
+    ${sup.address ? `<div class="muted">${escapeHtml(sup.address)}</div>` : ""}
+  `;
+}
+function renderPoProducts(){
+  const q = (document.getElementById("po-search").value||"").toLowerCase();
+  const list = state.products.filter(p=>
+    !q || p.name.toLowerCase().includes(q) || (p.brand||"").toLowerCase().includes(q) || (p.sku||"").toLowerCase().includes(q)
+  );
+  const wrap = document.getElementById("po-product-list");
+  wrap.innerHTML = list.map(p=>{
+    const priceLabel = !p.sizes.length ? "⚠ No price — tap Edit" : (p.sizes.length>1 ? "From "+fmt(Math.min(...p.sizes.map(s=>s.price))) : fmt(p.sizes[0].price));
+    return `<div class="list-row" data-open-po-product="${p.id}" style="cursor:pointer;">
+      <div class="swatch"></div>
+      <div><div class="row-title">${escapeHtml(p.name)}</div><div class="row-sub">${escapeHtml(p.brand||"")} · ${priceLabel}</div></div>
+      <div class="row-right"><button class="gold-fab" data-po-quickadd="${p.id}" style="width:30px;height:30px;">+</button></div>
+    </div>`;
+  }).join("") || `<div class="empty-hint">No matching products.</div>`;
+
+  wrap.querySelectorAll("[data-open-po-product]").forEach(el=>{
+    el.addEventListener("click", (e)=>{
+      if(e.target.closest("[data-po-quickadd]")) return;
+      openProductDetail(el.dataset.openPoProduct, "po");
+    });
+  });
+  wrap.querySelectorAll("[data-po-quickadd]").forEach(b=>{
+    b.addEventListener("click", (e)=>{ e.stopPropagation(); openProductDetail(b.dataset.poQuickadd, "po"); });
+  });
+}
+function addToPoCart(productId, sizeIdx){
+  const p = state.products.find(x=>x.id===productId);
+  if(!p) return false;
+  if(!p.sizes.length){ toast(`"${p.name}" has no price yet — open it and tap Edit to add one.`); return false; }
+  const size = p.sizes[sizeIdx] || p.sizes[0];
+  state.po.cart.push({
+    productId, sizeId: size.id, sizeIdx,
+    name: p.name + (p.sizes.length>1 ? " ("+size.label+")" : ""),
+    mode: Pricing.normaliseMode(p.default_mode),
+    lengthFt: p.length_ft || "", widthVal: p.width_val || "", thicknessIn: p.thickness_in || "",
+    pieces: 1, rate: size.price, gstRate: p.gst,
+    discountType: "pct", discountValue: 0
+  });
+  renderPoCart(); renderPoTotals();
+  return true;
+}
+function poLineCalc(c){
+  const r = Pricing.computeLine({mode:c.mode, lengthFt:c.lengthFt, widthVal:c.widthVal, thicknessIn:c.thicknessIn, pieces:c.pieces, rate:c.rate});
+  const discountAmount = c.discountType === "flat"
+    ? round2(Math.min(Math.max(0, c.discountValue||0), r.amount))
+    : round2(r.amount * (Math.min(100, Math.max(0, c.discountValue||0))/100));
+  const taxable = round2(r.amount - discountAmount);
+  const gstAmt = round2(taxable * ((c.gstRate||18)/100));
+  const finalAmt = round2(taxable + gstAmt);
+  return {...r, discountAmount, taxable, gstAmt, finalAmt};
+}
+function renderPoCart(){
+  const wrap = document.getElementById("po-cart-list");
+  if(!state.po.cart.length){
+    wrap.innerHTML = `<div class="empty-hint">No items yet. Add products above.</div>`;
+    return;
+  }
+  wrap.innerHTML = state.po.cart.map((c,idx)=>{
+    const m = Pricing.MODES[Pricing.normaliseMode(c.mode)];
+    const r = poLineCalc(c);
+
+    const dim = (label, unit, key, val) => `
+      <label class="dim">
+        <span>${label}${unit?` <em>(${unit})</em>`:""}</span>
+        <input type="number" inputmode="decimal" step="any" min="0"
+               value="${val===0||val?val:""}" data-po-line-field="${key}" data-po-line="${idx}" placeholder="0">
+      </label>`;
+
+    return `<div class="bill-line" data-po-line-row="${idx}">
+      <div class="bill-line-head">
+        <div class="bill-line-name">${escapeHtml(c.name)}</div>
+        <div class="line-actions">
+          <a href="#" data-po-dup="${idx}">Duplicate</a>
+          <a href="#" data-po-remove="${idx}" class="btn-danger-link">Remove</a>
+        </div>
+      </div>
+
+      <div class="mode-row">
+        ${Pricing.MODE_KEYS.map(k=>`
+          <button class="chip sm ${k===m.key?'selected':''}" data-po-line-mode="${k}" data-po-line="${idx}"
+                  title="${Pricing.MODES[k].formula}">${Pricing.MODES[k].unit}</button>
+        `).join("")}
+      </div>
+
+      <div class="dim-grid">
+        ${m.needsThickness ? dim("Thickness", m.thicknessUnit, "thicknessIn", c.thicknessIn) : ""}
+        ${m.needsLength ? dim("Length", m.lengthUnit, "lengthFt", c.lengthFt) : ""}
+        ${m.needsWidth ? dim("Width", m.widthUnit, "widthVal", c.widthVal) : ""}
+        ${dim("Qty", "pcs", "pieces", c.pieces)}
+        ${dim("Rate", "₹/"+m.unit, "rate", c.rate)}
+      </div>
+
+      <div class="chip-row" style="margin-top:8px;">
+        <button class="chip sm ${c.discountType==="pct"?'selected':''}" data-po-disc-type="pct" data-po-line="${idx}">Discount %</button>
+        <button class="chip sm ${c.discountType==="flat"?'selected':''}" data-po-disc-type="flat" data-po-line="${idx}">Discount ₹</button>
+      </div>
+      <div class="dim-grid">
+        ${dim("Discount", c.discountType==="flat"?"₹":"%", "discountValue", c.discountValue)}
+        <label class="dim"><span>GST <em>(%)</em></span><input type="number" value="${c.gstRate}" disabled style="opacity:0.6;"></label>
+      </div>
+
+      <div class="line-calc">
+        <div class="line-calc-formula">
+          ${r.sizeLabel ? `<strong>${escapeHtml(r.sizeLabel)}</strong> · ` : ""}
+          ${m.key!=="UNIT" ? `${Pricing.formatQty(r.perPiece, r.mode)}/pc × ${r.pieces} pcs = ` : ""}
+          <strong>${Pricing.formatQty(r.billedQty, r.mode)}</strong>
+          × ${Pricing.formatRate(r.rate, r.mode)}
+          ${r.discountAmount>0 ? ` − ${fmtPaise(r.discountAmount)} disc.` : ""}
+          + ${fmtPaise(r.gstAmt)} GST
+        </div>
+        <div class="line-calc-amount">${fmtPaise(r.finalAmt)}</div>
+      </div>
+    </div>`;
+  }).join("");
+
+  wrap.querySelectorAll("[data-po-line-mode]").forEach(b=>b.addEventListener("click", ()=>{
+    const c = state.po.cart[b.dataset.poLine];
+    const next = b.dataset.poLineMode;
+    if(c.mode === next) return;
+    c.rate = Pricing.isRateConvertible(c.mode, next)
+      ? Pricing.convertLineRate({mode:c.mode, lengthFt:c.lengthFt, widthVal:c.widthVal,
+                                 thicknessIn:c.thicknessIn, pieces:c.pieces, rate:c.rate}, next)
+      : "";
+    c.mode = next;
+    renderPoCart(); renderPoTotals();
+  }));
+
+  wrap.querySelectorAll("[data-po-disc-type]").forEach(b=>b.addEventListener("click", ()=>{
+    const c = state.po.cart[b.dataset.poLine];
+    c.discountType = b.dataset.poDiscType;
+    renderPoCart(); renderPoTotals();
+  }));
+
+  wrap.querySelectorAll("[data-po-line-field]").forEach(inp=>{
+    inp.addEventListener("input", ()=>{
+      const c = state.po.cart[inp.dataset.poLine];
+      const v = inp.value === "" ? "" : Math.max(0, parseFloat(inp.value)||0);
+      c[inp.dataset.poLineField] = v;
+      renderPoLineCalc(inp.dataset.poLine);
+      renderPoTotals();
+    });
+    inp.addEventListener("blur", ()=>{ renderPoCart(); renderPoTotals(); });
+  });
+
+  wrap.querySelectorAll("[data-po-dup]").forEach(a=>a.addEventListener("click", (e)=>{
+    e.preventDefault();
+    const i = Number(a.dataset.poDup);
+    state.po.cart.splice(i+1, 0, Object.assign({}, state.po.cart[i]));
+    renderPoCart(); renderPoTotals();
+  }));
+
+  wrap.querySelectorAll("[data-po-remove]").forEach(a=>a.addEventListener("click", (e)=>{
+    e.preventDefault(); state.po.cart.splice(a.dataset.poRemove,1); renderPoCart(); renderPoTotals();
+  }));
+}
+function renderPoLineCalc(idx){
+  const row = document.querySelector(`[data-po-line-row="${idx}"]`);
+  if(!row) return;
+  const c = state.po.cart[idx];
+  const m = Pricing.MODES[Pricing.normaliseMode(c.mode)];
+  const r = poLineCalc(c);
+  const f = row.querySelector(".line-calc-formula");
+  const a = row.querySelector(".line-calc-amount");
+  if(f) f.innerHTML =
+    (r.sizeLabel ? `<strong>${escapeHtml(r.sizeLabel)}</strong> · ` : "") +
+    (m.key!=="UNIT" ? `${Pricing.formatQty(r.perPiece, r.mode)}/pc × ${r.pieces} pcs = ` : "") +
+    `<strong>${Pricing.formatQty(r.billedQty, r.mode)}</strong>` +
+    ` × ${Pricing.formatRate(r.rate, r.mode)}` +
+    (r.discountAmount>0 ? ` − ${fmtPaise(r.discountAmount)} disc.` : "") +
+    ` + ${fmtPaise(r.gstAmt)} GST`;
+  if(a) a.textContent = fmtPaise(r.finalAmt);
+}
+function computePoTotals(){
+  const lines = state.po.cart.map(poLineCalc);
+  const subtotal = round2(lines.reduce((s,r)=>s+r.amount,0));
+  const discountAmount = round2(lines.reduce((s,r)=>s+r.discountAmount,0));
+  const goodsTax = round2(lines.reduce((s,r)=>s+r.gstAmt,0));
+
+  const freight = round2(Math.max(0, state.po.freight||0));
+  const otherCharges = round2(Math.max(0, state.po.otherCharges||0));
+
+  let cgst=0, sgst=0, igst=0;
+  if(state.po.purchaseType==="Interstate") igst = goodsTax;
+  else { cgst = round2(goodsTax/2); sgst = round2(goodsTax-cgst); }
+
+  const preRound = subtotal - discountAmount + cgst + sgst + igst + freight + otherCharges;
+  const total = round2(state.po.roundOff ? Math.round(preRound) : preRound);
+  const roundOffAmount = round2(total - preRound);
+
+  return {subtotal, discountAmount, cgst, sgst, igst, freight, otherCharges, roundOffAmount, total};
+}
+function renderPoTotals(){
+  const t = computePoTotals();
+  const row = (label, value, cls) =>
+    `<div class="inv-flex" style="margin-bottom:4px;${cls||""}"><span class="muted">${label}</span><span>${value}</span></div>`;
+  document.getElementById("po-totals-card").innerHTML = `
+    ${row("Subtotal", fmtPaise(t.subtotal))}
+    ${t.discountAmount>0 ? row("Total Discount", "-"+fmtPaise(t.discountAmount), "color:var(--danger);") : ""}
+    ${t.freight>0 ? row("Freight", fmtPaise(t.freight)) : ""}
+    ${t.otherCharges>0 ? row("Other Charges", fmtPaise(t.otherCharges)) : ""}
+    ${state.po.purchaseType==="Interstate"
+      ? row("IGST", fmtPaise(t.igst))
+      : row("CGST", fmtPaise(t.cgst)) + row("SGST", fmtPaise(t.sgst))}
+    ${t.roundOffAmount!==0 ? row("Round off", (t.roundOffAmount>0?"+":"")+fmtPaise(t.roundOffAmount)) : ""}
+    <div class="inv-flex" style="font-weight:800;border-top:1px solid var(--border);padding-top:6px;font-size:15px;"><span>Grand Total</span><span>${fmtPaise(t.total)}</span></div>
+    <div class="amount-words">${Pricing.amountInWords(t.total)}</div>
+  `;
+}
+function poPayload(){
+  return {
+    supplierId: state.po.supplierId,
+    date: document.getElementById("po-date").value || state.po.date,
+    deliveryAddress: state.po.deliveryAddress,
+    expectedDeliveryDate: state.po.expectedDeliveryDate,
+    purchaseType: state.po.purchaseType,
+    freight: state.po.freight, otherCharges: state.po.otherCharges, roundOff: state.po.roundOff,
+    paymentTerms: state.po.paymentTerms, deliveryTerms: state.po.deliveryTerms, remarks: state.po.remarks,
+    items: state.po.cart.map(c=>({
+      productId:c.productId, sizeId:c.sizeId, name:c.name, mode:c.mode,
+      lengthFt:c.lengthFt, widthVal:c.widthVal, thicknessIn:c.thicknessIn,
+      pieces:c.pieces, rate:c.rate, gstRate:c.gstRate,
+      discountType:c.discountType, discountValue:c.discountValue
+    }))
+  };
+}
+async function savePo(asDraft){
+  if(!state.po.supplierId){ toast("Select a supplier first."); return; }
+  if(!state.po.cart.length){ toast("Add at least one product to the order."); return; }
+  for(const c of state.po.cart){
+    const bad = Pricing.validateLine({
+      mode:c.mode, lengthFt:c.lengthFt, widthVal:c.widthVal,
+      thicknessIn:c.thicknessIn, pieces:c.pieces, rate: c.rate
+    }, c.name);
+    if(bad){ toast(bad); return; }
+  }
+  const saveBtn = document.getElementById("po-save-btn");
+  const draftBtn = document.getElementById("po-save-draft-btn");
+  saveBtn.disabled = true; draftBtn.disabled = true;
+  try{
+    const payload = { ...poPayload(), saveAsDraft: !!asDraft };
+    const editingId = state.po.editingPoId;
+    const saved = editingId
+      ? await api("PUT", `/purchase-orders/${editingId}`, payload)
+      : await api("POST", "/purchase-orders", payload);
+    resetPoState();
+    renderPoEditBanner();
+    await Promise.all([loadProducts(), loadSuppliers()]);
+    toast(`Purchase Order ${saved.po_no} ${editingId?"updated":"saved"} (${saved.status})`, "ok");
+    switchTab("home");
+  }catch(e){
+    toast(e.message);
+  }finally{
+    saveBtn.disabled = false; draftBtn.disabled = false;
+  }
+}
+
+/* ============================================================
+   SHEET: Purchase Order Detail (view + status-driven actions)
+   ============================================================ */
+const PO_STATUS_PILL = {
+  Draft: "", Pending: "warn", Approved: "ok", "Partially Completed": "warn", Completed: "ok", Cancelled: "danger"
+};
+async function openPoDetail(poId){
+  const po = await api("GET", `/purchase-orders/${poId}`);
+  const sheet = document.getElementById("sheet-po-detail");
+  const lineTotal = it => {
+    const taxable = round2(it.qty*it.rate - it.discount_amount);
+    return round2(taxable + taxable*(it.gst_rate/100));
+  };
+  const canEdit = ["Draft","Pending"].includes(po.status);
+  const canApprove = ["Draft","Pending"].includes(po.status);
+  const canConvert = po.status === "Approved";
+  const canClose = !["Completed","Cancelled"].includes(po.status);
+  const canDelete = po.status === "Draft";
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">${escapeHtml(po.po_no)} <span class="pill ${PO_STATUS_PILL[po.status]||''}">${escapeHtml(po.status)}</span></div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px;">${po.date}${po.expected_delivery_date?" · Expected "+po.expected_delivery_date:""}${po.delivery_address?"<br>"+escapeHtml(po.delivery_address):""}</div>
+    <div class="card">${po.items.map(it=>`
+      <div class="list-row">
+        <div><div class="row-title">${escapeHtml(it.name)}</div><div class="row-sub">${escapeHtml(it.size_label||"")} · ${it.pieces} ${escapeHtml(it.unit_label||"")} × ${fmt(it.rate)}${it.discount_amount>0?" · disc. "+fmt(it.discount_amount):""}</div></div>
+        <div class="row-right row-title">${fmt(lineTotal(it))}</div>
+      </div>`).join("")}
+    </div>
+    <div class="card" style="margin-top:8px;">
+      <div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Subtotal</span><span>${fmt(po.subtotal)}</span></div>
+      ${po.discount_amount>0?`<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Discount</span><span>-${fmt(po.discount_amount)}</span></div>`:""}
+      ${po.freight>0?`<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Freight</span><span>${fmt(po.freight)}</span></div>`:""}
+      ${po.other_charges>0?`<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Other Charges</span><span>${fmt(po.other_charges)}</span></div>`:""}
+      ${po.tax_type==="IGST"
+        ? `<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">IGST</span><span>${fmt(po.igst)}</span></div>`
+        : `<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">CGST</span><span>${fmt(po.cgst)}</span></div><div class="inv-flex" style="margin-bottom:4px;"><span class="muted">SGST</span><span>${fmt(po.sgst)}</span></div>`}
+      <div class="inv-flex" style="font-weight:800;border-top:1px solid var(--border);padding-top:6px;"><span>Total</span><span>${fmt(po.total)}</span></div>
+    </div>
+    ${po.payment_terms||po.delivery_terms||po.remarks ? `<div class="card" style="margin-top:8px;font-size:12px;">
+      ${po.payment_terms?`<div><span class="muted">Payment Terms:</span> ${escapeHtml(po.payment_terms)}</div>`:""}
+      ${po.delivery_terms?`<div><span class="muted">Delivery Terms:</span> ${escapeHtml(po.delivery_terms)}</div>`:""}
+      ${po.remarks?`<div><span class="muted">Remarks:</span> ${escapeHtml(po.remarks)}</div>`:""}
+    </div>` : ""}
+    ${po.converted_purchase_id ? `<div class="muted" style="font-size:11.5px;margin-top:8px;">Converted to Purchase Entry.</div>` : ""}
+    <div class="action-row" style="margin-top:14px;">
+      ${canEdit ? `<button class="btn btn-outline" id="edit-po-btn">✎ Edit</button>` : ""}
+      ${canApprove ? `<button class="btn btn-outline" id="approve-po-btn">Approve</button>` : ""}
+      ${canConvert ? `<button class="btn btn-gold" id="convert-po-btn">Convert to Purchase Entry</button>` : ""}
+      <button class="btn btn-outline" id="print-po-btn">Print</button>
+      <button class="btn btn-outline" id="share-po-btn">Share (WhatsApp)</button>
+    </div>
+    ${canClose ? `<div style="margin-top:12px;text-align:center;"><a href="#" id="close-po-link" class="btn-danger-link">Close / Cancel this order</a></div>` : ""}
+    ${canDelete ? `<div style="margin-top:8px;text-align:center;"><a href="#" id="delete-po-link" class="btn-danger-link">Delete this draft</a></div>` : ""}
+  `;
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  const editBtn = sheet.querySelector("#edit-po-btn");
+  if(editBtn) editBtn.addEventListener("click", ()=>{ closeAllSheets(); editExistingPo(po); });
+  const approveBtn = sheet.querySelector("#approve-po-btn");
+  if(approveBtn) approveBtn.addEventListener("click", async ()=>{
+    try{
+      await api("POST", `/purchase-orders/${po.id}/approve`);
+      closeAllSheets();
+      toast("Purchase Order approved.", "ok");
+    }catch(err){ toast(err.message); }
+  });
+  const convertBtn = sheet.querySelector("#convert-po-btn");
+  if(convertBtn) convertBtn.addEventListener("click", async ()=>{
+    if(!confirm(`Convert ${po.po_no} to a real Purchase Entry? This will increase stock and the supplier's due.`)) return;
+    try{
+      const result = await api("POST", `/purchase-orders/${po.id}/convert`, { paymentMethod: "Credit" });
+      await Promise.all([loadProducts(), loadSuppliers()]);
+      closeAllSheets();
+      toast(`Converted to ${result.purchase.purchase_no}.`, "ok");
+    }catch(err){ toast(err.message); }
+  });
+  sheet.querySelector("#print-po-btn").addEventListener("click", ()=>printPurchaseOrder(po));
+  sheet.querySelector("#share-po-btn").addEventListener("click", ()=>sharePoWhatsApp(po));
+  const closeLink = sheet.querySelector("#close-po-link");
+  if(closeLink) closeLink.addEventListener("click", async (e)=>{
+    e.preventDefault();
+    if(confirm(`Close/Cancel ${po.po_no}? This can't be undone.`)){
+      try{
+        await api("POST", `/purchase-orders/${po.id}/close`);
+        closeAllSheets();
+        toast("Purchase Order cancelled.", "ok");
+      }catch(err){ toast(err.message); }
+    }
+  });
+  const deleteLink = sheet.querySelector("#delete-po-link");
+  if(deleteLink) deleteLink.addEventListener("click", async (e)=>{
+    e.preventDefault();
+    if(confirm(`Delete this draft permanently? This can't be undone.`)){
+      try{
+        await api("DELETE", `/purchase-orders/${po.id}`);
+        closeAllSheets();
+        toast("Draft deleted.", "ok");
+      }catch(err){ toast(err.message); }
+    }
+  });
+  showSheet("sheet-po-detail");
+}
+function editExistingPo(po){
+  state.po.cart = po.items.map(it=>{
+    const product = state.products.find(x=>x.id===it.product_id);
+    const sizeIdx = product ? product.sizes.findIndex(s=>s.id===it.size_id) : -1;
+    return {
+      productId: it.product_id, sizeId: it.size_id, sizeIdx: sizeIdx>=0 ? sizeIdx : 0,
+      name: it.name, mode: it.mode, lengthFt: it.length_ft||"", widthVal: it.width_val||"",
+      thicknessIn: it.thickness_in||"", pieces: it.pieces, rate: it.rate, gstRate: it.gst_rate,
+      discountType: it.discount_amount>0 ? "flat" : "pct", discountValue: it.discount_amount>0 ? it.discount_amount : 0
+    };
+  });
+  state.po.supplierId = po.supplier_id;
+  state.po.purchaseType = po.purchase_type;
+  state.po.date = po.date;
+  state.po.deliveryAddress = po.delivery_address || "";
+  state.po.expectedDeliveryDate = po.expected_delivery_date || "";
+  state.po.paymentTerms = po.payment_terms || "";
+  state.po.deliveryTerms = po.delivery_terms || "";
+  state.po.remarks = po.remarks || "";
+  state.po.freight = po.freight || 0;
+  state.po.otherCharges = po.other_charges || 0;
+  state.po.roundOff = true;
+  state.po.editingPoId = po.id;
+
+  switchTab("po");
+  renderPoScreen().then(()=>{
+    const set = (id, val) => { const el=document.getElementById(id); if(el) el.value = val; };
+    set("po-date", state.po.date);
+    set("po-expected-date", state.po.expectedDeliveryDate);
+    set("po-delivery-address", state.po.deliveryAddress);
+    set("po-payment-terms", state.po.paymentTerms);
+    set("po-delivery-terms", state.po.deliveryTerms);
+    set("po-remarks", state.po.remarks);
+    set("po-freight-input", state.po.freight);
+    set("po-other-input", state.po.otherCharges);
+    document.querySelectorAll('[data-po-type]').forEach(x=>x.classList.toggle("selected", x.dataset.poType===state.po.purchaseType));
+    renderPoEditBanner();
+    toast(`Editing ${po.po_no} — make your changes, then save.`, "ok");
+  });
+}
+/** Simple print view — mirrors printCashBook()/printPartyLedger(); no dedicated PDF pipeline for POs yet. */
+function printPurchaseOrder(po){
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(po.po_no)}</title>
+    <style>
+      body{font-family:Arial,Helvetica,sans-serif;padding:20px;color:#000;}
+      h1{font-size:16px;margin:0 0 2px;} .sub{font-size:11px;color:#555;margin-bottom:14px;}
+      table{width:100%;border-collapse:collapse;font-size:11px;margin-top:10px;}
+      th,td{border:1px solid #000;padding:4px 6px;text-align:left;}
+      th{background:#eee;} .num{text-align:right;}
+      .totals{margin-top:10px;font-size:12px;text-align:right;}
+    </style></head><body>
+    <h1>Purchase Order — ${escapeHtml(po.po_no)}</h1>
+    <div class="sub">${po.date} · Status: ${escapeHtml(po.status)}${po.expected_delivery_date?" · Expected delivery "+po.expected_delivery_date:""}</div>
+    <div class="sub">${po.delivery_address?"Deliver to: "+escapeHtml(po.delivery_address):""}</div>
+    <table><thead><tr><th>#</th><th>Product</th><th>Size</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Disc.</th><th class="num">GST%</th><th class="num">Amount</th></tr></thead>
+    <tbody>${po.items.map((it,i)=>`<tr><td>${i+1}</td><td>${escapeHtml(it.name)}</td><td>${escapeHtml(it.size_label||"")}</td>
+      <td class="num">${it.pieces}</td><td class="num">${fmt(it.rate)}</td><td class="num">${fmt(it.discount_amount)}</td>
+      <td class="num">${it.gst_rate}%</td><td class="num">${fmt(round2(it.qty*it.rate-it.discount_amount))}</td></tr>`).join("")}</tbody></table>
+    <div class="totals">
+      Subtotal: ${fmt(po.subtotal)}<br>
+      ${po.discount_amount>0?`Discount: -${fmt(po.discount_amount)}<br>`:""}
+      ${po.freight>0?`Freight: ${fmt(po.freight)}<br>`:""}
+      ${po.other_charges>0?`Other: ${fmt(po.other_charges)}<br>`:""}
+      ${po.tax_type==="IGST"?`IGST: ${fmt(po.igst)}<br>`:`CGST: ${fmt(po.cgst)}<br>SGST: ${fmt(po.sgst)}<br>`}
+      <strong>Grand Total: ${fmt(po.total)}</strong>
+    </div>
+    ${po.payment_terms?`<div class="sub" style="margin-top:10px;">Payment Terms: ${escapeHtml(po.payment_terms)}</div>`:""}
+    ${po.delivery_terms?`<div class="sub">Delivery Terms: ${escapeHtml(po.delivery_terms)}</div>`:""}
+    ${po.remarks?`<div class="sub">Remarks: ${escapeHtml(po.remarks)}</div>`:""}
+    <script>window.onload=()=>window.print();</script>
+    </body></html>`;
+  const w = window.open("", "_blank");
+  w.document.write(html);
+  w.document.close();
+}
+/** Same share-as-text-link pattern as an invoice's WhatsApp share — there is no real email/SMTP integration in this app. */
+function sharePoWhatsApp(po){
+  const sup = state.suppliers.find(s=>s.id===po.supplier_id);
+  const lines = [
+    `Purchase Order ${po.po_no}`,
+    `Date: ${po.date}`,
+    sup ? `Supplier: ${sup.name}` : "",
+    ...po.items.map(it=>`${it.name} (${it.size_label||""}) x${it.pieces} @ ${fmt(it.rate)}`),
+    `Grand Total: ${fmt(po.total)}`
+  ].filter(Boolean);
+  const text = encodeURIComponent(lines.join("\n"));
+  window.open(`https://wa.me/?text=${text}`, "_blank");
 }
 
 })();

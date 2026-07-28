@@ -81,6 +81,7 @@ app.use("/api/invoices", requireAuth, require("./routes/invoices"));
 app.use("/api/reports", requireAuth, require("./routes/reports"));
 app.use("/api/cashbook", requireAuth, require("./routes/cashbook"));
 app.use("/api/purchases", requireAuth, require("./routes/purchases"));
+app.use("/api/purchase-orders", requireAuth, require("./routes/purchaseOrders"));
 app.use("/api/staff", requireAuth, requireRole("owner"), require("./routes/staff"));
 app.use("/api/audit", requireAuth, requireRole("owner"), require("./routes/audit"));
 app.use("/api/backup", requireAuth, requireRole("owner"), require("./routes/backup"));

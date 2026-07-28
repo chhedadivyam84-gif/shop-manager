@@ -64,6 +64,7 @@
         <div class="quick-actions">
           <button class="qa-btn" data-goto="billing"><span class="ic">&#128220;</span>New Invoice</button>
           <button class="qa-btn" data-goto="purchase"><span class="ic">&#128722;</span>New Purchase</button>
+          <button class="qa-btn" data-goto="po"><span class="ic">&#128203;</span>Purchase Order</button>
           <button class="qa-btn" data-goto="inventory"><span class="ic">&#128230;</span>Inventory</button>
           <button class="qa-btn" data-goto="customers"><span class="ic">&#128100;</span>Customers</button>
           <button class="qa-btn" data-goto="reports"><span class="ic">&#128202;</span>Reports</button>
@@ -338,6 +339,75 @@
           <button class="btn btn-primary" id="pur-save-btn">Save Purchase &amp; Update Stock</button>
         </div>
       </div>
+
+      <!-- PURCHASE ORDER -->
+      <div class="screen" id="screen-po">
+        <a href="#" id="po-back-link" class="muted" style="font-size:12px;font-weight:700;">&larr; Back to Home</a>
+        <div id="po-edit-mode-banner" style="display:none;"></div>
+
+        <div class="section-title" style="margin-top:10px;">Supplier</div>
+        <div class="searchbar" style="margin-top:0;">
+          <span>&#128269;</span><input type="text" id="po-supplier-search" placeholder="Search supplier by name or phone">
+        </div>
+        <div class="chip-row" id="po-suppliers" style="margin-top:8px;"></div>
+        <div class="card" id="po-supplier-info" style="display:none;margin-top:8px;font-size:12px;"></div>
+
+        <div class="section-title">Order Details</div>
+        <div class="card">
+          <div class="charge-grid">
+            <label class="dim"><span>Date</span><input type="date" id="po-date"></label>
+            <label class="dim"><span>Expected Delivery</span><input type="date" id="po-expected-date"></label>
+          </div>
+          <label class="field-label" style="margin-top:10px;">Delivery Address <span class="muted" style="font-weight:400;">— optional</span></label>
+          <input type="text" id="po-delivery-address" placeholder="Where should this be delivered?">
+          <label class="field-label" style="margin-top:10px;">Purchase Type</label>
+          <div class="chip-row" id="po-type-chips">
+            <button class="chip selected" data-po-type="Local">Local (CGST + SGST)</button>
+            <button class="chip" data-po-type="Interstate">Interstate (IGST)</button>
+          </div>
+          <label class="field-label" style="margin-top:10px;">Payment Terms <span class="muted" style="font-weight:400;">— optional</span></label>
+          <input type="text" id="po-payment-terms" placeholder="e.g. Net 30">
+          <label class="field-label" style="margin-top:10px;">Delivery Terms <span class="muted" style="font-weight:400;">— optional</span></label>
+          <input type="text" id="po-delivery-terms" placeholder="e.g. FOB, Ex-Godown">
+          <label class="field-label" style="margin-top:10px;">Remarks <span class="muted" style="font-weight:400;">— optional</span></label>
+          <input type="text" id="po-remarks" placeholder="e.g. Confirm before dispatch">
+        </div>
+
+        <div class="section-title">Add products</div>
+        <div class="searchbar">
+          <span>&#128269;</span><input type="text" id="po-search" placeholder="Search name, brand or SKU">
+        </div>
+        <div class="card" id="po-product-list" style="max-height:260px;overflow-y:auto;margin-top:8px;"></div>
+
+        <div class="section-title">Order items</div>
+        <div class="card" id="po-cart-list"><div class="empty-hint">No items yet. Add products above.</div></div>
+
+        <div class="section-title">Charges</div>
+        <div class="card">
+          <div class="charge-grid">
+            <label class="dim">
+              <span>Freight <em>(₹)</em></span>
+              <input type="number" inputmode="decimal" step="any" min="0" id="po-freight-input" value="0" placeholder="0">
+            </label>
+            <label class="dim">
+              <span>Other Charges <em>(₹)</em></span>
+              <input type="number" inputmode="decimal" step="any" min="0" id="po-other-input" value="0" placeholder="0">
+            </label>
+          </div>
+          <label class="check-row" style="margin-top:10px;">
+            <input type="checkbox" id="po-roundoff-toggle" checked>
+            <span>Round off the grand total to the nearest rupee</span>
+          </label>
+        </div>
+
+        <div class="section-title">Summary</div>
+        <div class="card" id="po-totals-card"></div>
+
+        <div style="margin-top:16px;display:flex;flex-direction:column;gap:8px;">
+          <button class="btn btn-primary" id="po-save-btn">Save</button>
+          <button class="btn btn-outline" id="po-save-draft-btn">Save as Draft</button>
+        </div>
+      </div>
     </main>
 
     <nav class="bottom">
@@ -369,6 +439,7 @@
   <div class="sheet" id="sheet-stock-in"></div>
   <div class="sheet" id="sheet-cash-entry"></div>
   <div class="sheet" id="sheet-purchase-detail"></div>
+  <div class="sheet" id="sheet-po-detail"></div>
   <div class="sheet" id="sheet-factory-reset"></div>
 
   <!-- ============ FULLSCREEN: INVOICE PREVIEW ============ -->

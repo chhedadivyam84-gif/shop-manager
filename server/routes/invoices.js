@@ -93,19 +93,37 @@ function computeTotals({ items, discountType, discountValue, advance, taxType, t
   };
 }
 
+/**
+ * Status Tracking (Draft / Pending / Approved / Partially Completed /
+ * Completed / Cancelled) — automatic, derived from existing fields rather
+ * than a stored column, so it can never drift out of sync with the real
+ * payment/void state. This app has no draft-saving step (Complete Sale both
+ * creates and finalises a document in one action), so Draft and Approved
+ * never apply here — every invoice/challan starts life already "approved";
+ * what's actually tracked is what happens to it afterward.
+ */
+function deriveDocStatus(inv) {
+  if (inv.voided) return "Cancelled";
+  if (inv.doc_type === "challan") return "Completed"; // no price/payment to track — goods have already left the shop
+  if (inv.balance_due <= 0) return "Completed";
+  if (inv.advance > 0) return "Partially Completed";
+  return "Pending";
+}
+function withStatus(inv) { return { ...inv, status: deriveDocStatus(inv) }; }
+
 router.get("/", (req, res) => {
   const { date } = req.query;
   const invoices = date
     ? db.prepare("SELECT * FROM invoices WHERE date = ? AND voided = 0 ORDER BY created_at DESC").all(date)
     : db.prepare("SELECT * FROM invoices WHERE voided = 0 ORDER BY created_at DESC").all();
-  res.json(invoices);
+  res.json(invoices.map(withStatus));
 });
 
 router.get("/:id", (req, res) => {
   const inv = db.prepare("SELECT * FROM invoices WHERE id = ?").get(req.params.id);
   if (!inv) return res.status(404).json({ error: "Invoice not found." });
   const items = db.prepare("SELECT * FROM invoice_items WHERE invoice_id = ?").all(inv.id);
-  res.json({ ...inv, items });
+  res.json({ ...withStatus(inv), items });
 });
 
 router.post("/", (req, res) => {
@@ -271,7 +289,7 @@ router.post("/", (req, res) => {
     isChallan ? challanNo : `${challanNo} — ${totals.total}`);
   const invoice = db.prepare("SELECT * FROM invoices WHERE id = ?").get(id);
   const savedItems = db.prepare("SELECT * FROM invoice_items WHERE invoice_id = ?").all(id);
-  res.status(201).json({ ...invoice, items: savedItems });
+  res.status(201).json({ ...withStatus(invoice), items: savedItems });
 });
 
 /**
@@ -439,7 +457,7 @@ router.put("/:id", (req, res) => {
   logAction(req, isChallan ? "challan.edit" : "invoice.edit", `${inv.challan_no}`);
   const updated = db.prepare("SELECT * FROM invoices WHERE id = ?").get(inv.id);
   const savedItems = db.prepare("SELECT * FROM invoice_items WHERE invoice_id = ?").all(inv.id);
-  res.json({ ...updated, items: savedItems });
+  res.json({ ...withStatus(updated), items: savedItems });
 });
 
 router.post("/:id/void", requireRole("owner"), (req, res) => {

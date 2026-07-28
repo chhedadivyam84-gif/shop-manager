@@ -108,6 +108,57 @@ router.get("/supplier-dues", (req, res) => {
   res.json(rows);
 });
 
+/** Per-product Shop/Warehouse/Total breakdown — the "Shop Stock" and
+ *  "Warehouse Stock" report views are this same data, just read for one
+ *  location's column instead of shown side by side; no need for two
+ *  near-duplicate endpoints when the client can pick a column. */
+router.get("/stock-by-location", (req, res) => {
+  const locations = db.prepare("SELECT * FROM locations WHERE active = 1 ORDER BY sort_order ASC").all();
+  const products = db.prepare("SELECT id, name, brand, stock FROM products ORDER BY name ASC").all();
+  const qtyStmt = db.prepare(`
+    SELECT COALESCE(SUM(sls.quantity),0) AS q
+    FROM size_location_stock sls JOIN product_sizes ps ON ps.id = sls.size_id
+    WHERE ps.product_id = ? AND sls.location_id = ?
+  `);
+  const rows = products.map(p => ({
+    label: p.name, brand: p.brand, total: p.stock,
+    byLocation: locations.map(l => ({ code: l.code, name: l.name, quantity: qtyStmt.get(p.id, l.id).q }))
+  }));
+  res.json(rows);
+});
+
+/** Purchases in / sales out / transfers, per day, for the last 14 days —
+ *  a quick read on whether stock is net growing or shrinking day to day. */
+router.get("/daily-movement", (req, res) => {
+  const purchaseInStmt = db.prepare(`
+    SELECT COALESCE(SUM(pi.pieces),0) AS q FROM purchases p
+    JOIN purchase_items pi ON pi.purchase_id = p.id WHERE p.date = ? AND p.voided = 0
+  `);
+  const stockInStmt = db.prepare("SELECT COALESCE(SUM(qty),0) AS q FROM stock_ins WHERE purchase_date = ?");
+  const salesOutStmt = db.prepare(`
+    SELECT COALESCE(SUM(ii.pieces),0) AS q FROM invoices i
+    JOIN invoice_items ii ON ii.invoice_id = i.id WHERE i.date = ? AND i.voided = 0
+  `);
+  const transferStmt = db.prepare(`
+    SELECT COALESCE(SUM(quantity),0) AS q FROM stock_transfers WHERE date(created_at/1000, 'unixepoch') = ?
+  `);
+
+  const days = [];
+  for (let i = 13; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const key = d.toISOString().slice(0, 10);
+    const purchasesIn = round2(purchaseInStmt.get(key).q + stockInStmt.get(key).q);
+    const salesOut = round2(salesOutStmt.get(key).q);
+    const transferred = round2(transferStmt.get(key).q);
+    days.push({
+      date: key, label: d.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" }),
+      purchasesIn, salesOut, transferred, net: round2(purchasesIn - salesOut)
+    });
+  }
+  res.json(days);
+});
+
 /** Every supplier's total purchases — mirrors party-wise for the payable side. */
 router.get("/supplier-wise", (req, res) => {
   const rows = db.prepare(`

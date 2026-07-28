@@ -3243,6 +3243,9 @@ async function renderReport(){
     if(state.reportType==="Supplier") return renderSupplierReport(body);
     if(state.reportType==="SalePayments") return renderSalePaymentsReport(body);
     if(state.reportType==="PurchasePayments") return renderPurchasePaymentsReport(body);
+    if(state.reportType==="LocationStock") return renderLocationStockReport(body);
+    if(state.reportType==="Transfers") return renderTransfersReport(body);
+    if(state.reportType==="DailyMovement") return renderDailyMovementReport(body);
 
     let title="", subtitle="", rows=[];
     if(state.reportType==="Sales"){
@@ -3284,6 +3287,47 @@ async function renderPurchaseReport(body){
     `).join("") : `<div class="empty-hint">No purchases recorded yet.</div>`);
 }
 
+async function renderLocationStockReport(body){
+  const rows = await api("GET","/reports/stock-by-location");
+  const codeIcon = code => code==="shop" ? "&#127978;" : code==="warehouse" ? "&#127974;" : "&#128230;";
+  body.innerHTML = `<div style="font-weight:800;font-size:14px;">Shop / Warehouse Stock</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every product's quantity at each location</div>` +
+    (rows.length ? rows.map(r=>`
+      <div class="list-row"><div>
+        <div class="row-title">${escapeHtml(r.label)}</div>
+        <div class="row-sub">${escapeHtml(r.brand||"")}${r.byLocation.map(l=>` · ${codeIcon(l.code)} ${escapeHtml(l.name)}: ${l.quantity}`).join("")}</div>
+      </div><div class="row-right row-title">Total: ${r.total}</div></div>
+    `).join("") : `<div class="empty-hint">No products yet.</div>`);
+}
+async function renderTransfersReport(body){
+  const rows = await api("GET","/transfers");
+  body.innerHTML = `<div style="font-weight:800;font-size:14px;">Transfer History</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Stock moved between locations, newest first</div>` +
+    (rows.length ? rows.map(r=>{
+      const fromName = (state.locations.find(l=>l.id===r.from_location_id)||{}).name || "?";
+      const toName = (state.locations.find(l=>l.id===r.to_location_id)||{}).name || "?";
+      return `<div class="list-row"><div>
+        <div class="row-title">${escapeHtml(r.product_name)}${r.size_label?" · "+escapeHtml(r.size_label):""}</div>
+        <div class="row-sub">${new Date(r.created_at).toLocaleDateString("en-IN")} · ${escapeHtml(fromName)} &rarr; ${escapeHtml(toName)}${r.staff_name?" · "+escapeHtml(r.staff_name):""}${r.reason?" · "+escapeHtml(r.reason):""}</div>
+      </div><div class="row-right row-title">${r.quantity}</div></div>`;
+    }).join("") : `<div class="empty-hint">No transfers recorded yet.</div>`);
+}
+async function renderDailyMovementReport(body){
+  const days = await api("GET","/reports/daily-movement");
+  const max = Math.max(1, ...days.map(d=>Math.max(d.purchasesIn, d.salesOut)));
+  body.innerHTML = `<div style="font-weight:800;font-size:14px;">Daily Movement</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Purchases in vs. sales out, last 14 days (pieces)</div>` +
+    days.map(d=>`
+      <div style="margin-bottom:10px;">
+        <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700;margin-bottom:4px;">
+          <span>${escapeHtml(d.label)}</span>
+          <span style="color:var(--ok);">+${d.purchasesIn}</span>
+          <span style="color:var(--danger);">-${d.salesOut}</span>
+          ${d.transferred>0?`<span class="muted">&#8646; ${d.transferred}</span>`:""}
+        </div>
+        <div style="display:flex;gap:2px;height:8px;">
+          <div style="flex:${Math.max(1,d.purchasesIn)};background:var(--ok);border-radius:100px;opacity:${d.purchasesIn>0?1:0.15};"></div>
+          <div style="flex:${Math.max(1,d.salesOut)};background:var(--danger);border-radius:100px;opacity:${d.salesOut>0?1:0.15};"></div>
+        </div>
+      </div>`).join("");
+}
 async function renderPartyReport(body){
   const rows = await api("GET","/reports/party-wise");
   body.innerHTML = `<div style="font-weight:800;font-size:14px;">Party-wise Report</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Total business per customer</div>` +

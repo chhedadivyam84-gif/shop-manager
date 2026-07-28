@@ -660,57 +660,6 @@ for (const t of ["payments", "purchase_payments"]) {
 addColumn("customers", "active", "INTEGER NOT NULL DEFAULT 1");
 addColumn("suppliers", "active", "INTEGER NOT NULL DEFAULT 1");
 
-// Multi-location inventory. A scalable Location model — not hardcoded to
-// Shop/Warehouse — so a third, fourth, etc. location can be added later with
-// zero schema changes. `code` is a stable machine key ("shop", "warehouse")
-// for the few places that need to mean ONE SPECIFIC location by name (a
-// sales invoice always deducts "shop" stock, never whichever row happens to
-// sort first); `id` stays the opaque PK everything else joins on.
-db.exec(`
-CREATE TABLE IF NOT EXISTS locations (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  code TEXT UNIQUE NOT NULL,
-  active INTEGER NOT NULL DEFAULT 1,
-  sort_order INTEGER NOT NULL DEFAULT 0,
-  created_at INTEGER NOT NULL
-);
-
--- Per-SIZE, per-location stock — this app already tracks stock at the size
--- level (an "8x4" sheet and "7x4" sheet of the same board are separate), so
--- location is a further split of that same granularity, not a replacement
--- for it. product_sizes.stock is kept as a live-synced denormalised SUM
--- across every location (see syncSizeStockTotal in server/inventory.js) so
--- every existing report/query/screen that reads it unchanged keeps working
--- exactly as before — only code that specifically needs to know Shop vs
--- Warehouse reads this table directly.
-CREATE TABLE IF NOT EXISTS size_location_stock (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  size_id INTEGER NOT NULL REFERENCES product_sizes(id) ON DELETE CASCADE,
-  location_id TEXT NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
-  quantity REAL NOT NULL DEFAULT 0,
-  min_stock REAL NOT NULL DEFAULT 0,
-  last_updated INTEGER NOT NULL,
-  UNIQUE(size_id, location_id)
-);
-
--- Full audit trail for Transfer Stock — kept separate from size_location_stock
--- (which only holds current quantities) so history survives even as
--- quantities keep changing.
-CREATE TABLE IF NOT EXISTS stock_transfers (
-  id TEXT PRIMARY KEY,
-  created_at INTEGER NOT NULL,
-  size_id INTEGER NOT NULL REFERENCES product_sizes(id) ON DELETE CASCADE,
-  product_name TEXT NOT NULL,
-  size_label TEXT NOT NULL DEFAULT '',
-  from_location_id TEXT NOT NULL REFERENCES locations(id),
-  to_location_id TEXT NOT NULL REFERENCES locations(id),
-  quantity REAL NOT NULL,
-  reason TEXT DEFAULT '',
-  staff_name TEXT NOT NULL DEFAULT ''
-);
-`);
-
 // node:sqlite has no built-in transaction wrapper the way better-sqlite3 does;
 // this shim keeps every route file's `db.transaction(() => {...})()` call working unchanged.
 db.transaction = function (fn) {
@@ -726,41 +675,6 @@ db.transaction = function (fn) {
     }
   };
 };
-
-// Seed the two starting locations (idempotent — INSERT OR IGNORE) and
-// backfill size_location_stock for every size that doesn't have location
-// rows yet. Existing stock becomes SHOP stock exactly as-is (not split or
-// halved) — that's what keeps Billing selling the same available quantity
-// it always has, on day one, with zero re-entry. Warehouse starts at 0 for
-// every size; nothing is invented for a location that was never tracked
-// before. Safe to re-run on every boot: a size that already has rows here
-// (from this migration or from a location-aware create/purchase since) is
-// left completely alone.
-db.exec(`
-  INSERT OR IGNORE INTO locations (id, name, code, active, sort_order, created_at)
-  VALUES ('LOC_shop', 'Shop', 'shop', 1, 0, ${Date.now()})
-`);
-db.exec(`
-  INSERT OR IGNORE INTO locations (id, name, code, active, sort_order, created_at)
-  VALUES ('LOC_warehouse', 'Warehouse', 'warehouse', 1, 1, ${Date.now()})
-`);
-db.transaction(() => {
-  const shop = db.prepare("SELECT id FROM locations WHERE code = 'shop'").get();
-  const warehouse = db.prepare("SELECT id FROM locations WHERE code = 'warehouse'").get();
-  const unmigratedSizes = db.prepare(`
-    SELECT id, stock FROM product_sizes
-    WHERE id NOT IN (SELECT DISTINCT size_id FROM size_location_stock)
-  `).all();
-  const insertLoc = db.prepare(`
-    INSERT INTO size_location_stock (size_id, location_id, quantity, min_stock, last_updated)
-    VALUES (?, ?, ?, 0, ?)
-  `);
-  const now = Date.now();
-  unmigratedSizes.forEach(s => {
-    insertLoc.run(s.id, shop.id, s.stock, now);
-    insertLoc.run(s.id, warehouse.id, 0, now);
-  });
-})();
 
 // Where the data lives — the backup module needs the on-disk paths, and this
 // is the single place that knows them.

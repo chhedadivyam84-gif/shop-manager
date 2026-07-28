@@ -26,14 +26,24 @@ function buildSupplierDetail(id) {
   `).all(s.id);
 
   // One chronological ledger — purchases raise the due, payments lower it —
-  // mirroring the customer ledger exactly (see customers.js).
-  const purchaseRows = db.prepare(`
+  // mirroring the customer ledger exactly (see customers.js). Two purchase
+  // sources feed it: the legacy single-line stock_ins (from Inventory's
+  // "Record Stock In") and the newer multi-line purchases (from New
+  // Purchase). Only the latter is tagged `source: "purchases"` and carries
+  // an id the client can open for Edit/Void/Delete — stock_ins rows stay
+  // read-only here, same as before this feature existed.
+  const stockInRows = db.prepare(`
     SELECT id, invoice_no, purchase_date AS date, grand_total AS total, created_at
     FROM stock_ins WHERE supplier_id = ?
   `).all(s.id);
-  const invoiceNoById = Object.fromEntries(purchaseRows.map(h => [h.id, h.invoice_no]));
+  const purchaseInvoiceRows = db.prepare(`
+    SELECT id, supplier_invoice_no AS invoice_no, date, total, created_at
+    FROM purchases WHERE supplier_id = ? AND voided = 0
+  `).all(s.id);
+  const invoiceNoById = Object.fromEntries(stockInRows.map(h => [h.id, h.invoice_no]));
   const chrono = [
-    ...purchaseRows.map(h => ({ type: "purchase", id: h.id, label: h.invoice_no || "(no invoice no.)", amount: h.total, date: h.date, at: h.created_at })),
+    ...stockInRows.map(h => ({ type: "purchase", source: "stock_in", id: h.id, label: h.invoice_no || "(no invoice no.)", amount: h.total, date: h.date, at: h.created_at })),
+    ...purchaseInvoiceRows.map(h => ({ type: "purchase", source: "purchases", id: h.id, label: h.invoice_no || "(no invoice no.)", amount: h.total, date: h.date, at: h.created_at })),
     ...payments.map(p => ({
       type: "payment", id: p.id, label: p.method, amount: -p.amount, note: p.note,
       referenceNo: p.reference_no, bankName: p.bank_name, upiId: p.upi_id,
@@ -45,7 +55,9 @@ function buildSupplierDetail(id) {
   let running = 0;
   const ledger = chrono.map(l => { running = round2(running + l.amount); return { ...l, runningBalance: running }; }).reverse();
 
-  const totalPurchases = round2(purchaseRows.reduce((sum, h) => sum + h.total, 0));
+  const totalPurchases = round2(
+    stockInRows.reduce((sum, h) => sum + h.total, 0) + purchaseInvoiceRows.reduce((sum, h) => sum + h.total, 0)
+  );
   const totalPaymentPaid = round2(payments.reduce((sum, p) => sum + p.amount, 0));
 
   return {

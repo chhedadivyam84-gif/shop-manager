@@ -55,7 +55,7 @@ let state = {
   pur: {
     supplierId: null, purchaseType: "Local", paymentMethod: "Credit",
     date: "", invoiceNo: "", dueDate: "", vehicleNumber: "", transportName: "", lrNumber: "", remarks: "",
-    transport: 0, loading: 0, otherCharges: 0, roundOff: true, cart: []
+    transport: 0, loading: 0, otherCharges: 0, roundOff: true, cart: [], editingPurchaseId: null
   },
   me: { staffName: "", role: "" },
   ctx: {}
@@ -1618,8 +1618,12 @@ function renderPartyLedgerRow(l, partyType, partyId){
   const isReceivable = partyType==="customer";
   const debitLabel = isReceivable ? "invoice" : "purchase";
   if(l.type===debitLabel){
-    const openAttr = isReceivable ? `data-open-invoice="${l.id}"` : "";
-    return `<div class="list-row" ${openAttr} style="${isReceivable?'cursor:pointer;':''}">
+    // Suppliers have two purchase sources (see suppliers.js) — only the
+    // newer multi-line kind (`source:"purchases"`) has an Edit/Void/Delete
+    // detail view to open; legacy single-line stock_ins stay read-only here.
+    const clickable = isReceivable || l.source==="purchases";
+    const openAttr = isReceivable ? `data-open-invoice="${l.id}"` : (l.source==="purchases" ? `data-open-purchase="${l.id}"` : "");
+    return `<div class="list-row" ${openAttr} style="${clickable?'cursor:pointer;':''}">
       <div><div class="row-title">${escapeHtml(l.label)}</div><div class="row-sub">${l.date} · ${isReceivable?"Invoice":"Purchase"}</div></div>
       <div class="row-right"><div class="row-title" style="color:var(--danger);">+${fmt(l.amount)}</div><div class="muted" style="font-size:10.5px;">Bal ${fmt(l.runningBalance)}</div></div>
     </div>`;
@@ -1896,6 +1900,9 @@ async function openSupplierDetail(supplierId){
     window.open(`/api/suppliers/${detail.id}/ledger/export`, "_blank");
   });
   wirePartyLedgerActions(sheet, detail, "supplier");
+  sheet.querySelectorAll("[data-open-purchase]").forEach(el=>{
+    el.addEventListener("click", ()=>{ closeAllSheets(); openPurchaseDetail(el.dataset.openPurchase); });
+  });
   const toggleActiveSupplierLink = sheet.querySelector("#toggle-active-supplier-link");
   if(toggleActiveSupplierLink) toggleActiveSupplierLink.addEventListener("click", async (e)=>{
     e.preventDefault();
@@ -3298,12 +3305,45 @@ async function renderPurchaseScreen(){
   if(!state.pur.date) state.pur.date = todayISO();
   const dateEl = document.getElementById("pur-date");
   if(dateEl && !dateEl.value) dateEl.value = state.pur.date;
+  renderPurchaseEditBanner();
   renderPurchaseSuppliers();
   renderPurchaseSupplierInfo();
   renderPurchaseProducts();
   renderPurchaseCart();
   renderPurchaseDueDateVisibility();
   renderPurchaseTotals();
+  const saveBtn = document.getElementById("pur-save-btn");
+  if(saveBtn) saveBtn.textContent = state.pur.editingPurchaseId ? "Update Purchase & Update Stock" : "Save Purchase & Update Stock";
+}
+/** Small dismissible banner shown atop New Purchase while an existing
+ *  purchase is being edited — mirrors renderEditModeBanner() on Billing. */
+function renderPurchaseEditBanner(){
+  const el = document.getElementById("pur-edit-mode-banner");
+  if(!el) return;
+  if(!state.pur.editingPurchaseId){ el.style.display = "none"; el.innerHTML = ""; return; }
+  el.style.display = "block";
+  el.innerHTML = `
+    <div class="card" style="background:var(--warn-bg);border-color:var(--warn-text);margin-bottom:10px;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;gap:8px;">
+      <div style="font-size:12px;font-weight:700;color:var(--warn-text);">✎ Editing an existing purchase — Save below will UPDATE it, not create a new one.</div>
+      <a href="#" id="cancel-purchase-edit-link" style="font-size:12px;font-weight:800;color:var(--warn-text);white-space:nowrap;">Cancel</a>
+    </div>
+  `;
+  document.getElementById("cancel-purchase-edit-link").addEventListener("click", (e)=>{
+    e.preventDefault();
+    state.pur = {
+      supplierId: null, purchaseType: "Local", paymentMethod: "Credit",
+      date: "", invoiceNo: "", dueDate: "", vehicleNumber: "", transportName: "", lrNumber: "", remarks: "",
+      transport: 0, loading: 0, otherCharges: 0, roundOff: true, cart: [], editingPurchaseId: null
+    };
+    const set = (id, val) => { const inp=document.getElementById(id); if(inp) inp.value = val; };
+    set("pur-invoice-no", ""); set("pur-due-date", ""); set("pur-vehicle", "");
+    set("pur-transport-name", ""); set("pur-lr", ""); set("pur-remarks", "");
+    set("pur-transport-input", 0); set("pur-loading-input", 0); set("pur-other-input", 0);
+    document.querySelectorAll('[data-pur-type]').forEach(x=>x.classList.toggle("selected", x.dataset.purType==="Local"));
+    document.querySelectorAll('[data-pur-pay]').forEach(x=>x.classList.toggle("selected", x.dataset.purPay==="Credit"));
+    renderPurchaseScreen();
+    toast("Edit cancelled.");
+  });
 }
 function renderPurchaseSuppliers(){
   const wrap = document.getElementById("pur-suppliers");
@@ -3613,11 +3653,14 @@ async function savePurchase(){
         discountType:c.discountType, discountValue:c.discountValue
       }))
     };
-    const saved = await api("POST", "/purchases", payload);
+    const editingId = state.pur.editingPurchaseId;
+    const saved = editingId
+      ? await api("PUT", `/purchases/${editingId}`, payload)
+      : await api("POST", "/purchases", payload);
     state.pur = {
       supplierId: null, purchaseType: "Local", paymentMethod: "Credit",
       date: "", invoiceNo: "", dueDate: "", vehicleNumber: "", transportName: "", lrNumber: "", remarks: "",
-      transport: 0, loading: 0, otherCharges: 0, roundOff: true, cart: []
+      transport: 0, loading: 0, otherCharges: 0, roundOff: true, cart: [], editingPurchaseId: null
     };
     const set = (id, val) => { const el=document.getElementById(id); if(el) el.value = val; };
     set("pur-invoice-no", ""); set("pur-due-date", ""); set("pur-vehicle", "");
@@ -3625,15 +3668,145 @@ async function savePurchase(){
     set("pur-transport-input", 0); set("pur-loading-input", 0); set("pur-other-input", 0);
     document.querySelectorAll('[data-pur-type]').forEach(x=>x.classList.toggle("selected", x.dataset.purType==="Local"));
     document.querySelectorAll('[data-pur-pay]').forEach(x=>x.classList.toggle("selected", x.dataset.purPay==="Credit"));
+    renderPurchaseEditBanner();
     await Promise.all([loadProducts(), loadSuppliers()]);
     await renderHome();
-    toast(`Purchase ${saved.purchase_no} saved — Grand Total ${fmt(saved.total)}`, "ok");
+    toast(`Purchase ${saved.purchase_no} ${editingId?"updated":"saved"} — Grand Total ${fmt(saved.total)}`, "ok");
     switchTab("home");
   }catch(e){
     toast(e.message);
   }finally{
     btn.disabled = false;
   }
+}
+
+/* ============================================================
+   SHEET: Purchase Detail (view + Edit/Void/Delete)
+   ============================================================ */
+async function openPurchaseDetail(purchaseId){
+  const p = await api("GET", `/purchases/${purchaseId}`);
+  const sheet = document.getElementById("sheet-purchase-detail");
+  const lineTotal = it => {
+    const taxable = round2(it.qty*it.rate - it.discount_amount);
+    return round2(taxable + taxable*(it.gst_rate/100));
+  };
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">${escapeHtml(p.purchase_no)} ${p.voided?'<span class="pill danger">Voided</span>':''}</div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px;">${p.date} · ${escapeHtml(p.supplier_invoice_no||"(no invoice no.)")} · ${escapeHtml(p.purchase_type)} · ${escapeHtml(p.payment_method)}</div>
+    <div class="card">${p.items.map(it=>`
+      <div class="list-row">
+        <div><div class="row-title">${escapeHtml(it.name)}</div><div class="row-sub">${escapeHtml(it.size_label||"")} · ${it.pieces} ${escapeHtml(it.unit_label||"")} × ${fmt(it.rate)}${it.discount_amount>0?" · disc. "+fmt(it.discount_amount):""}</div></div>
+        <div class="row-right row-title">${fmt(lineTotal(it))}</div>
+      </div>`).join("")}
+    </div>
+    <div class="card" style="margin-top:8px;">
+      <div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Subtotal</span><span>${fmt(p.subtotal)}</span></div>
+      ${p.discount_amount>0?`<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Discount</span><span>-${fmt(p.discount_amount)}</span></div>`:""}
+      ${p.transport>0?`<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Transport</span><span>${fmt(p.transport)}</span></div>`:""}
+      ${p.loading>0?`<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Loading</span><span>${fmt(p.loading)}</span></div>`:""}
+      ${p.other_charges>0?`<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Other Charges</span><span>${fmt(p.other_charges)}</span></div>`:""}
+      ${p.tax_type==="IGST"
+        ? `<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">IGST</span><span>${fmt(p.igst)}</span></div>`
+        : `<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">CGST</span><span>${fmt(p.cgst)}</span></div><div class="inv-flex" style="margin-bottom:4px;"><span class="muted">SGST</span><span>${fmt(p.sgst)}</span></div>`}
+      <div class="inv-flex" style="font-weight:800;border-top:1px solid var(--border);padding-top:6px;"><span>Total</span><span>${fmt(p.total)}</span></div>
+    </div>
+    <div class="action-row" style="margin-top:14px;">
+      ${!p.voided?'<button class="btn btn-outline" id="edit-purchase-btn">✎ Edit</button>':''}
+      ${isOwner() && !p.voided ? '<button class="btn btn-outline" id="void-purchase-btn">Void</button>' : ''}
+    </div>
+    ${isOwner() ? `<div style="margin-top:12px;text-align:center;"><a href="#" id="delete-purchase-link" class="btn-danger-link">Delete this purchase</a></div>` : ""}
+  `;
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  const editBtn = sheet.querySelector("#edit-purchase-btn");
+  if(editBtn) editBtn.addEventListener("click", ()=>{ closeAllSheets(); editExistingPurchase(p); });
+  const voidBtn = sheet.querySelector("#void-purchase-btn");
+  if(voidBtn) voidBtn.addEventListener("click", async ()=>{
+    if(confirm(`Void ${p.purchase_no}? Stock and the supplier's due will be reversed.`)){
+      try{
+        await api("POST", `/purchases/${p.id}/void`);
+        await Promise.all([loadProducts(), loadSuppliers()]);
+        closeAllSheets();
+        toast("Purchase voided.", "ok");
+      }catch(err){ toast(err.message); }
+    }
+  });
+  const deleteLink = sheet.querySelector("#delete-purchase-link");
+  if(deleteLink) deleteLink.addEventListener("click", async (e)=>{
+    e.preventDefault();
+    const warn = p.voided ? "" : " Stock and the supplier's due will be reversed.";
+    if(confirm(`Delete ${p.purchase_no} permanently?${warn} This can't be undone.`)){
+      try{
+        await api("DELETE", `/purchases/${p.id}`);
+        await Promise.all([loadProducts(), loadSuppliers()]);
+        closeAllSheets();
+        toast("Purchase deleted.", "ok");
+      }catch(err){ toast(err.message); }
+    }
+  });
+  showSheet("sheet-purchase-detail");
+}
+
+/**
+ * Loads a saved (non-voided) purchase's items and settings back into the
+ * New Purchase screen for editing. Saving from here PUTs to the same
+ * purchase instead of creating a new one — see savePurchase().
+ * A line's original discountType/discountValue aren't stored (the server
+ * only persists the resolved rupee discount_amount), so an edited line
+ * starts as a flat ₹ discount equal to what was actually applied — the
+ * amount is exactly right even though the original % entry, if any, isn't
+ * recoverable.
+ */
+async function editExistingPurchase(p){
+  if(p.voided){ toast("A voided purchase can't be edited."); return; }
+  await Promise.all([loadProducts(), loadSuppliers()]);
+  state.pur.cart = p.items.map(it=>{
+    const product = state.products.find(x=>x.id===it.product_id);
+    const sizeIdx = product ? product.sizes.findIndex(s=>s.id===it.size_id) : -1;
+    return {
+      productId: it.product_id, sizeId: it.size_id, sizeIdx: sizeIdx>=0 ? sizeIdx : 0,
+      name: it.name, mode: it.mode, lengthFt: it.length_ft||"", widthVal: it.width_val||"",
+      thicknessIn: it.thickness_in||"", pieces: it.pieces, rate: it.rate, gstRate: it.gst_rate,
+      discountType: it.discount_amount>0 ? "flat" : "pct", discountValue: it.discount_amount>0 ? it.discount_amount : 0
+    };
+  });
+  state.pur.supplierId = p.supplier_id;
+  state.pur.purchaseType = p.purchase_type;
+  state.pur.paymentMethod = p.payment_method;
+  state.pur.date = p.date;
+  state.pur.invoiceNo = p.supplier_invoice_no || "";
+  state.pur.dueDate = p.due_date || "";
+  state.pur.vehicleNumber = p.vehicle_number || "";
+  state.pur.transportName = p.transport_name || "";
+  state.pur.lrNumber = p.lr_number || "";
+  state.pur.remarks = p.remarks || "";
+  state.pur.transport = p.transport || 0;
+  state.pur.loading = p.loading || 0;
+  state.pur.otherCharges = p.other_charges || 0;
+  state.pur.roundOff = true;
+  state.pur.editingPurchaseId = p.id;
+
+  closeAllSheets();
+  switchTab("purchase");
+  await renderPurchaseScreen();
+
+  const set = (id, val) => { const el=document.getElementById(id); if(el) el.value = val; };
+  set("pur-date", state.pur.date);
+  set("pur-invoice-no", state.pur.invoiceNo);
+  set("pur-due-date", state.pur.dueDate);
+  set("pur-vehicle", state.pur.vehicleNumber);
+  set("pur-transport-name", state.pur.transportName);
+  set("pur-lr", state.pur.lrNumber);
+  set("pur-remarks", state.pur.remarks);
+  set("pur-transport-input", state.pur.transport);
+  set("pur-loading-input", state.pur.loading);
+  set("pur-other-input", state.pur.otherCharges);
+  document.querySelectorAll('[data-pur-type]').forEach(x=>x.classList.toggle("selected", x.dataset.purType===state.pur.purchaseType));
+  document.querySelectorAll('[data-pur-pay]').forEach(x=>x.classList.toggle("selected", x.dataset.purPay===state.pur.paymentMethod));
+  renderPurchaseDueDateVisibility();
+  renderPurchaseEditBanner();
+  toast(`Editing ${p.purchase_no} — make your changes, then save.`, "ok");
 }
 
 })();

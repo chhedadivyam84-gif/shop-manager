@@ -55,13 +55,14 @@ let state = {
   pur: {
     supplierId: null, purchaseType: "Local", paymentMethod: "Credit",
     date: "", invoiceNo: "", dueDate: "", vehicleNumber: "", transportName: "", lrNumber: "", remarks: "",
-    transport: 0, loading: 0, otherCharges: 0, roundOff: true, cart: [], editingPurchaseId: null
+    transport: 0, loading: 0, otherCharges: 0, roundOff: true, cart: [], editingPurchaseId: null, locationId: null
   },
   po: {
     supplierId: null, purchaseType: "Local", date: "", deliveryAddress: "", expectedDeliveryDate: "",
     paymentTerms: "", deliveryTerms: "", remarks: "", freight: 0, otherCharges: 0, roundOff: true,
     cart: [], editingPoId: null
   },
+  locations: [], invLocationCode: null, invStockFilter: "all",
   me: { staffName: "", role: "" },
   ctx: {}
 };
@@ -237,6 +238,12 @@ async function initApp(){
   document.querySelectorAll("[data-goto]").forEach(el=>{
     el.addEventListener("click", ()=>switchTab(el.dataset.goto));
   });
+  document.querySelectorAll("[data-inv-location-goto]").forEach(el=>{
+    el.addEventListener("click", async ()=>{
+      state.invLocationCode = el.dataset.invLocationGoto;
+      await switchTab("inventory");
+    });
+  });
   document.getElementById("qa-payment").addEventListener("click", openQuickPayment);
 
   document.querySelectorAll("[data-close-fs]").forEach(b=>{
@@ -305,6 +312,14 @@ async function initApp(){
 
   document.getElementById("inv-search").addEventListener("input", renderInventoryList);
   document.getElementById("inv-add-btn").addEventListener("click", ()=>openAddProduct("inventory"));
+  document.querySelectorAll('[data-inv-stock-filter]').forEach(b=>{
+    b.addEventListener("click", ()=>{
+      state.invStockFilter = b.dataset.invStockFilter;
+      document.querySelectorAll('[data-inv-stock-filter]').forEach(x=>x.classList.remove("selected"));
+      b.classList.add("selected");
+      renderInventoryList();
+    });
+  });
 
   document.getElementById("cust-search").addEventListener("input", renderCustomersList);
   document.getElementById("cust-add-btn").addEventListener("click", ()=>{
@@ -451,7 +466,7 @@ async function switchTab(tab){
 }
 
 async function renderAll(){
-  await Promise.all([loadProducts(), loadCustomers(), loadSuppliers()]);
+  await Promise.all([loadProducts(), loadCustomers(), loadSuppliers(), loadLocations()]);
   await renderHome();
   const activeTab = document.querySelector("nav.bottom .tab.active");
   const tab = activeTab ? activeTab.dataset.tab : "home";
@@ -463,6 +478,7 @@ async function renderAll(){
 async function loadProducts(){ state.products = await api("GET","/products"); }
 async function loadCustomers(){ state.customers = await api("GET","/customers"); }
 async function loadSuppliers(){ state.suppliers = await api("GET","/suppliers"); }
+async function loadLocations(){ state.locations = await api("GET","/locations"); }
 
 /* ============================================================
    HOME
@@ -552,6 +568,13 @@ function renderBillingCustomers(){
     });
   });
 }
+/** A sale can only ever draw from Shop — this is that size's Shop-specific
+ *  quantity, falling back to the cross-location total if byLocation wasn't
+ *  loaded for some reason (defensive; shouldn't happen once locations exist). */
+function sizeShopStock(size){
+  const row = (size.byLocation||[]).find(l=>l.code==="shop");
+  return row ? row.quantity : size.stock;
+}
 function renderBillingProducts(){
   const q = (document.getElementById("billing-search").value||"").toLowerCase();
   const list = state.products.filter(p=>
@@ -560,7 +583,9 @@ function renderBillingProducts(){
   const wrap = document.getElementById("billing-product-list");
   wrap.innerHTML = list.map(p=>{
     const priceLabel = !p.sizes.length ? "⚠ No price — tap Edit" : (p.sizes.length>1 ? "From "+fmt(Math.min(...p.sizes.map(s=>s.price))) : fmt(p.sizes[0].price));
-    const out = p.stock<=0;
+    // Billing only cares whether SHOP has any of this — Warehouse-only stock
+    // isn't sellable from here (matches the server: invoices deduct Shop only).
+    const out = !p.sizes.some(s=>sizeShopStock(s)>0);
     return `<div class="list-row" data-open-product="${p.id}" style="cursor:pointer;">
       <div class="swatch"></div>
       <div><div class="row-title">${escapeHtml(p.name)}</div><div class="row-sub">${escapeHtml(p.brand||"")} · ${priceLabel}</div></div>
@@ -594,7 +619,7 @@ function addToCart(productId, sizeIdx){
   // the specific size, not the product as a whole.
   const existing = state.cart.find(c=>c.sizeId===size.id);
   const piecesForSize = state.cart.filter(c=>c.sizeId===size.id).reduce((s,c)=>s+(c.pieces||0),0);
-  if(piecesForSize >= size.stock){ return false; }
+  if(piecesForSize >= sizeShopStock(size)){ return false; }
   if(existing){ existing.pieces += 1; }
   else{
     state.cart.push({
@@ -1088,19 +1113,49 @@ function renderBrandFilter(){
     b.addEventListener("click", ()=>{ state.invBrandFilter=b.dataset.brand; renderInventoryList(); });
   });
 }
+/** A product's total quantity AT one location — summed across every size,
+ *  since a product's sizes/variants are still tracked separately even
+ *  within the same location. */
+function productLocationStock(p, locationCode){
+  return p.sizes.reduce((sum, s) => {
+    const row = (s.byLocation||[]).find(l=>l.code===locationCode);
+    return sum + (row ? row.quantity : 0);
+  }, 0);
+}
+function renderInventoryLocationToggle(){
+  const wrap = document.getElementById("inv-location-toggle");
+  if(!wrap) return;
+  if(!state.invLocationCode && state.locations.length) state.invLocationCode = state.locations[0].code;
+  const icon = code => code==="shop" ? "&#127978;" : code==="warehouse" ? "&#127974;" : "&#128230;";
+  wrap.innerHTML = state.locations.map(l=>`
+    <button class="doctype-btn ${state.invLocationCode===l.code?'selected':''}" data-inv-location="${l.code}">${icon(l.code)} ${escapeHtml(l.name)} Stock</button>
+  `).join("");
+  wrap.querySelectorAll("[data-inv-location]").forEach(b=>{
+    b.addEventListener("click", ()=>{ state.invLocationCode = b.dataset.invLocation; renderInventoryList(); });
+  });
+}
 async function renderInventoryList(){
+  renderInventoryLocationToggle();
   renderBrandFilter();
   const q = (document.getElementById("inv-search").value||"").toLowerCase();
   let list = state.products;
   if(state.invBrandFilter!=="All") list = list.filter(p=>p.brand===state.invBrandFilter);
   if(q) list = list.filter(p=>p.name.toLowerCase().includes(q) || (p.sku||"").toLowerCase().includes(q));
+  // Low/Out filters read the CURRENT location tab's quantity specifically —
+  // a product low in Shop but fine in Warehouse only shows under the Shop tab.
+  if(state.invStockFilter==="low") list = list.filter(p=>{ const s=productLocationStock(p,state.invLocationCode); return s>0 && s<5; });
+  else if(state.invStockFilter==="out") list = list.filter(p=>productLocationStock(p,state.invLocationCode)<=0);
   document.getElementById("product-count").textContent = list.length + " product" + (list.length!==1?"s":"");
   document.getElementById("inventory-list").innerHTML = `<div class="card">` + (list.length ? list.map(p=>{
     const priceLabel = !p.sizes.length ? "⚠ No price — tap Edit" : (p.sizes.length>1 ? "From "+fmt(Math.min(...p.sizes.map(s=>s.price))) : fmt(p.sizes[0].price));
+    const locStock = productLocationStock(p, state.invLocationCode);
     return `<div class="list-row" data-open-inv-product="${p.id}" style="cursor:pointer;">
       <div class="swatch"></div>
       <div><div class="row-title">${escapeHtml(p.name)}</div><div class="row-sub">${escapeHtml(p.brand||"")} · ${priceLabel}</div></div>
-      <div class="row-right"><span class="pill ${stockLevel(p.stock)}">${stockLabel(p.stock)}</span></div>
+      <div class="row-right">
+        <span class="pill ${stockLevel(locStock)}">${stockLabel(locStock)}</span>
+        <div class="muted" style="font-size:10px;margin-top:2px;">Total: ${p.stock}</div>
+      </div>
     </div>`;
   }).join("") : `<div class="empty-hint">No products found.</div>`) + `</div>`;
   document.querySelectorAll("[data-open-inv-product]").forEach(el=>{
@@ -1171,7 +1226,13 @@ function renderProductDetailSheet(context){
     <span class="pill ${stockLevel(p.stock)}">${p.stock} ${escapeHtml(p.unit||"")} total, all sizes</span>
 
     <div class="chip-row" style="margin:12px 0;">
-      ${p.sizes.map((s,i)=>`<button class="chip ${i===state.ctx.selectedSizeIdx?'selected':''}" data-size="${i}">${escapeHtml(s.label)} · ${fmt(s.price)} · ${s.stock} in stock</button>`).join("")}
+      ${p.sizes.map((s,i)=>{
+        // Billing shows what's actually sellable (Shop only) — every other
+        // context shows the cross-location total.
+        const qty = context==="billing" ? sizeShopStock(s) : s.stock;
+        const qtyLabel = context==="billing" ? qty+" in Shop" : qty+" in stock";
+        return `<button class="chip ${i===state.ctx.selectedSizeIdx?'selected':''}" data-size="${i}">${escapeHtml(s.label)} · ${fmt(s.price)} · ${qtyLabel}</button>`;
+      }).join("")}
     </div>
 
     <div class="card" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11.5px;">
@@ -1186,7 +1247,10 @@ function renderProductDetailSheet(context){
 
     <div id="stock-editor-area" style="margin-top:14px;"></div>
     ${context==="inventory" ? `
-      <button class="btn btn-outline" id="stock-in-btn" style="margin-top:10px;">+ Record Stock In (Purchase)</button>
+      <div style="display:flex;gap:8px;margin-top:10px;">
+        <button class="btn btn-outline" id="stock-in-btn" style="flex:1;">+ Record Stock In</button>
+        <button class="btn btn-outline" id="transfer-stock-btn" style="flex:1;">&#8646; Transfer Stock</button>
+      </div>
       <div class="section-title">Recent Purchases</div>
       <div class="card" id="stock-in-history"><div class="empty-hint">Loading…</div></div>
     ` : ""}
@@ -1194,7 +1258,7 @@ function renderProductDetailSheet(context){
     ${context==="billing" ? (
       !p.sizes.length
         ? `<button class="btn btn-gold" id="add-to-invoice-btn" style="margin-top:14px;" disabled>No price set — tap Edit below</button>`
-        : `<button class="btn btn-gold" id="add-to-invoice-btn" style="margin-top:14px;" ${selectedSize.stock<=0?"disabled":""}>${selectedSize.stock<=0?"Out of stock":"Add to Invoice"}</button>`
+        : `<button class="btn btn-gold" id="add-to-invoice-btn" style="margin-top:14px;" ${sizeShopStock(selectedSize)<=0?"disabled":""}>${sizeShopStock(selectedSize)<=0?"Out of Shop stock":"Add to Invoice"}</button>`
     ) : ""}
     ${context==="purchase" ? (
       !p.sizes.length
@@ -1217,33 +1281,40 @@ function renderProductDetailSheet(context){
   `;
   const stockArea = sheet.querySelector("#stock-editor-area");
   if(context==="inventory"){
-    // Every size gets its own row and its own +/- — there is no single
-    // "total stock" to correct anymore, only each size's own count.
+    // Every size × location gets its own +/- — Manual Adjustment always says
+    // which location, same as every other stock action in this app. Icons
+    // mirror the Inventory screen's own location toggle (🏪/🏬/📦).
+    const locIcon = code => code==="shop" ? "&#127978;" : code==="warehouse" ? "&#127974;" : "&#128230;";
     stockArea.innerHTML = `
-      <label class="field-label">Stock on hand, per size</label>
+      <label class="field-label">Stock on hand, per size and location</label>
       ${p.sizes.map(s=>`
-        <div class="list-row" style="padding:6px 0;">
-          <div style="flex:1;font-size:12.5px;font-weight:700;">${escapeHtml(s.label)}</div>
-          <div class="qty-step">
-            <button data-size-dec="${s.id}">−</button>
-            <input type="number" value="${s.stock}" data-size-stock-input="${s.id}" style="width:60px;">
-            <button data-size-inc="${s.id}">+</button>
-          </div>
+        <div class="card" style="margin-bottom:8px;padding:10px 12px;">
+          <div style="font-size:12.5px;font-weight:700;margin-bottom:6px;">${escapeHtml(s.label)} <span class="muted" style="font-weight:400;">· Total ${s.stock}</span></div>
+          ${(s.byLocation||[]).map(loc=>`
+            <div class="list-row" style="padding:4px 0;">
+              <div style="flex:1;font-size:12px;">${locIcon(loc.code)} ${escapeHtml(loc.name)}</div>
+              <div class="qty-step">
+                <button data-loc-dec="${s.id}" data-loc-id="${loc.location_id}">−</button>
+                <input type="number" value="${loc.quantity}" data-loc-stock-input="${s.id}" data-loc-id="${loc.location_id}" style="width:60px;">
+                <button data-loc-inc="${s.id}" data-loc-id="${loc.location_id}">+</button>
+              </div>
+            </div>`).join("")}
         </div>`).join("") || `<div class="empty-hint">No sizes on this product.</div>`}
     `;
-    stockArea.querySelectorAll("[data-size-dec]").forEach(b=>b.addEventListener("click", async ()=>{
-      const updated = await api("PATCH", `/products/${p.id}/sizes/${b.dataset.sizeDec}/stock`, {delta:-1});
+    stockArea.querySelectorAll("[data-loc-dec]").forEach(b=>b.addEventListener("click", async ()=>{
+      const updated = await api("PATCH", `/products/${p.id}/sizes/${b.dataset.locDec}/stock`, {delta:-1, locationId:b.dataset.locId});
       Object.assign(p, updated); renderProductDetailSheet(context); renderInventoryList();
     }));
-    stockArea.querySelectorAll("[data-size-inc]").forEach(b=>b.addEventListener("click", async ()=>{
-      const updated = await api("PATCH", `/products/${p.id}/sizes/${b.dataset.sizeInc}/stock`, {delta:1});
+    stockArea.querySelectorAll("[data-loc-inc]").forEach(b=>b.addEventListener("click", async ()=>{
+      const updated = await api("PATCH", `/products/${p.id}/sizes/${b.dataset.locInc}/stock`, {delta:1, locationId:b.dataset.locId});
       Object.assign(p, updated); renderProductDetailSheet(context); renderInventoryList();
     }));
-    stockArea.querySelectorAll("[data-size-stock-input]").forEach(inp=>inp.addEventListener("change", async (e)=>{
-      const updated = await api("PATCH", `/products/${p.id}/sizes/${inp.dataset.sizeStockInput}/stock`, {stock: parseInt(e.target.value)||0});
+    stockArea.querySelectorAll("[data-loc-stock-input]").forEach(inp=>inp.addEventListener("change", async (e)=>{
+      const updated = await api("PATCH", `/products/${p.id}/sizes/${inp.dataset.locStockInput}/stock`, {stock: parseInt(e.target.value)||0, locationId:inp.dataset.locId});
       Object.assign(p, updated); renderProductDetailSheet(context); renderInventoryList();
     }));
     sheet.querySelector("#stock-in-btn").addEventListener("click", ()=>openStockIn(p));
+    sheet.querySelector("#transfer-stock-btn").addEventListener("click", ()=>openTransferStock(p));
     loadStockInHistory(p.id);
   } else {
     stockArea.innerHTML = `<div class="muted" style="font-size:11.5px;">${selectedSize ? selectedSize.stock+" "+escapeHtml(p.unit||"")+" available in "+escapeHtml(selectedSize.label) : ""} · edit stock levels from Inventory</div>`;
@@ -1257,7 +1328,7 @@ function renderProductDetailSheet(context){
     addBtn.addEventListener("click", ()=>{
       const ok = addToCart(p.id, state.ctx.selectedSizeIdx);
       if(ok){ closeAllSheets(); renderBillingProducts(); }
-      else toast("Can't add more — that's all the stock we have for this size.");
+      else toast("Can't add more — that's all the Shop stock we have for this size.");
     });
   }
   const addPurBtn = sheet.querySelector("#add-to-purchase-btn");
@@ -1416,18 +1487,21 @@ function openFactoryResetSheet(){
  */
 function openStockIn(p, editingSi){
   const sheet = document.getElementById("sheet-stock-in");
+  const warehouseLoc = state.locations.find(l=>l.code==="warehouse");
   const ctx = editingSi ? {
     sizeId: editingSi.size_id,
     mode: Pricing.normaliseMode(editingSi.mode),
     lengthFt: editingSi.length_ft || "", widthVal: editingSi.width_val || "", thicknessIn: editingSi.thickness_in || "",
-    pieces: editingSi.qty, rate: editingSi.rate, gst: editingSi.gst_rate, transport: editingSi.transport
+    pieces: editingSi.qty, rate: editingSi.rate, gst: editingSi.gst_rate, transport: editingSi.transport,
+    locationId: editingSi.location_id || (warehouseLoc && warehouseLoc.id)
   } : {
     // Stock lands on one specific size — auto-picked when there's only one,
     // otherwise the counter staff must say which so it can't land nowhere.
     sizeId: p.sizes.length===1 ? p.sizes[0].id : null,
     mode: Pricing.normaliseMode(p.default_mode),
     lengthFt: p.length_ft || "", widthVal: p.width_val || "", thicknessIn: p.thickness_in || "",
-    pieces: 1, rate: 0, gst: p.gst, transport: 0
+    pieces: 1, rate: 0, gst: p.gst, transport: 0,
+    locationId: warehouseLoc && warehouseLoc.id
   };
 
   function calc(){
@@ -1485,6 +1559,11 @@ function openStockIn(p, editingSi){
         ${p.sizes.map(s=>`<button class="chip ${s.id===ctx.sizeId?'selected':''}" data-si-size="${s.id}">${escapeHtml(s.label)} · ${s.stock} in stock</button>`).join("") || `<span class="muted" style="font-size:12px;">No sizes on this product yet — add one via Edit first.</span>`}
       </div>
 
+      <label class="field-label">Stock goes to</label>
+      <div class="chip-row" id="si-location-chips">
+        ${state.locations.map(l=>`<button class="chip ${l.id===ctx.locationId?'selected':''}" data-si-location="${l.id}">${escapeHtml(l.name)}</button>`).join("")}
+      </div>
+
       <label class="field-label">Billing mode</label>
       <div class="mode-row">
         ${Pricing.MODE_KEYS.map(k=>`<button class="chip sm ${k===ctx.mode?'selected':''}" data-si-mode="${k}" title="${Pricing.MODES[k].formula}">${Pricing.MODES[k].unit}</button>`).join("")}
@@ -1530,6 +1609,9 @@ function openStockIn(p, editingSi){
     sheet.querySelectorAll("[data-si-mode]").forEach(b=>b.addEventListener("click", ()=>{
       ctx.mode = b.dataset.siMode; render();
     }));
+    sheet.querySelectorAll("[data-si-location]").forEach(b=>b.addEventListener("click", ()=>{
+      ctx.locationId = b.dataset.siLocation; render();
+    }));
     sheet.querySelector("#si-supplier").addEventListener("input", renderCalcOnly);
     sheet.querySelectorAll("[data-si-field]").forEach(inp=>inp.addEventListener("input", ()=>{
       ctx[inp.dataset.siField] = inp.value;
@@ -1552,7 +1634,7 @@ function openStockIn(p, editingSi){
           supplier: document.getElementById("si-supplier").value.trim(),
           note: document.getElementById("si-note").value.trim(),
           mode: ctx.mode, lengthFt: ctx.lengthFt, widthVal: ctx.widthVal, thicknessIn: ctx.thicknessIn,
-          pieces: ctx.pieces, rate: ctx.rate, gst: ctx.gst, transport: ctx.transport
+          pieces: ctx.pieces, rate: ctx.rate, gst: ctx.gst, transport: ctx.transport, locationId: ctx.locationId
         };
         if(editingSi){
           await api("PUT", `/products/${p.id}/stock-in/${editingSi.id}`, payload);
@@ -3414,7 +3496,12 @@ async function renderPurchaseScreen(){
   if(!state.pur.date) state.pur.date = todayISO();
   const dateEl = document.getElementById("pur-date");
   if(dateEl && !dateEl.value) dateEl.value = state.pur.date;
+  if(!state.pur.locationId){
+    const warehouse = state.locations.find(l=>l.code==="warehouse");
+    if(warehouse) state.pur.locationId = warehouse.id;
+  }
   renderPurchaseEditBanner();
+  renderPurchaseLocationChips();
   renderPurchaseSuppliers();
   renderPurchaseSupplierInfo();
   renderPurchaseProducts();
@@ -3423,6 +3510,19 @@ async function renderPurchaseScreen(){
   renderPurchaseTotals();
   const saveBtn = document.getElementById("pur-save-btn");
   if(saveBtn) saveBtn.textContent = state.pur.editingPurchaseId ? "Update Purchase & Update Stock" : "Save Purchase & Update Stock";
+}
+function renderPurchaseLocationChips(){
+  const wrap = document.getElementById("pur-location-chips");
+  if(!wrap) return;
+  wrap.innerHTML = state.locations.map(l=>`
+    <button class="chip ${state.pur.locationId===l.id?'selected':''}" data-pur-location="${l.id}">${escapeHtml(l.name)}</button>
+  `).join("");
+  wrap.querySelectorAll("[data-pur-location]").forEach(b=>{
+    b.addEventListener("click", ()=>{
+      state.pur.locationId = b.dataset.purLocation;
+      renderPurchaseLocationChips();
+    });
+  });
 }
 /** Small dismissible banner shown atop New Purchase while an existing
  *  purchase is being edited — mirrors renderEditModeBanner() on Billing. */
@@ -3442,7 +3542,7 @@ function renderPurchaseEditBanner(){
     state.pur = {
       supplierId: null, purchaseType: "Local", paymentMethod: "Credit",
       date: "", invoiceNo: "", dueDate: "", vehicleNumber: "", transportName: "", lrNumber: "", remarks: "",
-      transport: 0, loading: 0, otherCharges: 0, roundOff: true, cart: [], editingPurchaseId: null
+      transport: 0, loading: 0, otherCharges: 0, roundOff: true, cart: [], editingPurchaseId: null, locationId: null
     };
     const set = (id, val) => { const inp=document.getElementById(id); if(inp) inp.value = val; };
     set("pur-invoice-no", ""); set("pur-due-date", ""); set("pur-vehicle", "");
@@ -3753,6 +3853,7 @@ async function savePurchase(){
       loading: state.pur.loading,
       otherCharges: state.pur.otherCharges,
       roundOff: state.pur.roundOff,
+      locationId: state.pur.locationId,
       // Only the raw inputs are sent — the server recomputes every derived
       // figure itself, same principle as completeSale() on the Billing side.
       items: state.pur.cart.map(c=>({
@@ -3769,7 +3870,7 @@ async function savePurchase(){
     state.pur = {
       supplierId: null, purchaseType: "Local", paymentMethod: "Credit",
       date: "", invoiceNo: "", dueDate: "", vehicleNumber: "", transportName: "", lrNumber: "", remarks: "",
-      transport: 0, loading: 0, otherCharges: 0, roundOff: true, cart: [], editingPurchaseId: null
+      transport: 0, loading: 0, otherCharges: 0, roundOff: true, cart: [], editingPurchaseId: null, locationId: null
     };
     const set = (id, val) => { const el=document.getElementById(id); if(el) el.value = val; };
     set("pur-invoice-no", ""); set("pur-due-date", ""); set("pur-vehicle", "");
@@ -3895,6 +3996,7 @@ async function editExistingPurchase(p){
   state.pur.otherCharges = p.other_charges || 0;
   state.pur.roundOff = true;
   state.pur.editingPurchaseId = p.id;
+  state.pur.locationId = p.location_id || null;
 
   closeAllSheets();
   switchTab("purchase");
@@ -4304,6 +4406,11 @@ async function openPoDetail(poId){
       ${po.remarks?`<div><span class="muted">Remarks:</span> ${escapeHtml(po.remarks)}</div>`:""}
     </div>` : ""}
     ${po.converted_purchase_id ? `<div class="muted" style="font-size:11.5px;margin-top:8px;">Converted to Purchase Entry.</div>` : ""}
+    ${canConvert ? `
+    <label class="field-label" style="margin-top:14px;">Stock goes to</label>
+    <div class="chip-row" id="po-convert-location-chips">
+      ${state.locations.map((l,i)=>`<button class="chip ${l.code==='warehouse'?'selected':''}" data-po-convert-loc="${l.id}">${escapeHtml(l.name)}</button>`).join("")}
+    </div>` : ""}
     <div class="action-row" style="margin-top:14px;">
       ${canEdit ? `<button class="btn btn-outline" id="edit-po-btn">✎ Edit</button>` : ""}
       ${canApprove ? `<button class="btn btn-outline" id="approve-po-btn">Approve</button>` : ""}
@@ -4325,11 +4432,19 @@ async function openPoDetail(poId){
       toast("Purchase Order approved.", "ok");
     }catch(err){ toast(err.message); }
   });
+  sheet.querySelectorAll("[data-po-convert-loc]").forEach(b=>b.addEventListener("click", ()=>{
+    sheet.querySelectorAll("[data-po-convert-loc]").forEach(x=>x.classList.remove("selected"));
+    b.classList.add("selected");
+  }));
   const convertBtn = sheet.querySelector("#convert-po-btn");
   if(convertBtn) convertBtn.addEventListener("click", async ()=>{
-    if(!confirm(`Convert ${po.po_no} to a real Purchase Entry? This will increase stock and the supplier's due.`)) return;
+    const selectedLoc = sheet.querySelector("[data-po-convert-loc].selected");
+    if(!confirm(`Convert ${po.po_no} to a real Purchase Entry? This will increase ${selectedLoc?selectedLoc.textContent:"Warehouse"} stock and the supplier's due.`)) return;
     try{
-      const result = await api("POST", `/purchase-orders/${po.id}/convert`, { paymentMethod: "Credit" });
+      const result = await api("POST", `/purchase-orders/${po.id}/convert`, {
+        paymentMethod: "Credit",
+        locationId: selectedLoc ? selectedLoc.dataset.poConvertLoc : undefined
+      });
       await Promise.all([loadProducts(), loadSuppliers()]);
       closeAllSheets();
       toast(`Converted to ${result.purchase.purchase_no}.`, "ok");
@@ -4448,6 +4563,121 @@ function sharePoWhatsApp(po){
   ].filter(Boolean);
   const text = encodeURIComponent(lines.join("\n"));
   window.open(`https://wa.me/?text=${text}`, "_blank");
+}
+
+/* ============================================================
+   SHEET: Transfer Stock — moves quantity for one size between two
+   locations in a single server-side transaction (server/routes/transfers.js).
+   ============================================================ */
+function openTransferStock(p){
+  const sheet = document.getElementById("sheet-transfer-stock");
+  const shop = state.locations.find(l=>l.code==="shop");
+  const warehouse = state.locations.find(l=>l.code==="warehouse");
+  const ctx = {
+    sizeId: p.sizes.length===1 ? p.sizes[0].id : null,
+    fromLocationId: warehouse ? warehouse.id : (state.locations[0] && state.locations[0].id),
+    toLocationId: shop ? shop.id : (state.locations[1] && state.locations[1].id),
+    quantity: 1, reason: ""
+  };
+
+  function currentSize(){ return p.sizes.find(s=>s.id===ctx.sizeId); }
+  function stockAt(locationId){
+    const size = currentSize();
+    if(!size) return 0;
+    const row = (size.byLocation||[]).find(l=>l.location_id===locationId);
+    return row ? row.quantity : 0;
+  }
+
+  function render(){
+    const size = currentSize();
+    const fromStock = stockAt(ctx.fromLocationId);
+    const toStock = stockAt(ctx.toLocationId);
+    const qty = Math.max(0, parseFloat(ctx.quantity)||0);
+
+    sheet.innerHTML = `
+      <div class="sheet-handle"></div>
+      <button class="sheet-close" data-sheetclose>✕</button>
+      <div class="sheet-title">Transfer Stock</div>
+      <div class="muted" style="font-size:12px;margin-bottom:10px;">${escapeHtml(p.name)}</div>
+
+      <label class="field-label">Which size?</label>
+      <div class="chip-row" id="xfr-size-chips">
+        ${p.sizes.map(s=>`<button class="chip ${s.id===ctx.sizeId?'selected':''}" data-xfr-size="${s.id}">${escapeHtml(s.label)}</button>`).join("") || `<span class="muted" style="font-size:12px;">No sizes on this product.</span>`}
+      </div>
+
+      <label class="field-label">From</label>
+      <div class="chip-row" id="xfr-from-chips">
+        ${state.locations.map(l=>`<button class="chip ${l.id===ctx.fromLocationId?'selected':''}" data-xfr-from="${l.id}">${escapeHtml(l.name)} · ${stockAt(l.id)}${size?" "+escapeHtml(p.unit||""):""}</button>`).join("")}
+      </div>
+
+      <label class="field-label">To</label>
+      <div class="chip-row" id="xfr-to-chips">
+        ${state.locations.map(l=>`<button class="chip ${l.id===ctx.toLocationId?'selected':''}" data-xfr-to="${l.id}" ${l.id===ctx.fromLocationId?'disabled':''}>${escapeHtml(l.name)} · ${stockAt(l.id)}${size?" "+escapeHtml(p.unit||""):""}</button>`).join("")}
+      </div>
+
+      <label class="field-label">Quantity</label>
+      <input type="number" inputmode="decimal" step="any" min="0" id="xfr-qty" value="${ctx.quantity}">
+
+      <label class="field-label">Reason <span class="muted" style="font-weight:400;">— optional</span></label>
+      <input type="text" id="xfr-reason" value="${escapeHtml(ctx.reason)}" placeholder="e.g. Restocking counter">
+
+      ${size ? `
+      <div class="line-calc" style="margin-top:10px;">
+        <div class="line-calc-formula">${fromStock} &rarr; ${round2(fromStock-qty)}</div>
+        <div class="line-calc-amount" style="font-size:13px;">${escapeHtml((state.locations.find(l=>l.id===ctx.fromLocationId)||{}).name||"")}</div>
+      </div>
+      <div class="line-calc" style="margin-top:6px;">
+        <div class="line-calc-formula">${toStock} &rarr; ${round2(toStock+qty)}</div>
+        <div class="line-calc-amount" style="font-size:13px;">${escapeHtml((state.locations.find(l=>l.id===ctx.toLocationId)||{}).name||"")}</div>
+      </div>
+      ${qty>fromStock ? `<div class="line-warn">Only ${fromStock} available at the source location.</div>` : ""}
+      ` : ""}
+
+      <button class="btn btn-primary" id="xfr-save" style="margin-top:16px;">Transfer</button>
+    `;
+
+    sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+    sheet.querySelectorAll("[data-xfr-size]").forEach(b=>b.addEventListener("click", ()=>{ ctx.sizeId = Number(b.dataset.xfrSize); render(); }));
+    sheet.querySelectorAll("[data-xfr-from]").forEach(b=>b.addEventListener("click", ()=>{
+      ctx.fromLocationId = b.dataset.xfrFrom;
+      if(ctx.toLocationId===ctx.fromLocationId){
+        const other = state.locations.find(l=>l.id!==ctx.fromLocationId);
+        ctx.toLocationId = other ? other.id : ctx.toLocationId;
+      }
+      render();
+    }));
+    sheet.querySelectorAll("[data-xfr-to]").forEach(b=>{
+      if(!b.disabled) b.addEventListener("click", ()=>{ ctx.toLocationId = b.dataset.xfrTo; render(); });
+    });
+    sheet.querySelector("#xfr-qty").addEventListener("input", (e)=>{ ctx.quantity = e.target.value; render(); });
+    sheet.querySelector("#xfr-reason").addEventListener("input", (e)=>{ ctx.reason = e.target.value; });
+    sheet.querySelector("#xfr-save").addEventListener("click", async ()=>{
+      if(ctx.sizeId == null){ toast("Choose which size to transfer."); return; }
+      if(!(qty>0)){ toast("Enter a quantity greater than zero."); return; }
+      if(ctx.fromLocationId===ctx.toLocationId){ toast("Source and destination must be different."); return; }
+      const btn = document.getElementById("xfr-save");
+      btn.disabled = true;
+      try{
+        const result = await api("POST", "/transfers", {
+          sizeId: ctx.sizeId, fromLocationId: ctx.fromLocationId, toLocationId: ctx.toLocationId,
+          quantity: qty, reason: ctx.reason.trim()
+        });
+        await loadProducts();
+        const refreshed = state.products.find(x=>x.id===p.id);
+        if(refreshed) Object.assign(p, refreshed);
+        closeAllSheets();
+        openProductDetail(p.id, "inventory");
+        renderInventoryList();
+        const fromName = (state.locations.find(l=>l.id===ctx.fromLocationId)||{}).name || "";
+        const toName = (state.locations.find(l=>l.id===ctx.toLocationId)||{}).name || "";
+        toast(`Transferred ${qty} — ${fromName} → ${toName}`, "ok");
+      }catch(err){ toast(err.message); }
+      finally{ btn.disabled = false; }
+    });
+  }
+
+  render();
+  showSheet("sheet-transfer-stock");
 }
 
 })();

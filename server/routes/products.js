@@ -15,8 +15,14 @@ function dim(v, fallback) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+// `stock` on each size stays the existing denormalised cross-location total
+// (unchanged shape, every existing screen keeps working) — `byLocation` is
+// purely additive, the per-location breakdown the Inventory screen's
+// Shop/Warehouse tabs need.
 function loadSizes(productId) {
-  return db.prepare("SELECT id, label, price, stock FROM product_sizes WHERE product_id = ? ORDER BY sort_order ASC, id ASC").all(productId);
+  const sizes = db.prepare("SELECT id, label, price, stock FROM product_sizes WHERE product_id = ? ORDER BY sort_order ASC, id ASC").all(productId);
+  sizes.forEach(s => { s.byLocation = inventory.getStockByLocation(s.id); });
+  return sizes;
 }
 
 function serialize(p) {
@@ -158,24 +164,35 @@ router.put("/:id", (req, res) => {
  * Correct ONE size's stock directly — every size carries its own count now,
  * so there is no longer a single product-level number to adjust.
  */
+/**
+ * Manual Adjustment — always at a specific location (Shop, Warehouse, ...),
+ * per the multi-location requirement that every stock action says where.
+ * `locationId` defaults to Shop when omitted, since the Inventory screen's
+ * stock editor always has a location selected before this fires; Shop is
+ * the safer default for any older caller (matches what a sale can actually
+ * draw from) rather than silently landing in Warehouse.
+ */
 router.patch("/:id/sizes/:sizeId/stock", (req, res) => {
   const p = db.prepare("SELECT * FROM products WHERE id = ?").get(req.params.id);
   if (!p) return res.status(404).json({ error: "Product not found." });
   const size = db.prepare("SELECT * FROM product_sizes WHERE id = ? AND product_id = ?").get(req.params.sizeId, p.id);
   if (!size) return res.status(404).json({ error: "Size not found on this product." });
+  const targetLocation = inventory.getLocationById(req.body.locationId);
+  const locationId = (targetLocation && targetLocation.active) ? targetLocation.id : inventory.getLocationByCode("shop").id;
+  const before = inventory.getStock(size.id, locationId);
 
   let newStock;
   if (req.body.stock !== undefined) newStock = Number(req.body.stock);
-  else if (req.body.delta !== undefined) newStock = size.stock + Number(req.body.delta);
+  else if (req.body.delta !== undefined) newStock = before + Number(req.body.delta);
   else return res.status(400).json({ error: "Provide stock or delta." });
   newStock = Math.max(0, newStock);
 
   db.transaction(() => {
-    db.prepare("UPDATE product_sizes SET stock = ? WHERE id = ?").run(newStock, size.id);
+    inventory.addStock(size.id, locationId, newStock - before);
     syncProductStock(p.id);
   })();
 
-  logAction(req, "product.stock_adjust", `${p.name} (${size.label}): ${size.stock} → ${newStock}`);
+  logAction(req, "product.stock_adjust", `${p.name} (${size.label}) @ ${targetLocation ? targetLocation.name : "Shop"}: ${before} → ${newStock}`);
   res.json(serialize(db.prepare("SELECT * FROM products WHERE id = ?").get(p.id)));
 });
 

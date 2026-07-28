@@ -66,6 +66,8 @@
           <button class="qa-btn" data-goto="purchase"><span class="ic">&#128722;</span>New Purchase</button>
           <button class="qa-btn" data-goto="po"><span class="ic">&#128203;</span>Purchase Order</button>
           <button class="qa-btn" data-goto="inventory"><span class="ic">&#128230;</span>Inventory</button>
+          <button class="qa-btn" data-inv-location-goto="shop"><span class="ic">&#127978;</span>Shop Stock</button>
+          <button class="qa-btn" data-inv-location-goto="warehouse"><span class="ic">&#127974;</span>Warehouse Stock</button>
           <button class="qa-btn" data-goto="customers"><span class="ic">&#128100;</span>Customers</button>
           <button class="qa-btn" data-goto="reports"><span class="ic">&#128202;</span>Reports</button>
           <button class="qa-btn" id="qa-payment"><span class="ic">&#128176;</span>Payment</button>
@@ -187,9 +189,15 @@
 
       <!-- INVENTORY -->
       <div class="screen" id="screen-inventory">
-        <div class="searchbar" style="margin-top:0;">
+        <div class="doctype-toggle" id="inv-location-toggle" style="margin-top:0;"></div>
+        <div class="searchbar" style="margin-top:10px;">
           <span>&#128269;</span><input type="text" id="inv-search" placeholder="Search SKU or product">
           <button class="gold-fab" id="inv-add-btn">+</button>
+        </div>
+        <div class="chip-row" style="margin-top:10px;" id="inv-stock-filter">
+          <button class="chip selected" data-inv-stock-filter="all">All</button>
+          <button class="chip" data-inv-stock-filter="low">Low Stock</button>
+          <button class="chip" data-inv-stock-filter="out">Out of Stock</button>
         </div>
         <div class="chip-row" style="margin-top:10px;" id="brand-filter"></div>
         <div class="muted" style="font-size:11.5px;margin:8px 0;" id="product-count"></div>
@@ -275,6 +283,8 @@
             <label class="dim"><span>Purchase Date</span><input type="date" id="pur-date"></label>
             <label class="dim"><span>Supplier Invoice #</span><input type="text" id="pur-invoice-no" placeholder="e.g. INV-1234"></label>
           </div>
+          <label class="field-label" style="margin-top:10px;">Stock goes to</label>
+          <div class="chip-row" id="pur-location-chips"></div>
           <label class="field-label" style="margin-top:10px;">Purchase Type</label>
           <div class="chip-row" id="pur-type-chips">
             <button class="chip selected" data-pur-type="Local">Local (CGST + SGST)</button>
@@ -440,6 +450,7 @@
   <div class="sheet" id="sheet-cash-entry"></div>
   <div class="sheet" id="sheet-purchase-detail"></div>
   <div class="sheet" id="sheet-po-detail"></div>
+  <div class="sheet" id="sheet-transfer-stock"></div>
   <div class="sheet" id="sheet-factory-reset"></div>
 
   <!-- ============ FULLSCREEN: INVOICE PREVIEW ============ -->

@@ -3375,20 +3375,33 @@ async function renderPurchasePaymentsReport(body){
 async function renderProfitReport(body){
   const d = await api("GET","/reports/profit");
   const missingCost = d.rows.some(r=>!r.hasCost && r.pieces>0);
+  // GST is deliberately excluded from every profit figure below — it's tax
+  // collected and remitted, not margin — but shown alongside each amount so
+  // the two totals (Total = amount + GST) still tie out to what actually
+  // changed hands.
+  const row = (label, value, cls) =>
+    `<div class="inv-flex" style="margin-bottom:4px;${cls||""}"><span class="muted">${label}</span><span>${value}</span></div>`;
   body.innerHTML = `
     <div style="font-weight:800;font-size:14px;">Profit Report</div>
-    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Revenue minus each product's latest recorded purchase cost</div>
-    <div class="stat-grid" style="margin-bottom:12px;">
-      <div class="stat-card plain"><div class="label">Revenue</div><div class="value">${fmt(d.totalRevenue)}</div></div>
-      <div class="stat-card plain"><div class="label">Cost</div><div class="value">${fmt(d.totalCost)}</div></div>
-      <div class="stat-card navy"><div class="label">Profit</div><div class="value">${fmt(d.totalProfit)}</div></div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Sales Amount minus Purchase Amount, both excluding GST</div>
+    <div class="card" style="margin-bottom:12px;">
+      ${row("Purchase Amount (Excl. GST)", fmt(d.purchaseAmount))}
+      ${row("Purchase GST", fmt(d.purchaseGst))}
+      ${row("Purchase Total", fmt(d.purchaseTotal), "font-weight:700;border-bottom:1px solid var(--border);padding-bottom:6px;")}
+      ${row("Sales Amount (Excl. GST)", fmt(d.salesAmount))}
+      ${row("Sales GST", fmt(d.salesGst))}
+      ${row("Sales Total", fmt(d.salesTotal), "font-weight:700;border-bottom:1px solid var(--border);padding-bottom:6px;")}
+      <div class="inv-flex" style="font-weight:800;font-size:15px;padding-top:4px;"><span>Gross Profit</span><span style="color:${d.grossProfit>=0?'var(--ok)':'var(--danger)'};">${fmt(d.grossProfit)}</span></div>
+      ${d.profitPct!=null ? row("Profit %", d.profitPct+"%") : ""}
     </div>
-    ${missingCost ? `<div class="muted" style="font-size:11px;margin-bottom:8px;">⚠ Some items sold have no purchase on file, so their cost is counted as ₹0 — record a Purchase entry for accurate profit.</div>` : ""}
+    ${missingCost ? `<div class="muted" style="font-size:11px;margin-bottom:8px;">⚠ Some items sold have no purchase on file, so their purchase side is counted as ₹0 — record a Purchase entry for accurate profit.</div>` : ""}
+    <div class="section-title" style="margin-top:0;">Per Sale</div>
     ${d.rows.length ? d.rows.slice(0,50).map(r=>`
       <div class="list-row"><div>
         <div class="row-title">${escapeHtml(r.name)}${!r.hasCost&&r.pieces>0?' <span class="pill warn">no cost on file</span>':""}</div>
-        <div class="row-sub">${r.date} · ${escapeHtml(r.challan_no)} · Revenue ${fmt(r.revenue)} − Cost ${fmt(r.cost)}</div>
-      </div><div class="row-right row-title" style="color:${r.profit>=0?'var(--ok)':'var(--danger)'};">${fmt(r.profit)}</div></div>
+        <div class="row-sub">${r.date} · ${escapeHtml(r.challan_no)}</div>
+        <div class="row-sub">Sales ${fmt(r.salesAmount)} − Purchase ${fmt(r.purchaseAmount)}${r.pieces>0?" · "+fmt(r.profitPerUnit)+"/unit":""}${r.profitPct!=null?" · "+r.profitPct+"%":""}</div>
+      </div><div class="row-right row-title" style="color:${r.grossProfit>=0?'var(--ok)':'var(--danger)'};">${fmt(r.grossProfit)}</div></div>
     `).join("") : `<div class="empty-hint">No sales yet.</div>`}
   `;
 }

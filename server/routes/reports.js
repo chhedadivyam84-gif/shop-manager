@@ -226,41 +226,67 @@ router.get("/party-wise", (req, res) => {
 });
 
 /**
- * Profit per sold item: revenue (pre-tax line amount) minus a cost basis
- * pulled from the most recent PURCHASE on file for that product (cost_price
- * is per physical piece, already inclusive of transport — see stock-in).
- * A product never purchased through this app (e.g. opening stock typed
- * straight into Inventory) has no cost on file and shows cost 0 / profit =
- * full revenue, which is flagged in the row rather than silently guessed at.
+ * Profit per sold item, following the standard GST-exclusive method:
+ *   Purchase Amount = purchase rate × qty (GST added separately as Purchase GST)
+ *   Sales Amount     = sale rate × qty     (GST added separately as Sales GST)
+ *   Gross Profit     = Sales Amount − Purchase Amount   (GST never enters this —
+ *                       it's tax collected and remitted, not margin)
+ * The purchase side's rate/GST% come from the most recent PURCHASE on file for
+ * that product; cost_price already excludes GST (it's rate+transport per piece,
+ * see stock-in), so purchaseAmount below is genuinely GST-exclusive without
+ * needing a ÷1.18-style unwind. A product never purchased through this app has
+ * no cost on file — its purchase side is 0 and the row is flagged (hasCost)
+ * rather than silently guessing a number.
  */
 router.get("/profit", (req, res) => {
   const items = db.prepare(`
-    SELECT ii.product_id, ii.name, ii.pieces, ii.qty, ii.rate, ii.qty*ii.rate AS revenue,
-      i.date, i.challan_no
+    SELECT ii.product_id, ii.name, ii.pieces, ii.qty, ii.rate, ii.gst_rate AS sales_gst_rate,
+      ii.qty*ii.rate AS sales_amount, i.date, i.challan_no
     FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
     WHERE i.voided = 0 AND i.doc_type = 'invoice'
     ORDER BY i.created_at DESC
   `).all();
 
   const latestCost = db.prepare(`
-    SELECT cost_price FROM stock_ins WHERE product_id = ? ORDER BY created_at DESC LIMIT 1
+    SELECT cost_price, gst_rate FROM stock_ins WHERE product_id = ? ORDER BY created_at DESC LIMIT 1
   `);
 
-  let totalRevenue = 0, totalCost = 0;
+  const totals = { purchaseAmount: 0, purchaseGst: 0, salesAmount: 0, salesGst: 0 };
   const rows = items.map(it => {
     const costRow = it.product_id ? latestCost.get(it.product_id) : null;
     const hasCost = !!costRow;
-    const cost = round2((costRow ? costRow.cost_price : 0) * (it.pieces || 0));
-    const profit = round2(it.revenue - cost);
-    totalRevenue += it.revenue; totalCost += cost;
-    return { ...it, cost, profit, hasCost };
+
+    const purchaseAmount = round2((costRow ? costRow.cost_price : 0) * (it.pieces || 0));
+    const purchaseGst = round2(purchaseAmount * ((costRow ? costRow.gst_rate : 0) / 100));
+    const purchaseTotal = round2(purchaseAmount + purchaseGst);
+
+    const salesAmount = round2(it.sales_amount);
+    const salesGst = round2(salesAmount * ((it.sales_gst_rate || 0) / 100));
+    const salesTotal = round2(salesAmount + salesGst);
+
+    const grossProfit = round2(salesAmount - purchaseAmount);
+    const profitPerUnit = it.pieces > 0 ? round2(grossProfit / it.pieces) : 0;
+    const profitPct = purchaseAmount > 0 ? round2((grossProfit / purchaseAmount) * 100) : null;
+
+    totals.purchaseAmount += purchaseAmount; totals.purchaseGst += purchaseGst;
+    totals.salesAmount += salesAmount; totals.salesGst += salesGst;
+
+    return {
+      name: it.name, date: it.date, challan_no: it.challan_no, pieces: it.pieces, hasCost,
+      purchaseAmount, purchaseGst, purchaseTotal, salesAmount, salesGst, salesTotal,
+      grossProfit, profitPerUnit, profitPct
+    };
   });
+
+  const purchaseAmount = round2(totals.purchaseAmount);
+  const salesAmount = round2(totals.salesAmount);
+  const grossProfit = round2(salesAmount - purchaseAmount);
 
   res.json({
     rows,
-    totalRevenue: round2(totalRevenue),
-    totalCost: round2(totalCost),
-    totalProfit: round2(totalRevenue - totalCost)
+    purchaseAmount, purchaseGst: round2(totals.purchaseGst), purchaseTotal: round2(purchaseAmount + totals.purchaseGst),
+    salesAmount, salesGst: round2(totals.salesGst), salesTotal: round2(salesAmount + totals.salesGst),
+    grossProfit, profitPct: purchaseAmount > 0 ? round2((grossProfit / purchaseAmount) * 100) : null
   });
 });
 

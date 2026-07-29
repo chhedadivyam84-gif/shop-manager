@@ -302,10 +302,29 @@ router.post("/:id/stock-in", (req, res) => {
   });
 });
 
+/**
+ * A product's "Recent Purchases" panel — merges both purchase systems (see
+ * reports.js's /purchases for the same merge, same reasoning) so a product
+ * bought only through New Purchase doesn't show an empty history here.
+ */
 router.get("/:id/stock-in", (req, res) => {
   const p = db.prepare("SELECT * FROM products WHERE id = ?").get(req.params.id);
   if (!p) return res.status(404).json({ error: "Product not found." });
-  const rows = db.prepare("SELECT * FROM stock_ins WHERE product_id = ? ORDER BY created_at DESC LIMIT 20").all(p.id);
+
+  const stockInRows = db.prepare("SELECT * FROM stock_ins WHERE product_id = ?").all(p.id);
+  const purchaseLineRows = db.prepare(`
+    SELECT pi.id, pi.size_label, pi.mode, pi.pieces AS qty, pi.qty AS billed_qty, pi.rate, pi.discount_amount, pi.gst_rate,
+      p.date AS purchase_date, p.supplier_invoice_no AS invoice_no, p.created_at, s.name AS supplier
+    FROM purchase_items pi
+    JOIN purchases p ON p.id = pi.purchase_id
+    LEFT JOIN suppliers s ON s.id = p.supplier_id
+    WHERE pi.product_id = ? AND p.voided = 0
+  `).all(p.id).map(r => {
+    const taxable = round2(r.qty * r.rate - r.discount_amount);
+    return { ...r, grand_total: round2(taxable + taxable * (r.gst_rate / 100)) };
+  });
+
+  const rows = [...stockInRows, ...purchaseLineRows].sort((a, b) => b.created_at - a.created_at).slice(0, 20);
   res.json(rows);
 });
 

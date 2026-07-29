@@ -5,6 +5,36 @@ const { buildXlsx } = require("../xlsx");
 
 const router = express.Router();
 
+/**
+ * A product's most recent purchase cost, whichever of the two purchase
+ * systems it actually came from — stock_ins (the older single-line Record
+ * Stock In) or purchase_items (the newer multi-line New Purchase) — by
+ * timestamp. purchase_items has no stored cost_price/gst_rate the way
+ * stock_ins does, so it's computed here the same way: rate net of its own
+ * line discount, per piece, GST-exclusive (transport isn't split across
+ * multi-line purchases the way stock_ins folds it in for a single line).
+ */
+function getLatestCost(productId) {
+  const fromStockIn = db.prepare(
+    "SELECT cost_price, gst_rate, created_at FROM stock_ins WHERE product_id = ? ORDER BY created_at DESC LIMIT 1"
+  ).get(productId);
+  const fromPurchase = db.prepare(`
+    SELECT pi.rate, pi.discount_amount, pi.pieces, pi.gst_rate, p.created_at
+    FROM purchase_items pi JOIN purchases p ON p.id = pi.purchase_id
+    WHERE pi.product_id = ? AND p.voided = 0
+    ORDER BY p.created_at DESC LIMIT 1
+  `).get(productId);
+
+  if (!fromStockIn && !fromPurchase) return null;
+  if (fromStockIn && (!fromPurchase || fromStockIn.created_at >= fromPurchase.created_at)) {
+    return { costPrice: fromStockIn.cost_price, gstRate: fromStockIn.gst_rate };
+  }
+  const costPrice = fromPurchase.pieces > 0
+    ? round2((fromPurchase.rate * fromPurchase.pieces - fromPurchase.discount_amount) / fromPurchase.pieces)
+    : fromPurchase.rate;
+  return { costPrice, gstRate: fromPurchase.gst_rate };
+}
+
 router.get("/dashboard", (req, res) => {
   const today = todayStr();
   // Sales figures count priced tax invoices only — a delivery challan carries no
@@ -19,12 +49,9 @@ router.get("/dashboard", (req, res) => {
     FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
     WHERE i.date = ? AND i.voided = 0 AND i.doc_type = 'invoice'
   `).all(today);
-  const latestCostStmt = db.prepare(
-    "SELECT cost_price FROM stock_ins WHERE product_id = ? ORDER BY created_at DESC LIMIT 1"
-  );
   const todaysProfit = Math.round(todaysItems.reduce((s, it) => {
-    const c = it.product_id ? latestCostStmt.get(it.product_id) : null;
-    return s + (it.revenue - (c ? c.cost_price * it.pieces : 0));
+    const c = it.product_id ? getLatestCost(it.product_id) : null;
+    return s + (it.revenue - (c ? c.costPrice * it.pieces : 0));
   }, 0));
 
   const customers = db.prepare("SELECT * FROM customers").all();
@@ -191,11 +218,32 @@ router.get("/purchase-payments", (req, res) => {
   res.json(rows);
 });
 
-/** Every purchase entry, newest first — the Purchase Report. */
+/**
+ * Every purchase entry, newest first — the Purchase Report. Two sources feed
+ * this: the older single-line stock_ins (Inventory > product > Record Stock
+ * In) and the newer multi-line purchases/purchase_items (New Purchase),
+ * flattened to one row per product line so both look the same to this
+ * report — same merge this app already does for a supplier's ledger.
+ */
 router.get("/purchases", (req, res) => {
-  const rows = db.prepare(`
-    SELECT * FROM stock_ins ORDER BY created_at DESC
+  const stockInRows = db.prepare(`
+    SELECT id, product_name, size_label, purchase_date, invoice_no, supplier, qty, billed_qty, mode, grand_total, created_at
+    FROM stock_ins
   `).all();
+
+  const purchaseLineRows = db.prepare(`
+    SELECT pi.id, pi.name AS product_name, pi.size_label, p.date AS purchase_date, p.supplier_invoice_no AS invoice_no,
+      s.name AS supplier, pi.pieces AS qty, pi.qty AS billed_qty, pi.mode, pi.rate, pi.discount_amount, pi.gst_rate, p.created_at
+    FROM purchase_items pi
+    JOIN purchases p ON p.id = pi.purchase_id
+    LEFT JOIN suppliers s ON s.id = p.supplier_id
+    WHERE p.voided = 0
+  `).all().map(r => {
+    const taxable = round2(r.qty * r.rate - r.discount_amount);
+    return { ...r, grand_total: round2(taxable + taxable * (r.gst_rate / 100)) };
+  });
+
+  const rows = [...stockInRows, ...purchaseLineRows].sort((a, b) => b.created_at - a.created_at);
   res.json(rows);
 });
 
@@ -247,17 +295,13 @@ router.get("/profit", (req, res) => {
     ORDER BY i.created_at DESC
   `).all();
 
-  const latestCost = db.prepare(`
-    SELECT cost_price, gst_rate FROM stock_ins WHERE product_id = ? ORDER BY created_at DESC LIMIT 1
-  `);
-
   const totals = { purchaseAmount: 0, purchaseGst: 0, salesAmount: 0, salesGst: 0 };
   const rows = items.map(it => {
-    const costRow = it.product_id ? latestCost.get(it.product_id) : null;
+    const costRow = it.product_id ? getLatestCost(it.product_id) : null;
     const hasCost = !!costRow;
 
-    const purchaseAmount = round2((costRow ? costRow.cost_price : 0) * (it.pieces || 0));
-    const purchaseGst = round2(purchaseAmount * ((costRow ? costRow.gst_rate : 0) / 100));
+    const purchaseAmount = round2((costRow ? costRow.costPrice : 0) * (it.pieces || 0));
+    const purchaseGst = round2(purchaseAmount * ((costRow ? costRow.gstRate : 0) / 100));
     const purchaseTotal = round2(purchaseAmount + purchaseGst);
 
     const salesAmount = round2(it.sales_amount);
@@ -363,10 +407,9 @@ router.get("/export", (req, res) => {
       FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
       WHERE i.voided = 0 AND i.doc_type = 'invoice' ORDER BY i.created_at DESC
     `).all();
-    const latestCostStmt = db.prepare("SELECT cost_price FROM stock_ins WHERE product_id = ? ORDER BY created_at DESC LIMIT 1");
     items.forEach(it => {
-      const c = it.product_id ? latestCostStmt.get(it.product_id) : null;
-      const cost = round2((c ? c.cost_price : 0) * (it.pieces || 0));
+      const c = it.product_id ? getLatestCost(it.product_id) : null;
+      const cost = round2((c ? c.costPrice : 0) * (it.pieces || 0));
       rows.push([it.date, it.challan_no, it.name, it.pieces, round2(it.revenue), cost, round2(it.revenue - cost)]);
     });
   } else {

@@ -92,10 +92,14 @@ function derivePurchaseStatus(p) {
 function withStatus(p) { return { ...p, status: derivePurchaseStatus(p) }; }
 
 router.get("/", (req, res) => {
-  const { supplierId } = req.query;
+  const { supplierId, includeVoided } = req.query;
+  // Voided purchases are hidden by default everywhere (lists, reports) since
+  // Void is meant to look "gone" day-to-day — includeVoided=true is the only
+  // way to look one back up (e.g. to delete it outright after voiding).
+  const voidedClause = includeVoided === "true" ? "" : "AND voided = 0";
   const rows = supplierId
-    ? db.prepare("SELECT * FROM purchases WHERE supplier_id = ? AND voided = 0 ORDER BY created_at DESC").all(supplierId)
-    : db.prepare("SELECT * FROM purchases WHERE voided = 0 ORDER BY created_at DESC").all();
+    ? db.prepare(`SELECT * FROM purchases WHERE supplier_id = ? ${voidedClause} ORDER BY created_at DESC`).all(supplierId)
+    : db.prepare(`SELECT * FROM purchases WHERE 1=1 ${voidedClause} ORDER BY created_at DESC`).all();
   res.json(rows.map(withStatus));
 });
 

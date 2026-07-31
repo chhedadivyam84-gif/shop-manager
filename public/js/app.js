@@ -62,6 +62,16 @@ let state = {
     paymentTerms: "", deliveryTerms: "", remarks: "", freight: 0, otherCharges: 0, roundOff: true,
     cart: [], editingPoId: null
   },
+  quotation: {
+    customerId: null, saleType: "Local", date: "", validUntil: "", terms: "", remarks: "",
+    discountType: "pct", discountValue: 0, transport: 0, loading: 0, gstOnCharges: true, roundOff: true,
+    cart: [], editingQuotationId: null
+  },
+  so: {
+    customerId: null, saleType: "Local", date: "", deliveryAddress: "", expectedDeliveryDate: "", remarks: "",
+    discountType: "pct", discountValue: 0, transport: 0, loading: 0, gstOnCharges: true, roundOff: true,
+    cart: [], editingSoId: null
+  },
   locations: [], invLocationCode: null, invStockFilter: "all",
   me: { staffName: "", role: "" },
   ctx: {}
@@ -432,6 +442,88 @@ async function initApp(){
   document.getElementById("po-save-btn").addEventListener("click", ()=>savePo(false));
   document.getElementById("po-save-draft-btn").addEventListener("click", ()=>savePo(true));
 
+  document.getElementById("quotation-back-link").addEventListener("click", (e)=>{ e.preventDefault(); switchTab("home"); });
+  document.getElementById("quotation-customer-search").addEventListener("input", renderQuotationCustomers);
+  document.getElementById("quotation-search").addEventListener("input", renderQuotationProducts);
+  document.getElementById("quotation-date").addEventListener("change", (e)=>{ state.quotation.date = e.target.value; });
+  document.getElementById("quotation-valid-until").addEventListener("change", (e)=>{ state.quotation.validUntil = e.target.value; });
+  document.getElementById("quotation-terms").addEventListener("input", (e)=>{ state.quotation.terms = e.target.value; });
+  document.getElementById("quotation-remarks").addEventListener("input", (e)=>{ state.quotation.remarks = e.target.value; });
+  document.querySelectorAll('[data-quotation-type]').forEach(b=>{
+    b.addEventListener("click", ()=>{
+      state.quotation.saleType = b.dataset.quotationType;
+      document.querySelectorAll('[data-quotation-type]').forEach(x=>x.classList.remove("selected"));
+      b.classList.add("selected");
+      renderQuotationTotals();
+    });
+  });
+  document.querySelectorAll('[data-quotation-disc-type]').forEach(b=>{
+    b.addEventListener("click", ()=>{
+      state.quotation.discountType = b.dataset.quotationDiscType;
+      document.querySelectorAll('[data-quotation-disc-type]').forEach(x=>x.classList.remove("selected"));
+      b.classList.add("selected");
+      renderQuotationTotals();
+    });
+  });
+  document.getElementById("quotation-disc-value").addEventListener("input", (e)=>{
+    state.quotation.discountValue = Math.max(0, parseFloat(e.target.value)||0); renderQuotationTotals();
+  });
+  document.getElementById("quotation-transport-input").addEventListener("input", (e)=>{
+    state.quotation.transport = Math.max(0, parseFloat(e.target.value)||0); renderQuotationTotals();
+  });
+  document.getElementById("quotation-loading-input").addEventListener("input", (e)=>{
+    state.quotation.loading = Math.max(0, parseFloat(e.target.value)||0); renderQuotationTotals();
+  });
+  document.getElementById("quotation-gst-on-charges-toggle").addEventListener("change", (e)=>{
+    state.quotation.gstOnCharges = e.target.checked; renderQuotationTotals();
+  });
+  document.getElementById("quotation-roundoff-toggle").addEventListener("change", (e)=>{
+    state.quotation.roundOff = e.target.checked; renderQuotationTotals();
+  });
+  document.getElementById("quotation-save-btn").addEventListener("click", ()=>saveQuotation(false));
+  document.getElementById("quotation-save-draft-btn").addEventListener("click", ()=>saveQuotation(true));
+
+  document.getElementById("so-back-link").addEventListener("click", (e)=>{ e.preventDefault(); switchTab("home"); });
+  document.getElementById("so-customer-search").addEventListener("input", renderSoCustomers);
+  document.getElementById("so-search").addEventListener("input", renderSoProducts);
+  document.getElementById("so-date").addEventListener("change", (e)=>{ state.so.date = e.target.value; });
+  document.getElementById("so-expected-date").addEventListener("change", (e)=>{ state.so.expectedDeliveryDate = e.target.value; });
+  document.getElementById("so-delivery-address").addEventListener("input", (e)=>{ state.so.deliveryAddress = e.target.value; });
+  document.getElementById("so-remarks").addEventListener("input", (e)=>{ state.so.remarks = e.target.value; });
+  document.querySelectorAll('[data-so-type]').forEach(b=>{
+    b.addEventListener("click", ()=>{
+      state.so.saleType = b.dataset.soType;
+      document.querySelectorAll('[data-so-type]').forEach(x=>x.classList.remove("selected"));
+      b.classList.add("selected");
+      renderSoTotals();
+    });
+  });
+  document.querySelectorAll('[data-so-disc-type]').forEach(b=>{
+    b.addEventListener("click", ()=>{
+      state.so.discountType = b.dataset.soDiscType;
+      document.querySelectorAll('[data-so-disc-type]').forEach(x=>x.classList.remove("selected"));
+      b.classList.add("selected");
+      renderSoTotals();
+    });
+  });
+  document.getElementById("so-disc-value").addEventListener("input", (e)=>{
+    state.so.discountValue = Math.max(0, parseFloat(e.target.value)||0); renderSoTotals();
+  });
+  document.getElementById("so-transport-input").addEventListener("input", (e)=>{
+    state.so.transport = Math.max(0, parseFloat(e.target.value)||0); renderSoTotals();
+  });
+  document.getElementById("so-loading-input").addEventListener("input", (e)=>{
+    state.so.loading = Math.max(0, parseFloat(e.target.value)||0); renderSoTotals();
+  });
+  document.getElementById("so-gst-on-charges-toggle").addEventListener("change", (e)=>{
+    state.so.gstOnCharges = e.target.checked; renderSoTotals();
+  });
+  document.getElementById("so-roundoff-toggle").addEventListener("change", (e)=>{
+    state.so.roundOff = e.target.checked; renderSoTotals();
+  });
+  document.getElementById("so-save-btn").addEventListener("click", ()=>saveSo(false));
+  document.getElementById("so-save-draft-btn").addEventListener("click", ()=>saveSo(true));
+
   document.getElementById("scrim").addEventListener("click", closeAllSheets);
 
   document.getElementById("paper-a5").addEventListener("click", ()=>setPaper("A5"));
@@ -453,7 +545,7 @@ async function switchTab(tab){
   document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));
   document.getElementById("screen-"+tab).classList.add("active");
   document.querySelectorAll("nav.bottom .tab").forEach(t=>t.classList.toggle("active", t.dataset.tab===tab));
-  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",purchase:"New Purchase",po:"Purchase Order"};
+  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",purchase:"New Purchase",po:"Purchase Order",quotation:"Quotation",so:"Sales Order"};
   document.getElementById("hdr-sub").textContent = subMap[tab];
   document.getElementById("hdr-main").textContent = tab==="home" ? greeting() : subMap[tab];
   if(tab==="billing") await renderBilling();
@@ -463,6 +555,8 @@ async function switchTab(tab){
   if(tab==="cashbook") await renderCashBook();
   if(tab==="purchase") await renderPurchaseScreen();
   if(tab==="po") await renderPoScreen();
+  if(tab==="quotation") await renderQuotationScreen();
+  if(tab==="so") await renderSoScreen();
 }
 
 async function renderAll(){
@@ -1270,6 +1364,16 @@ function renderProductDetailSheet(context){
         ? `<button class="btn btn-gold" id="add-to-po-btn" style="margin-top:14px;" disabled>No price set — tap Edit below</button>`
         : `<button class="btn btn-gold" id="add-to-po-btn" style="margin-top:14px;">Add to Order</button>`
     ) : ""}
+    ${context==="quotation" ? (
+      !p.sizes.length
+        ? `<button class="btn btn-gold" id="add-to-quotation-btn" style="margin-top:14px;" disabled>No price set — tap Edit below</button>`
+        : `<button class="btn btn-gold" id="add-to-quotation-btn" style="margin-top:14px;">Add to Quotation</button>`
+    ) : ""}
+    ${context==="so" ? (
+      !p.sizes.length
+        ? `<button class="btn btn-gold" id="add-to-so-btn" style="margin-top:14px;" disabled>No price set — tap Edit below</button>`
+        : `<button class="btn btn-gold" id="add-to-so-btn" style="margin-top:14px;">Add to Order</button>`
+    ) : ""}
 
     <div class="action-row">
       <button class="btn btn-outline" id="edit-product-btn">✎ Edit</button>
@@ -1345,6 +1449,22 @@ function renderProductDetailSheet(context){
       addToPoCart(p.id, state.ctx.selectedSizeIdx);
       closeAllSheets();
       renderPoProducts();
+    });
+  }
+  const addQuotationBtn = sheet.querySelector("#add-to-quotation-btn");
+  if(addQuotationBtn){
+    addQuotationBtn.addEventListener("click", ()=>{
+      addToQuotationCart(p.id, state.ctx.selectedSizeIdx);
+      closeAllSheets();
+      renderQuotationProducts();
+    });
+  }
+  const addSoBtn = sheet.querySelector("#add-to-so-btn");
+  if(addSoBtn){
+    addSoBtn.addEventListener("click", ()=>{
+      addToSoCart(p.id, state.ctx.selectedSizeIdx);
+      closeAllSheets();
+      renderSoProducts();
     });
   }
   sheet.querySelector("#edit-product-btn").addEventListener("click", ()=>{
@@ -1716,7 +1836,12 @@ function openStockIn(p, editingSi){
    SHEETS: Customer Detail
    ============================================================ */
 async function openCustomerDetail(customerId){
-  const detail = await api("GET", `/customers/${customerId}`);
+  const [detail, quotations, salesOrders, salesReturns] = await Promise.all([
+    api("GET", `/customers/${customerId}`),
+    api("GET", `/quotations?customerId=${customerId}`),
+    api("GET", `/sales-orders?customerId=${customerId}`),
+    api("GET", `/sales-returns?customerId=${customerId}`)
+  ]);
   const sheet = document.getElementById("sheet-customer-detail");
   sheet.innerHTML = `
     <div class="sheet-handle"></div>
@@ -1735,6 +1860,30 @@ async function openCustomerDetail(customerId){
       <button class="btn btn-outline" id="print-ledger-btn">Print Ledger</button>
       <button class="btn btn-outline" id="export-ledger-btn">Export Excel</button>
     </div>
+    ${quotations.length ? `
+    <div class="section-title">Quotations</div>
+    <div class="card">${quotations.map(q=>`
+      <div class="list-row" data-open-quotation="${q.id}" style="cursor:pointer;">
+        <div><div class="row-title">${escapeHtml(q.quotation_no)}</div><div class="row-sub">${q.date}</div></div>
+        <div class="row-right"><div class="row-title">${fmt(q.total)}</div><span class="pill ${QUOTATION_STATUS_PILL[q.status]||''}">${escapeHtml(q.status)}</span></div>
+      </div>`).join("")}
+    </div>` : ""}
+    ${salesOrders.length ? `
+    <div class="section-title">Sales Orders</div>
+    <div class="card">${salesOrders.map(so=>`
+      <div class="list-row" data-open-so="${so.id}" style="cursor:pointer;">
+        <div><div class="row-title">${escapeHtml(so.so_no)}</div><div class="row-sub">${so.date}</div></div>
+        <div class="row-right"><div class="row-title">${fmt(so.total)}</div><span class="pill ${SO_STATUS_PILL[so.status]||''}">${escapeHtml(so.status)}</span></div>
+      </div>`).join("")}
+    </div>` : ""}
+    ${salesReturns.length ? `
+    <div class="section-title">Sales Returns</div>
+    <div class="card">${salesReturns.map(sr=>`
+      <div class="list-row" data-open-sales-return="${sr.id}" style="cursor:pointer;">
+        <div><div class="row-title">${escapeHtml(sr.return_no)}</div><div class="row-sub">${sr.date}${sr.voided?" · Voided":""}</div></div>
+        <div class="row-right row-title">${fmt(sr.total)}</div>
+      </div>`).join("")}
+    </div>` : ""}
     <div class="section-title">Ledger</div>
     <div class="card">${detail.ledger.length ? detail.ledger.map(l=>renderPartyLedgerRow(l,"customer",detail.id)).join("") : `<div class="empty-hint">No activity yet.</div>`}</div>
     ${isOwner() ? `<div style="margin-top:16px;display:flex;flex-direction:column;gap:8px;align-items:center;">
@@ -1746,6 +1895,15 @@ async function openCustomerDetail(customerId){
   sheet.querySelector("#edit-cust-btn").addEventListener("click", ()=>{ closeAllSheets(); openAddCustomer(detail); });
   sheet.querySelectorAll("[data-open-invoice]").forEach(el=>{
     el.addEventListener("click", ()=>{ closeAllSheets(); openExistingInvoice(el.dataset.openInvoice); });
+  });
+  sheet.querySelectorAll("[data-open-quotation]").forEach(el=>{
+    el.addEventListener("click", ()=>{ closeAllSheets(); openQuotationDetail(el.dataset.openQuotation); });
+  });
+  sheet.querySelectorAll("[data-open-so]").forEach(el=>{
+    el.addEventListener("click", ()=>{ closeAllSheets(); openSoDetail(el.dataset.openSo); });
+  });
+  sheet.querySelectorAll("[data-open-sales-return]").forEach(el=>{
+    el.addEventListener("click", ()=>{ closeAllSheets(); openSalesReturnDetail(el.dataset.openSalesReturn); });
   });
   const recordPaymentBtn = sheet.querySelector("#record-payment-btn");
   if(recordPaymentBtn) recordPaymentBtn.addEventListener("click", ()=>openRecordPayment(detail));
@@ -2906,13 +3064,20 @@ function openInvoicePreview(existingInvoice){
 // Remove any edit/void/delete buttons left over from a previously-opened
 // document before deciding which ones this one needs — the set differs by
 // doc type and whether it's already voided.
-["inv-edit", "inv-void", "inv-delete"].forEach(id => { const el = document.getElementById(id); if(el) el.remove(); });
+["inv-edit", "inv-void", "inv-delete", "inv-return"].forEach(id => { const el = document.getElementById(id); if(el) el.remove(); });
   if(existingInvoice && existingInvoice.id && !existingInvoice.voided){
     const actionsBar = document.querySelector(".inv-actions");
     const editBtn = document.createElement("button");
     editBtn.id = "inv-edit"; editBtn.textContent = "✎ Edit";
     editBtn.onclick = ()=>{ closeFullscreen("fs-invoice"); editExistingInvoice(existingInvoice); };
     actionsBar.appendChild(editBtn);
+
+    if(!challan){
+      const returnBtn = document.createElement("button");
+      returnBtn.id = "inv-return"; returnBtn.textContent = "Return Items";
+      returnBtn.onclick = ()=>{ closeFullscreen("fs-invoice"); openSalesReturn(existingInvoice); };
+      actionsBar.appendChild(returnBtn);
+    }
   }
   if(existingInvoice && existingInvoice.id && isOwner()){
     const actionsBar = document.querySelector(".inv-actions");
@@ -3258,6 +3423,7 @@ async function renderReport(){
     if(state.reportType==="Purchase") return renderPurchaseReport(body);
     if(state.reportType==="Party") return renderPartyReport(body);
     if(state.reportType==="Profit") return renderProfitReport(body);
+    if(state.reportType==="ProfitByInvoice") return renderProfitByInvoiceReport(body);
     if(state.reportType==="Supplier") return renderSupplierReport(body);
     if(state.reportType==="SalePayments") return renderSalePaymentsReport(body);
     if(state.reportType==="PurchasePayments") return renderPurchasePaymentsReport(body);
@@ -3419,6 +3585,25 @@ async function renderProfitReport(body){
         <div class="row-title">${escapeHtml(r.name)}${!r.hasCost&&r.pieces>0?' <span class="pill warn">no cost on file</span>':""}</div>
         <div class="row-sub">${r.date} · ${escapeHtml(r.challan_no)}</div>
         <div class="row-sub">Sales ${fmt(r.salesAmount)} − Purchase ${fmt(r.purchaseAmount)}${r.pieces>0?" · "+fmt(r.profitPerUnit)+"/unit":""}${r.profitPct!=null?" · "+r.profitPct+"%":""}</div>
+      </div><div class="row-right row-title" style="color:${r.grossProfit>=0?'var(--ok)':'var(--danger)'};">${fmt(r.grossProfit)}</div></div>
+    `).join("") : `<div class="empty-hint">No sales yet.</div>`}
+  `;
+}
+
+async function renderProfitByInvoiceReport(body){
+  const d = await api("GET","/reports/profit-by-invoice");
+  body.innerHTML = `
+    <div style="font-weight:800;font-size:14px;">Profit per Invoice</div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Total profit for each sale, Sales Amount minus Purchase Amount excl. GST</div>
+    <div class="card" style="margin-bottom:12px;">
+      <div class="inv-flex" style="font-weight:800;font-size:15px;"><span>Gross Profit (All Invoices)</span><span style="color:${d.grossProfit>=0?'var(--ok)':'var(--danger)'};">${fmt(d.grossProfit)}</span></div>
+      ${d.profitPct!=null ? `<div class="inv-flex muted" style="font-size:12px;"><span>Profit %</span><span>${d.profitPct}%</span></div>` : ""}
+    </div>
+    ${d.rows.length ? d.rows.map(r=>`
+      <div class="list-row"><div>
+        <div class="row-title">${escapeHtml(r.challan_no)}${!r.hasCost?' <span class="pill warn">no cost on file</span>':""}</div>
+        <div class="row-sub">${escapeHtml(r.date)} · ${escapeHtml(r.customer)} · ${r.itemCount} item${r.itemCount!==1?"s":""}</div>
+        <div class="row-sub">Sales ${fmt(r.salesAmount)} − Purchase ${fmt(r.purchaseAmount)}${r.profitPct!=null?" · "+r.profitPct+"%":""}</div>
       </div><div class="row-right row-title" style="color:${r.grossProfit>=0?'var(--ok)':'var(--danger)'};">${fmt(r.grossProfit)}</div></div>
     `).join("") : `<div class="empty-hint">No sales yet.</div>`}
   `;
@@ -4638,6 +4823,1245 @@ function sharePoWhatsApp(po){
   ].filter(Boolean);
   const text = encodeURIComponent(lines.join("\n"));
   window.open(`https://wa.me/?text=${text}`, "_blank");
+}
+
+/* ============================================================
+   SALES QUOTATION — mirrors the Purchase Order screen above almost
+   exactly (customer instead of supplier, transport/loading/discount
+   instead of freight/other, since it prices the same way an Invoice does).
+   ============================================================ */
+async function renderQuotationScreen(){
+  if(!state.quotation.date) state.quotation.date = todayISO();
+  const dateEl = document.getElementById("quotation-date");
+  if(dateEl && !dateEl.value) dateEl.value = state.quotation.date;
+  renderQuotationEditBanner();
+  renderQuotationCustomers();
+  renderQuotationCustomerInfo();
+  renderQuotationProducts();
+  renderQuotationCart();
+  renderQuotationTotals();
+}
+function renderQuotationEditBanner(){
+  const el = document.getElementById("quotation-edit-mode-banner");
+  if(!el) return;
+  if(!state.quotation.editingQuotationId){ el.style.display = "none"; el.innerHTML = ""; return; }
+  el.style.display = "block";
+  el.innerHTML = `
+    <div class="card" style="background:var(--warn-bg);border-color:var(--warn-text);margin-bottom:10px;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;gap:8px;">
+      <div style="font-size:12px;font-weight:700;color:var(--warn-text);">✎ Editing an existing Quotation — Save below will UPDATE it, not create a new one.</div>
+      <a href="#" id="cancel-quotation-edit-link" style="font-size:12px;font-weight:800;color:var(--warn-text);white-space:nowrap;">Cancel</a>
+    </div>
+  `;
+  document.getElementById("cancel-quotation-edit-link").addEventListener("click", (e)=>{
+    e.preventDefault();
+    resetQuotationState();
+    renderQuotationScreen();
+    toast("Edit cancelled.");
+  });
+}
+function resetQuotationState(){
+  state.quotation = {
+    customerId: null, saleType: "Local", date: "", validUntil: "", terms: "", remarks: "",
+    discountType: "pct", discountValue: 0, transport: 0, loading: 0, gstOnCharges: true, roundOff: true,
+    cart: [], editingQuotationId: null
+  };
+  const set = (id, val) => { const el=document.getElementById(id); if(el) el.value = val; };
+  set("quotation-valid-until", ""); set("quotation-terms", ""); set("quotation-remarks", "");
+  set("quotation-disc-value", 0); set("quotation-transport-input", 0); set("quotation-loading-input", 0);
+  document.querySelectorAll('[data-quotation-type]').forEach(x=>x.classList.toggle("selected", x.dataset.quotationType==="Local"));
+  document.querySelectorAll('[data-quotation-disc-type]').forEach(x=>x.classList.toggle("selected", x.dataset.quotationDiscType==="pct"));
+  const gstToggle = document.getElementById("quotation-gst-on-charges-toggle"); if(gstToggle) gstToggle.checked = true;
+  const roToggle = document.getElementById("quotation-roundoff-toggle"); if(roToggle) roToggle.checked = true;
+}
+function renderQuotationCustomers(){
+  const wrap = document.getElementById("quotation-customers");
+  const searchEl = document.getElementById("quotation-customer-search");
+  const q = (searchEl && searchEl.value || "").trim().toLowerCase();
+
+  const selected = state.customers.find(c=>c.id===state.quotation.customerId);
+  let list = state.customers;
+  if(q) list = list.filter(c=>c.name.toLowerCase().includes(q) || (c.phone||"").includes(q));
+  if(selected && !list.includes(selected)) list = [selected, ...list];
+
+  wrap.innerHTML = list.map(c=>`
+    <button class="chip ${state.quotation.customerId===c.id?'selected':''}" data-quotation-cust="${c.id}">${escapeHtml(c.name)}</button>
+  `).join("") || `<div class="empty-hint" style="padding:8px 4px;">${q ? `No customer matches "${escapeHtml(q)}".` : "No customers yet — add one from the Customers tab."}</div>`;
+
+  wrap.querySelectorAll("[data-quotation-cust]").forEach(b=>{
+    b.addEventListener("click", ()=>{
+      state.quotation.customerId = b.dataset.quotationCust;
+      const cust = state.customers.find(c=>c.id===state.quotation.customerId);
+      state.quotation.saleType = (cust && cust.gst_type === "IGST") ? "Interstate" : "Local";
+      document.querySelectorAll('[data-quotation-type]').forEach(x=>x.classList.toggle("selected", x.dataset.quotationType===state.quotation.saleType));
+      renderQuotationCustomers();
+      renderQuotationCustomerInfo();
+      renderQuotationTotals();
+    });
+  });
+}
+function renderQuotationCustomerInfo(){
+  const box = document.getElementById("quotation-customer-info");
+  const cust = state.customers.find(c=>c.id===state.quotation.customerId);
+  if(!cust){ box.style.display = "none"; box.innerHTML = ""; return; }
+  box.style.display = "block";
+  box.innerHTML = `
+    <div><strong>${escapeHtml(cust.name)}</strong></div>
+    ${cust.phone ? `<div class="muted">${escapeHtml(cust.phone)}</div>` : ""}
+    ${cust.gst ? `<div class="muted">GST: ${escapeHtml(cust.gst)}</div>` : ""}
+    ${cust.state ? `<div class="muted">${escapeHtml(cust.state)}</div>` : ""}
+    ${cust.address ? `<div class="muted">${escapeHtml(cust.address)}</div>` : ""}
+  `;
+}
+function renderQuotationProducts(){
+  const q = (document.getElementById("quotation-search").value||"").toLowerCase();
+  const list = state.products.filter(p=>
+    !q || p.name.toLowerCase().includes(q) || (p.brand||"").toLowerCase().includes(q) || (p.sku||"").toLowerCase().includes(q)
+  );
+  const wrap = document.getElementById("quotation-product-list");
+  wrap.innerHTML = list.map(p=>{
+    const priceLabel = !p.sizes.length ? "⚠ No price — tap Edit" : (p.sizes.length>1 ? "From "+fmt(Math.min(...p.sizes.map(s=>s.price))) : fmt(p.sizes[0].price));
+    return `<div class="list-row" data-open-quotation-product="${p.id}" style="cursor:pointer;">
+      <div class="swatch"></div>
+      <div><div class="row-title">${escapeHtml(p.name)}</div><div class="row-sub">${escapeHtml(p.brand||"")} · ${priceLabel}</div></div>
+      <div class="row-right"><button class="gold-fab" data-quotation-quickadd="${p.id}" style="width:30px;height:30px;">+</button></div>
+    </div>`;
+  }).join("") || `<div class="empty-hint">No matching products.</div>`;
+
+  wrap.querySelectorAll("[data-open-quotation-product]").forEach(el=>{
+    el.addEventListener("click", (e)=>{
+      if(e.target.closest("[data-quotation-quickadd]")) return;
+      openProductDetail(el.dataset.openQuotationProduct, "quotation");
+    });
+  });
+  wrap.querySelectorAll("[data-quotation-quickadd]").forEach(b=>{
+    b.addEventListener("click", (e)=>{ e.stopPropagation(); openProductDetail(b.dataset.quotationQuickadd, "quotation"); });
+  });
+}
+function addToQuotationCart(productId, sizeIdx){
+  const p = state.products.find(x=>x.id===productId);
+  if(!p) return false;
+  if(!p.sizes.length){ toast(`"${p.name}" has no price yet — open it and tap Edit to add one.`); return false; }
+  const size = p.sizes[sizeIdx] || p.sizes[0];
+  state.quotation.cart.push({
+    productId, sizeId: size.id, sizeIdx,
+    name: p.name + (p.sizes.length>1 ? " ("+size.label+")" : ""),
+    mode: Pricing.normaliseMode(p.default_mode),
+    lengthFt: p.length_ft || "", widthVal: p.width_val || "", thicknessIn: p.thickness_in || "",
+    pieces: 1, rate: size.price, gstRate: p.gst,
+    discountType: "pct", discountValue: 0
+  });
+  renderQuotationCart(); renderQuotationTotals();
+  return true;
+}
+function quotationLineCalc(c){
+  const r = Pricing.computeLine({mode:c.mode, lengthFt:c.lengthFt, widthVal:c.widthVal, thicknessIn:c.thicknessIn, pieces:c.pieces, rate:c.rate});
+  const discountAmount = c.discountType === "flat"
+    ? round2(Math.min(Math.max(0, c.discountValue||0), r.amount))
+    : round2(r.amount * (Math.min(100, Math.max(0, c.discountValue||0))/100));
+  const taxable = round2(r.amount - discountAmount);
+  const gstAmt = round2(taxable * ((c.gstRate||18)/100));
+  const finalAmt = round2(taxable + gstAmt);
+  return {...r, discountAmount, taxable, gstAmt, finalAmt};
+}
+function renderQuotationCart(){
+  const wrap = document.getElementById("quotation-cart-list");
+  if(!state.quotation.cart.length){
+    wrap.innerHTML = `<div class="empty-hint">No items yet. Add products above.</div>`;
+    return;
+  }
+  wrap.innerHTML = state.quotation.cart.map((c,idx)=>{
+    const m = Pricing.MODES[Pricing.normaliseMode(c.mode)];
+    const r = quotationLineCalc(c);
+
+    const dim = (label, unit, key, val) => `
+      <label class="dim">
+        <span>${label}${unit?` <em>(${unit})</em>`:""}</span>
+        <input type="number" inputmode="decimal" step="any" min="0"
+               value="${val===0||val?val:""}" data-quotation-line-field="${key}" data-quotation-line="${idx}" placeholder="0">
+      </label>`;
+
+    return `<div class="bill-line" data-quotation-line-row="${idx}">
+      <div class="bill-line-head">
+        <div class="bill-line-name">${escapeHtml(c.name)}</div>
+        <div class="line-actions">
+          <a href="#" data-quotation-dup="${idx}">Duplicate</a>
+          <a href="#" data-quotation-remove="${idx}" class="btn-danger-link">Remove</a>
+        </div>
+      </div>
+
+      <div class="mode-row">
+        ${Pricing.MODE_KEYS.map(k=>`
+          <button class="chip sm ${k===m.key?'selected':''}" data-quotation-line-mode="${k}" data-quotation-line="${idx}"
+                  title="${Pricing.MODES[k].formula}">${Pricing.MODES[k].unit}</button>
+        `).join("")}
+      </div>
+
+      <div class="dim-grid">
+        ${m.needsThickness ? dim("Thickness", m.thicknessUnit, "thicknessIn", c.thicknessIn) : ""}
+        ${m.needsLength ? dim("Length", m.lengthUnit, "lengthFt", c.lengthFt) : ""}
+        ${m.needsWidth ? dim("Width", m.widthUnit, "widthVal", c.widthVal) : ""}
+        ${dim("Qty", "pcs", "pieces", c.pieces)}
+        ${dim("Rate", "₹/"+m.unit, "rate", c.rate)}
+      </div>
+
+      <div class="chip-row" style="margin-top:8px;">
+        <button class="chip sm ${c.discountType==="pct"?'selected':''}" data-quotation-line-disc-type="pct" data-quotation-line="${idx}">Discount %</button>
+        <button class="chip sm ${c.discountType==="flat"?'selected':''}" data-quotation-line-disc-type="flat" data-quotation-line="${idx}">Discount ₹</button>
+      </div>
+      <div class="dim-grid">
+        ${dim("Discount", c.discountType==="flat"?"₹":"%", "discountValue", c.discountValue)}
+        <label class="dim"><span>GST <em>(%)</em></span><input type="number" value="${c.gstRate}" disabled style="opacity:0.6;"></label>
+      </div>
+
+      <div class="line-calc">
+        <div class="line-calc-formula">
+          ${r.sizeLabel ? `<strong>${escapeHtml(r.sizeLabel)}</strong> · ` : ""}
+          ${m.key!=="UNIT" ? `${Pricing.formatQty(r.perPiece, r.mode)}/pc × ${r.pieces} pcs = ` : ""}
+          <strong>${Pricing.formatQty(r.billedQty, r.mode)}</strong>
+          × ${Pricing.formatRate(r.rate, r.mode)}
+          ${r.discountAmount>0 ? ` − ${fmtPaise(r.discountAmount)} disc.` : ""}
+          + ${fmtPaise(r.gstAmt)} GST
+        </div>
+        <div class="line-calc-amount">${fmtPaise(r.finalAmt)}</div>
+      </div>
+    </div>`;
+  }).join("");
+
+  wrap.querySelectorAll("[data-quotation-line-mode]").forEach(b=>b.addEventListener("click", ()=>{
+    const c = state.quotation.cart[b.dataset.quotationLine];
+    const next = b.dataset.quotationLineMode;
+    if(c.mode === next) return;
+    c.rate = Pricing.isRateConvertible(c.mode, next)
+      ? Pricing.convertLineRate({mode:c.mode, lengthFt:c.lengthFt, widthVal:c.widthVal,
+                                 thicknessIn:c.thicknessIn, pieces:c.pieces, rate:c.rate}, next)
+      : "";
+    c.mode = next;
+    renderQuotationCart(); renderQuotationTotals();
+  }));
+
+  wrap.querySelectorAll("[data-quotation-line-disc-type]").forEach(b=>b.addEventListener("click", ()=>{
+    const c = state.quotation.cart[b.dataset.quotationLine];
+    c.discountType = b.dataset.quotationLineDiscType;
+    renderQuotationCart(); renderQuotationTotals();
+  }));
+
+  wrap.querySelectorAll("[data-quotation-line-field]").forEach(inp=>{
+    inp.addEventListener("input", ()=>{
+      const c = state.quotation.cart[inp.dataset.quotationLine];
+      const v = inp.value === "" ? "" : Math.max(0, parseFloat(inp.value)||0);
+      c[inp.dataset.quotationLineField] = v;
+      renderQuotationLineCalc(inp.dataset.quotationLine);
+      renderQuotationTotals();
+    });
+    inp.addEventListener("blur", ()=>{ renderQuotationCart(); renderQuotationTotals(); });
+  });
+
+  wrap.querySelectorAll("[data-quotation-dup]").forEach(a=>a.addEventListener("click", (e)=>{
+    e.preventDefault();
+    const i = Number(a.dataset.quotationDup);
+    state.quotation.cart.splice(i+1, 0, Object.assign({}, state.quotation.cart[i]));
+    renderQuotationCart(); renderQuotationTotals();
+  }));
+
+  wrap.querySelectorAll("[data-quotation-remove]").forEach(a=>a.addEventListener("click", (e)=>{
+    e.preventDefault(); state.quotation.cart.splice(a.dataset.quotationRemove,1); renderQuotationCart(); renderQuotationTotals();
+  }));
+}
+function renderQuotationLineCalc(idx){
+  const row = document.querySelector(`[data-quotation-line-row="${idx}"]`);
+  if(!row) return;
+  const c = state.quotation.cart[idx];
+  const m = Pricing.MODES[Pricing.normaliseMode(c.mode)];
+  const r = quotationLineCalc(c);
+  const f = row.querySelector(".line-calc-formula");
+  const a = row.querySelector(".line-calc-amount");
+  if(f) f.innerHTML =
+    (r.sizeLabel ? `<strong>${escapeHtml(r.sizeLabel)}</strong> · ` : "") +
+    (m.key!=="UNIT" ? `${Pricing.formatQty(r.perPiece, r.mode)}/pc × ${r.pieces} pcs = ` : "") +
+    `<strong>${Pricing.formatQty(r.billedQty, r.mode)}</strong>` +
+    ` × ${Pricing.formatRate(r.rate, r.mode)}` +
+    (r.discountAmount>0 ? ` − ${fmtPaise(r.discountAmount)} disc.` : "") +
+    ` + ${fmtPaise(r.gstAmt)} GST`;
+  if(a) a.textContent = fmtPaise(r.finalAmt);
+}
+function computeQuotationTotals(){
+  const lines = state.quotation.cart.map(quotationLineCalc);
+  const subtotal = round2(lines.reduce((s,r)=>s+r.amount,0));
+  let discountAmount = 0;
+  if(state.quotation.discountType === "flat") discountAmount = Number(state.quotation.discountValue)||0;
+  else discountAmount = subtotal * (Math.min(100, Math.max(0, Number(state.quotation.discountValue)||0))/100);
+  discountAmount = round2(Math.min(Math.max(0, discountAmount), subtotal));
+
+  let goodsTax = 0;
+  lines.forEach(r=>{
+    const share = subtotal>0 ? (r.amount/subtotal)*discountAmount : 0;
+    const taxable = Math.max(0, r.amount - share);
+    goodsTax += taxable * ((r.gstRate||18)/100);
+  });
+  goodsTax = round2(goodsTax);
+
+  const transport = round2(Math.max(0, state.quotation.transport||0));
+  const loading = round2(Math.max(0, state.quotation.loading||0));
+  const taxableGoods = round2(subtotal - discountAmount);
+  const effectiveRate = taxableGoods>0 ? goodsTax/taxableGoods : 0;
+  const ancillaryTax = state.quotation.gstOnCharges ? round2((transport+loading)*effectiveRate) : 0;
+  const totalTax = round2(goodsTax + ancillaryTax);
+
+  let cgst=0, sgst=0, igst=0;
+  if(state.quotation.saleType==="Interstate") igst = totalTax;
+  else { cgst = round2(totalTax/2); sgst = round2(totalTax-cgst); }
+
+  const preRound = subtotal - discountAmount + transport + loading + cgst + sgst + igst;
+  const total = round2(state.quotation.roundOff ? Math.round(preRound) : preRound);
+  const roundOffAmount = round2(total - preRound);
+
+  return {subtotal, discountAmount, cgst, sgst, igst, transport, loading, roundOffAmount, total};
+}
+function renderQuotationTotals(){
+  const t = computeQuotationTotals();
+  const row = (label, value, cls) =>
+    `<div class="inv-flex" style="margin-bottom:4px;${cls||""}"><span class="muted">${label}</span><span>${value}</span></div>`;
+  document.getElementById("quotation-totals-card").innerHTML = `
+    ${row("Subtotal", fmtPaise(t.subtotal))}
+    ${t.discountAmount>0 ? row("Total Discount", "-"+fmtPaise(t.discountAmount), "color:var(--danger);") : ""}
+    ${t.transport>0 ? row("Transport", fmtPaise(t.transport)) : ""}
+    ${t.loading>0 ? row("Loading", fmtPaise(t.loading)) : ""}
+    ${state.quotation.saleType==="Interstate"
+      ? row("IGST", fmtPaise(t.igst))
+      : row("CGST", fmtPaise(t.cgst)) + row("SGST", fmtPaise(t.sgst))}
+    ${t.roundOffAmount!==0 ? row("Round off", (t.roundOffAmount>0?"+":"")+fmtPaise(t.roundOffAmount)) : ""}
+    <div class="inv-flex" style="font-weight:800;border-top:1px solid var(--border);padding-top:6px;font-size:15px;"><span>Grand Total</span><span>${fmtPaise(t.total)}</span></div>
+    <div class="amount-words">${Pricing.amountInWords(t.total)}</div>
+  `;
+}
+function quotationPayload(){
+  return {
+    customerId: state.quotation.customerId,
+    date: document.getElementById("quotation-date").value || state.quotation.date,
+    validUntil: state.quotation.validUntil, saleType: state.quotation.saleType,
+    discountType: state.quotation.discountType, discountValue: state.quotation.discountValue,
+    transport: state.quotation.transport, loading: state.quotation.loading,
+    gstOnCharges: state.quotation.gstOnCharges, roundOff: state.quotation.roundOff,
+    terms: state.quotation.terms, remarks: state.quotation.remarks,
+    items: state.quotation.cart.map(c=>({
+      productId:c.productId, sizeId:c.sizeId, name:c.name, mode:c.mode,
+      lengthFt:c.lengthFt, widthVal:c.widthVal, thicknessIn:c.thicknessIn,
+      pieces:c.pieces, rate:c.rate, gstRate:c.gstRate,
+      discountType:c.discountType, discountValue:c.discountValue
+    }))
+  };
+}
+async function saveQuotation(asDraft){
+  if(!state.quotation.cart.length){ toast("Add at least one product to the quotation."); return; }
+  for(const c of state.quotation.cart){
+    const bad = Pricing.validateLine({
+      mode:c.mode, lengthFt:c.lengthFt, widthVal:c.widthVal,
+      thicknessIn:c.thicknessIn, pieces:c.pieces, rate: c.rate
+    }, c.name);
+    if(bad){ toast(bad); return; }
+  }
+  const saveBtn = document.getElementById("quotation-save-btn");
+  const draftBtn = document.getElementById("quotation-save-draft-btn");
+  saveBtn.disabled = true; draftBtn.disabled = true;
+  try{
+    const payload = { ...quotationPayload(), saveAsDraft: !!asDraft };
+    const editingId = state.quotation.editingQuotationId;
+    const saved = editingId
+      ? await api("PUT", `/quotations/${editingId}`, payload)
+      : await api("POST", "/quotations", payload);
+    resetQuotationState();
+    renderQuotationEditBanner();
+    await loadCustomers();
+    toast(`Quotation ${saved.quotation_no} ${editingId?"updated":"saved"} (${saved.status})`, "ok");
+    switchTab("home");
+  }catch(e){
+    toast(e.message);
+  }finally{
+    saveBtn.disabled = false; draftBtn.disabled = false;
+  }
+}
+
+/* ============================================================
+   SHEET: Quotation Detail (view + status-driven actions)
+   ============================================================ */
+const QUOTATION_STATUS_PILL = { Draft: "", Sent: "warn", Accepted: "ok", Converted: "ok", Cancelled: "danger" };
+async function openQuotationDetail(quotationId){
+  const q = await api("GET", `/quotations/${quotationId}`);
+  const sheet = document.getElementById("sheet-quotation-detail");
+  const lineTotal = it => {
+    const taxable = round2(it.qty*it.rate - it.discount_amount);
+    return round2(taxable + taxable*(it.gst_rate/100));
+  };
+  const canEdit = ["Draft","Sent"].includes(q.status);
+  const canAccept = ["Draft","Sent"].includes(q.status);
+  const canConvert = q.status === "Accepted";
+  const canCancel = !["Converted","Cancelled"].includes(q.status);
+  const canDelete = q.status === "Draft";
+  const cust = state.customers.find(c=>c.id===q.customer_id);
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">${escapeHtml(q.quotation_no)} <span class="pill ${QUOTATION_STATUS_PILL[q.status]||''}">${escapeHtml(q.status)}</span></div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px;">${q.date}${q.valid_until?" · Valid until "+q.valid_until:""}${cust?"<br>"+escapeHtml(cust.name):""}</div>
+    <div class="card">${q.items.map(it=>`
+      <div class="list-row">
+        <div><div class="row-title">${escapeHtml(it.name)}</div><div class="row-sub">${escapeHtml(it.size_label||"")} · ${it.pieces} ${escapeHtml(it.unit_label||"")} × ${fmt(it.rate)}${it.discount_amount>0?" · disc. "+fmt(it.discount_amount):""}</div></div>
+        <div class="row-right row-title">${fmt(lineTotal(it))}</div>
+      </div>`).join("")}
+    </div>
+    <div class="card" style="margin-top:8px;">
+      <div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Subtotal</span><span>${fmt(q.subtotal)}</span></div>
+      ${q.discount_amount>0?`<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Discount</span><span>-${fmt(q.discount_amount)}</span></div>`:""}
+      ${q.transport>0?`<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Transport</span><span>${fmt(q.transport)}</span></div>`:""}
+      ${q.loading>0?`<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Loading</span><span>${fmt(q.loading)}</span></div>`:""}
+      ${q.tax_type==="IGST"
+        ? `<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">IGST</span><span>${fmt(q.igst)}</span></div>`
+        : `<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">CGST</span><span>${fmt(q.cgst)}</span></div><div class="inv-flex" style="margin-bottom:4px;"><span class="muted">SGST</span><span>${fmt(q.sgst)}</span></div>`}
+      <div class="inv-flex" style="font-weight:800;border-top:1px solid var(--border);padding-top:6px;"><span>Total</span><span>${fmt(q.total)}</span></div>
+    </div>
+    ${q.terms||q.remarks ? `<div class="card" style="margin-top:8px;font-size:12px;">
+      ${q.terms?`<div><span class="muted">Terms &amp; Conditions:</span><div style="white-space:pre-line;">${escapeHtml(q.terms)}</div></div>`:""}
+      ${q.remarks?`<div><span class="muted">Remarks:</span> ${escapeHtml(q.remarks)}</div>`:""}
+    </div>` : ""}
+    ${q.converted_invoice_id ? `<div class="muted" style="font-size:11.5px;margin-top:8px;">Converted to Tax Invoice.</div>` : ""}
+    <div class="action-row" style="margin-top:14px;">
+      ${canEdit ? `<button class="btn btn-outline" id="edit-quotation-btn">✎ Edit</button>` : ""}
+      ${canAccept ? `<button class="btn btn-outline" id="accept-quotation-btn">Mark Accepted</button>` : ""}
+      ${canConvert ? `<button class="btn btn-gold" id="convert-quotation-btn">Convert to Invoice</button>` : ""}
+      <button class="btn btn-outline" id="print-quotation-btn">Print</button>
+      <button class="btn btn-outline" id="share-quotation-btn">Share (WhatsApp)</button>
+    </div>
+    ${canCancel ? `<div style="margin-top:12px;text-align:center;"><a href="#" id="cancel-quotation-link" class="btn-danger-link">Cancel this quotation</a></div>` : ""}
+    ${canDelete ? `<div style="margin-top:8px;text-align:center;"><a href="#" id="delete-quotation-link" class="btn-danger-link">Delete this draft</a></div>` : ""}
+  `;
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  const editBtn = sheet.querySelector("#edit-quotation-btn");
+  if(editBtn) editBtn.addEventListener("click", ()=>{ closeAllSheets(); editExistingQuotation(q); });
+  const acceptBtn = sheet.querySelector("#accept-quotation-btn");
+  if(acceptBtn) acceptBtn.addEventListener("click", async ()=>{
+    try{
+      await api("POST", `/quotations/${q.id}/accept`);
+      closeAllSheets();
+      toast("Quotation marked Accepted.", "ok");
+    }catch(err){ toast(err.message); }
+  });
+  const convertBtn = sheet.querySelector("#convert-quotation-btn");
+  if(convertBtn) convertBtn.addEventListener("click", async ()=>{
+    if(!confirm(`Convert ${q.quotation_no} to a real Tax Invoice? This will deduct Shop stock and raise the customer's due.`)) return;
+    try{
+      const result = await api("POST", `/quotations/${q.id}/convert`, { paymentMethod: "Cash", advance: 0 });
+      await Promise.all([loadProducts(), loadCustomers()]);
+      closeAllSheets();
+      toast(`Converted to ${result.invoice.challan_no}.`, "ok");
+    }catch(err){ toast(err.message); }
+  });
+  sheet.querySelector("#print-quotation-btn").addEventListener("click", ()=>printQuotation(q));
+  sheet.querySelector("#share-quotation-btn").addEventListener("click", ()=>shareQuotationWhatsApp(q));
+  const cancelLink = sheet.querySelector("#cancel-quotation-link");
+  if(cancelLink) cancelLink.addEventListener("click", async (e)=>{
+    e.preventDefault();
+    if(confirm(`Cancel ${q.quotation_no}? This can't be undone.`)){
+      try{
+        await api("POST", `/quotations/${q.id}/cancel`);
+        closeAllSheets();
+        toast("Quotation cancelled.", "ok");
+      }catch(err){ toast(err.message); }
+    }
+  });
+  const deleteLink = sheet.querySelector("#delete-quotation-link");
+  if(deleteLink) deleteLink.addEventListener("click", async (e)=>{
+    e.preventDefault();
+    if(confirm(`Delete this draft permanently? This can't be undone.`)){
+      try{
+        await api("DELETE", `/quotations/${q.id}`);
+        closeAllSheets();
+        toast("Draft deleted.", "ok");
+      }catch(err){ toast(err.message); }
+    }
+  });
+  showSheet("sheet-quotation-detail");
+}
+function editExistingQuotation(q){
+  state.quotation.cart = q.items.map(it=>{
+    const product = state.products.find(x=>x.id===it.product_id);
+    const sizeIdx = product ? product.sizes.findIndex(s=>s.id===it.size_id) : -1;
+    return {
+      productId: it.product_id, sizeId: it.size_id, sizeIdx: sizeIdx>=0 ? sizeIdx : 0,
+      name: it.name, mode: it.mode, lengthFt: it.length_ft||"", widthVal: it.width_val||"",
+      thicknessIn: it.thickness_in||"", pieces: it.pieces, rate: it.rate, gstRate: it.gst_rate,
+      discountType: it.discount_amount>0 ? "flat" : "pct", discountValue: it.discount_amount>0 ? it.discount_amount : 0
+    };
+  });
+  state.quotation.customerId = q.customer_id;
+  state.quotation.saleType = q.sale_type;
+  state.quotation.date = q.date;
+  state.quotation.validUntil = q.valid_until || "";
+  state.quotation.terms = q.terms || "";
+  state.quotation.remarks = q.remarks || "";
+  state.quotation.discountType = q.discount_type;
+  state.quotation.discountValue = q.discount_value;
+  state.quotation.transport = q.transport || 0;
+  state.quotation.loading = q.loading || 0;
+  state.quotation.gstOnCharges = !!q.gst_on_charges;
+  state.quotation.roundOff = true;
+  state.quotation.editingQuotationId = q.id;
+
+  switchTab("quotation");
+  renderQuotationScreen().then(()=>{
+    const set = (id, val) => { const el=document.getElementById(id); if(el) el.value = val; };
+    set("quotation-date", state.quotation.date);
+    set("quotation-valid-until", state.quotation.validUntil);
+    set("quotation-terms", state.quotation.terms);
+    set("quotation-remarks", state.quotation.remarks);
+    set("quotation-disc-value", state.quotation.discountValue);
+    set("quotation-transport-input", state.quotation.transport);
+    set("quotation-loading-input", state.quotation.loading);
+    document.querySelectorAll('[data-quotation-type]').forEach(x=>x.classList.toggle("selected", x.dataset.quotationType===state.quotation.saleType));
+    document.querySelectorAll('[data-quotation-disc-type]').forEach(x=>x.classList.toggle("selected", x.dataset.quotationDiscType===state.quotation.discountType));
+    document.getElementById("quotation-gst-on-charges-toggle").checked = state.quotation.gstOnCharges;
+    renderQuotationEditBanner();
+    toast(`Editing ${q.quotation_no} — make your changes, then save.`, "ok");
+  });
+}
+function printQuotation(q){
+  const cust = state.customers.find(c=>c.id===q.customer_id);
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(q.quotation_no)}</title>
+    <style>
+      body{font-family:Arial,Helvetica,sans-serif;padding:20px;color:#000;}
+      h1{font-size:16px;margin:0 0 2px;} .sub{font-size:11px;color:#555;margin-bottom:14px;}
+      table{width:100%;border-collapse:collapse;font-size:11px;margin-top:10px;}
+      th,td{border:1px solid #000;padding:4px 6px;text-align:left;}
+      th{background:#eee;} .num{text-align:right;}
+      .totals{margin-top:10px;font-size:12px;text-align:right;}
+    </style></head><body>
+    <h1>Quotation — ${escapeHtml(q.quotation_no)}</h1>
+    <div class="sub">${q.date}${q.valid_until?" · Valid until "+q.valid_until:""} · Status: ${escapeHtml(q.status)}</div>
+    <div class="sub">${cust?"To: "+escapeHtml(cust.name):""}</div>
+    <table><thead><tr><th>#</th><th>Product</th><th>Size</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Disc.</th><th class="num">GST%</th><th class="num">Amount</th></tr></thead>
+    <tbody>${q.items.map((it,i)=>`<tr><td>${i+1}</td><td>${escapeHtml(it.name)}</td><td>${escapeHtml(it.size_label||"")}</td>
+      <td class="num">${it.pieces}</td><td class="num">${fmt(it.rate)}</td><td class="num">${fmt(it.discount_amount)}</td>
+      <td class="num">${it.gst_rate}%</td><td class="num">${fmt(round2(it.qty*it.rate-it.discount_amount))}</td></tr>`).join("")}</tbody></table>
+    <div class="totals">
+      Subtotal: ${fmt(q.subtotal)}<br>
+      ${q.discount_amount>0?`Discount: -${fmt(q.discount_amount)}<br>`:""}
+      ${q.transport>0?`Transport: ${fmt(q.transport)}<br>`:""}
+      ${q.loading>0?`Loading: ${fmt(q.loading)}<br>`:""}
+      ${q.tax_type==="IGST"?`IGST: ${fmt(q.igst)}<br>`:`CGST: ${fmt(q.cgst)}<br>SGST: ${fmt(q.sgst)}<br>`}
+      <strong>Grand Total: ${fmt(q.total)}</strong>
+    </div>
+    ${q.terms?`<div class="sub" style="margin-top:10px;white-space:pre-line;"><strong>Terms &amp; Conditions:</strong><br>${escapeHtml(q.terms)}</div>`:""}
+    ${q.remarks?`<div class="sub">Remarks: ${escapeHtml(q.remarks)}</div>`:""}
+    <script>window.onload=()=>window.print();</script>
+    </body></html>`;
+  const w = window.open("", "_blank");
+  w.document.write(html);
+  w.document.close();
+}
+function shareQuotationWhatsApp(q){
+  const cust = state.customers.find(c=>c.id===q.customer_id);
+  const lines = [
+    `Quotation ${q.quotation_no}`,
+    `Date: ${q.date}`,
+    cust ? `To: ${cust.name}` : "",
+    ...q.items.map(it=>`${it.name} (${it.size_label||""}) x${it.pieces} @ ${fmt(it.rate)}`),
+    `Grand Total: ${fmt(q.total)}`
+  ].filter(Boolean);
+  const phone = cust && cust.phone ? cust.phone.replace(/\D/g,"") : "";
+  const text = encodeURIComponent(lines.join("\n"));
+  window.open(`https://wa.me/${phone?("91"+phone):""}?text=${text}`, "_blank");
+}
+
+/* ============================================================
+   SALES ORDER — same structure as Quotation, with delivery
+   address/expected-date instead of valid-until/terms.
+   ============================================================ */
+async function renderSoScreen(){
+  if(!state.so.date) state.so.date = todayISO();
+  const dateEl = document.getElementById("so-date");
+  if(dateEl && !dateEl.value) dateEl.value = state.so.date;
+  renderSoEditBanner();
+  renderSoCustomers();
+  renderSoCustomerInfo();
+  renderSoProducts();
+  renderSoCart();
+  renderSoTotals();
+}
+function renderSoEditBanner(){
+  const el = document.getElementById("so-edit-mode-banner");
+  if(!el) return;
+  if(!state.so.editingSoId){ el.style.display = "none"; el.innerHTML = ""; return; }
+  el.style.display = "block";
+  el.innerHTML = `
+    <div class="card" style="background:var(--warn-bg);border-color:var(--warn-text);margin-bottom:10px;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;gap:8px;">
+      <div style="font-size:12px;font-weight:700;color:var(--warn-text);">✎ Editing an existing Sales Order — Save below will UPDATE it, not create a new one.</div>
+      <a href="#" id="cancel-so-edit-link" style="font-size:12px;font-weight:800;color:var(--warn-text);white-space:nowrap;">Cancel</a>
+    </div>
+  `;
+  document.getElementById("cancel-so-edit-link").addEventListener("click", (e)=>{
+    e.preventDefault();
+    resetSoState();
+    renderSoScreen();
+    toast("Edit cancelled.");
+  });
+}
+function resetSoState(){
+  state.so = {
+    customerId: null, saleType: "Local", date: "", deliveryAddress: "", expectedDeliveryDate: "", remarks: "",
+    discountType: "pct", discountValue: 0, transport: 0, loading: 0, gstOnCharges: true, roundOff: true,
+    cart: [], editingSoId: null
+  };
+  const set = (id, val) => { const el=document.getElementById(id); if(el) el.value = val; };
+  set("so-delivery-address", ""); set("so-expected-date", ""); set("so-remarks", "");
+  set("so-disc-value", 0); set("so-transport-input", 0); set("so-loading-input", 0);
+  document.querySelectorAll('[data-so-type]').forEach(x=>x.classList.toggle("selected", x.dataset.soType==="Local"));
+  document.querySelectorAll('[data-so-disc-type]').forEach(x=>x.classList.toggle("selected", x.dataset.soDiscType==="pct"));
+  const gstToggle = document.getElementById("so-gst-on-charges-toggle"); if(gstToggle) gstToggle.checked = true;
+  const roToggle = document.getElementById("so-roundoff-toggle"); if(roToggle) roToggle.checked = true;
+}
+function renderSoCustomers(){
+  const wrap = document.getElementById("so-customers");
+  const searchEl = document.getElementById("so-customer-search");
+  const q = (searchEl && searchEl.value || "").trim().toLowerCase();
+
+  const selected = state.customers.find(c=>c.id===state.so.customerId);
+  let list = state.customers;
+  if(q) list = list.filter(c=>c.name.toLowerCase().includes(q) || (c.phone||"").includes(q));
+  if(selected && !list.includes(selected)) list = [selected, ...list];
+
+  wrap.innerHTML = list.map(c=>`
+    <button class="chip ${state.so.customerId===c.id?'selected':''}" data-so-cust="${c.id}">${escapeHtml(c.name)}</button>
+  `).join("") || `<div class="empty-hint" style="padding:8px 4px;">${q ? `No customer matches "${escapeHtml(q)}".` : "No customers yet — add one from the Customers tab."}</div>`;
+
+  wrap.querySelectorAll("[data-so-cust]").forEach(b=>{
+    b.addEventListener("click", ()=>{
+      state.so.customerId = b.dataset.soCust;
+      const cust = state.customers.find(c=>c.id===state.so.customerId);
+      state.so.saleType = (cust && cust.gst_type === "IGST") ? "Interstate" : "Local";
+      document.querySelectorAll('[data-so-type]').forEach(x=>x.classList.toggle("selected", x.dataset.soType===state.so.saleType));
+      renderSoCustomers();
+      renderSoCustomerInfo();
+      renderSoTotals();
+    });
+  });
+}
+function renderSoCustomerInfo(){
+  const box = document.getElementById("so-customer-info");
+  const cust = state.customers.find(c=>c.id===state.so.customerId);
+  if(!cust){ box.style.display = "none"; box.innerHTML = ""; return; }
+  box.style.display = "block";
+  box.innerHTML = `
+    <div><strong>${escapeHtml(cust.name)}</strong></div>
+    ${cust.phone ? `<div class="muted">${escapeHtml(cust.phone)}</div>` : ""}
+    ${cust.gst ? `<div class="muted">GST: ${escapeHtml(cust.gst)}</div>` : ""}
+    ${cust.state ? `<div class="muted">${escapeHtml(cust.state)}</div>` : ""}
+    ${cust.address ? `<div class="muted">${escapeHtml(cust.address)}</div>` : ""}
+  `;
+}
+function renderSoProducts(){
+  const q = (document.getElementById("so-search").value||"").toLowerCase();
+  const list = state.products.filter(p=>
+    !q || p.name.toLowerCase().includes(q) || (p.brand||"").toLowerCase().includes(q) || (p.sku||"").toLowerCase().includes(q)
+  );
+  const wrap = document.getElementById("so-product-list");
+  wrap.innerHTML = list.map(p=>{
+    const priceLabel = !p.sizes.length ? "⚠ No price — tap Edit" : (p.sizes.length>1 ? "From "+fmt(Math.min(...p.sizes.map(s=>s.price))) : fmt(p.sizes[0].price));
+    return `<div class="list-row" data-open-so-product="${p.id}" style="cursor:pointer;">
+      <div class="swatch"></div>
+      <div><div class="row-title">${escapeHtml(p.name)}</div><div class="row-sub">${escapeHtml(p.brand||"")} · ${priceLabel}</div></div>
+      <div class="row-right"><button class="gold-fab" data-so-quickadd="${p.id}" style="width:30px;height:30px;">+</button></div>
+    </div>`;
+  }).join("") || `<div class="empty-hint">No matching products.</div>`;
+
+  wrap.querySelectorAll("[data-open-so-product]").forEach(el=>{
+    el.addEventListener("click", (e)=>{
+      if(e.target.closest("[data-so-quickadd]")) return;
+      openProductDetail(el.dataset.openSoProduct, "so");
+    });
+  });
+  wrap.querySelectorAll("[data-so-quickadd]").forEach(b=>{
+    b.addEventListener("click", (e)=>{ e.stopPropagation(); openProductDetail(b.dataset.soQuickadd, "so"); });
+  });
+}
+function addToSoCart(productId, sizeIdx){
+  const p = state.products.find(x=>x.id===productId);
+  if(!p) return false;
+  if(!p.sizes.length){ toast(`"${p.name}" has no price yet — open it and tap Edit to add one.`); return false; }
+  const size = p.sizes[sizeIdx] || p.sizes[0];
+  state.so.cart.push({
+    productId, sizeId: size.id, sizeIdx,
+    name: p.name + (p.sizes.length>1 ? " ("+size.label+")" : ""),
+    mode: Pricing.normaliseMode(p.default_mode),
+    lengthFt: p.length_ft || "", widthVal: p.width_val || "", thicknessIn: p.thickness_in || "",
+    pieces: 1, rate: size.price, gstRate: p.gst,
+    discountType: "pct", discountValue: 0
+  });
+  renderSoCart(); renderSoTotals();
+  return true;
+}
+function soLineCalc(c){
+  const r = Pricing.computeLine({mode:c.mode, lengthFt:c.lengthFt, widthVal:c.widthVal, thicknessIn:c.thicknessIn, pieces:c.pieces, rate:c.rate});
+  const discountAmount = c.discountType === "flat"
+    ? round2(Math.min(Math.max(0, c.discountValue||0), r.amount))
+    : round2(r.amount * (Math.min(100, Math.max(0, c.discountValue||0))/100));
+  const taxable = round2(r.amount - discountAmount);
+  const gstAmt = round2(taxable * ((c.gstRate||18)/100));
+  const finalAmt = round2(taxable + gstAmt);
+  return {...r, discountAmount, taxable, gstAmt, finalAmt};
+}
+function renderSoCart(){
+  const wrap = document.getElementById("so-cart-list");
+  if(!state.so.cart.length){
+    wrap.innerHTML = `<div class="empty-hint">No items yet. Add products above.</div>`;
+    return;
+  }
+  wrap.innerHTML = state.so.cart.map((c,idx)=>{
+    const m = Pricing.MODES[Pricing.normaliseMode(c.mode)];
+    const r = soLineCalc(c);
+
+    const dim = (label, unit, key, val) => `
+      <label class="dim">
+        <span>${label}${unit?` <em>(${unit})</em>`:""}</span>
+        <input type="number" inputmode="decimal" step="any" min="0"
+               value="${val===0||val?val:""}" data-so-line-field="${key}" data-so-line="${idx}" placeholder="0">
+      </label>`;
+
+    return `<div class="bill-line" data-so-line-row="${idx}">
+      <div class="bill-line-head">
+        <div class="bill-line-name">${escapeHtml(c.name)}</div>
+        <div class="line-actions">
+          <a href="#" data-so-dup="${idx}">Duplicate</a>
+          <a href="#" data-so-remove="${idx}" class="btn-danger-link">Remove</a>
+        </div>
+      </div>
+
+      <div class="mode-row">
+        ${Pricing.MODE_KEYS.map(k=>`
+          <button class="chip sm ${k===m.key?'selected':''}" data-so-line-mode="${k}" data-so-line="${idx}"
+                  title="${Pricing.MODES[k].formula}">${Pricing.MODES[k].unit}</button>
+        `).join("")}
+      </div>
+
+      <div class="dim-grid">
+        ${m.needsThickness ? dim("Thickness", m.thicknessUnit, "thicknessIn", c.thicknessIn) : ""}
+        ${m.needsLength ? dim("Length", m.lengthUnit, "lengthFt", c.lengthFt) : ""}
+        ${m.needsWidth ? dim("Width", m.widthUnit, "widthVal", c.widthVal) : ""}
+        ${dim("Qty", "pcs", "pieces", c.pieces)}
+        ${dim("Rate", "₹/"+m.unit, "rate", c.rate)}
+      </div>
+
+      <div class="chip-row" style="margin-top:8px;">
+        <button class="chip sm ${c.discountType==="pct"?'selected':''}" data-so-line-disc-type="pct" data-so-line="${idx}">Discount %</button>
+        <button class="chip sm ${c.discountType==="flat"?'selected':''}" data-so-line-disc-type="flat" data-so-line="${idx}">Discount ₹</button>
+      </div>
+      <div class="dim-grid">
+        ${dim("Discount", c.discountType==="flat"?"₹":"%", "discountValue", c.discountValue)}
+        <label class="dim"><span>GST <em>(%)</em></span><input type="number" value="${c.gstRate}" disabled style="opacity:0.6;"></label>
+      </div>
+
+      <div class="line-calc">
+        <div class="line-calc-formula">
+          ${r.sizeLabel ? `<strong>${escapeHtml(r.sizeLabel)}</strong> · ` : ""}
+          ${m.key!=="UNIT" ? `${Pricing.formatQty(r.perPiece, r.mode)}/pc × ${r.pieces} pcs = ` : ""}
+          <strong>${Pricing.formatQty(r.billedQty, r.mode)}</strong>
+          × ${Pricing.formatRate(r.rate, r.mode)}
+          ${r.discountAmount>0 ? ` − ${fmtPaise(r.discountAmount)} disc.` : ""}
+          + ${fmtPaise(r.gstAmt)} GST
+        </div>
+        <div class="line-calc-amount">${fmtPaise(r.finalAmt)}</div>
+      </div>
+    </div>`;
+  }).join("");
+
+  wrap.querySelectorAll("[data-so-line-mode]").forEach(b=>b.addEventListener("click", ()=>{
+    const c = state.so.cart[b.dataset.soLine];
+    const next = b.dataset.soLineMode;
+    if(c.mode === next) return;
+    c.rate = Pricing.isRateConvertible(c.mode, next)
+      ? Pricing.convertLineRate({mode:c.mode, lengthFt:c.lengthFt, widthVal:c.widthVal,
+                                 thicknessIn:c.thicknessIn, pieces:c.pieces, rate:c.rate}, next)
+      : "";
+    c.mode = next;
+    renderSoCart(); renderSoTotals();
+  }));
+
+  wrap.querySelectorAll("[data-so-line-disc-type]").forEach(b=>b.addEventListener("click", ()=>{
+    const c = state.so.cart[b.dataset.soLine];
+    c.discountType = b.dataset.soLineDiscType;
+    renderSoCart(); renderSoTotals();
+  }));
+
+  wrap.querySelectorAll("[data-so-line-field]").forEach(inp=>{
+    inp.addEventListener("input", ()=>{
+      const c = state.so.cart[inp.dataset.soLine];
+      const v = inp.value === "" ? "" : Math.max(0, parseFloat(inp.value)||0);
+      c[inp.dataset.soLineField] = v;
+      renderSoLineCalc(inp.dataset.soLine);
+      renderSoTotals();
+    });
+    inp.addEventListener("blur", ()=>{ renderSoCart(); renderSoTotals(); });
+  });
+
+  wrap.querySelectorAll("[data-so-dup]").forEach(a=>a.addEventListener("click", (e)=>{
+    e.preventDefault();
+    const i = Number(a.dataset.soDup);
+    state.so.cart.splice(i+1, 0, Object.assign({}, state.so.cart[i]));
+    renderSoCart(); renderSoTotals();
+  }));
+
+  wrap.querySelectorAll("[data-so-remove]").forEach(a=>a.addEventListener("click", (e)=>{
+    e.preventDefault(); state.so.cart.splice(a.dataset.soRemove,1); renderSoCart(); renderSoTotals();
+  }));
+}
+function renderSoLineCalc(idx){
+  const row = document.querySelector(`[data-so-line-row="${idx}"]`);
+  if(!row) return;
+  const c = state.so.cart[idx];
+  const m = Pricing.MODES[Pricing.normaliseMode(c.mode)];
+  const r = soLineCalc(c);
+  const f = row.querySelector(".line-calc-formula");
+  const a = row.querySelector(".line-calc-amount");
+  if(f) f.innerHTML =
+    (r.sizeLabel ? `<strong>${escapeHtml(r.sizeLabel)}</strong> · ` : "") +
+    (m.key!=="UNIT" ? `${Pricing.formatQty(r.perPiece, r.mode)}/pc × ${r.pieces} pcs = ` : "") +
+    `<strong>${Pricing.formatQty(r.billedQty, r.mode)}</strong>` +
+    ` × ${Pricing.formatRate(r.rate, r.mode)}` +
+    (r.discountAmount>0 ? ` − ${fmtPaise(r.discountAmount)} disc.` : "") +
+    ` + ${fmtPaise(r.gstAmt)} GST`;
+  if(a) a.textContent = fmtPaise(r.finalAmt);
+}
+function computeSoTotals(){
+  const lines = state.so.cart.map(soLineCalc);
+  const subtotal = round2(lines.reduce((s,r)=>s+r.amount,0));
+  let discountAmount = 0;
+  if(state.so.discountType === "flat") discountAmount = Number(state.so.discountValue)||0;
+  else discountAmount = subtotal * (Math.min(100, Math.max(0, Number(state.so.discountValue)||0))/100);
+  discountAmount = round2(Math.min(Math.max(0, discountAmount), subtotal));
+
+  let goodsTax = 0;
+  lines.forEach(r=>{
+    const share = subtotal>0 ? (r.amount/subtotal)*discountAmount : 0;
+    const taxable = Math.max(0, r.amount - share);
+    goodsTax += taxable * ((r.gstRate||18)/100);
+  });
+  goodsTax = round2(goodsTax);
+
+  const transport = round2(Math.max(0, state.so.transport||0));
+  const loading = round2(Math.max(0, state.so.loading||0));
+  const taxableGoods = round2(subtotal - discountAmount);
+  const effectiveRate = taxableGoods>0 ? goodsTax/taxableGoods : 0;
+  const ancillaryTax = state.so.gstOnCharges ? round2((transport+loading)*effectiveRate) : 0;
+  const totalTax = round2(goodsTax + ancillaryTax);
+
+  let cgst=0, sgst=0, igst=0;
+  if(state.so.saleType==="Interstate") igst = totalTax;
+  else { cgst = round2(totalTax/2); sgst = round2(totalTax-cgst); }
+
+  const preRound = subtotal - discountAmount + transport + loading + cgst + sgst + igst;
+  const total = round2(state.so.roundOff ? Math.round(preRound) : preRound);
+  const roundOffAmount = round2(total - preRound);
+
+  return {subtotal, discountAmount, cgst, sgst, igst, transport, loading, roundOffAmount, total};
+}
+function renderSoTotals(){
+  const t = computeSoTotals();
+  const row = (label, value, cls) =>
+    `<div class="inv-flex" style="margin-bottom:4px;${cls||""}"><span class="muted">${label}</span><span>${value}</span></div>`;
+  document.getElementById("so-totals-card").innerHTML = `
+    ${row("Subtotal", fmtPaise(t.subtotal))}
+    ${t.discountAmount>0 ? row("Total Discount", "-"+fmtPaise(t.discountAmount), "color:var(--danger);") : ""}
+    ${t.transport>0 ? row("Transport", fmtPaise(t.transport)) : ""}
+    ${t.loading>0 ? row("Loading", fmtPaise(t.loading)) : ""}
+    ${state.so.saleType==="Interstate"
+      ? row("IGST", fmtPaise(t.igst))
+      : row("CGST", fmtPaise(t.cgst)) + row("SGST", fmtPaise(t.sgst))}
+    ${t.roundOffAmount!==0 ? row("Round off", (t.roundOffAmount>0?"+":"")+fmtPaise(t.roundOffAmount)) : ""}
+    <div class="inv-flex" style="font-weight:800;border-top:1px solid var(--border);padding-top:6px;font-size:15px;"><span>Grand Total</span><span>${fmtPaise(t.total)}</span></div>
+    <div class="amount-words">${Pricing.amountInWords(t.total)}</div>
+  `;
+}
+function soPayload(){
+  return {
+    customerId: state.so.customerId,
+    date: document.getElementById("so-date").value || state.so.date,
+    deliveryAddress: state.so.deliveryAddress, expectedDeliveryDate: state.so.expectedDeliveryDate,
+    saleType: state.so.saleType,
+    discountType: state.so.discountType, discountValue: state.so.discountValue,
+    transport: state.so.transport, loading: state.so.loading,
+    gstOnCharges: state.so.gstOnCharges, roundOff: state.so.roundOff,
+    remarks: state.so.remarks,
+    items: state.so.cart.map(c=>({
+      productId:c.productId, sizeId:c.sizeId, name:c.name, mode:c.mode,
+      lengthFt:c.lengthFt, widthVal:c.widthVal, thicknessIn:c.thicknessIn,
+      pieces:c.pieces, rate:c.rate, gstRate:c.gstRate,
+      discountType:c.discountType, discountValue:c.discountValue
+    }))
+  };
+}
+async function saveSo(asDraft){
+  if(!state.so.cart.length){ toast("Add at least one product to the sales order."); return; }
+  for(const c of state.so.cart){
+    const bad = Pricing.validateLine({
+      mode:c.mode, lengthFt:c.lengthFt, widthVal:c.widthVal,
+      thicknessIn:c.thicknessIn, pieces:c.pieces, rate: c.rate
+    }, c.name);
+    if(bad){ toast(bad); return; }
+  }
+  const saveBtn = document.getElementById("so-save-btn");
+  const draftBtn = document.getElementById("so-save-draft-btn");
+  saveBtn.disabled = true; draftBtn.disabled = true;
+  try{
+    const payload = { ...soPayload(), saveAsDraft: !!asDraft };
+    const editingId = state.so.editingSoId;
+    const saved = editingId
+      ? await api("PUT", `/sales-orders/${editingId}`, payload)
+      : await api("POST", "/sales-orders", payload);
+    resetSoState();
+    renderSoEditBanner();
+    await loadCustomers();
+    toast(`Sales Order ${saved.so_no} ${editingId?"updated":"saved"} (${saved.status})`, "ok");
+    switchTab("home");
+  }catch(e){
+    toast(e.message);
+  }finally{
+    saveBtn.disabled = false; draftBtn.disabled = false;
+  }
+}
+
+/* ============================================================
+   SHEET: Sales Order Detail (view + status-driven actions)
+   ============================================================ */
+const SO_STATUS_PILL = { Draft: "", Confirmed: "warn", Converted: "ok", Cancelled: "danger" };
+async function openSoDetail(soId){
+  const so = await api("GET", `/sales-orders/${soId}`);
+  const sheet = document.getElementById("sheet-so-detail");
+  const lineTotal = it => {
+    const taxable = round2(it.qty*it.rate - it.discount_amount);
+    return round2(taxable + taxable*(it.gst_rate/100));
+  };
+  const canEdit = so.status === "Draft";
+  const canConfirm = so.status === "Draft";
+  const canConvert = so.status === "Confirmed";
+  const canCancel = !["Converted","Cancelled"].includes(so.status);
+  const canDelete = so.status === "Draft";
+  const cust = state.customers.find(c=>c.id===so.customer_id);
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">${escapeHtml(so.so_no)} <span class="pill ${SO_STATUS_PILL[so.status]||''}">${escapeHtml(so.status)}</span></div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px;">${so.date}${so.expected_delivery_date?" · Expected "+so.expected_delivery_date:""}${cust?"<br>"+escapeHtml(cust.name):""}${so.delivery_address?"<br>"+escapeHtml(so.delivery_address):""}</div>
+    <div class="card">${so.items.map(it=>`
+      <div class="list-row">
+        <div><div class="row-title">${escapeHtml(it.name)}</div><div class="row-sub">${escapeHtml(it.size_label||"")} · ${it.pieces} ${escapeHtml(it.unit_label||"")} × ${fmt(it.rate)}${it.discount_amount>0?" · disc. "+fmt(it.discount_amount):""}</div></div>
+        <div class="row-right row-title">${fmt(lineTotal(it))}</div>
+      </div>`).join("")}
+    </div>
+    <div class="card" style="margin-top:8px;">
+      <div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Subtotal</span><span>${fmt(so.subtotal)}</span></div>
+      ${so.discount_amount>0?`<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Discount</span><span>-${fmt(so.discount_amount)}</span></div>`:""}
+      ${so.transport>0?`<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Transport</span><span>${fmt(so.transport)}</span></div>`:""}
+      ${so.loading>0?`<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Loading</span><span>${fmt(so.loading)}</span></div>`:""}
+      ${so.tax_type==="IGST"
+        ? `<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">IGST</span><span>${fmt(so.igst)}</span></div>`
+        : `<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">CGST</span><span>${fmt(so.cgst)}</span></div><div class="inv-flex" style="margin-bottom:4px;"><span class="muted">SGST</span><span>${fmt(so.sgst)}</span></div>`}
+      <div class="inv-flex" style="font-weight:800;border-top:1px solid var(--border);padding-top:6px;"><span>Total</span><span>${fmt(so.total)}</span></div>
+    </div>
+    ${so.remarks ? `<div class="card" style="margin-top:8px;font-size:12px;"><span class="muted">Remarks:</span> ${escapeHtml(so.remarks)}</div>` : ""}
+    ${so.converted_invoice_id ? `<div class="muted" style="font-size:11.5px;margin-top:8px;">Converted to Tax Invoice.</div>` : ""}
+    <div class="action-row" style="margin-top:14px;">
+      ${canEdit ? `<button class="btn btn-outline" id="edit-so-btn">✎ Edit</button>` : ""}
+      ${canConfirm ? `<button class="btn btn-outline" id="confirm-so-btn">Confirm</button>` : ""}
+      ${canConvert ? `<button class="btn btn-gold" id="convert-so-btn">Convert to Invoice</button>` : ""}
+      <button class="btn btn-outline" id="print-so-btn">Print</button>
+      <button class="btn btn-outline" id="share-so-btn">Share (WhatsApp)</button>
+    </div>
+    ${canCancel ? `<div style="margin-top:12px;text-align:center;"><a href="#" id="cancel-so-link" class="btn-danger-link">Cancel this order</a></div>` : ""}
+    ${canDelete ? `<div style="margin-top:8px;text-align:center;"><a href="#" id="delete-so-link" class="btn-danger-link">Delete this draft</a></div>` : ""}
+  `;
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  const editBtn = sheet.querySelector("#edit-so-btn");
+  if(editBtn) editBtn.addEventListener("click", ()=>{ closeAllSheets(); editExistingSo(so); });
+  const confirmBtn = sheet.querySelector("#confirm-so-btn");
+  if(confirmBtn) confirmBtn.addEventListener("click", async ()=>{
+    try{
+      await api("POST", `/sales-orders/${so.id}/confirm`);
+      closeAllSheets();
+      toast("Sales Order confirmed.", "ok");
+    }catch(err){ toast(err.message); }
+  });
+  const convertBtn = sheet.querySelector("#convert-so-btn");
+  if(convertBtn) convertBtn.addEventListener("click", async ()=>{
+    if(!confirm(`Convert ${so.so_no} to a real Tax Invoice? This will deduct Shop stock and raise the customer's due.`)) return;
+    try{
+      const result = await api("POST", `/sales-orders/${so.id}/convert`, { paymentMethod: "Cash", advance: 0 });
+      await Promise.all([loadProducts(), loadCustomers()]);
+      closeAllSheets();
+      toast(`Converted to ${result.invoice.challan_no}.`, "ok");
+    }catch(err){ toast(err.message); }
+  });
+  sheet.querySelector("#print-so-btn").addEventListener("click", ()=>printSalesOrder(so));
+  sheet.querySelector("#share-so-btn").addEventListener("click", ()=>shareSoWhatsApp(so));
+  const cancelLink = sheet.querySelector("#cancel-so-link");
+  if(cancelLink) cancelLink.addEventListener("click", async (e)=>{
+    e.preventDefault();
+    if(confirm(`Cancel ${so.so_no}? This can't be undone.`)){
+      try{
+        await api("POST", `/sales-orders/${so.id}/cancel`);
+        closeAllSheets();
+        toast("Sales Order cancelled.", "ok");
+      }catch(err){ toast(err.message); }
+    }
+  });
+  const deleteLink = sheet.querySelector("#delete-so-link");
+  if(deleteLink) deleteLink.addEventListener("click", async (e)=>{
+    e.preventDefault();
+    if(confirm(`Delete this draft permanently? This can't be undone.`)){
+      try{
+        await api("DELETE", `/sales-orders/${so.id}`);
+        closeAllSheets();
+        toast("Draft deleted.", "ok");
+      }catch(err){ toast(err.message); }
+    }
+  });
+  showSheet("sheet-so-detail");
+}
+function editExistingSo(so){
+  state.so.cart = so.items.map(it=>{
+    const product = state.products.find(x=>x.id===it.product_id);
+    const sizeIdx = product ? product.sizes.findIndex(s=>s.id===it.size_id) : -1;
+    return {
+      productId: it.product_id, sizeId: it.size_id, sizeIdx: sizeIdx>=0 ? sizeIdx : 0,
+      name: it.name, mode: it.mode, lengthFt: it.length_ft||"", widthVal: it.width_val||"",
+      thicknessIn: it.thickness_in||"", pieces: it.pieces, rate: it.rate, gstRate: it.gst_rate,
+      discountType: it.discount_amount>0 ? "flat" : "pct", discountValue: it.discount_amount>0 ? it.discount_amount : 0
+    };
+  });
+  state.so.customerId = so.customer_id;
+  state.so.saleType = so.sale_type;
+  state.so.date = so.date;
+  state.so.deliveryAddress = so.delivery_address || "";
+  state.so.expectedDeliveryDate = so.expected_delivery_date || "";
+  state.so.remarks = so.remarks || "";
+  state.so.discountType = so.discount_type;
+  state.so.discountValue = so.discount_value;
+  state.so.transport = so.transport || 0;
+  state.so.loading = so.loading || 0;
+  state.so.gstOnCharges = !!so.gst_on_charges;
+  state.so.roundOff = true;
+  state.so.editingSoId = so.id;
+
+  switchTab("so");
+  renderSoScreen().then(()=>{
+    const set = (id, val) => { const el=document.getElementById(id); if(el) el.value = val; };
+    set("so-date", state.so.date);
+    set("so-expected-date", state.so.expectedDeliveryDate);
+    set("so-delivery-address", state.so.deliveryAddress);
+    set("so-remarks", state.so.remarks);
+    set("so-disc-value", state.so.discountValue);
+    set("so-transport-input", state.so.transport);
+    set("so-loading-input", state.so.loading);
+    document.querySelectorAll('[data-so-type]').forEach(x=>x.classList.toggle("selected", x.dataset.soType===state.so.saleType));
+    document.querySelectorAll('[data-so-disc-type]').forEach(x=>x.classList.toggle("selected", x.dataset.soDiscType===state.so.discountType));
+    document.getElementById("so-gst-on-charges-toggle").checked = state.so.gstOnCharges;
+    renderSoEditBanner();
+    toast(`Editing ${so.so_no} — make your changes, then save.`, "ok");
+  });
+}
+function printSalesOrder(so){
+  const cust = state.customers.find(c=>c.id===so.customer_id);
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(so.so_no)}</title>
+    <style>
+      body{font-family:Arial,Helvetica,sans-serif;padding:20px;color:#000;}
+      h1{font-size:16px;margin:0 0 2px;} .sub{font-size:11px;color:#555;margin-bottom:14px;}
+      table{width:100%;border-collapse:collapse;font-size:11px;margin-top:10px;}
+      th,td{border:1px solid #000;padding:4px 6px;text-align:left;}
+      th{background:#eee;} .num{text-align:right;}
+      .totals{margin-top:10px;font-size:12px;text-align:right;}
+    </style></head><body>
+    <h1>Sales Order — ${escapeHtml(so.so_no)}</h1>
+    <div class="sub">${so.date} · Status: ${escapeHtml(so.status)}${so.expected_delivery_date?" · Expected delivery "+so.expected_delivery_date:""}</div>
+    <div class="sub">${cust?"To: "+escapeHtml(cust.name):""}${so.delivery_address?" · Deliver to: "+escapeHtml(so.delivery_address):""}</div>
+    <table><thead><tr><th>#</th><th>Product</th><th>Size</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Disc.</th><th class="num">GST%</th><th class="num">Amount</th></tr></thead>
+    <tbody>${so.items.map((it,i)=>`<tr><td>${i+1}</td><td>${escapeHtml(it.name)}</td><td>${escapeHtml(it.size_label||"")}</td>
+      <td class="num">${it.pieces}</td><td class="num">${fmt(it.rate)}</td><td class="num">${fmt(it.discount_amount)}</td>
+      <td class="num">${it.gst_rate}%</td><td class="num">${fmt(round2(it.qty*it.rate-it.discount_amount))}</td></tr>`).join("")}</tbody></table>
+    <div class="totals">
+      Subtotal: ${fmt(so.subtotal)}<br>
+      ${so.discount_amount>0?`Discount: -${fmt(so.discount_amount)}<br>`:""}
+      ${so.transport>0?`Transport: ${fmt(so.transport)}<br>`:""}
+      ${so.loading>0?`Loading: ${fmt(so.loading)}<br>`:""}
+      ${so.tax_type==="IGST"?`IGST: ${fmt(so.igst)}<br>`:`CGST: ${fmt(so.cgst)}<br>SGST: ${fmt(so.sgst)}<br>`}
+      <strong>Grand Total: ${fmt(so.total)}</strong>
+    </div>
+    ${so.remarks?`<div class="sub" style="margin-top:10px;">Remarks: ${escapeHtml(so.remarks)}</div>`:""}
+    <script>window.onload=()=>window.print();</script>
+    </body></html>`;
+  const w = window.open("", "_blank");
+  w.document.write(html);
+  w.document.close();
+}
+function shareSoWhatsApp(so){
+  const cust = state.customers.find(c=>c.id===so.customer_id);
+  const lines = [
+    `Sales Order ${so.so_no}`,
+    `Date: ${so.date}`,
+    cust ? `To: ${cust.name}` : "",
+    ...so.items.map(it=>`${it.name} (${it.size_label||""}) x${it.pieces} @ ${fmt(it.rate)}`),
+    `Grand Total: ${fmt(so.total)}`
+  ].filter(Boolean);
+  const phone = cust && cust.phone ? cust.phone.replace(/\D/g,"") : "";
+  const text = encodeURIComponent(lines.join("\n"));
+  window.open(`https://wa.me/${phone?("91"+phone):""}?text=${text}`, "_blank");
+}
+
+/* ============================================================
+   SHEET: Sales Return — pick items/quantities off a past Tax Invoice.
+   Unlike Quotation/SO/PO, this has no cart-building step of its own: every
+   returnable line and its rate/GST come straight from the invoice, so the
+   only inputs are "how many of each" and how the refund is settled.
+   ============================================================ */
+async function openSalesReturn(invoice){
+  if(invoice.doc_type !== "invoice"){ toast("Returns can only be made against a Tax Invoice, not a Delivery Challan."); return; }
+  const sheet = document.getElementById("sheet-sales-return");
+  const cust = state.customers.find(c=>c.id===invoice.customer_id);
+
+  // Sum pieces already returned per invoice_item, across every non-voided
+  // return against this invoice — the server enforces this too, but showing
+  // it up front (and capping the input) avoids a wasted round-trip.
+  const priorReturns = await api("GET", `/sales-returns?invoiceId=${invoice.id}`);
+  const returnedById = {};
+  await Promise.all(priorReturns.filter(r=>!r.voided).map(async r=>{
+    const full = await api("GET", `/sales-returns/${r.id}`);
+    full.items.forEach(it=>{ returnedById[it.invoice_item_id] = (returnedById[it.invoice_item_id]||0) + it.pieces; });
+  }));
+  const returnableRows = invoice.items.map(it=>({
+    ...it,
+    alreadyReturned: returnedById[it.id] || 0
+  }));
+
+  function render(){
+    sheet.innerHTML = `
+      <div class="sheet-handle"></div>
+      <button class="sheet-close" data-sheetclose>✕</button>
+      <div class="sheet-title">Sales Return</div>
+      <div class="muted" style="font-size:12px;margin-bottom:10px;">Against ${escapeHtml(invoice.challan_no)}${cust?" · "+escapeHtml(cust.name):""}</div>
+      <div class="card">${returnableRows.map((it,idx)=>{
+        const remaining = round2(it.pieces - it.alreadyReturned);
+        return `
+        <div class="list-row" style="align-items:flex-start;">
+          <div style="flex:1;">
+            <div class="row-title">${escapeHtml(it.name)}</div>
+            <div class="row-sub">${escapeHtml(it.size_label||"")} · Sold ${it.pieces} ${escapeHtml(it.unit_label||"")} @ ${fmt(it.rate)}${it.alreadyReturned>0?` · ${it.alreadyReturned} already returned`:""}</div>
+          </div>
+          <div class="qty-step">
+            <input type="number" inputmode="decimal" step="any" min="0" max="${remaining}"
+                   value="" placeholder="0" data-sr-qty="${idx}" style="width:70px;" ${remaining<=0?"disabled":""}>
+          </div>
+        </div>`;
+      }).join("")}</div>
+      <label class="field-label" style="margin-top:12px;">Reason <span class="muted" style="font-weight:400;">— optional</span></label>
+      <input type="text" id="sr-reason" placeholder="e.g. Damaged, wrong size">
+      <label class="field-label" style="margin-top:10px;">Refund Method</label>
+      <div class="chip-row" id="sr-refund-chips">
+        <button class="chip selected" data-sr-refund="AdjustDue">Adjust Against Due</button>
+        <button class="chip" data-sr-refund="Cash">Cash</button>
+        <button class="chip" data-sr-refund="Bank">Bank</button>
+      </div>
+      <div class="card" id="sr-preview-card" style="margin-top:12px;"></div>
+      <button class="btn btn-primary" id="sr-save-btn" style="margin-top:14px;width:100%;">Save Return</button>
+    `;
+    sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+    sheet.querySelectorAll("[data-sr-qty]").forEach(inp=>inp.addEventListener("input", renderPreview));
+    sheet.querySelectorAll("[data-sr-refund]").forEach(b=>b.addEventListener("click", ()=>{
+      sheet.querySelectorAll("[data-sr-refund]").forEach(x=>x.classList.remove("selected"));
+      b.classList.add("selected");
+    }));
+    sheet.querySelector("#sr-save-btn").addEventListener("click", save);
+    renderPreview();
+  }
+
+  function collectItems(){
+    const items = [];
+    sheet.querySelectorAll("[data-sr-qty]").forEach(inp=>{
+      const pieces = parseFloat(inp.value) || 0;
+      if(pieces > 0){
+        const it = returnableRows[inp.dataset.srQty];
+        items.push({ invoiceItemId: it.id, pieces, rate: it.rate, gstRate: it.gst_rate });
+      }
+    });
+    return items;
+  }
+
+  function renderPreview(){
+    const items = collectItems();
+    const subtotal = round2(items.reduce((s,it)=>s+it.pieces*it.rate,0));
+    const gst = round2(items.reduce((s,it)=>s+round2(it.pieces*it.rate)*(it.gstRate/100),0));
+    const total = round2(subtotal + gst);
+    document.getElementById("sr-preview-card").innerHTML = `
+      <div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Subtotal</span><span>${fmt(subtotal)}</span></div>
+      <div class="inv-flex" style="margin-bottom:4px;"><span class="muted">GST</span><span>${fmt(gst)}</span></div>
+      <div class="inv-flex" style="font-weight:800;border-top:1px solid var(--border);padding-top:6px;"><span>Credit Total</span><span>${fmt(total)}</span></div>
+    `;
+  }
+
+  async function save(){
+    const items = collectItems();
+    if(!items.length){ toast("Enter a quantity to return for at least one item."); return; }
+    const refundMethod = sheet.querySelector("[data-sr-refund].selected").dataset.srRefund;
+    const btn = sheet.querySelector("#sr-save-btn");
+    btn.disabled = true;
+    try{
+      const saved = await api("POST", "/sales-returns", {
+        invoiceId: invoice.id, reason: document.getElementById("sr-reason").value.trim(),
+        refundMethod, items: items.map(it=>({ invoiceItemId: it.invoiceItemId, pieces: it.pieces }))
+      });
+      await Promise.all([loadProducts(), loadCustomers()]);
+      closeAllSheets();
+      toast(`Return ${saved.return_no} saved (${fmt(saved.total)}).`, "ok");
+    }catch(err){ toast(err.message); }
+    finally{ btn.disabled = false; }
+  }
+
+  render();
+  showSheet("sheet-sales-return");
+}
+async function openSalesReturnDetail(returnId){
+  const sr = await api("GET", `/sales-returns/${returnId}`);
+  const sheet = document.getElementById("sheet-sales-return-detail");
+  const cust = state.customers.find(c=>c.id===sr.customer_id);
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">${escapeHtml(sr.return_no)} ${sr.voided?'<span class="pill danger">Voided</span>':''}</div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px;">${sr.date}${cust?" · "+escapeHtml(cust.name):""}${sr.reason?"<br>Reason: "+escapeHtml(sr.reason):""}</div>
+    <div class="card">${sr.items.map(it=>`
+      <div class="list-row">
+        <div><div class="row-title">${escapeHtml(it.name)}</div><div class="row-sub">${escapeHtml(it.size_label||"")} · ${it.pieces} ${escapeHtml(it.unit_label||"")} @ ${fmt(it.rate)}</div></div>
+        <div class="row-right row-title">${fmt(round2(it.pieces*it.rate*(1+it.gst_rate/100)))}</div>
+      </div>`).join("")}
+    </div>
+    <div class="card" style="margin-top:8px;">
+      <div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Subtotal</span><span>${fmt(sr.subtotal)}</span></div>
+      ${sr.igst>0
+        ? `<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">IGST</span><span>${fmt(sr.igst)}</span></div>`
+        : `<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">CGST</span><span>${fmt(sr.cgst)}</span></div><div class="inv-flex" style="margin-bottom:4px;"><span class="muted">SGST</span><span>${fmt(sr.sgst)}</span></div>`}
+      <div class="inv-flex" style="font-weight:800;border-top:1px solid var(--border);padding-top:6px;"><span>Total</span><span>${fmt(sr.total)}</span></div>
+      <div class="muted" style="font-size:11.5px;margin-top:6px;">Refund: ${escapeHtml(sr.refund_method)}</div>
+    </div>
+    ${!sr.voided && isOwner() ? `<div style="margin-top:14px;text-align:center;"><a href="#" id="void-sales-return-link" class="btn-danger-link">Void this return</a></div>` : ""}
+  `;
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  const voidLink = sheet.querySelector("#void-sales-return-link");
+  if(voidLink) voidLink.addEventListener("click", async (e)=>{
+    e.preventDefault();
+    if(!confirm(`Void ${sr.return_no}? Stock and the customer's due will be reversed back.`)) return;
+    try{
+      await api("POST", `/sales-returns/${sr.id}/void`);
+      await Promise.all([loadProducts(), loadCustomers()]);
+      closeAllSheets();
+      toast("Return voided.", "ok");
+    }catch(err){ toast(err.message); }
+  });
+  showSheet("sheet-sales-return-detail");
 }
 
 /* ============================================================

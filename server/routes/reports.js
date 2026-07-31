@@ -334,6 +334,65 @@ router.get("/profit", (req, res) => {
   });
 });
 
+// Same GST-exclusive profit math as /profit, but rolled up per invoice
+// instead of per line — "how much did this one sale actually make", which
+// per-line is too granular for and the plain sales report has no cost data
+// to answer at all.
+router.get("/profit-by-invoice", (req, res) => {
+  const invoices = db.prepare(`
+    SELECT i.id, i.challan_no, i.date, i.created_at, i.customer_id, c.name AS customer_name
+    FROM invoices i LEFT JOIN customers c ON c.id = i.customer_id
+    WHERE i.voided = 0 AND i.doc_type = 'invoice'
+    ORDER BY i.created_at DESC
+  `).all();
+
+  const itemsStmt = db.prepare(`
+    SELECT product_id, pieces, qty, rate, gst_rate AS sales_gst_rate, qty*rate AS sales_amount
+    FROM invoice_items WHERE invoice_id = ?
+  `);
+
+  const rows = invoices.map(inv => {
+    const items = itemsStmt.all(inv.id);
+    let purchaseAmount = 0, purchaseGst = 0, salesAmount = 0, salesGst = 0;
+    let hasCost = true;
+    items.forEach(it => {
+      const costRow = it.product_id ? getLatestCost(it.product_id) : null;
+      if (!costRow) hasCost = false;
+      const lineCost = round2((costRow ? costRow.costPrice : 0) * (it.pieces || 0));
+      purchaseAmount += lineCost;
+      purchaseGst += round2(lineCost * ((costRow ? costRow.gstRate : 0) / 100));
+      const lineSales = round2(it.sales_amount);
+      salesAmount += lineSales;
+      salesGst += round2(lineSales * ((it.sales_gst_rate || 0) / 100));
+    });
+    purchaseAmount = round2(purchaseAmount); purchaseGst = round2(purchaseGst);
+    salesAmount = round2(salesAmount); salesGst = round2(salesGst);
+    const grossProfit = round2(salesAmount - purchaseAmount);
+    const profitPct = purchaseAmount > 0 ? round2((grossProfit / purchaseAmount) * 100) : null;
+
+    return {
+      invoiceId: inv.id, challan_no: inv.challan_no, date: inv.date,
+      customer: inv.customer_name || "Walk-in", itemCount: items.length, hasCost,
+      purchaseAmount, purchaseGst, purchaseTotal: round2(purchaseAmount + purchaseGst),
+      salesAmount, salesGst, salesTotal: round2(salesAmount + salesGst),
+      grossProfit, profitPct
+    };
+  });
+
+  const totals = rows.reduce((acc, r) => {
+    acc.purchaseAmount += r.purchaseAmount; acc.salesAmount += r.salesAmount;
+    return acc;
+  }, { purchaseAmount: 0, salesAmount: 0 });
+  const purchaseAmount = round2(totals.purchaseAmount);
+  const salesAmount = round2(totals.salesAmount);
+  const grossProfit = round2(salesAmount - purchaseAmount);
+
+  res.json({
+    rows, purchaseAmount, salesAmount, grossProfit,
+    profitPct: purchaseAmount > 0 ? round2((grossProfit / purchaseAmount) * 100) : null
+  });
+});
+
 router.get("/export", (req, res) => {
   const type = req.query.type || "Sales";
   let rows = [];

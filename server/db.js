@@ -371,6 +371,139 @@ CREATE TABLE IF NOT EXISTS purchase_items (
   gst_rate REAL NOT NULL DEFAULT 18
 );
 
+-- Sales Quotation: an estimate with NO stock or due impact — creating,
+-- editing or cancelling one never touches product_sizes or a customer's due,
+-- exactly like a Purchase Order never touches supplier due until converted.
+CREATE TABLE IF NOT EXISTS quotations (
+  id TEXT PRIMARY KEY,
+  quotation_no TEXT UNIQUE NOT NULL,
+  date TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  customer_id TEXT REFERENCES customers(id) ON DELETE SET NULL,
+  valid_until TEXT DEFAULT '',
+  sale_type TEXT NOT NULL DEFAULT 'Local' CHECK (sale_type IN ('Local', 'Interstate')),
+  tax_type TEXT NOT NULL DEFAULT 'CGST_SGST',
+  subtotal REAL NOT NULL DEFAULT 0,
+  discount_type TEXT NOT NULL DEFAULT 'pct',
+  discount_value REAL NOT NULL DEFAULT 0,
+  discount_amount REAL NOT NULL DEFAULT 0,
+  cgst REAL NOT NULL DEFAULT 0,
+  sgst REAL NOT NULL DEFAULT 0,
+  igst REAL NOT NULL DEFAULT 0,
+  transport REAL NOT NULL DEFAULT 0,
+  loading REAL NOT NULL DEFAULT 0,
+  round_off REAL NOT NULL DEFAULT 0,
+  total REAL NOT NULL DEFAULT 0,
+  gst_on_charges INTEGER NOT NULL DEFAULT 1,
+  terms TEXT DEFAULT '',
+  remarks TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'Draft'
+    CHECK (status IN ('Draft', 'Sent', 'Accepted', 'Converted', 'Cancelled')),
+  -- Set once Convert to Invoice runs — lets the UI link straight to the
+  -- resulting invoice instead of making staff go find it.
+  converted_invoice_id TEXT REFERENCES invoices(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS quotation_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  quotation_id TEXT NOT NULL REFERENCES quotations(id) ON DELETE CASCADE,
+  product_id TEXT REFERENCES products(id) ON DELETE SET NULL,
+  size_id INTEGER REFERENCES product_sizes(id) ON DELETE SET NULL,
+  name TEXT NOT NULL, brand TEXT DEFAULT '', category TEXT DEFAULT '',
+  mode TEXT NOT NULL DEFAULT 'UNIT',
+  length_ft REAL, width_val REAL, thickness_in REAL,
+  size_label TEXT NOT NULL DEFAULT '',
+  pieces REAL NOT NULL DEFAULT 0, per_piece REAL NOT NULL DEFAULT 0,
+  unit_label TEXT NOT NULL DEFAULT 'Pc',
+  qty REAL NOT NULL, rate REAL NOT NULL,
+  discount_amount REAL NOT NULL DEFAULT 0,
+  gst_rate REAL NOT NULL DEFAULT 18
+);
+
+-- Sales Order: a confirmed order awaiting delivery. Same no-stock-impact
+-- rule as Quotation applies until it's converted to a real Invoice/Challan.
+CREATE TABLE IF NOT EXISTS sales_orders (
+  id TEXT PRIMARY KEY,
+  so_no TEXT UNIQUE NOT NULL,
+  date TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  customer_id TEXT REFERENCES customers(id) ON DELETE SET NULL,
+  delivery_address TEXT DEFAULT '',
+  expected_delivery_date TEXT DEFAULT '',
+  sale_type TEXT NOT NULL DEFAULT 'Local' CHECK (sale_type IN ('Local', 'Interstate')),
+  tax_type TEXT NOT NULL DEFAULT 'CGST_SGST',
+  subtotal REAL NOT NULL DEFAULT 0,
+  discount_type TEXT NOT NULL DEFAULT 'pct',
+  discount_value REAL NOT NULL DEFAULT 0,
+  discount_amount REAL NOT NULL DEFAULT 0,
+  cgst REAL NOT NULL DEFAULT 0,
+  sgst REAL NOT NULL DEFAULT 0,
+  igst REAL NOT NULL DEFAULT 0,
+  transport REAL NOT NULL DEFAULT 0,
+  loading REAL NOT NULL DEFAULT 0,
+  round_off REAL NOT NULL DEFAULT 0,
+  total REAL NOT NULL DEFAULT 0,
+  gst_on_charges INTEGER NOT NULL DEFAULT 1,
+  remarks TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'Draft'
+    CHECK (status IN ('Draft', 'Confirmed', 'Converted', 'Cancelled')),
+  converted_invoice_id TEXT REFERENCES invoices(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS sales_order_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  so_id TEXT NOT NULL REFERENCES sales_orders(id) ON DELETE CASCADE,
+  product_id TEXT REFERENCES products(id) ON DELETE SET NULL,
+  size_id INTEGER REFERENCES product_sizes(id) ON DELETE SET NULL,
+  name TEXT NOT NULL, brand TEXT DEFAULT '', category TEXT DEFAULT '',
+  mode TEXT NOT NULL DEFAULT 'UNIT',
+  length_ft REAL, width_val REAL, thickness_in REAL,
+  size_label TEXT NOT NULL DEFAULT '',
+  pieces REAL NOT NULL DEFAULT 0, per_piece REAL NOT NULL DEFAULT 0,
+  unit_label TEXT NOT NULL DEFAULT 'Pc',
+  qty REAL NOT NULL, rate REAL NOT NULL,
+  discount_amount REAL NOT NULL DEFAULT 0,
+  gst_rate REAL NOT NULL DEFAULT 18
+);
+
+-- Sales Return: a credit note against a past Tax Invoice. Reverses stock
+-- (back into Shop, since a sale only ever deducted Shop) and, when the
+-- refund is adjusted against the account, reduces the customer's due —
+-- mirroring how Void/Delete reverse a Purchase's stock and supplier due.
+CREATE TABLE IF NOT EXISTS sales_returns (
+  id TEXT PRIMARY KEY,
+  return_no TEXT UNIQUE NOT NULL,
+  date TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  invoice_id TEXT REFERENCES invoices(id) ON DELETE SET NULL,
+  customer_id TEXT REFERENCES customers(id) ON DELETE SET NULL,
+  reason TEXT DEFAULT '',
+  subtotal REAL NOT NULL DEFAULT 0,
+  cgst REAL NOT NULL DEFAULT 0,
+  sgst REAL NOT NULL DEFAULT 0,
+  igst REAL NOT NULL DEFAULT 0,
+  total REAL NOT NULL DEFAULT 0,
+  refund_method TEXT NOT NULL DEFAULT 'AdjustDue' CHECK (refund_method IN ('AdjustDue', 'Cash', 'Bank')),
+  location_id TEXT REFERENCES locations(id),
+  voided INTEGER NOT NULL DEFAULT 0,
+  remarks TEXT DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS sales_return_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  return_id TEXT NOT NULL REFERENCES sales_returns(id) ON DELETE CASCADE,
+  invoice_item_id INTEGER REFERENCES invoice_items(id) ON DELETE SET NULL,
+  product_id TEXT REFERENCES products(id) ON DELETE SET NULL,
+  size_id INTEGER REFERENCES product_sizes(id) ON DELETE SET NULL,
+  name TEXT NOT NULL,
+  size_label TEXT NOT NULL DEFAULT '',
+  pieces REAL NOT NULL DEFAULT 0,
+  unit_label TEXT NOT NULL DEFAULT 'Pc',
+  qty REAL NOT NULL,
+  rate REAL NOT NULL,
+  gst_rate REAL NOT NULL DEFAULT 18
+);
+
 -- One row per silent print request sent to the shop PC's local printer. This
 -- is the audit trail behind "Printing… / Printed / Failed" on the phone —
 -- the phone polls this row's status rather than waiting on an open HTTP
@@ -397,6 +530,10 @@ CREATE INDEX IF NOT EXISTS idx_payments_customer ON payments(customer_id);
 CREATE INDEX IF NOT EXISTS idx_purchase_payments_supplier ON purchase_payments(supplier_id);
 CREATE INDEX IF NOT EXISTS idx_stock_ins_product ON stock_ins(product_id);
 CREATE INDEX IF NOT EXISTS idx_print_jobs_created ON print_jobs(created_at);
+CREATE INDEX IF NOT EXISTS idx_quotation_items_quotation ON quotation_items(quotation_id);
+CREATE INDEX IF NOT EXISTS idx_sales_order_items_so ON sales_order_items(so_id);
+CREATE INDEX IF NOT EXISTS idx_sales_return_items_return ON sales_return_items(return_id);
+CREATE INDEX IF NOT EXISTS idx_sales_returns_invoice ON sales_returns(invoice_id);
 `);
 
 /* ------------------------------------------------------------------

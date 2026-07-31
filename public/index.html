@@ -65,6 +65,8 @@
           <button class="qa-btn" data-goto="billing"><span class="ic">&#128220;</span>New Invoice</button>
           <button class="qa-btn" data-goto="purchase"><span class="ic">&#128722;</span>New Purchase</button>
           <button class="qa-btn" data-goto="po"><span class="ic">&#128203;</span>Purchase Order</button>
+          <button class="qa-btn" data-goto="quotation"><span class="ic">&#128221;</span>Quotation</button>
+          <button class="qa-btn" data-goto="so"><span class="ic">&#128197;</span>Sales Order</button>
           <button class="qa-btn" data-goto="inventory"><span class="ic">&#128230;</span>Inventory</button>
           <button class="qa-btn" data-inv-location-goto="shop"><span class="ic">&#127978;</span>Shop Stock</button>
           <button class="qa-btn" data-inv-location-goto="warehouse"><span class="ic">&#127974;</span>Warehouse Stock</button>
@@ -228,6 +230,7 @@
           <button class="chip" data-report="Brand">Brand-wise</button>
           <button class="chip" data-report="Party">Party-wise</button>
           <button class="chip" data-report="Profit">Profit</button>
+          <button class="chip" data-report="ProfitByInvoice">Profit per Invoice</button>
           <button class="chip" data-report="Supplier">Supplier</button>
           <button class="chip" data-report="SalePayments">Sale Payments</button>
           <button class="chip" data-report="PurchasePayments">Purchase Payments</button>
@@ -421,6 +424,150 @@
           <button class="btn btn-outline" id="po-save-draft-btn">Save as Draft</button>
         </div>
       </div>
+
+      <!-- SALES QUOTATION -->
+      <div class="screen" id="screen-quotation">
+        <a href="#" id="quotation-back-link" class="muted" style="font-size:12px;font-weight:700;">&larr; Back to Home</a>
+        <div id="quotation-edit-mode-banner" style="display:none;"></div>
+
+        <div class="section-title" style="margin-top:10px;">Customer</div>
+        <div class="searchbar" style="margin-top:0;">
+          <span>&#128269;</span><input type="text" id="quotation-customer-search" placeholder="Search customer by name or phone">
+        </div>
+        <div class="chip-row" id="quotation-customers" style="margin-top:8px;"></div>
+        <div class="card" id="quotation-customer-info" style="display:none;margin-top:8px;font-size:12px;"></div>
+
+        <div class="section-title">Quotation Details</div>
+        <div class="card">
+          <div class="charge-grid">
+            <label class="dim"><span>Date</span><input type="date" id="quotation-date"></label>
+            <label class="dim"><span>Valid Until</span><input type="date" id="quotation-valid-until"></label>
+          </div>
+          <label class="field-label" style="margin-top:10px;">Sale Type</label>
+          <div class="chip-row" id="quotation-type-chips">
+            <button class="chip selected" data-quotation-type="Local">Local (CGST + SGST)</button>
+            <button class="chip" data-quotation-type="Interstate">Interstate (IGST)</button>
+          </div>
+          <label class="field-label" style="margin-top:10px;">Terms &amp; Conditions <span class="muted" style="font-weight:400;">— optional</span></label>
+          <textarea id="quotation-terms" rows="4" placeholder="e.g.&#10;1. 50% advance, balance on delivery&#10;2. Price valid for 7 days&#10;3. Delivery within 5 working days of confirmation"></textarea>
+          <label class="field-label" style="margin-top:10px;">Remarks <span class="muted" style="font-weight:400;">— optional</span></label>
+          <input type="text" id="quotation-remarks" placeholder="e.g. Price valid for 7 days">
+        </div>
+
+        <div class="section-title">Add products</div>
+        <div class="searchbar">
+          <span>&#128269;</span><input type="text" id="quotation-search" placeholder="Search name, brand or SKU">
+        </div>
+        <div class="card" id="quotation-product-list" style="max-height:260px;overflow-y:auto;margin-top:8px;"></div>
+
+        <div class="section-title">Items</div>
+        <div class="card" id="quotation-cart-list"><div class="empty-hint">No items yet. Add products above.</div></div>
+
+        <div class="section-title">Charges</div>
+        <div class="card">
+          <div class="charge-grid">
+            <label class="dim"><span>Discount</span>
+              <div class="chip-row" id="quotation-disc-type-chips" style="margin-top:4px;">
+                <button class="chip sm selected" data-quotation-disc-type="pct">%</button>
+                <button class="chip sm" data-quotation-disc-type="flat">₹</button>
+              </div>
+            </label>
+            <label class="dim"><span>Discount Value</span><input type="number" inputmode="decimal" step="any" min="0" id="quotation-disc-value" value="0" placeholder="0"></label>
+          </div>
+          <div class="charge-grid" style="margin-top:10px;">
+            <label class="dim"><span>Transport <em>(₹)</em></span><input type="number" inputmode="decimal" step="any" min="0" id="quotation-transport-input" value="0" placeholder="0"></label>
+            <label class="dim"><span>Loading <em>(₹)</em></span><input type="number" inputmode="decimal" step="any" min="0" id="quotation-loading-input" value="0" placeholder="0"></label>
+          </div>
+          <label class="check-row" style="margin-top:10px;">
+            <input type="checkbox" id="quotation-gst-on-charges-toggle" checked>
+            <span>Apply GST on Transport/Loading too</span>
+          </label>
+          <label class="check-row" style="margin-top:6px;">
+            <input type="checkbox" id="quotation-roundoff-toggle" checked>
+            <span>Round off the grand total to the nearest rupee</span>
+          </label>
+        </div>
+
+        <div class="section-title">Summary</div>
+        <div class="card" id="quotation-totals-card"></div>
+
+        <div style="margin-top:16px;display:flex;flex-direction:column;gap:8px;">
+          <button class="btn btn-primary" id="quotation-save-btn">Save &amp; Send</button>
+          <button class="btn btn-outline" id="quotation-save-draft-btn">Save as Draft</button>
+        </div>
+      </div>
+
+      <!-- SALES ORDER -->
+      <div class="screen" id="screen-so">
+        <a href="#" id="so-back-link" class="muted" style="font-size:12px;font-weight:700;">&larr; Back to Home</a>
+        <div id="so-edit-mode-banner" style="display:none;"></div>
+
+        <div class="section-title" style="margin-top:10px;">Customer</div>
+        <div class="searchbar" style="margin-top:0;">
+          <span>&#128269;</span><input type="text" id="so-customer-search" placeholder="Search customer by name or phone">
+        </div>
+        <div class="chip-row" id="so-customers" style="margin-top:8px;"></div>
+        <div class="card" id="so-customer-info" style="display:none;margin-top:8px;font-size:12px;"></div>
+
+        <div class="section-title">Order Details</div>
+        <div class="card">
+          <div class="charge-grid">
+            <label class="dim"><span>Date</span><input type="date" id="so-date"></label>
+            <label class="dim"><span>Expected Delivery</span><input type="date" id="so-expected-date"></label>
+          </div>
+          <label class="field-label" style="margin-top:10px;">Delivery Address <span class="muted" style="font-weight:400;">— optional</span></label>
+          <input type="text" id="so-delivery-address" placeholder="Where should this be delivered?">
+          <label class="field-label" style="margin-top:10px;">Sale Type</label>
+          <div class="chip-row" id="so-type-chips">
+            <button class="chip selected" data-so-type="Local">Local (CGST + SGST)</button>
+            <button class="chip" data-so-type="Interstate">Interstate (IGST)</button>
+          </div>
+          <label class="field-label" style="margin-top:10px;">Remarks <span class="muted" style="font-weight:400;">— optional</span></label>
+          <input type="text" id="so-remarks" placeholder="e.g. Confirm before dispatch">
+        </div>
+
+        <div class="section-title">Add products</div>
+        <div class="searchbar">
+          <span>&#128269;</span><input type="text" id="so-search" placeholder="Search name, brand or SKU">
+        </div>
+        <div class="card" id="so-product-list" style="max-height:260px;overflow-y:auto;margin-top:8px;"></div>
+
+        <div class="section-title">Items</div>
+        <div class="card" id="so-cart-list"><div class="empty-hint">No items yet. Add products above.</div></div>
+
+        <div class="section-title">Charges</div>
+        <div class="card">
+          <div class="charge-grid">
+            <label class="dim"><span>Discount</span>
+              <div class="chip-row" id="so-disc-type-chips" style="margin-top:4px;">
+                <button class="chip sm selected" data-so-disc-type="pct">%</button>
+                <button class="chip sm" data-so-disc-type="flat">₹</button>
+              </div>
+            </label>
+            <label class="dim"><span>Discount Value</span><input type="number" inputmode="decimal" step="any" min="0" id="so-disc-value" value="0" placeholder="0"></label>
+          </div>
+          <div class="charge-grid" style="margin-top:10px;">
+            <label class="dim"><span>Transport <em>(₹)</em></span><input type="number" inputmode="decimal" step="any" min="0" id="so-transport-input" value="0" placeholder="0"></label>
+            <label class="dim"><span>Loading <em>(₹)</em></span><input type="number" inputmode="decimal" step="any" min="0" id="so-loading-input" value="0" placeholder="0"></label>
+          </div>
+          <label class="check-row" style="margin-top:10px;">
+            <input type="checkbox" id="so-gst-on-charges-toggle" checked>
+            <span>Apply GST on Transport/Loading too</span>
+          </label>
+          <label class="check-row" style="margin-top:6px;">
+            <input type="checkbox" id="so-roundoff-toggle" checked>
+            <span>Round off the grand total to the nearest rupee</span>
+          </label>
+        </div>
+
+        <div class="section-title">Summary</div>
+        <div class="card" id="so-totals-card"></div>
+
+        <div style="margin-top:16px;display:flex;flex-direction:column;gap:8px;">
+          <button class="btn btn-primary" id="so-save-btn">Save &amp; Confirm</button>
+          <button class="btn btn-outline" id="so-save-draft-btn">Save as Draft</button>
+        </div>
+      </div>
     </main>
 
     <nav class="bottom">
@@ -453,6 +600,10 @@
   <div class="sheet" id="sheet-cash-entry"></div>
   <div class="sheet" id="sheet-purchase-detail"></div>
   <div class="sheet" id="sheet-po-detail"></div>
+  <div class="sheet" id="sheet-quotation-detail"></div>
+  <div class="sheet" id="sheet-so-detail"></div>
+  <div class="sheet" id="sheet-sales-return"></div>
+  <div class="sheet" id="sheet-sales-return-detail"></div>
   <div class="sheet" id="sheet-transfer-stock"></div>
   <div class="sheet" id="sheet-factory-reset"></div>
 

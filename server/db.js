@@ -214,6 +214,23 @@ CREATE TABLE IF NOT EXISTS cash_entries (
   created_at INTEGER NOT NULL
 );
 
+-- Bank Book: identical shape and purpose to cash_entries above, just a
+-- separate running balance for the bank account instead of the cash drawer —
+-- a manual entry here is NOT created automatically from a Bank-method sale/
+-- purchase payment (those already have their own record); this is for
+-- everything else that moves through the bank (transfers, cheques, charges).
+CREATE TABLE IF NOT EXISTS bank_entries (
+  id TEXT PRIMARY KEY,
+  date TEXT NOT NULL,
+  type TEXT NOT NULL CHECK (type IN ('in', 'out')),
+  amount REAL NOT NULL,
+  party TEXT DEFAULT '',
+  category TEXT DEFAULT '',
+  remarks TEXT DEFAULT '',
+  voided INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+
 -- A purchase entry, one product per row (mirrors how the product is sold: one
 -- board/size per line). qty is the physical sheet/piece count received --
 -- what products.stock goes up by. billed_qty/mode/geometry mirror

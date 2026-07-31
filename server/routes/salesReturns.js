@@ -37,7 +37,8 @@ function alreadyReturned(invoiceItemId) {
 
 function serialize(sr) {
   const items = db.prepare("SELECT * FROM sales_return_items WHERE return_id = ?").all(sr.id);
-  return { ...sr, items };
+  const invoice = sr.invoice_id ? db.prepare("SELECT challan_no FROM invoices WHERE id = ?").get(sr.invoice_id) : null;
+  return { ...sr, items, invoice_challan_no: invoice ? invoice.challan_no : null };
 }
 
 router.get("/", (req, res) => {

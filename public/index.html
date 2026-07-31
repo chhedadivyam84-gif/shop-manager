@@ -67,6 +67,7 @@
           <button class="qa-btn" data-goto="po"><span class="ic">&#128203;</span>Purchase Order</button>
           <button class="qa-btn" data-goto="quotation"><span class="ic">&#128221;</span>Quotation</button>
           <button class="qa-btn" data-goto="so"><span class="ic">&#128197;</span>Sales Order</button>
+          <button class="qa-btn" data-goto="bankbook"><span class="ic">&#127974;</span>Bank Book</button>
           <button class="qa-btn" data-goto="inventory"><span class="ic">&#128230;</span>Inventory</button>
           <button class="qa-btn" data-inv-location-goto="shop"><span class="ic">&#127978;</span>Shop Stock</button>
           <button class="qa-btn" data-inv-location-goto="warehouse"><span class="ic">&#127974;</span>Warehouse Stock</button>
@@ -268,6 +269,34 @@
         <div style="display:flex;gap:8px;margin-top:12px;">
           <button class="btn btn-outline" id="cb-print-btn" style="flex:1;">Print</button>
           <button class="btn btn-outline" id="cb-export-btn" style="flex:1;">Export Excel (.xlsx)</button>
+        </div>
+      </div>
+
+      <!-- BANK BOOK -->
+      <div class="screen" id="screen-bankbook">
+        <a href="#" id="bb-back-link" class="muted" style="font-size:12px;font-weight:700;">&larr; Back to Home</a>
+        <div class="card" id="bankbook-summary" style="margin-top:10px;"></div>
+
+        <div class="charge-grid" style="margin-top:10px;">
+          <label class="dim"><span>From</span><input type="date" id="bb-filter-from"></label>
+          <label class="dim"><span>To</span><input type="date" id="bb-filter-to"></label>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px;">
+          <button class="btn btn-outline" id="bb-filter-today" style="flex:1;">Today</button>
+          <button class="btn btn-outline" id="bb-filter-clear" style="flex:1;">All</button>
+        </div>
+
+        <div style="display:flex;gap:8px;margin-top:14px;">
+          <button class="btn btn-gold" id="bb-add-in" style="flex:1;">+ Bank In</button>
+          <button class="btn btn-outline" id="bb-add-out" style="flex:1;border-color:var(--danger);color:var(--danger);">+ Bank Out</button>
+        </div>
+
+        <div class="section-title">Ledger</div>
+        <div class="card" id="bankbook-list"></div>
+
+        <div style="display:flex;gap:8px;margin-top:12px;">
+          <button class="btn btn-outline" id="bb-print-btn" style="flex:1;">Print</button>
+          <button class="btn btn-outline" id="bb-export-btn" style="flex:1;">Export Excel (.xlsx)</button>
         </div>
       </div>
 
@@ -598,6 +627,7 @@
   <div class="sheet" id="sheet-quick-payment"></div>
   <div class="sheet" id="sheet-stock-in"></div>
   <div class="sheet" id="sheet-cash-entry"></div>
+  <div class="sheet" id="sheet-bank-entry"></div>
   <div class="sheet" id="sheet-purchase-detail"></div>
   <div class="sheet" id="sheet-po-detail"></div>
   <div class="sheet" id="sheet-quotation-detail"></div>

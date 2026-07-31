@@ -48,6 +48,7 @@ let state = {
   invBrandFilter: "All", reportType: "Sales", partyMode: "customer",
   paperSize: "A5", editingInvoiceId: null,
   cbFrom: "", cbTo: "", cbEntries: [],
+  bbFrom: "", bbTo: "", bbEntries: [],
   // Purchase Entry (Phase 1) — a standalone cart, separate from state.cart
   // (Billing's sales cart), since a purchase invoice's line shape (per-line
   // discount, GST computed forward not backed-out, no stock cap) differs from
@@ -373,6 +374,23 @@ async function initApp(){
     window.open("/api/cashbook/export" + (q?"?"+q:""), "_blank");
   });
 
+  document.getElementById("bb-back-link").addEventListener("click", (e)=>{ e.preventDefault(); switchTab("home"); });
+  document.getElementById("bb-add-in").addEventListener("click", ()=>openBankEntry("in"));
+  document.getElementById("bb-add-out").addEventListener("click", ()=>openBankEntry("out"));
+  document.getElementById("bb-filter-from").addEventListener("change", (e)=>{ state.bbFrom = e.target.value; renderBankBook(); });
+  document.getElementById("bb-filter-to").addEventListener("change", (e)=>{ state.bbTo = e.target.value; renderBankBook(); });
+  document.getElementById("bb-filter-today").addEventListener("click", ()=>{
+    const t = todayISO(); state.bbFrom = t; state.bbTo = t; renderBankBook();
+  });
+  document.getElementById("bb-filter-clear").addEventListener("click", ()=>{
+    state.bbFrom = ""; state.bbTo = ""; renderBankBook();
+  });
+  document.getElementById("bb-print-btn").addEventListener("click", printBankBook);
+  document.getElementById("bb-export-btn").addEventListener("click", ()=>{
+    const q = bankBookQuery();
+    window.open("/api/bankbook/export" + (q?"?"+q:""), "_blank");
+  });
+
   document.getElementById("pur-back-link").addEventListener("click", (e)=>{ e.preventDefault(); switchTab("home"); });
   document.getElementById("pur-supplier-search").addEventListener("input", renderPurchaseSuppliers);
   document.getElementById("pur-search").addEventListener("input", renderPurchaseProducts);
@@ -545,7 +563,7 @@ async function switchTab(tab){
   document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));
   document.getElementById("screen-"+tab).classList.add("active");
   document.querySelectorAll("nav.bottom .tab").forEach(t=>t.classList.toggle("active", t.dataset.tab===tab));
-  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",purchase:"New Purchase",po:"Purchase Order",quotation:"Quotation",so:"Sales Order"};
+  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",purchase:"New Purchase",po:"Purchase Order",quotation:"Quotation",so:"Sales Order"};
   document.getElementById("hdr-sub").textContent = subMap[tab];
   document.getElementById("hdr-main").textContent = tab==="home" ? greeting() : subMap[tab];
   if(tab==="billing") await renderBilling();
@@ -553,6 +571,7 @@ async function switchTab(tab){
   if(tab==="customers") await renderCustomersList();
   if(tab==="reports") await renderReport();
   if(tab==="cashbook") await renderCashBook();
+  if(tab==="bankbook") await renderBankBook();
   if(tab==="purchase") await renderPurchaseScreen();
   if(tab==="po") await renderPoScreen();
   if(tab==="quotation") await renderQuotationScreen();
@@ -3750,6 +3769,142 @@ function printCashBook(){
 }
 
 /* ============================================================
+   BANK BOOK — identical structure to Cash Book above, a separate running
+   balance for the bank account instead of the cash drawer.
+   ============================================================ */
+function bankBookQuery(){
+  const p = new URLSearchParams();
+  if(state.bbFrom) p.set("from", state.bbFrom);
+  if(state.bbTo) p.set("to", state.bbTo);
+  return p.toString();
+}
+async function renderBankBook(){
+  const fromEl = document.getElementById("bb-filter-from");
+  const toEl = document.getElementById("bb-filter-to");
+  if(fromEl) fromEl.value = state.bbFrom;
+  if(toEl) toEl.value = state.bbTo;
+
+  const q = bankBookQuery();
+  try{
+    const [summary, entries] = await Promise.all([
+      api("GET", "/bankbook/summary" + (q?"?"+q:"")),
+      api("GET", "/bankbook" + (q?"?"+q:""))
+    ]);
+    state.bbEntries = entries;
+    renderBankBookSummary(summary);
+    renderBankBookList(entries);
+  }catch(e){ toast(e.message); }
+}
+function renderBankBookSummary(s){
+  const row = (label, value, cls) =>
+    `<div class="inv-flex" style="margin-bottom:4px;${cls||""}"><span class="muted">${label}</span><span>${value}</span></div>`;
+  document.getElementById("bankbook-summary").innerHTML = `
+    <div style="font-weight:800;font-size:14px;margin-bottom:6px;">${s.from===s.to ? s.from : s.from+" to "+s.to}</div>
+    ${row("Opening Balance", fmt(s.openingBalance))}
+    ${row("Total Bank In", "+"+fmt(s.totalIn), "color:var(--ok);")}
+    ${row("Total Bank Out", "-"+fmt(s.totalOut), "color:var(--danger);")}
+    <div class="inv-flex" style="font-weight:800;border-top:1px solid var(--border);padding-top:6px;font-size:15px;"><span>Closing Balance</span><span>${fmt(s.closingBalance)}</span></div>
+  `;
+}
+function renderBankBookList(entries){
+  document.getElementById("bankbook-list").innerHTML = entries.length ? entries.map(e=>`
+    <div class="list-row" data-bb-entry="${e.id}" style="cursor:pointer;">
+      <div>
+        <div class="row-title">${escapeHtml(e.party || e.category || (e.type==="in"?"Bank In":"Bank Out"))}</div>
+        <div class="row-sub">${e.date}${e.category && e.party ? " · "+escapeHtml(e.category) : ""}${e.remarks ? " · "+escapeHtml(e.remarks) : ""}</div>
+        <div class="row-sub">Balance ${fmt(e.runningBalance)}</div>
+      </div>
+      <div class="row-right row-title" style="color:${e.type==="in"?"var(--ok)":"var(--danger)"};">${e.type==="in"?"+":"-"}${fmt(e.amount)}</div>
+    </div>
+  `).join("") : `<div class="empty-hint">No bank entries in this range yet.</div>`;
+  document.querySelectorAll("[data-bb-entry]").forEach(el=>{
+    el.addEventListener("click", ()=>{
+      const entry = state.bbEntries.find(e=>e.id===el.dataset.bbEntry);
+      if(entry) openBankEntry(entry.type, entry);
+    });
+  });
+}
+/** One sheet serves both "add" (editEntry omitted) and "edit" of a bank entry. */
+function openBankEntry(type, editEntry){
+  const sheet = document.getElementById("sheet-bank-entry");
+  const isIn = type==="in";
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">${editEntry ? "Edit " : ""}${isIn ? "Bank In" : "Bank Out"}</div>
+    <label class="field-label">Date</label>
+    <input type="date" id="bbe-date" value="${editEntry ? editEntry.date : todayISO()}">
+    <label class="field-label">Amount (₹)</label>
+    <input type="number" inputmode="decimal" step="any" min="0" id="bbe-amount" value="${editEntry ? editEntry.amount : ""}" placeholder="0">
+    <label class="field-label">Party / Person <span class="muted" style="font-weight:400;">— optional</span></label>
+    <input type="text" id="bbe-party" value="${editEntry ? escapeHtml(editEntry.party||"") : ""}" placeholder="e.g. Ramesh, Electricity Board">
+    <label class="field-label">Category <span class="muted" style="font-weight:400;">— optional</span></label>
+    <input type="text" id="bbe-category" value="${editEntry ? escapeHtml(editEntry.category||"") : ""}" placeholder="e.g. Cheque, NEFT, Bank Charges">
+    <label class="field-label">Remarks <span class="muted" style="font-weight:400;">— optional</span></label>
+    <input type="text" id="bbe-remarks" value="${editEntry ? escapeHtml(editEntry.remarks||"") : ""}" placeholder="e.g. Cheque #123456">
+    <button class="btn btn-primary" id="bbe-save" style="margin-top:16px;">${editEntry ? "Update Entry" : "Save Entry"}</button>
+    ${editEntry && isOwner() ? `<div style="margin-top:12px;text-align:center;"><a href="#" id="bbe-delete-link" class="btn-danger-link">Delete this entry</a></div>` : ""}
+  `;
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  sheet.querySelector("#bbe-save").addEventListener("click", async ()=>{
+    const amount = parseFloat(document.getElementById("bbe-amount").value);
+    if(!amount || amount<=0){ toast("Enter a valid amount."); return; }
+    const payload = {
+      date: document.getElementById("bbe-date").value,
+      type,
+      amount,
+      party: document.getElementById("bbe-party").value.trim(),
+      category: document.getElementById("bbe-category").value.trim(),
+      remarks: document.getElementById("bbe-remarks").value.trim()
+    };
+    const btn = document.getElementById("bbe-save");
+    btn.disabled = true;
+    try{
+      if(editEntry) await api("PUT", `/bankbook/${editEntry.id}`, payload);
+      else await api("POST", "/bankbook", payload);
+      closeAllSheets();
+      await renderBankBook();
+      toast(editEntry ? "Entry updated." : "Entry saved.", "ok");
+    }catch(err){ toast(err.message); }
+    finally{ btn.disabled = false; }
+  });
+  const deleteLink = sheet.querySelector("#bbe-delete-link");
+  if(deleteLink) deleteLink.addEventListener("click", async (e)=>{
+    e.preventDefault();
+    if(confirm("Delete this bank entry? This can't be undone from here.")){
+      try{
+        await api("POST", `/bankbook/${editEntry.id}/void`);
+        closeAllSheets();
+        await renderBankBook();
+        toast("Entry deleted.", "ok");
+      }catch(err){ toast(err.message); }
+    }
+  });
+  showSheet("sheet-bank-entry");
+}
+function printBankBook(){
+  const rows = [...state.bbEntries].reverse();
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Bank Book</title>
+    <style>
+      body{font-family:Arial,Helvetica,sans-serif;padding:20px;color:#000;}
+      h1{font-size:16px;margin:0 0 2px;} .sub{font-size:11px;color:#555;margin-bottom:14px;}
+      table{width:100%;border-collapse:collapse;font-size:11px;}
+      th,td{border:1px solid #000;padding:4px 6px;text-align:left;}
+      th{background:#eee;} .num{text-align:right;}
+    </style></head><body>
+    <h1>Bank Book</h1>
+    <div class="sub">${state.bbFrom || state.bbTo ? (state.bbFrom||"…")+" to "+(state.bbTo||"…") : "All entries"}</div>
+    <table><thead><tr><th>Date</th><th>Party</th><th>Category</th><th>Remarks</th><th class="num">Bank In</th><th class="num">Bank Out</th><th class="num">Balance</th></tr></thead>
+    <tbody>${rows.map(e=>`<tr><td>${e.date}</td><td>${escapeHtml(e.party||"")}</td><td>${escapeHtml(e.category||"")}</td><td>${escapeHtml(e.remarks||"")}</td>
+      <td class="num">${e.type==="in"?fmt(e.amount):""}</td><td class="num">${e.type==="out"?fmt(e.amount):""}</td><td class="num">${fmt(e.runningBalance)}</td></tr>`).join("")}</tbody></table>
+    <script>window.onload=()=>window.print();</script>
+    </body></html>`;
+  const w = window.open("", "_blank");
+  w.document.write(html);
+  w.document.close();
+}
+
+/* ============================================================
    PURCHASE ENTRY (Phase 1 — core multi-line invoice)
    ============================================================ */
 async function renderPurchaseScreen(){
@@ -5323,6 +5478,30 @@ function editExistingQuotation(q){
     toast(`Editing ${q.quotation_no} — make your changes, then save.`, "ok");
   });
 }
+/** Shop name/address/GSTIN/phone block shared by every print view that
+ *  represents something FROM the shop TO a party (Quotation, Sales Order,
+ *  Sales Return) — Purchase Order omits this since it's addressed to a
+ *  supplier and the recipient already knows who they're dealing with. */
+function printShopHeaderHtml(){
+  const cfg = state.settings || {};
+  return `
+    <div class="shop-header">
+      <div class="shop-name">${escapeHtml(cfg.business_name||"")}</div>
+      ${cfg.tagline ? `<div class="shop-tag">${escapeHtml(cfg.tagline)}</div>` : ""}
+      ${cfg.address ? `<div class="shop-addr">${escapeHtml(cfg.address)}</div>` : ""}
+      <div class="shop-contact">${[
+        cfg.gstin ? `GSTIN: ${escapeHtml(cfg.gstin)}` : "",
+        cfg.phones ? `Ph: ${escapeHtml(cfg.phones)}` : ""
+      ].filter(Boolean).join("  |  ")}</div>
+    </div>`;
+}
+const SHOP_HEADER_CSS = `
+  .shop-header{text-align:center;border-bottom:2px solid #000;padding-bottom:8px;margin-bottom:12px;}
+  .shop-name{font-size:20px;font-weight:800;}
+  .shop-tag{font-size:11px;color:#555;}
+  .shop-addr{font-size:11px;color:#333;margin-top:2px;}
+  .shop-contact{font-size:11px;color:#333;margin-top:2px;}
+`;
 function printQuotation(q){
   const cust = state.customers.find(c=>c.id===q.customer_id);
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(q.quotation_no)}</title>
@@ -5333,7 +5512,9 @@ function printQuotation(q){
       th,td{border:1px solid #000;padding:4px 6px;text-align:left;}
       th{background:#eee;} .num{text-align:right;}
       .totals{margin-top:10px;font-size:12px;text-align:right;}
+      ${SHOP_HEADER_CSS}
     </style></head><body>
+    ${printShopHeaderHtml()}
     <h1>Quotation — ${escapeHtml(q.quotation_no)}</h1>
     <div class="sub">${q.date}${q.valid_until?" · Valid until "+q.valid_until:""} · Status: ${escapeHtml(q.status)}</div>
     <div class="sub">${cust?"To: "+escapeHtml(cust.name):""}</div>
@@ -5876,7 +6057,9 @@ function printSalesOrder(so){
       th,td{border:1px solid #000;padding:4px 6px;text-align:left;}
       th{background:#eee;} .num{text-align:right;}
       .totals{margin-top:10px;font-size:12px;text-align:right;}
+      ${SHOP_HEADER_CSS}
     </style></head><body>
+    ${printShopHeaderHtml()}
     <h1>Sales Order — ${escapeHtml(so.so_no)}</h1>
     <div class="sub">${so.date} · Status: ${escapeHtml(so.status)}${so.expected_delivery_date?" · Expected delivery "+so.expected_delivery_date:""}</div>
     <div class="sub">${cust?"To: "+escapeHtml(cust.name):""}${so.delivery_address?" · Deliver to: "+escapeHtml(so.delivery_address):""}</div>
@@ -6047,9 +6230,11 @@ async function openSalesReturnDetail(returnId){
       <div class="inv-flex" style="font-weight:800;border-top:1px solid var(--border);padding-top:6px;"><span>Total</span><span>${fmt(sr.total)}</span></div>
       <div class="muted" style="font-size:11.5px;margin-top:6px;">Refund: ${escapeHtml(sr.refund_method)}</div>
     </div>
+    <button class="btn btn-outline" id="print-sales-return-btn" style="margin-top:14px;width:100%;">Print</button>
     ${!sr.voided && isOwner() ? `<div style="margin-top:14px;text-align:center;"><a href="#" id="void-sales-return-link" class="btn-danger-link">Void this return</a></div>` : ""}
   `;
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  sheet.querySelector("#print-sales-return-btn").addEventListener("click", ()=>printSalesReturn(sr));
   const voidLink = sheet.querySelector("#void-sales-return-link");
   if(voidLink) voidLink.addEventListener("click", async (e)=>{
     e.preventDefault();
@@ -6062,6 +6247,39 @@ async function openSalesReturnDetail(returnId){
     }catch(err){ toast(err.message); }
   });
   showSheet("sheet-sales-return-detail");
+}
+
+function printSalesReturn(sr){
+  const cust = state.customers.find(c=>c.id===sr.customer_id);
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(sr.return_no)}</title>
+    <style>
+      body{font-family:Arial,Helvetica,sans-serif;padding:20px;color:#000;}
+      h1{font-size:16px;margin:0 0 2px;} .sub{font-size:11px;color:#555;margin-bottom:14px;}
+      table{width:100%;border-collapse:collapse;font-size:11px;margin-top:10px;}
+      th,td{border:1px solid #000;padding:4px 6px;text-align:left;}
+      th{background:#eee;} .num{text-align:right;}
+      .totals{margin-top:10px;font-size:12px;text-align:right;}
+      ${SHOP_HEADER_CSS}
+    </style></head><body>
+    ${printShopHeaderHtml()}
+    <h1>Sales Return — ${escapeHtml(sr.return_no)}</h1>
+    <div class="sub">${sr.date}${sr.voided?" · VOIDED":""}${sr.invoice_challan_no?" · Against "+escapeHtml(sr.invoice_challan_no):""}</div>
+    <div class="sub">${cust?"Customer: "+escapeHtml(cust.name):""}${sr.reason?" · Reason: "+escapeHtml(sr.reason):""}</div>
+    <table><thead><tr><th>#</th><th>Product</th><th>Size</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">GST%</th><th class="num">Amount</th></tr></thead>
+    <tbody>${sr.items.map((it,i)=>`<tr><td>${i+1}</td><td>${escapeHtml(it.name)}</td><td>${escapeHtml(it.size_label||"")}</td>
+      <td class="num">${it.pieces}</td><td class="num">${fmt(it.rate)}</td>
+      <td class="num">${it.gst_rate}%</td><td class="num">${fmt(round2(it.pieces*it.rate*(1+it.gst_rate/100)))}</td></tr>`).join("")}</tbody></table>
+    <div class="totals">
+      Subtotal: ${fmt(sr.subtotal)}<br>
+      ${sr.igst>0?`IGST: ${fmt(sr.igst)}<br>`:`CGST: ${fmt(sr.cgst)}<br>SGST: ${fmt(sr.sgst)}<br>`}
+      <strong>Credit Total: ${fmt(sr.total)}</strong><br>
+      Refund Method: ${escapeHtml(sr.refund_method)}
+    </div>
+    <script>window.onload=()=>window.print();</script>
+    </body></html>`;
+  const w = window.open("", "_blank");
+  w.document.write(html);
+  w.document.close();
 }
 
 /* ============================================================

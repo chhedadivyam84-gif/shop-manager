@@ -550,21 +550,37 @@ router.delete("/:id", requireRole("owner"), (req, res) => {
   // even a voided one, since the historical line still references it and losing
   // the product would break that document's product link for future reference.
   // Purchases (stock_ins) do NOT block deletion: a product bought but never
-  // sold is fair game to remove.
+  // sold is fair game to remove. An owner can override this with ?force=true.
   const usedInSales = db.prepare(
     "SELECT COUNT(*) AS n FROM invoice_items WHERE product_id = ?"
   ).get(p.id).n;
-  if (usedInSales > 0) {
+  const force = req.query.force === "true";
+  if (usedInSales > 0 && !force) {
     return res.status(400).json({
-      error: `"${p.name}" can't be deleted — it has been used in ${usedInSales} sale line${usedInSales > 1 ? "s" : ""}. Products already sold or on a challan are kept for record-keeping.`
+      error: `"${p.name}" can't be deleted — it has been used in ${usedInSales} sale line${usedInSales > 1 ? "s" : ""}. Products already sold or on a challan are kept for record-keeping.`,
+      canForce: true,
+      usedInSales
     });
+  }
+
+  // Force delete: sever the historical sale lines' link to this product before
+  // removing it. Each invoice_item already stores its own copy of the name,
+  // size and rate, so the sale still prints exactly as issued — this only
+  // clears the live product_id, matching the ON DELETE SET NULL behaviour
+  // every other product_id reference in the schema already has.
+  if (usedInSales > 0) {
+    db.prepare("UPDATE invoice_items SET product_id = NULL WHERE product_id = ?").run(p.id);
   }
 
   // Past invoices keep their own copy of the name, size and rate, so deleting a
   // product never rewrites history — the sale still prints exactly as issued.
   db.prepare("DELETE FROM products WHERE id = ?").run(p.id);
-  logAction(req, "product.delete", p.name);
-  res.json({ ok: true });
+  logAction(
+    req,
+    usedInSales > 0 ? "product.force_delete" : "product.delete",
+    usedInSales > 0 ? `${p.name} (force — ${usedInSales} sale line${usedInSales > 1 ? "s" : ""} detached)` : p.name
+  );
+  res.json({ ok: true, forced: usedInSales > 0 });
 });
 
 module.exports = router;

@@ -1373,18 +1373,36 @@ function renderProductDetailSheet(context){
     // state the actual consequence instead of a generic warning — and so a
     // product already used in a sale is refused here rather than after a
     // confirm dialog the user just clicked through.
-    let warn = "";
+    let warn = "", invoiceCount = 0;
     try{
       const u = await api("GET", `/products/${p.id}/usage`);
-      if(u.invoiceCount > 0){
-        toast(`"${p.name}" can't be deleted — it's used in ${u.invoiceCount} sale line${u.invoiceCount>1?"s":""}. Products already sold are kept for record-keeping.`);
-        return;
+      invoiceCount = u.invoiceCount || 0;
+      if(invoiceCount === 0){
+        const bits = [];
+        if(u.stockInCount) bits.push(`${u.stockInCount} purchase record${u.stockInCount>1?"s":""}`);
+        if(u.stock > 0) bits.push(`${u.stock} still in stock`);
+        if(bits.length) warn = "\n\nThis product has " + bits.join(", ") + ".";
       }
-      const bits = [];
-      if(u.stockInCount) bits.push(`${u.stockInCount} purchase record${u.stockInCount>1?"s":""}`);
-      if(u.stock > 0) bits.push(`${u.stock} still in stock`);
-      if(bits.length) warn = "\n\nThis product has " + bits.join(", ") + ".";
     }catch(_){ /* fall back to the plain confirmation; server still enforces the rule */ }
+
+    if(invoiceCount > 0){
+      const step1 = confirm(
+        `"${p.name}" has been used in ${invoiceCount} sale line${invoiceCount>1?"s":""} and normally can't be deleted, to keep those invoices accurate.\n\n` +
+        `Force Delete removes it anyway. Those ${invoiceCount} past invoice${invoiceCount>1?"s":""} will still print exactly as issued (they keep their own copy of the name, size and rate) — but they'll lose their live link to this product, which can affect future profit/cost lookups for those sale lines.\n\n` +
+        `This cannot be undone. Force delete "${p.name}"?`
+      );
+      if(!step1) return;
+      const step2 = confirm(`Last check — permanently delete "${p.name}" and detach it from ${invoiceCount} past sale${invoiceCount>1?"s":""}? This is not reversible.`);
+      if(!step2) return;
+      try{
+        await api("DELETE", `/products/${p.id}?force=true`);
+        await loadProducts();
+        closeAllSheets(); renderInventoryList(); renderBillingProducts();
+        refreshCartFromProducts();
+        toast("Product force-deleted.", "ok");
+      }catch(err){ toast(err.message); }
+      return;
+    }
 
     if(confirm("Delete " + p.name + "? This can't be undone." + warn)){
       try{

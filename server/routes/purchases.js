@@ -416,14 +416,18 @@ router.post("/:id/void", requireRole("owner"), (req, res) => {
   const purchaseLocationId = p.location_id || inventory.getLocationByCode("warehouse").id;
 
   const runVoid = db.transaction(() => {
+    // A line whose product was since force-deleted has size_id/product_id
+    // cleared (see products.js DELETE ?force=true) — its size no longer
+    // exists, so there is no live stock to check or reverse against.
+    const liveItems = items.filter(it => it.size_id != null);
     const touchedProducts = new Set();
-    items.forEach(it => {
+    liveItems.forEach(it => {
       const atLocation = inventory.getStock(it.size_id, purchaseLocationId);
       if (atLocation < it.pieces) {
         throw { status: 400, error: `Can't void this purchase — ${itemLabel(it)} stock has already been used elsewhere (only ${atLocation} left at that location, this purchase added ${it.pieces}).` };
       }
     });
-    items.forEach(it => {
+    liveItems.forEach(it => {
       inventory.addStock(it.size_id, purchaseLocationId, -it.pieces);
       touchedProducts.add(it.product_id);
     });
@@ -459,14 +463,18 @@ router.delete("/:id", requireRole("owner"), (req, res) => {
 
   const runDelete = db.transaction(() => {
     if (!p.voided) {
+      // A line whose product was since force-deleted has size_id/product_id
+      // cleared (see products.js DELETE ?force=true) — its size no longer
+      // exists, so there is no live stock to check or reverse against.
+      const liveItems = items.filter(it => it.size_id != null);
       const touchedProducts = new Set();
-      items.forEach(it => {
+      liveItems.forEach(it => {
         const atLocation = inventory.getStock(it.size_id, purchaseLocationId);
         if (atLocation < it.pieces) {
           throw { status: 400, error: `Can't delete this purchase — ${itemLabel(it)} stock has already been used elsewhere (only ${atLocation} left at that location, this purchase added ${it.pieces}). Void it after correcting stock, or edit it instead.` };
         }
       });
-      items.forEach(it => {
+      liveItems.forEach(it => {
         inventory.addStock(it.size_id, purchaseLocationId, -it.pieces);
         touchedProducts.add(it.product_id);
       });

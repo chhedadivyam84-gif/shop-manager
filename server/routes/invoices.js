@@ -128,10 +128,18 @@ function deriveDocStatus(inv) {
 function withStatus(inv) { return { ...inv, status: deriveDocStatus(inv) }; }
 
 router.get("/", (req, res) => {
-  const { date } = req.query;
-  const invoices = date
-    ? db.prepare("SELECT * FROM invoices WHERE date = ? AND voided = 0 ORDER BY created_at DESC").all(date)
-    : db.prepare("SELECT * FROM invoices WHERE voided = 0 ORDER BY created_at DESC").all();
+  const { date, customerId, includeVoided } = req.query;
+  // Voided invoices are hidden by default (matches purchases.js's same
+  // pattern) — includeVoided=true is the only way to look one back up, e.g.
+  // to see why a customer with no visible ledger activity still can't be
+  // deleted (a voided invoice still blocks that — see customers.js).
+  const voidedClause = includeVoided === "true" ? "" : "AND voided = 0";
+  let sql = "SELECT * FROM invoices WHERE 1=1 " + voidedClause;
+  const params = [];
+  if (date) { sql += " AND date = ?"; params.push(date); }
+  if (customerId) { sql += " AND customer_id = ?"; params.push(customerId); }
+  sql += " ORDER BY created_at DESC";
+  const invoices = db.prepare(sql).all(...params);
   res.json(invoices.map(withStatus));
 });
 

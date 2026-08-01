@@ -1415,6 +1415,7 @@ function renderProductDetailSheet(context){
         <button class="btn btn-outline" id="stock-in-btn" style="flex:1;">+ Record Stock In</button>
         <button class="btn btn-outline" id="transfer-stock-btn" style="flex:1;">&#8646; Transfer Stock</button>
       </div>
+      <button class="btn btn-outline" id="opening-stock-btn" style="width:100%;margin-top:8px;">+ Opening Stock Balance</button>
       <div class="section-title">Recent Purchases</div>
       <div class="card" id="stock-in-history"><div class="empty-hint">Loading…</div></div>
     ` : ""}
@@ -1489,6 +1490,7 @@ function renderProductDetailSheet(context){
     }));
     sheet.querySelector("#stock-in-btn").addEventListener("click", ()=>openStockIn(p));
     sheet.querySelector("#transfer-stock-btn").addEventListener("click", ()=>openTransferStock(p));
+    sheet.querySelector("#opening-stock-btn").addEventListener("click", ()=>openOpeningStock(p));
     loadStockInHistory(p.id);
   } else {
     // Every doc type acts on a chosen location (Shop by default for a sale,
@@ -1907,6 +1909,104 @@ function openStockIn(p, editingSi){
 
   render();
   showSheet("sheet-stock-in");
+}
+
+/**
+ * Opening Stock Balance — a deliberately stripped-down alternative to
+ * Record Stock In, for setting up a product's starting quantity/cost with
+ * no GST, supplier, or billing-mode geometry to think about: just Product
+ * (already chosen via the sheet it's opened from), Location, Opening Date,
+ * Opening Quantity and Purchase Cost, with Total Opening Value shown live.
+ * Saves through the exact same stock-in endpoint as Record Stock In —
+ * always as a plain per-piece UNIT line (qty × cost = total), regardless of
+ * the product's normal selling mode, since an opening balance doesn't need
+ * area/length billing math, only a starting count and its cost.
+ */
+function openOpeningStock(p){
+  const sheet = document.getElementById("sheet-opening-stock");
+  const warehouseLoc = state.locations.find(l=>l.code==="warehouse");
+  const ctx = {
+    sizeId: p.sizes.length===1 ? p.sizes[0].id : null,
+    locationId: warehouseLoc && warehouseLoc.id,
+    date: todayISO(), qty: "", cost: ""
+  };
+
+  function render(){
+    const total = round2((parseFloat(ctx.qty)||0) * (parseFloat(ctx.cost)||0));
+    sheet.innerHTML = `
+      <div class="sheet-handle"></div>
+      <button class="sheet-close" data-sheetclose>✕</button>
+      <div class="sheet-title">Opening Stock Balance</div>
+      <div class="muted" style="font-size:12px;margin-bottom:10px;">${escapeHtml(p.name)}</div>
+
+      ${p.sizes.length>1 ? `
+      <label class="field-label">Size / Variant</label>
+      <div class="chip-row" id="os-size-chips">
+        ${p.sizes.map(s=>`<button class="chip ${s.id===ctx.sizeId?'selected':''}" data-os-size="${s.id}">${escapeHtml(s.label)}</button>`).join("")}
+      </div>` : ""}
+
+      <label class="field-label">Warehouse <span class="muted" style="font-weight:400;">— optional, defaults to Warehouse</span></label>
+      <div class="chip-row" id="os-location-chips">
+        ${state.locations.map(l=>`<button class="chip ${l.id===ctx.locationId?'selected':''}" data-os-location="${l.id}">${escapeHtml(l.name)}</button>`).join("")}
+      </div>
+
+      <label class="field-label">Opening Date</label>
+      <input type="date" id="os-date" value="${ctx.date}">
+
+      <label class="field-label">Opening Quantity</label>
+      <input type="number" inputmode="decimal" step="any" min="0" id="os-qty" value="${ctx.qty}" placeholder="0">
+
+      <label class="field-label">Purchase Cost <span class="muted" style="font-weight:400;">— per unit</span></label>
+      <input type="number" inputmode="decimal" step="any" min="0" id="os-cost" value="${ctx.cost}" placeholder="0">
+
+      <div class="card" style="margin-top:12px;">
+        <div class="inv-flex" style="font-weight:800;"><span>Total Opening Value</span><span>${fmt(total)}</span></div>
+      </div>
+
+      <button class="btn btn-primary" id="os-save" style="margin-top:16px;width:100%;">Save Opening Stock</button>
+    `;
+    sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+    sheet.querySelectorAll("[data-os-size]").forEach(b=>b.addEventListener("click", ()=>{
+      ctx.sizeId = Number(b.dataset.osSize); render();
+    }));
+    sheet.querySelectorAll("[data-os-location]").forEach(b=>b.addEventListener("click", ()=>{
+      ctx.locationId = b.dataset.osLocation; render();
+    }));
+    sheet.querySelector("#os-date").addEventListener("change", e=>{ ctx.date = e.target.value; });
+    sheet.querySelector("#os-qty").addEventListener("input", e=>{ ctx.qty = e.target.value; renderTotalOnly(); });
+    sheet.querySelector("#os-cost").addEventListener("input", e=>{ ctx.cost = e.target.value; renderTotalOnly(); });
+    sheet.querySelector("#os-save").addEventListener("click", save);
+  }
+  // Recompute just the total on every keystroke without a full re-render —
+  // a full render() would steal focus from the input mid-type.
+  function renderTotalOnly(){
+    const total = round2((parseFloat(ctx.qty)||0) * (parseFloat(ctx.cost)||0));
+    const el = sheet.querySelector(".card .inv-flex span:last-child");
+    if(el) el.textContent = fmt(total);
+  }
+  async function save(){
+    const qty = parseFloat(ctx.qty);
+    const cost = parseFloat(ctx.cost);
+    if(!qty || qty<=0){ toast("Enter a valid opening quantity."); return; }
+    if(cost===null || isNaN(cost) || cost<0){ toast("Enter a valid purchase cost."); return; }
+    if(!ctx.sizeId){ toast("Choose which size/variant this opening stock is for."); return; }
+    const btn = sheet.querySelector("#os-save");
+    btn.disabled = true;
+    try{
+      await api("POST", `/products/${p.id}/stock-in`, {
+        purchaseDate: ctx.date, sizeId: ctx.sizeId, locationId: ctx.locationId,
+        mode: "UNIT", pieces: qty, rate: cost, gst: 0
+      });
+      await loadProducts();
+      closeAllSheets();
+      renderInventoryList();
+      toast("Opening stock saved.", "ok");
+    }catch(err){ toast(err.message); }
+    finally{ btn.disabled = false; }
+  }
+
+  render();
+  showSheet("sheet-opening-stock");
 }
 
 /* ============================================================

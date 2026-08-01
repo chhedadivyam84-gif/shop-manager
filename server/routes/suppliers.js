@@ -40,6 +40,9 @@ function buildSupplierDetail(id) {
     SELECT id, supplier_invoice_no AS invoice_no, date, total, created_at
     FROM purchases WHERE supplier_id = ? AND voided = 0
   `).all(s.id);
+  const openingBalanceRows = db.prepare(`
+    SELECT * FROM supplier_opening_balances WHERE supplier_id = ? AND voided = 0
+  `).all(s.id);
   const invoiceNoById = Object.fromEntries(stockInRows.map(h => [h.id, h.invoice_no]));
   const chrono = [
     ...stockInRows.map(h => ({ type: "purchase", source: "stock_in", id: h.id, productId: h.product_id, label: h.invoice_no || "(no invoice no.)", amount: h.total, date: h.date, at: h.created_at })),
@@ -50,6 +53,14 @@ function buildSupplierDetail(id) {
       attachmentPath: p.attachment_path, attachmentName: p.attachment_name,
       againstInvoiceNo: p.stock_in_id ? (invoiceNoById[p.stock_in_id] || null) : null,
       date: p.payment_date || new Date(p.created_at).toISOString().slice(0, 10), at: p.created_at
+    })),
+    // Payable raises the due like a purchase would; Advance lowers it like a
+    // payment would — the sign is baked into `amount` here so the ledger's
+    // running-balance math (below) treats it exactly the same way.
+    ...openingBalanceRows.map(o => ({
+      type: "opening_balance", id: o.id, label: o.balance_type, note: o.remarks,
+      amount: o.balance_type === "Advance" ? -o.amount : o.amount,
+      date: o.date, at: o.created_at
     }))
   ].sort((a, b) => a.at - b.at);
   let running = 0;
@@ -59,10 +70,11 @@ function buildSupplierDetail(id) {
     stockInRows.reduce((sum, h) => sum + h.total, 0) + purchaseInvoiceRows.reduce((sum, h) => sum + h.total, 0)
   );
   const totalPaymentPaid = round2(payments.reduce((sum, p) => sum + p.amount, 0));
+  const openingBalance = round2(openingBalanceRows.reduce((sum, o) => sum + (o.balance_type === "Advance" ? -o.amount : o.amount), 0));
 
   return {
     ...s, history, payments, ledger,
-    openingBalance: 0, totalPurchases, totalPaymentPaid,
+    openingBalance, totalPurchases, totalPaymentPaid,
     outstandingPayable: s.due, closingBalance: s.due
   };
 }
@@ -90,6 +102,52 @@ router.get("/:id/ledger/export", (req, res) => {
   res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   res.setHeader("Content-Disposition", `attachment; filename="${filename}.xlsx"`);
   res.send(buf);
+});
+
+/** Sets (or adds another) starting balance for this supplier — Payable
+ *  raises due, Advance lowers it. Not restricted to once, so a mistaken
+ *  entry can be voided and re-entered rather than being permanent. */
+router.post("/:id/opening-balance", (req, res) => {
+  const s = db.prepare("SELECT * FROM suppliers WHERE id = ?").get(req.params.id);
+  if (!s) return res.status(404).json({ error: "Supplier not found." });
+  const amount = round2(Number(req.body.amount));
+  if (!amount || amount <= 0) return res.status(400).json({ error: "Enter a valid opening balance amount." });
+  const balanceType = req.body.balanceType === "Advance" ? "Advance" : "Payable";
+  const date = (req.body.date || "").trim() || todayStr();
+  const remarks = (req.body.remarks || "").trim();
+
+  const id = uid("SOB");
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO supplier_opening_balances (id, supplier_id, date, amount, balance_type, remarks, voided, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+    `).run(id, s.id, date, amount, balanceType, remarks, Date.now());
+    if (balanceType === "Advance") db.prepare("UPDATE suppliers SET due = MAX(0, due - ?) WHERE id = ?").run(amount, s.id);
+    else db.prepare("UPDATE suppliers SET due = due + ? WHERE id = ?").run(amount, s.id);
+  })();
+
+  logAction(req, "supplier.opening_balance", `${s.name}: ${amount} (${balanceType})`);
+  res.status(201).json(db.prepare("SELECT * FROM suppliers WHERE id = ?").get(s.id));
+});
+
+router.post("/:id/opening-balance/:obId/void", requireRole("owner"), (req, res) => {
+  const s = db.prepare("SELECT * FROM suppliers WHERE id = ?").get(req.params.id);
+  if (!s) return res.status(404).json({ error: "Supplier not found." });
+  const o = db.prepare("SELECT * FROM supplier_opening_balances WHERE id = ? AND supplier_id = ?").get(req.params.obId, s.id);
+  if (!o) return res.status(404).json({ error: "Opening balance entry not found." });
+  if (o.voided) return res.status(400).json({ error: "Already voided." });
+
+  db.transaction(() => {
+    db.prepare("UPDATE supplier_opening_balances SET voided = 1 WHERE id = ?").run(o.id);
+    // Reverse exactly what it did: a Payable had raised due, so voiding lowers
+    // it back (floored at 0, same as every other reversal in this app); an
+    // Advance had lowered due, so voiding raises it back.
+    if (o.balance_type === "Advance") db.prepare("UPDATE suppliers SET due = due + ? WHERE id = ?").run(o.amount, s.id);
+    else db.prepare("UPDATE suppliers SET due = MAX(0, due - ?) WHERE id = ?").run(o.amount, s.id);
+  })();
+
+  logAction(req, "supplier.opening_balance_void", `${s.name}: ${o.amount} (${o.balance_type})`);
+  res.json(db.prepare("SELECT * FROM suppliers WHERE id = ?").get(s.id));
 });
 
 router.post("/:id/payments", (req, res) => {

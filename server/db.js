@@ -196,6 +196,37 @@ CREATE TABLE IF NOT EXISTS purchase_payments (
   created_at INTEGER NOT NULL
 );
 
+-- A one-time (but not enforced-single, so it can be voided and re-entered)
+-- starting balance for a supplier when they're first added to the system
+-- with an existing real-world balance — Payable raises due like a purchase
+-- would, Advance lowers it like a payment would. Feeds into the same
+-- supplier ledger/due/Total Payables/Dashboard figures a real purchase or
+-- payment already does, rather than needing separate reporting.
+CREATE TABLE IF NOT EXISTS supplier_opening_balances (
+  id TEXT PRIMARY KEY,
+  supplier_id TEXT NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  amount REAL NOT NULL,
+  balance_type TEXT NOT NULL CHECK (balance_type IN ('Payable', 'Advance')),
+  remarks TEXT DEFAULT '',
+  voided INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+
+-- Mirror of supplier_opening_balances for the customer (Debtor) side —
+-- Receivable raises due like an invoice would, Advance lowers it like a
+-- payment would.
+CREATE TABLE IF NOT EXISTS customer_opening_balances (
+  id TEXT PRIMARY KEY,
+  customer_id TEXT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  amount REAL NOT NULL,
+  balance_type TEXT NOT NULL CHECK (balance_type IN ('Receivable', 'Advance')),
+  remarks TEXT DEFAULT '',
+  voided INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+
 -- Daily Cash Book: a standalone running cash ledger, independent of any
 -- customer/supplier/invoice — for everyday cash in/out (petty cash, wages,
 -- expenses, walk-in cash not tied to a bill) that the shop still wants

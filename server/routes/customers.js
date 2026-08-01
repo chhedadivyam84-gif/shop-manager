@@ -33,6 +33,9 @@ function buildCustomerDetail(id) {
     SELECT id, challan_no, date, total, created_at FROM invoices
     WHERE customer_id = ? AND voided = 0 AND doc_type = 'invoice'
   `).all(c.id);
+  const openingBalanceRows = db.prepare(`
+    SELECT * FROM customer_opening_balances WHERE customer_id = ? AND voided = 0
+  `).all(c.id);
   const invoiceNoById = Object.fromEntries(invoiceRows.map(h => [h.id, h.challan_no]));
   // Oldest-first to accumulate a running balance the way a real ledger reads
   // top-to-bottom, then reversed for display (newest activity first, matching
@@ -45,6 +48,14 @@ function buildCustomerDetail(id) {
       attachmentPath: p.attachment_path, attachmentName: p.attachment_name,
       againstInvoiceNo: p.invoice_id ? (invoiceNoById[p.invoice_id] || null) : null,
       date: p.payment_date || new Date(p.created_at).toISOString().slice(0, 10), at: p.created_at
+    })),
+    // Receivable raises the due like an invoice would; Advance lowers it like
+    // a payment would — sign baked into `amount` so the running-balance math
+    // (below) treats it exactly the same way as every other ledger entry.
+    ...openingBalanceRows.map(o => ({
+      type: "opening_balance", id: o.id, label: o.balance_type, note: o.remarks,
+      amount: o.balance_type === "Advance" ? -o.amount : o.amount,
+      date: o.date, at: o.created_at
     }))
   ].sort((a, b) => a.at - b.at);
   let running = 0;
@@ -52,10 +63,11 @@ function buildCustomerDetail(id) {
 
   const totalSales = round2(invoiceRows.reduce((s, h) => s + h.total, 0));
   const totalPaymentReceived = round2(payments.reduce((s, p) => s + p.amount, 0));
+  const openingBalance = round2(openingBalanceRows.reduce((sum, o) => sum + (o.balance_type === "Advance" ? -o.amount : o.amount), 0));
 
   return {
     ...c, history, payments, ledger,
-    openingBalance: 0, totalSales, totalPaymentReceived,
+    openingBalance, totalSales, totalPaymentReceived,
     outstandingReceivable: c.due, closingBalance: c.due
   };
 }
@@ -85,6 +97,49 @@ router.get("/:id/ledger/export", (req, res) => {
   res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   res.setHeader("Content-Disposition", `attachment; filename="${filename}.xlsx"`);
   res.send(buf);
+});
+
+/** Sets (or adds another) starting balance for this customer — Receivable
+ *  raises due, Advance lowers it. Not restricted to once, so a mistaken
+ *  entry can be voided and re-entered rather than being permanent. */
+router.post("/:id/opening-balance", (req, res) => {
+  const c = db.prepare("SELECT * FROM customers WHERE id = ?").get(req.params.id);
+  if (!c) return res.status(404).json({ error: "Customer not found." });
+  const amount = round2(Number(req.body.amount));
+  if (!amount || amount <= 0) return res.status(400).json({ error: "Enter a valid opening balance amount." });
+  const balanceType = req.body.balanceType === "Advance" ? "Advance" : "Receivable";
+  const date = (req.body.date || "").trim() || todayStr();
+  const remarks = (req.body.remarks || "").trim();
+
+  const id = uid("COB");
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO customer_opening_balances (id, customer_id, date, amount, balance_type, remarks, voided, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+    `).run(id, c.id, date, amount, balanceType, remarks, Date.now());
+    if (balanceType === "Advance") db.prepare("UPDATE customers SET due = MAX(0, due - ?) WHERE id = ?").run(amount, c.id);
+    else db.prepare("UPDATE customers SET due = due + ? WHERE id = ?").run(amount, c.id);
+  })();
+
+  logAction(req, "customer.opening_balance", `${c.name}: ${amount} (${balanceType})`);
+  res.status(201).json(db.prepare("SELECT * FROM customers WHERE id = ?").get(c.id));
+});
+
+router.post("/:id/opening-balance/:obId/void", requireRole("owner"), (req, res) => {
+  const c = db.prepare("SELECT * FROM customers WHERE id = ?").get(req.params.id);
+  if (!c) return res.status(404).json({ error: "Customer not found." });
+  const o = db.prepare("SELECT * FROM customer_opening_balances WHERE id = ? AND customer_id = ?").get(req.params.obId, c.id);
+  if (!o) return res.status(404).json({ error: "Opening balance entry not found." });
+  if (o.voided) return res.status(400).json({ error: "Already voided." });
+
+  db.transaction(() => {
+    db.prepare("UPDATE customer_opening_balances SET voided = 1 WHERE id = ?").run(o.id);
+    if (o.balance_type === "Advance") db.prepare("UPDATE customers SET due = due + ? WHERE id = ?").run(o.amount, c.id);
+    else db.prepare("UPDATE customers SET due = MAX(0, due - ?) WHERE id = ?").run(o.amount, c.id);
+  })();
+
+  logAction(req, "customer.opening_balance_void", `${c.name}: ${o.amount} (${o.balance_type})`);
+  res.json(db.prepare("SELECT * FROM customers WHERE id = ?").get(c.id));
 });
 
 router.post("/:id/payments", (req, res) => {

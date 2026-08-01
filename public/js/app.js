@@ -2036,6 +2036,7 @@ async function openCustomerDetail(customerId){
       ${detail.due>0 ? `<button class="btn btn-gold" id="record-payment-btn">Sale Payment</button>` : ""}
       <button class="btn btn-outline" id="print-ledger-btn">Print Ledger</button>
       <button class="btn btn-outline" id="export-ledger-btn">Export Excel</button>
+      <button class="btn btn-outline" id="opening-balance-btn">Opening Balance</button>
     </div>
     ${quotations.length ? `
     <div class="section-title">Quotations</div>
@@ -2084,6 +2085,7 @@ async function openCustomerDetail(customerId){
   });
   const recordPaymentBtn = sheet.querySelector("#record-payment-btn");
   if(recordPaymentBtn) recordPaymentBtn.addEventListener("click", ()=>openRecordPayment(detail));
+  sheet.querySelector("#opening-balance-btn").addEventListener("click", ()=>openCustomerOpeningBalance(detail));
   sheet.querySelector("#print-ledger-btn").addEventListener("click", ()=>printPartyLedger(detail,"Customer"));
   sheet.querySelector("#export-ledger-btn").addEventListener("click", ()=>{
     window.open(`/api/customers/${detail.id}/ledger/export`, "_blank");
@@ -2144,6 +2146,20 @@ function renderPartyLedgerRow(l, partyType, partyId){
       <div class="row-right"><div class="row-title" style="color:var(--danger);">+${fmt(l.amount)}</div><div class="muted" style="font-size:10.5px;">Bal ${fmt(l.runningBalance)}</div></div>
     </div>`;
   }
+  if(l.type==="opening_balance"){
+    // Sign follows Payable (raises due, red) vs Advance (lowers due, green) —
+    // amount is already stored signed the same way a purchase/payment would be.
+    const isDebit = l.amount >= 0;
+    return `<div class="list-row"><div>
+        <div class="row-title">Opening Balance — ${escapeHtml(l.label)}${l.note?" — "+escapeHtml(l.note):""}</div>
+        <div class="row-sub">${escapeHtml(l.date)}</div>
+      </div>
+      <div class="row-right" style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
+        <div class="row-title" style="color:${isDebit?"var(--danger)":"var(--ok)"};">${isDebit?"+":""}${fmt(l.amount)}</div>
+        <div class="muted" style="font-size:10.5px;">Bal ${fmt(l.runningBalance)}</div>
+        ${isOwner() ? `<a href="#" data-void-opening-balance="${l.id}" class="btn-danger-link" style="font-size:11px;">Void</a>` : ""}
+      </div></div>`;
+  }
   const subParts = [l.date, l.label];
   if(l.againstInvoiceNo) subParts.push("against "+l.againstInvoiceNo);
   if(l.referenceNo) subParts.push("Ref# "+l.referenceNo);
@@ -2189,6 +2205,19 @@ function wirePartyLedgerActions(sheet, detail, partyType){
       if(!entry) return;
       if(partyType==="customer") openRecordPayment(detail, entry);
       else openRecordPurchasePayment(detail, entry);
+    });
+  });
+  sheet.querySelectorAll("[data-void-opening-balance]").forEach(a=>{
+    a.addEventListener("click", async (e)=>{
+      e.preventDefault();
+      if(confirm("Void this opening balance entry? The due will be reversed back.")){
+        try{
+          await api("POST", `/${base}/${detail.id}/opening-balance/${a.dataset.voidOpeningBalance}/void`);
+          await reload();
+          await reopen(detail.id);
+          toast("Opening balance voided.", "ok");
+        }catch(err){ toast(err.message); }
+      }
     });
   });
 }
@@ -2379,6 +2408,56 @@ function openRecordPayment(customer, editEntry){
 }
 
 /* ============================================================
+   SHEET: Customer Opening Balance — mirrors openSupplierOpeningBalance
+   below, for the Debtor side. Receivable raises due, Advance lowers it.
+   ============================================================ */
+function openCustomerOpeningBalance(customer){
+  const sheet = document.getElementById("sheet-customer-opening-balance");
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">Customer Opening Balance</div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px;">${escapeHtml(customer.name)} · Current Due: ${fmt(customer.due)}</div>
+    <label class="field-label">Opening Date</label>
+    <input type="date" id="cob-date" value="${todayISO()}">
+    <label class="field-label">Opening Balance Amount (₹)</label>
+    <input type="number" inputmode="decimal" step="any" min="0" id="cob-amount" placeholder="0">
+    <label class="field-label">Balance Type</label>
+    <div class="chip-row" id="cob-type-chips">
+      <button class="chip selected" data-cob-type="Receivable">Receivable</button>
+      <button class="chip" data-cob-type="Advance">Advance</button>
+    </div>
+    <label class="field-label">Remarks <span class="muted" style="font-weight:400;">— optional</span></label>
+    <input type="text" id="cob-remarks" placeholder="e.g. Carried forward from previous system">
+    <button class="btn btn-primary" id="cob-save" style="margin-top:16px;">Save Opening Balance</button>
+  `;
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  sheet.querySelectorAll("[data-cob-type]").forEach(b=>b.addEventListener("click", ()=>{
+    sheet.querySelectorAll("[data-cob-type]").forEach(x=>x.classList.remove("selected"));
+    b.classList.add("selected");
+  }));
+  sheet.querySelector("#cob-save").addEventListener("click", async ()=>{
+    const amount = parseFloat(document.getElementById("cob-amount").value);
+    if(!amount || amount<=0){ toast("Enter a valid opening balance amount."); return; }
+    const btn = document.getElementById("cob-save");
+    btn.disabled = true;
+    try{
+      await api("POST", `/customers/${customer.id}/opening-balance`, {
+        date: document.getElementById("cob-date").value,
+        amount, balanceType: sheet.querySelector("[data-cob-type].selected").dataset.cobType,
+        remarks: document.getElementById("cob-remarks").value.trim()
+      });
+      await loadCustomers();
+      closeAllSheets();
+      await openCustomerDetail(customer.id);
+      toast("Opening balance saved.", "ok");
+    }catch(err){ toast(err.message); }
+    finally{ btn.disabled = false; }
+  });
+  showSheet("sheet-customer-opening-balance");
+}
+
+/* ============================================================
    SHEET: Supplier Detail (ledger + Purchase Payment)
    ============================================================ */
 async function openSupplierDetail(supplierId){
@@ -2402,6 +2481,7 @@ async function openSupplierDetail(supplierId){
       ${detail.due>0 ? `<button class="btn btn-gold" id="record-purchase-payment-btn">Purchase Payment</button>` : ""}
       <button class="btn btn-outline" id="print-ledger-btn">Print Ledger</button>
       <button class="btn btn-outline" id="export-ledger-btn">Export Excel</button>
+      <button class="btn btn-outline" id="opening-balance-btn">Opening Balance</button>
     </div>
     ${pos.length ? `
     <div class="section-title">Purchase Orders</div>
@@ -2422,6 +2502,7 @@ async function openSupplierDetail(supplierId){
   sheet.querySelector("#edit-supplier-btn").addEventListener("click", ()=>{ closeAllSheets(); openAddSupplier(detail); });
   const recordPaymentBtn = sheet.querySelector("#record-purchase-payment-btn");
   if(recordPaymentBtn) recordPaymentBtn.addEventListener("click", ()=>openRecordPurchasePayment(detail));
+  sheet.querySelector("#opening-balance-btn").addEventListener("click", ()=>openSupplierOpeningBalance(detail));
   sheet.querySelector("#print-ledger-btn").addEventListener("click", ()=>printPartyLedger(detail,"Supplier"));
   sheet.querySelector("#export-ledger-btn").addEventListener("click", ()=>{
     window.open(`/api/suppliers/${detail.id}/ledger/export`, "_blank");
@@ -2548,6 +2629,58 @@ function openRecordPurchasePayment(supplier, editEntry){
     finally{ btn.disabled = false; }
   });
   showSheet("sheet-record-purchase-payment");
+}
+
+/* ============================================================
+   SHEET: Supplier Opening Balance — a starting Payable/Advance for a
+   supplier just added to the system with an existing real-world balance.
+   Feeds straight into the same due/ledger/Total Payables/Dashboard figures
+   a real purchase or payment already does.
+   ============================================================ */
+function openSupplierOpeningBalance(supplier){
+  const sheet = document.getElementById("sheet-supplier-opening-balance");
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">Supplier Opening Balance</div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px;">${escapeHtml(supplier.name)} · Current Due: ${fmt(supplier.due)}</div>
+    <label class="field-label">Opening Date</label>
+    <input type="date" id="sob-date" value="${todayISO()}">
+    <label class="field-label">Opening Balance Amount (₹)</label>
+    <input type="number" inputmode="decimal" step="any" min="0" id="sob-amount" placeholder="0">
+    <label class="field-label">Balance Type</label>
+    <div class="chip-row" id="sob-type-chips">
+      <button class="chip selected" data-sob-type="Payable">Payable</button>
+      <button class="chip" data-sob-type="Advance">Advance</button>
+    </div>
+    <label class="field-label">Remarks <span class="muted" style="font-weight:400;">— optional</span></label>
+    <input type="text" id="sob-remarks" placeholder="e.g. Carried forward from previous system">
+    <button class="btn btn-primary" id="sob-save" style="margin-top:16px;">Save Opening Balance</button>
+  `;
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  sheet.querySelectorAll("[data-sob-type]").forEach(b=>b.addEventListener("click", ()=>{
+    sheet.querySelectorAll("[data-sob-type]").forEach(x=>x.classList.remove("selected"));
+    b.classList.add("selected");
+  }));
+  sheet.querySelector("#sob-save").addEventListener("click", async ()=>{
+    const amount = parseFloat(document.getElementById("sob-amount").value);
+    if(!amount || amount<=0){ toast("Enter a valid opening balance amount."); return; }
+    const btn = document.getElementById("sob-save");
+    btn.disabled = true;
+    try{
+      await api("POST", `/suppliers/${supplier.id}/opening-balance`, {
+        date: document.getElementById("sob-date").value,
+        amount, balanceType: sheet.querySelector("[data-sob-type].selected").dataset.sobType,
+        remarks: document.getElementById("sob-remarks").value.trim()
+      });
+      await loadSuppliers();
+      closeAllSheets();
+      await openSupplierDetail(supplier.id);
+      toast("Opening balance saved.", "ok");
+    }catch(err){ toast(err.message); }
+    finally{ btn.disabled = false; }
+  });
+  showSheet("sheet-supplier-opening-balance");
 }
 
 /* ============================================================

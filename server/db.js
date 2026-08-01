@@ -585,6 +585,24 @@ CREATE TABLE IF NOT EXISTS print_jobs (
   finished_at INTEGER
 );
 
+-- Customer Inquiry Book: a walk-in/phone lead, logged before there's
+-- necessarily a real Customer record or a sale at all -- customer_name and
+-- mobile are plain text (not a link to customers) for exactly that reason.
+-- "voided" instead of a hard delete, matching every other list in this app.
+CREATE TABLE IF NOT EXISTS inquiries (
+  id TEXT PRIMARY KEY,
+  inquiry_no TEXT UNIQUE NOT NULL,
+  date TEXT NOT NULL,
+  time TEXT NOT NULL DEFAULT '',
+  customer_name TEXT NOT NULL,
+  mobile TEXT NOT NULL DEFAULT '',
+  company_name TEXT DEFAULT '',
+  salesperson TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'Open' CHECK (status IN ('Open', 'Follow-up', 'Converted to Sale', 'Closed')),
+  voided INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_invoices_date ON invoices(date);
 CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice ON invoice_items(invoice_id);
 CREATE INDEX IF NOT EXISTS idx_product_sizes_product ON product_sizes(product_id);
@@ -597,6 +615,7 @@ CREATE INDEX IF NOT EXISTS idx_quotation_items_quotation ON quotation_items(quot
 CREATE INDEX IF NOT EXISTS idx_sales_order_items_so ON sales_order_items(so_id);
 CREATE INDEX IF NOT EXISTS idx_sales_return_items_return ON sales_return_items(return_id);
 CREATE INDEX IF NOT EXISTS idx_sales_returns_invoice ON sales_returns(invoice_id);
+CREATE INDEX IF NOT EXISTS idx_inquiries_date ON inquiries(date);
 `);
 
 /* ------------------------------------------------------------------

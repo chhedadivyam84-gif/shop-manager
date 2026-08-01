@@ -53,6 +53,7 @@ let state = {
   paperSize: "A5", editingInvoiceId: null,
   cbFrom: "", cbTo: "", cbEntries: [],
   bbFrom: "", bbTo: "", bbEntries: [], bankAccounts: [], bbAccountId: null,
+  inqStatus: "All", inquiries: [], staffNames: [],
   // Purchase Entry (Phase 1) — a standalone cart, separate from state.cart
   // (Billing's sales cart), since a purchase invoice's line shape (per-line
   // discount, GST computed forward not backed-out, no stock cap) differs from
@@ -399,6 +400,9 @@ async function initApp(){
     window.open("/api/bankbook/export" + (q?"?"+q:""), "_blank");
   });
 
+  document.getElementById("inq-back-link").addEventListener("click", (e)=>{ e.preventDefault(); switchTab("home"); });
+  document.getElementById("inq-add-btn").addEventListener("click", ()=>openInquiry());
+
   document.getElementById("pur-back-link").addEventListener("click", (e)=>{ e.preventDefault(); switchTab("home"); });
   document.getElementById("pur-supplier-search").addEventListener("input", renderPurchaseSuppliers);
   document.getElementById("pur-search").addEventListener("input", renderPurchaseProducts);
@@ -571,7 +575,7 @@ async function switchTab(tab){
   document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));
   document.getElementById("screen-"+tab).classList.add("active");
   document.querySelectorAll("nav.bottom .tab").forEach(t=>t.classList.toggle("active", t.dataset.tab===tab));
-  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",purchase:"New Purchase",po:"Purchase Order",quotation:"Quotation",so:"Sales Order"};
+  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",quotation:"Quotation",so:"Sales Order"};
   document.getElementById("hdr-sub").textContent = subMap[tab];
   document.getElementById("hdr-main").textContent = tab==="home" ? greeting() : subMap[tab];
   if(tab==="billing") await renderBilling();
@@ -580,6 +584,7 @@ async function switchTab(tab){
   if(tab==="reports") await renderReport();
   if(tab==="cashbook") await renderCashBook();
   if(tab==="bankbook") await renderBankBook();
+  if(tab==="inquiries") await renderInquiries();
   if(tab==="purchase") await renderPurchaseScreen();
   if(tab==="po") await renderPoScreen();
   if(tab==="quotation") await renderQuotationScreen();
@@ -587,7 +592,7 @@ async function switchTab(tab){
 }
 
 async function renderAll(){
-  await Promise.all([loadProducts(), loadCustomers(), loadSuppliers(), loadLocations(), loadBankAccounts()]);
+  await Promise.all([loadProducts(), loadCustomers(), loadSuppliers(), loadLocations(), loadBankAccounts(), loadStaffNames()]);
   await renderHome();
   const activeTab = document.querySelector("nav.bottom .tab.active");
   const tab = activeTab ? activeTab.dataset.tab : "home";
@@ -601,6 +606,11 @@ async function loadCustomers(){ state.customers = await api("GET","/customers");
 async function loadSuppliers(){ state.suppliers = await api("GET","/suppliers"); }
 async function loadLocations(){ state.locations = await api("GET","/locations"); }
 async function loadBankAccounts(){ state.bankAccounts = await api("GET","/bank-accounts"); }
+// Public regardless of login flow (the login screen's own staffList variable
+// isn't guaranteed populated when boot() resumes an existing session without
+// ever showing the PIN screen), so the Inquiry Book's salesperson picker
+// fetches its own copy here instead of relying on that one.
+async function loadStaffNames(){ state.staffNames = await api("GET","/auth/staff-list").catch(()=>[]); }
 
 /* ============================================================
    HOME
@@ -4648,6 +4658,127 @@ function printBankBook(){
   const w = window.open("", "_blank");
   w.document.write(html);
   w.document.close();
+}
+
+/* ============================================================
+   CUSTOMER INQUIRY BOOK
+   ============================================================ */
+const INQUIRY_STATUSES = ["Open","Follow-up","Converted to Sale","Closed"];
+function inquiryStatusPillClass(status){
+  if(status==="Converted to Sale") return "ok";
+  if(status==="Closed") return "";
+  return "warn"; // Open, Follow-up — both still need action
+}
+function nowTimeInputValue(){
+  const d = new Date();
+  return String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");
+}
+async function renderInquiries(){
+  const wrap = document.getElementById("inq-status-chips");
+  wrap.innerHTML = ["All",...INQUIRY_STATUSES].map(s=>`
+    <button class="chip ${state.inqStatus===s?'selected':''}" data-inq-status="${escapeHtml(s)}">${escapeHtml(s)}</button>
+  `).join("");
+  wrap.querySelectorAll("[data-inq-status]").forEach(b=>{
+    b.addEventListener("click", ()=>{
+      state.inqStatus = b.dataset.inqStatus;
+      renderInquiries();
+    });
+  });
+
+  const q = state.inqStatus!=="All" ? "?status="+encodeURIComponent(state.inqStatus) : "";
+  try{ state.inquiries = await api("GET", "/inquiries"+q); }
+  catch(e){ toast(e.message); return; }
+  renderInquiryList(state.inquiries);
+}
+function renderInquiryList(list){
+  document.getElementById("inquiries-list").innerHTML = list.length ? list.map(i=>`
+    <div class="list-row" data-inq="${i.id}" style="cursor:pointer;">
+      <div>
+        <div class="row-title">${escapeHtml(i.customer_name)}</div>
+        <div class="row-sub">${escapeHtml(i.inquiry_no)} · ${i.date}${i.time?" "+i.time:""}</div>
+        <div class="row-sub">${[i.mobile, i.company_name, i.salesperson].filter(Boolean).map(escapeHtml).join(" · ")}</div>
+      </div>
+      <div class="row-right"><span class="pill ${inquiryStatusPillClass(i.status)}">${escapeHtml(i.status)}</span></div>
+    </div>
+  `).join("") : `<div class="empty-hint">No inquiries yet. Tap "+ New Inquiry" to log one.</div>`;
+  document.querySelectorAll("[data-inq]").forEach(el=>{
+    el.addEventListener("click", ()=>{
+      const inq = state.inquiries.find(i=>i.id===el.dataset.inq);
+      if(inq) openInquiry(inq);
+    });
+  });
+}
+/** One sheet serves both "add" (editEntry omitted) and "edit" of an inquiry. */
+function openInquiry(editEntry){
+  const sheet = document.getElementById("sheet-inquiry");
+  const e = editEntry;
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">${e?"Edit Inquiry":"New Inquiry"}</div>
+    ${e?`<div class="muted" style="font-size:12px;margin-bottom:10px;">${escapeHtml(e.inquiry_no)}</div>`:""}
+    <div class="charge-grid">
+      <label class="dim"><span>Date</span><input type="date" id="inq-date" value="${e?e.date:todayISO()}"></label>
+      <label class="dim"><span>Time</span><input type="time" id="inq-time" value="${e?e.time:nowTimeInputValue()}"></label>
+    </div>
+    <label class="field-label">Customer Name</label>
+    <input type="text" id="inq-customer" value="${e?escapeHtml(e.customer_name):""}" placeholder="e.g. Ramesh Sharma">
+    <label class="field-label">Mobile Number</label>
+    <input type="tel" id="inq-mobile" value="${e?escapeHtml(e.mobile||""):""}" placeholder="e.g. 9876543210">
+    <label class="field-label">Company Name <span class="muted" style="font-weight:400;">— optional</span></label>
+    <input type="text" id="inq-company" value="${e?escapeHtml(e.company_name||""):""}" placeholder="e.g. ABC Constructions">
+    <label class="field-label">Salesperson</label>
+    <div class="chip-row" id="inq-salesperson-chips">
+      ${state.staffNames.map(s=>`<button class="chip ${(e?e.salesperson===s.name:s.name===state.me.staffName)?'selected':''}" data-inq-salesperson="${escapeHtml(s.name)}">${escapeHtml(s.name)}</button>`).join("")}
+    </div>
+    <label class="field-label">Status</label>
+    <div class="chip-row" id="inq-status-form-chips">
+      ${INQUIRY_STATUSES.map(s=>`<button class="chip ${(e?e.status:"Open")===s?'selected':''}" data-inq-status-form="${escapeHtml(s)}">${escapeHtml(s)}</button>`).join("")}
+    </div>
+    <button class="btn btn-primary" id="inq-save" style="margin-top:16px;">${e?"Update Inquiry":"Save Inquiry"}</button>
+    ${e && isOwner() ? `<div style="margin-top:12px;text-align:center;"><a href="#" id="inq-delete-link" class="btn-danger-link">Delete this inquiry</a></div>` : ""}
+  `;
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  wireChipGroup(sheet, "#inq-salesperson-chips", "[data-inq-salesperson]");
+  wireChipGroup(sheet, "#inq-status-form-chips", "[data-inq-status-form]");
+  sheet.querySelector("#inq-save").addEventListener("click", async ()=>{
+    const customerName = document.getElementById("inq-customer").value.trim();
+    if(!customerName){ toast("Enter the customer's name."); return; }
+    const btn = document.getElementById("inq-save");
+    btn.disabled = true;
+    try{
+      const salespersonEl = sheet.querySelector("#inq-salesperson-chips [data-inq-salesperson].selected");
+      const statusEl = sheet.querySelector("#inq-status-form-chips [data-inq-status-form].selected");
+      const payload = {
+        date: document.getElementById("inq-date").value,
+        time: document.getElementById("inq-time").value,
+        customerName,
+        mobile: document.getElementById("inq-mobile").value.trim(),
+        companyName: document.getElementById("inq-company").value.trim(),
+        salesperson: salespersonEl ? salespersonEl.dataset.inqSalesperson : "",
+        status: statusEl ? statusEl.dataset.inqStatusForm : "Open"
+      };
+      if(e) await api("PUT", `/inquiries/${e.id}`, payload);
+      else await api("POST", "/inquiries", payload);
+      closeAllSheets();
+      await renderInquiries();
+      toast(e?"Inquiry updated.":"Inquiry saved.", "ok");
+    }catch(err){ toast(err.message); }
+    finally{ btn.disabled = false; }
+  });
+  const deleteLink = sheet.querySelector("#inq-delete-link");
+  if(deleteLink) deleteLink.addEventListener("click", async (ev)=>{
+    ev.preventDefault();
+    if(confirm("Delete this inquiry? This can't be undone from here.")){
+      try{
+        await api("POST", `/inquiries/${e.id}/void`);
+        closeAllSheets();
+        await renderInquiries();
+        toast("Inquiry deleted.", "ok");
+      }catch(err){ toast(err.message); }
+    }
+  });
+  showSheet("sheet-inquiry");
 }
 
 /* ============================================================

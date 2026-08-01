@@ -70,6 +70,7 @@
           <button class="qa-btn" data-goto="quotation"><span class="ic">&#128221;</span>Quotation</button>
           <button class="qa-btn" data-goto="so"><span class="ic">&#128197;</span>Sales Order</button>
           <button class="qa-btn" data-goto="bankbook"><span class="ic">&#127974;</span>Bank Book</button>
+          <button class="qa-btn" data-goto="inquiries"><span class="ic">&#128222;</span>Inquiries</button>
           <button class="qa-btn" data-goto="inventory"><span class="ic">&#128230;</span>Inventory</button>
           <button class="qa-btn" data-inv-location-goto="shop"><span class="ic">&#127978;</span>Shop Stock</button>
           <button class="qa-btn" data-inv-location-goto="warehouse"><span class="ic">&#127974;</span>Warehouse Stock</button>
@@ -308,6 +309,16 @@
           <button class="btn btn-outline" id="bb-print-btn" style="flex:1;">Print</button>
           <button class="btn btn-outline" id="bb-export-btn" style="flex:1;">Export Excel (.xlsx)</button>
         </div>
+      </div>
+
+      <!-- CUSTOMER INQUIRY BOOK -->
+      <div class="screen" id="screen-inquiries">
+        <a href="#" id="inq-back-link" class="muted" style="font-size:12px;font-weight:700;">&larr; Back to Home</a>
+        <div class="section-title" style="margin-top:10px;">Customer Inquiry Book</div>
+        <div class="chip-row" id="inq-status-chips"></div>
+        <button class="btn btn-gold" id="inq-add-btn" style="margin-top:12px;">+ New Inquiry</button>
+        <div class="section-title">Inquiries</div>
+        <div class="card" id="inquiries-list"></div>
       </div>
 
       <!-- PURCHASE ENTRY -->
@@ -642,6 +653,7 @@
   <div class="sheet" id="sheet-cash-entry"></div>
   <div class="sheet" id="sheet-bank-entry"></div>
   <div class="sheet" id="sheet-bank-account"></div>
+  <div class="sheet" id="sheet-inquiry"></div>
   <div class="sheet" id="sheet-purchase-detail"></div>
   <div class="sheet" id="sheet-po-detail"></div>
   <div class="sheet" id="sheet-quotation-detail"></div>

@@ -4572,8 +4572,10 @@ function openBankEntry(editEntry){
    ------------------------------------------------------------------ */
 function openManageBankAccounts(){
   const sheet = document.getElementById("sheet-bank-account");
+  let editingId = null;
   const renderList = () => {
     const accounts = state.bankAccounts||[];
+    const editing = editingId ? accounts.find(a=>a.id===editingId) : null;
     sheet.innerHTML = `
       <div class="sheet-handle"></div>
       <button class="sheet-close" data-sheetclose>✕</button>
@@ -4587,23 +4589,38 @@ function openManageBankAccounts(){
             </div>
             <div class="row-right" style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
               <div class="row-title">${fmt(a.balance)}</div>
-              ${isOwner() ? `<a href="#" data-bam-toggle="${a.id}" data-bam-active="${a.active}" style="font-size:11px;">${a.active?"Archive":"Reactivate"}</a>` : ""}
+              <div style="display:flex;gap:10px;">
+                <a href="#" data-bam-edit="${a.id}" style="font-size:11px;">Edit</a>
+                ${isOwner() ? `<a href="#" data-bam-toggle="${a.id}" data-bam-active="${a.active}" style="font-size:11px;">${a.active?"Archive":"Reactivate"}</a>` : ""}
+              </div>
             </div>
           </div>
         `).join("") : `<div class="empty-hint">No bank accounts yet.</div>`}
       </div>
-      <div class="section-title" style="margin-top:0;">Add Account</div>
+      <div class="section-title" style="margin-top:0;">${editing?"Edit Account":"Add Account"}</div>
       <label class="field-label">Account Name</label>
-      <input type="text" id="bam-name" placeholder="e.g. HDFC Current A/c">
+      <input type="text" id="bam-name" value="${editing?escapeHtml(editing.name):""}" placeholder="e.g. HDFC Current A/c">
       <label class="field-label">Bank Name <span class="muted" style="font-weight:400;">— optional</span></label>
-      <input type="text" id="bam-bank-name" placeholder="e.g. HDFC Bank">
+      <input type="text" id="bam-bank-name" value="${editing?escapeHtml(editing.bank_name||""):""}" placeholder="e.g. HDFC Bank">
       <label class="field-label">Account No. <span class="muted" style="font-weight:400;">— optional</span></label>
-      <input type="text" id="bam-account-no" placeholder="">
+      <input type="text" id="bam-account-no" value="${editing?escapeHtml(editing.account_no||""):""}" placeholder="">
       <label class="field-label">Opening Balance (₹) <span class="muted" style="font-weight:400;">— optional</span></label>
-      <input type="number" inputmode="decimal" step="any" id="bam-opening" placeholder="0">
-      <button class="btn btn-primary" id="bam-save" style="margin-top:16px;">Add Account</button>
+      <input type="number" inputmode="decimal" step="any" id="bam-opening" value="${editing?editing.opening_balance:""}" placeholder="0">
+      <button class="btn btn-primary" id="bam-save" style="margin-top:16px;">${editing?"Update Account":"Add Account"}</button>
+      ${editing ? `<div style="margin-top:10px;text-align:center;"><a href="#" id="bam-cancel-edit">Cancel edit</a></div>` : ""}
     `;
     sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+    sheet.querySelectorAll("[data-bam-edit]").forEach(link=>link.addEventListener("click", (ev)=>{
+      ev.preventDefault();
+      editingId = link.dataset.bamEdit;
+      renderList();
+    }));
+    const cancelLink = sheet.querySelector("#bam-cancel-edit");
+    if(cancelLink) cancelLink.addEventListener("click", (ev)=>{
+      ev.preventDefault();
+      editingId = null;
+      renderList();
+    });
     sheet.querySelectorAll("[data-bam-toggle]").forEach(link=>link.addEventListener("click", async (ev)=>{
       ev.preventDefault();
       const nowActive = link.dataset.bamActive !== "1";
@@ -4621,16 +4638,19 @@ function openManageBankAccounts(){
       const btn = document.getElementById("bam-save");
       btn.disabled = true;
       try{
-        await api("POST", "/bank-accounts", {
+        const payload = {
           name,
           bankName: document.getElementById("bam-bank-name").value.trim(),
           accountNo: document.getElementById("bam-account-no").value.trim(),
           openingBalance: parseFloat(document.getElementById("bam-opening").value) || 0
-        });
+        };
+        if(editing) await api("PUT", `/bank-accounts/${editing.id}`, payload);
+        else await api("POST", "/bank-accounts", payload);
+        editingId = null;
         await loadBankAccounts();
         renderList();
         renderBankAccountChips();
-        toast("Bank account added.", "ok");
+        toast(editing?"Bank account updated.":"Bank account added.", "ok");
       }catch(err){ toast(err.message); }
       finally{ btn.disabled = false; }
     });

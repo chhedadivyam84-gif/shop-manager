@@ -274,6 +274,74 @@ router.get("/party-wise", (req, res) => {
 });
 
 /**
+ * Party-wise Product report: every product sold to each customer, or bought
+ * from each supplier, grouped so the screen can show "this party bought/
+ * sold these products in these quantities" rather than just one lump total
+ * per party. The purchase side merges BOTH purchase systems (stock_ins and
+ * purchase_items — see getLatestCost's comment above for why both exist),
+ * summed together per (supplier, product) pair so a product bought through
+ * both isn't split into two confusing rows.
+ */
+router.get("/party-product", (req, res) => {
+  const type = req.query.type === "purchases" ? "purchases" : "sales";
+
+  if (type === "sales") {
+    const rows = db.prepare(`
+      SELECT COALESCE(c.id, '') AS partyId, COALESCE(c.name, 'Walk-in') AS party,
+        ii.name AS product, ii.unit_label AS unit,
+        SUM(ii.pieces) AS qty, SUM(ii.qty * ii.rate) AS amount
+      FROM invoice_items ii
+      JOIN invoices i ON i.id = ii.invoice_id
+      LEFT JOIN customers c ON c.id = i.customer_id
+      WHERE i.voided = 0 AND i.doc_type = 'invoice'
+      GROUP BY COALESCE(c.id, ''), ii.name
+    `).all();
+    return res.json(groupByParty(rows));
+  }
+
+  const fromStockIns = db.prepare(`
+    SELECT COALESCE(s.id, '') AS partyId, COALESCE(s.name, 'Unknown Supplier') AS party,
+      si.product_name AS product, '' AS unit, si.qty AS qty, si.qty * si.cost_price AS amount
+    FROM stock_ins si LEFT JOIN suppliers s ON s.id = si.supplier_id
+  `).all();
+  const fromPurchaseItems = db.prepare(`
+    SELECT COALESCE(s.id, '') AS partyId, COALESCE(s.name, 'Unknown Supplier') AS party,
+      pi.name AS product, pi.unit_label AS unit, pi.pieces AS qty,
+      (pi.qty * pi.rate - pi.discount_amount) AS amount
+    FROM purchase_items pi
+    JOIN purchases p ON p.id = pi.purchase_id
+    LEFT JOIN suppliers s ON s.id = p.supplier_id
+    WHERE p.voided = 0
+  `).all();
+
+  const merged = new Map();
+  [...fromStockIns, ...fromPurchaseItems].forEach(r => {
+    const key = r.partyId + "|" + r.product;
+    const existing = merged.get(key);
+    if (existing) { existing.qty += r.qty; existing.amount += r.amount; }
+    else merged.set(key, { ...r });
+  });
+  res.json(groupByParty([...merged.values()]));
+});
+
+/** Rolls flat {partyId, party, product, unit, qty, amount} rows into one
+ *  entry per party with a nested product list, sorted by that party's
+ *  total amount (highest business first), each party's products likewise. */
+function groupByParty(rows) {
+  const parties = new Map();
+  rows.forEach(r => {
+    if (!parties.has(r.partyId)) parties.set(r.partyId, { partyId: r.partyId, party: r.party, total: 0, products: [] });
+    const p = parties.get(r.partyId);
+    p.total = round2(p.total + r.amount);
+    p.products.push({ product: r.product, unit: r.unit, qty: round2(r.qty), amount: round2(r.amount) });
+  });
+  const result = [...parties.values()];
+  result.forEach(p => p.products.sort((a, b) => b.amount - a.amount));
+  result.sort((a, b) => b.total - a.total);
+  return result;
+}
+
+/**
  * Profit per sold item, following the standard GST-exclusive method:
  *   Purchase Amount = purchase rate × qty (GST added separately as Purchase GST)
  *   Sales Amount     = sale rate × qty     (GST added separately as Sales GST)

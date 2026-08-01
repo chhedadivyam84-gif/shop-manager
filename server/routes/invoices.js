@@ -12,13 +12,19 @@ function getSettingsRow() {
   return db.prepare("SELECT * FROM settings WHERE id = 1").get();
 }
 
-// A sale always deducts from Shop stock specifically — Warehouse stock is
-// never touched by a sales invoice or delivery challan (see requirement:
-// invoices deduct ONLY from Shop). Looked up fresh rather than cached at
-// module load, since it's one cheap indexed query and avoids any load-order
-// fragility with db.js's own location-seeding migration.
+// A sale defaults to deducting Shop stock, but staff can pick Warehouse
+// instead per-document (requirement: "sale to warehouse") — mirrors
+// purchases.js's resolveLocationId, just defaulting to Shop instead of
+// Warehouse, since Shop was every invoice's only option before this existed.
 function shopLocationId() {
   return inventory.getLocationByCode("shop").id;
+}
+function resolveLocationId(requestedId) {
+  if (requestedId) {
+    const loc = inventory.getLocationById(requestedId);
+    if (loc && loc.active) return loc.id;
+  }
+  return shopLocationId();
 }
 
 // Stock lives on product_sizes; products.stock is kept as a denormalised sum
@@ -139,9 +145,10 @@ router.get("/:id", (req, res) => {
 router.post("/", (req, res) => {
   const { customerId, items: rawItems, discountType, discountValue, advance,
           paymentMethod, paperSize, transport, loading, roundOff, deliveryMan,
-          vehicleNumber, deliveryAddress, remarks, taxType: taxTypeOverride } = req.body;
+          vehicleNumber, deliveryAddress, remarks, taxType: taxTypeOverride, locationId } = req.body;
   const docType = req.body.docType === "challan" ? "challan" : "invoice";
   const isChallan = docType === "challan";
+  const location = resolveLocationId(locationId);
   // Defaults ON (matches the always-taxed behaviour before this toggle
   // existed) unless the client explicitly turns it off.
   const gstOnCharges = req.body.gstOnCharges !== false;
@@ -208,14 +215,14 @@ router.post("/", (req, res) => {
       ...calc
     });
   }
-  const shop = shopLocationId();
+  const locationName = inventory.getLocationById(location).name;
   for (const [sizeId, pieces] of Object.entries(piecesBySize)) {
     const size = db.prepare("SELECT * FROM product_sizes WHERE id = ?").get(sizeId);
     const product = db.prepare("SELECT * FROM products WHERE id = ?").get(size.product_id);
-    const shopStock = inventory.getStock(Number(sizeId), shop);
-    if (pieces > shopStock) {
+    const atLocation = inventory.getStock(Number(sizeId), location);
+    if (pieces > atLocation) {
       return res.status(400).json({
-        error: `Not enough Shop stock for ${product.name} (${size.label}). Available: ${shopStock} ${product.unit || "Pc"}, needed: ${pieces}.`
+        error: `Not enough ${locationName} stock for ${product.name} (${size.label}). Available: ${atLocation} ${product.unit || "Pc"}, needed: ${pieces}.`
       });
     }
   }
@@ -243,10 +250,10 @@ router.post("/", (req, res) => {
   const insertInvoice = db.prepare(`
     INSERT INTO invoices (id, challan_no, doc_type, date, created_at, customer_id, subtotal, discount_type, discount_value,
       discount_amount, tax_type, cgst, sgst, igst, transport, loading, gst_on_charges, round_off, total, advance, balance_due,
-      payment_method, paper_size, delivery_man, vehicle_number, delivery_address, remarks)
+      payment_method, paper_size, delivery_man, vehicle_number, delivery_address, remarks, location_id)
     VALUES (@id, @challanNo, @docType, @date, @createdAt, @customerId, @subtotal, @discountType, @discountValue,
       @discountAmount, @taxType, @cgst, @sgst, @igst, @transport, @loading, @gstOnCharges, @roundOffAmount, @total, @advance,
-      @balanceDue, @paymentMethod, @paperSize, @deliveryMan, @vehicleNumber, @deliveryAddress, @remarks)
+      @balanceDue, @paymentMethod, @paperSize, @deliveryMan, @vehicleNumber, @deliveryAddress, @remarks, @locationId)
   `);
   const insertItem = db.prepare(`
     INSERT INTO invoice_items
@@ -271,7 +278,8 @@ router.post("/", (req, res) => {
       deliveryMan: (deliveryMan || "").trim(),
       vehicleNumber: (vehicleNumber || "").trim(),
       deliveryAddress: (deliveryAddress || "").trim(),
-      remarks: (remarks || "").trim()
+      remarks: (remarks || "").trim(),
+      locationId: location
     });
     items.forEach(it => insertItem.run(
       id, it.productId, it.sizeId, it.name, it.code, it.brand, it.hsnCode, it.mode,
@@ -284,11 +292,12 @@ router.post("/", (req, res) => {
       it.billedQty, it.rate, it.gstRate
     ));
     // Stock moves in pieces, not in billed area/length/volume — for a challan
-    // too, since the goods physically leave the shop. Deducted per SIZE from
-    // Shop specifically, then each touched product's total is resynced.
+    // too, since the goods physically leave the shop or warehouse. Deducted
+    // per SIZE from this invoice's own location, then each touched product's
+    // total is resynced.
     const touchedProducts = new Set();
     Object.entries(piecesBySize).forEach(([sizeId, pieces]) => {
-      inventory.addStock(Number(sizeId), shop, -pieces);
+      inventory.addStock(Number(sizeId), location, -pieces);
       const size = db.prepare("SELECT product_id FROM product_sizes WHERE id = ?").get(sizeId);
       if (size) touchedProducts.add(size.product_id);
     });
@@ -318,7 +327,7 @@ router.put("/:id", (req, res) => {
 
   const { customerId, items: rawItems, discountType, discountValue, advance,
           paymentMethod, paperSize, transport, loading, roundOff, deliveryMan,
-          vehicleNumber, deliveryAddress, remarks, taxType: taxTypeOverride } = req.body;
+          vehicleNumber, deliveryAddress, remarks, taxType: taxTypeOverride, locationId } = req.body;
   const gstOnCharges = req.body.gstOnCharges !== false;
 
   if (!Array.isArray(rawItems) || !rawItems.length) {
@@ -347,15 +356,20 @@ router.put("/:id", (req, res) => {
        size_label, pieces, per_piece, unit_label, qty, rate, gst_rate)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const shop = shopLocationId();
+  // The OLD location this document actually deducted from — never the NEW
+  // requested one — so reversal always undoes what really happened. Falls
+  // back to Shop for a document saved before location_id existed.
+  const oldLocation = inv.location_id || shopLocationId();
+  const newLocation = resolveLocationId(locationId);
 
   const runEdit = db.transaction(() => {
-    // 1. Reverse the OLD stock impact — Shop stock now reflects "as if this
-    //    document never existed", so the new items validate against true
-    //    availability rather than double-counting what this edit removes.
+    // 1. Reverse the OLD stock impact at the OLD location — stock now
+    //    reflects "as if this document never existed", so the new items
+    //    validate against true availability rather than double-counting
+    //    what this edit removes.
     const touchedProducts = new Set();
     oldItems.forEach(it => {
-      if (it.size_id) { inventory.addStock(it.size_id, shop, it.pieces); touchedProducts.add(it.product_id); }
+      if (it.size_id) { inventory.addStock(it.size_id, oldLocation, it.pieces); touchedProducts.add(it.product_id); }
       else if (it.product_id) restoreProduct.run(it.pieces, it.product_id);
     });
 
@@ -386,12 +400,13 @@ router.put("/:id", (req, res) => {
         gstRate: product.gst_rate, product, size, ...calc
       });
     }
+    const newLocationName = inventory.getLocationById(newLocation).name;
     for (const [sizeId, pieces] of Object.entries(piecesBySize)) {
       const size = db.prepare("SELECT * FROM product_sizes WHERE id = ?").get(sizeId);
       const product = db.prepare("SELECT * FROM products WHERE id = ?").get(size.product_id);
-      const shopStock = inventory.getStock(Number(sizeId), shop);
-      if (pieces > shopStock) {
-        throw { status: 400, error: `Not enough Shop stock for ${product.name} (${size.label}). Available: ${shopStock} ${product.unit || "Pc"}, needed: ${pieces}.` };
+      const atLocation = inventory.getStock(Number(sizeId), newLocation);
+      if (pieces > atLocation) {
+        throw { status: 400, error: `Not enough ${newLocationName} stock for ${product.name} (${size.label}). Available: ${atLocation} ${product.unit || "Pc"}, needed: ${pieces}.` };
       }
     }
 
@@ -419,9 +434,10 @@ router.put("/:id", (req, res) => {
       it.sizeLabel, it.pieces, it.perPiece, it.unit, it.billedQty, it.rate, it.gstRate
     ));
 
-    // 5. Deduct Shop stock for the NEW items and resync affected product totals.
+    // 5. Deduct stock for the NEW items at the NEW location and resync
+    //    affected product totals.
     Object.entries(piecesBySize).forEach(([sizeId, pieces]) => {
-      inventory.addStock(Number(sizeId), shop, -pieces);
+      inventory.addStock(Number(sizeId), newLocation, -pieces);
       const size = db.prepare("SELECT product_id FROM product_sizes WHERE id = ?").get(sizeId);
       if (size) touchedProducts.add(size.product_id);
     });
@@ -436,7 +452,7 @@ router.put("/:id", (req, res) => {
         gst_on_charges=@gstOnCharges, round_off=@roundOffAmount, total=@total, advance=@advance,
         balance_due=@balanceDue, payment_method=@paymentMethod, paper_size=@paperSize,
         delivery_man=@deliveryMan, vehicle_number=@vehicleNumber, delivery_address=@deliveryAddress,
-        remarks=@remarks
+        remarks=@remarks, location_id=@locationId
       WHERE id=@id
     `).run({
       id: inv.id, customerId: customerId || null,
@@ -449,7 +465,8 @@ router.put("/:id", (req, res) => {
       paymentMethod: isChallan ? "—" : (paymentMethod || "Cash"),
       paperSize: paperSize === "A4" ? "A4" : "A5",
       deliveryMan: (deliveryMan || "").trim(), vehicleNumber: (vehicleNumber || "").trim(),
-      deliveryAddress: (deliveryAddress || "").trim(), remarks: (remarks || "").trim()
+      deliveryAddress: (deliveryAddress || "").trim(), remarks: (remarks || "").trim(),
+      locationId: newLocation
     });
 
     // 7. Bump the (possibly new) customer's due by the new balance.
@@ -483,16 +500,15 @@ router.post("/:id/void", requireRole("owner"), (req, res) => {
   const restoreProduct = db.prepare("UPDATE products SET stock = stock + ? WHERE id = ?");
   const reduceDue = db.prepare("UPDATE customers SET due = MAX(0, due - ?) WHERE id = ?");
   const voidInvoice = db.prepare("UPDATE invoices SET voided = 1 WHERE id = ?");
-  const shop = shopLocationId();
+  const location = inv.location_id || shopLocationId();
 
   db.transaction(() => {
     // Restore the physical piece count, NOT `qty` — on an area-priced line qty
     // is a sq.ft figure and would put hundreds of phantom sheets into stock.
-    // Restored to Shop specifically — that's the only location a sale ever
-    // deducted from.
+    // Restored to wherever this invoice actually deducted from.
     const touchedProducts = new Set();
     items.forEach(it => {
-      if (it.size_id) { inventory.addStock(it.size_id, shop, it.pieces); touchedProducts.add(it.product_id); }
+      if (it.size_id) { inventory.addStock(it.size_id, location, it.pieces); touchedProducts.add(it.product_id); }
       else if (it.product_id) restoreProduct.run(it.pieces, it.product_id);
     });
     touchedProducts.forEach(pid => syncProductStockStmt.run(pid));
@@ -522,14 +538,14 @@ router.delete("/:id", requireRole("owner"), (req, res) => {
   const items = db.prepare("SELECT * FROM invoice_items WHERE invoice_id = ?").all(inv.id);
   const restoreProduct = db.prepare("UPDATE products SET stock = stock + ? WHERE id = ?");
   const reduceDue = db.prepare("UPDATE customers SET due = MAX(0, due - ?) WHERE id = ?");
-  const shop = shopLocationId();
+  const location = inv.location_id || shopLocationId();
 
   db.transaction(() => {
     if (!inv.voided) {
       // Only reverse stock/dues if a prior Void hasn't already done so.
       const touchedProducts = new Set();
       items.forEach(it => {
-        if (it.size_id) { inventory.addStock(it.size_id, shop, it.pieces); touchedProducts.add(it.product_id); }
+        if (it.size_id) { inventory.addStock(it.size_id, location, it.pieces); touchedProducts.add(it.product_id); }
         else if (it.product_id) restoreProduct.run(it.pieces, it.product_id);
       });
       touchedProducts.forEach(pid => syncProductStockStmt.run(pid));

@@ -46,6 +46,10 @@ let state = {
   transport: 0, loading: 0, roundOff: true, docType: "invoice", challanShowRate: false, gstOnCharges: true, deliveryMan: "",
   vehicleNumber: "", deliveryAddress: "", remarks: "",
   invBrandFilter: "All", reportType: "Sales", partyMode: "customer",
+  // Which location a Bill/Challan sells from — "shop" is every invoice's
+  // long-standing default; "warehouse" is opt-in per sale (requirement:
+  // "sale to warehouse"). Stored as a location ID once locations load.
+  billingLocationId: null,
   paperSize: "A5", editingInvoiceId: null,
   cbFrom: "", cbTo: "", cbEntries: [],
   bbFrom: "", bbTo: "", bbEntries: [],
@@ -646,6 +650,7 @@ function escapeHtml(s){
    ============================================================ */
 async function renderBilling(){
   renderBillingCustomers();
+  renderBillingLocationChips();
   renderBillingProducts();
   // Re-applies the document-type UI (which section is hidden, button labels)
   // and calls renderCart + renderTotals itself, so a challan-in-progress
@@ -692,6 +697,37 @@ function sizeWarehouseStock(size){
   const row = (size.byLocation||[]).find(l=>l.code==="warehouse");
   return row ? row.quantity : 0;
 }
+/** Stock at whichever location Billing currently has selected to sell
+ *  from — defaults to Shop until state.billingLocationId is set (right
+ *  after locations load), matching every invoice's behaviour before this
+ *  picker existed. */
+function billingLocationStock(size){
+  const loc = state.locations.find(l=>l.id===state.billingLocationId);
+  if(!loc || loc.code==="shop") return sizeShopStock(size);
+  const row = (size.byLocation||[]).find(l=>l.location_id===state.billingLocationId);
+  return row ? row.quantity : 0;
+}
+function renderBillingLocationChips(){
+  const wrap = document.getElementById("billing-location-chips");
+  if(!wrap) return;
+  if(!state.billingLocationId){
+    const shop = state.locations.find(l=>l.code==="shop");
+    if(shop) state.billingLocationId = shop.id;
+  }
+  wrap.innerHTML = state.locations.map(l=>`
+    <button class="chip ${state.billingLocationId===l.id?'selected':''}" data-billing-location="${l.id}">${escapeHtml(l.name)}</button>
+  `).join("");
+  wrap.querySelectorAll("[data-billing-location]").forEach(b=>{
+    b.addEventListener("click", ()=>{
+      if(state.cart.length && b.dataset.billingLocation!==state.billingLocationId){
+        if(!confirm("Change location? Items already added were checked against the OLD location's stock — you may need to re-check quantities.")) return;
+      }
+      state.billingLocationId = b.dataset.billingLocation;
+      renderBillingLocationChips();
+      renderBillingProducts();
+    });
+  });
+}
 function renderBillingProducts(){
   const q = (document.getElementById("billing-search").value||"").toLowerCase();
   const list = state.products.filter(p=>
@@ -700,13 +736,13 @@ function renderBillingProducts(){
   const wrap = document.getElementById("billing-product-list");
   wrap.innerHTML = list.map(p=>{
     const priceLabel = !p.sizes.length ? "⚠ No price — tap Edit" : (p.sizes.length>1 ? "From "+fmt(Math.min(...p.sizes.map(s=>s.price))) : fmt(p.sizes[0].price));
-    // Billing only ever DEDUCTS from Shop — a sale can't draw on Warehouse
-    // stock (matches the server). Both are shown here purely for visibility,
-    // so staff can see "0 in Shop, 20 in Warehouse" and know to transfer
-    // stock first, rather than assuming the product has none at all.
+    // Billing deducts from whichever location is selected above (Sell from) —
+    // both totals are shown regardless, purely for visibility, so staff can
+    // see "0 in Shop, 20 in Warehouse" and know to switch or transfer first.
     const shopTotal = p.sizes.reduce((s,sz)=>s+sizeShopStock(sz),0);
     const warehouseTotal = p.sizes.reduce((s,sz)=>s+sizeWarehouseStock(sz),0);
-    const out = shopTotal<=0;
+    const sellableTotal = p.sizes.reduce((s,sz)=>s+billingLocationStock(sz),0);
+    const out = sellableTotal<=0;
     const stockLine = `&#127978; Shop: ${shopTotal}${warehouseTotal>0?` · &#127974; Warehouse: ${warehouseTotal}`:""}`;
     return `<div class="list-row" data-open-product="${p.id}" style="cursor:pointer;">
       <div class="swatch"></div>
@@ -741,7 +777,7 @@ function addToCart(productId, sizeIdx){
   // the specific size, not the product as a whole.
   const existing = state.cart.find(c=>c.sizeId===size.id);
   const piecesForSize = state.cart.filter(c=>c.sizeId===size.id).reduce((s,c)=>s+(c.pieces||0),0);
-  if(piecesForSize >= sizeShopStock(size)){ return false; }
+  if(piecesForSize >= billingLocationStock(size)){ return false; }
   if(existing){ existing.pieces += 1; }
   else{
     state.cart.push({
@@ -896,6 +932,10 @@ async function editExistingInvoice(inv){
   state.deliveryAddress = inv.delivery_address || "";
   state.remarks = inv.remarks || "";
   state.editingInvoiceId = inv.id;
+  // Reflect what this invoice actually deducted from, not whatever was last
+  // selected on the Billing screen — falls back to Shop for a document saved
+  // before this picker existed.
+  state.billingLocationId = inv.location_id || (state.locations.find(l=>l.code==="shop")||{}).id;
 
   closeAllSheets();
   closeFullscreen("fs-invoice");
@@ -1194,7 +1234,8 @@ async function completeSale(){
       // Only sent when staff explicitly picked a GST Type for this invoice —
       // omitted (undefined) falls back to the customer's Customer Master
       // default server-side, same as before this override existed.
-      taxType: state.taxTypeOverride || undefined
+      taxType: state.taxTypeOverride || undefined,
+      locationId: state.billingLocationId
     };
     const invoice = editingId
       ? await api("PUT", `/invoices/${editingId}`, payload)
@@ -1349,10 +1390,11 @@ function renderProductDetailSheet(context){
 
     <div class="chip-row" style="margin:12px 0;">
       ${p.sizes.map((s,i)=>{
-        // Billing shows what's actually sellable (Shop only) — every other
-        // context shows the cross-location total.
-        const qty = context==="billing" ? sizeShopStock(s) : s.stock;
-        const qtyLabel = context==="billing" ? qty+" in Shop" : qty+" in stock";
+        // Billing shows what's actually sellable at the selected location —
+        // every other context shows the cross-location total.
+        const qty = context==="billing" ? billingLocationStock(s) : s.stock;
+        const billingLocName = (state.locations.find(l=>l.id===state.billingLocationId)||{}).name || "Shop";
+        const qtyLabel = context==="billing" ? qty+" in "+billingLocName : qty+" in stock";
         return `<button class="chip ${i===state.ctx.selectedSizeIdx?'selected':''}" data-size="${i}">${escapeHtml(s.label)} · ${fmt(s.price)} · ${qtyLabel}</button>`;
       }).join("")}
     </div>
@@ -1380,7 +1422,7 @@ function renderProductDetailSheet(context){
     ${context==="billing" ? (
       !p.sizes.length
         ? `<button class="btn btn-gold" id="add-to-invoice-btn" style="margin-top:14px;" disabled>No price set — tap Edit below</button>`
-        : `<button class="btn btn-gold" id="add-to-invoice-btn" style="margin-top:14px;" ${sizeShopStock(selectedSize)<=0?"disabled":""}>${sizeShopStock(selectedSize)<=0?"Out of Shop stock":"Add to Invoice"}</button>`
+        : `<button class="btn btn-gold" id="add-to-invoice-btn" style="margin-top:14px;" ${billingLocationStock(selectedSize)<=0?"disabled":""}>${billingLocationStock(selectedSize)<=0?"Out of stock at this location":"Add to Invoice"}</button>`
     ) : ""}
     ${context==="purchase" ? (
       !p.sizes.length
@@ -1449,10 +1491,11 @@ function renderProductDetailSheet(context){
     sheet.querySelector("#transfer-stock-btn").addEventListener("click", ()=>openTransferStock(p));
     loadStockInHistory(p.id);
   } else {
-    // Billing/Purchase/Quotation/PO/SO all only ever act on Shop (sales) or a
-    // chosen location (purchases) — showing both here is for visibility only,
-    // so staff aren't misled by the single denormalised total into thinking
-    // stock sitting in Warehouse is sellable right now.
+    // Every doc type acts on a chosen location (Shop by default for a sale,
+    // Warehouse by default for a purchase) — showing both here is for
+    // visibility only, so staff aren't misled by the single denormalised
+    // total into thinking stock sitting in the OTHER location is available
+    // without switching locations first.
     const shopQty = selectedSize ? sizeShopStock(selectedSize) : 0;
     const warehouseQty = selectedSize ? sizeWarehouseStock(selectedSize) : 0;
     stockArea.innerHTML = `<div class="muted" style="font-size:11.5px;">${selectedSize ? `&#127978; Shop: ${shopQty} · &#127974; Warehouse: ${warehouseQty} ${escapeHtml(p.unit||"")} (${escapeHtml(selectedSize.label)})` : ""} · edit stock levels from Inventory</div>`;
@@ -1466,7 +1509,7 @@ function renderProductDetailSheet(context){
     addBtn.addEventListener("click", ()=>{
       const ok = addToCart(p.id, state.ctx.selectedSizeIdx);
       if(ok){ closeAllSheets(); renderBillingProducts(); }
-      else toast("Can't add more — that's all the Shop stock we have for this size.");
+      else toast("Can't add more — that's all the stock we have for this size at the selected location.");
     });
   }
   const addPurBtn = sheet.querySelector("#add-to-purchase-btn");
@@ -3456,6 +3499,7 @@ async function renderReport(){
   try{
     if(state.reportType==="Purchase") return renderPurchaseReport(body);
     if(state.reportType==="Party") return renderPartyReport(body);
+    if(state.reportType==="PartyProduct") return renderPartyProductReport(body);
     if(state.reportType==="Profit") return renderProfitReport(body);
     if(state.reportType==="ProfitByInvoice") return renderProfitByInvoiceReport(body);
     if(state.reportType==="Supplier") return renderSupplierReport(body);
@@ -3557,6 +3601,33 @@ async function renderPartyReport(body){
     `).join("") : `<div class="empty-hint">No customers yet.</div>`);
 }
 
+async function renderPartyProductReport(body){
+  const kind = state.partyProductType || "sales";
+  const rows = await api("GET", `/reports/party-product?type=${kind}`);
+  body.innerHTML = `
+    <div style="font-weight:800;font-size:14px;">Party-wise Product Report</div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every product ${kind==="sales"?"sold to each customer":"bought from each supplier"}</div>
+    <div class="chip-row" id="party-product-type-chips" style="margin-bottom:10px;">
+      <button class="chip ${kind==="sales"?"selected":""}" data-pp-type="sales">Sales</button>
+      <button class="chip ${kind==="purchases"?"selected":""}" data-pp-type="purchases">Purchases</button>
+    </div>
+    ${rows.length ? rows.map(p=>`
+      <div class="section-title" style="margin-top:14px;display:flex;justify-content:space-between;">
+        <span>${escapeHtml(p.party)}</span><span>${fmt(p.total)}</span>
+      </div>
+      <div class="card">${p.products.map(pr=>`
+        <div class="list-row">
+          <div><div class="row-title">${escapeHtml(pr.product)}</div><div class="row-sub">${pr.qty} ${escapeHtml(pr.unit||"")}</div></div>
+          <div class="row-right row-title">${fmt(pr.amount)}</div>
+        </div>`).join("")}
+      </div>
+    `).join("") : `<div class="empty-hint">No ${kind} recorded yet.</div>`}
+  `;
+  body.querySelectorAll("[data-pp-type]").forEach(b=>b.addEventListener("click", ()=>{
+    state.partyProductType = b.dataset.ppType;
+    renderPartyProductReport(body);
+  }));
+}
 async function renderSupplierReport(body){
   const rows = await api("GET","/reports/supplier-wise");
   body.innerHTML = `<div style="font-weight:800;font-size:14px;">Supplier Report</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Total purchases and outstanding due per supplier</div>` +
@@ -5394,6 +5465,11 @@ async function openQuotationDetail(quotationId){
       ${q.remarks?`<div><span class="muted">Remarks:</span> ${escapeHtml(q.remarks)}</div>`:""}
     </div>` : ""}
     ${q.converted_invoice_id ? `<div class="muted" style="font-size:11.5px;margin-top:8px;">Converted to Tax Invoice.</div>` : ""}
+    ${canConvert ? `
+    <label class="field-label" style="margin-top:14px;">Sell from</label>
+    <div class="chip-row" id="quotation-convert-location-chips">
+      ${state.locations.map(l=>`<button class="chip ${l.code==='shop'?'selected':''}" data-quotation-convert-loc="${l.id}">${escapeHtml(l.name)}</button>`).join("")}
+    </div>` : ""}
     <div class="action-row" style="margin-top:14px;">
       ${canEdit ? `<button class="btn btn-outline" id="edit-quotation-btn">✎ Edit</button>` : ""}
       ${canAccept ? `<button class="btn btn-outline" id="accept-quotation-btn">Mark Accepted</button>` : ""}
@@ -5415,11 +5491,20 @@ async function openQuotationDetail(quotationId){
       toast("Quotation marked Accepted.", "ok");
     }catch(err){ toast(err.message); }
   });
+  sheet.querySelectorAll("[data-quotation-convert-loc]").forEach(b=>b.addEventListener("click", ()=>{
+    sheet.querySelectorAll("[data-quotation-convert-loc]").forEach(x=>x.classList.remove("selected"));
+    b.classList.add("selected");
+  }));
   const convertBtn = sheet.querySelector("#convert-quotation-btn");
   if(convertBtn) convertBtn.addEventListener("click", async ()=>{
-    if(!confirm(`Convert ${q.quotation_no} to a real Tax Invoice? This will deduct Shop stock and raise the customer's due.`)) return;
+    const selectedLoc = sheet.querySelector("[data-quotation-convert-loc].selected");
+    const locName = selectedLoc ? selectedLoc.textContent : "Shop";
+    if(!confirm(`Convert ${q.quotation_no} to a real Tax Invoice? This will deduct ${locName} stock and raise the customer's due.`)) return;
     try{
-      const result = await api("POST", `/quotations/${q.id}/convert`, { paymentMethod: "Cash", advance: 0 });
+      const result = await api("POST", `/quotations/${q.id}/convert`, {
+        paymentMethod: "Cash", advance: 0,
+        locationId: selectedLoc ? selectedLoc.dataset.quotationConvertLoc : undefined
+      });
       await Promise.all([loadProducts(), loadCustomers()]);
       closeAllSheets();
       toast(`Converted to ${result.invoice.challan_no}.`, "ok");
@@ -5963,6 +6048,11 @@ async function openSoDetail(soId){
     </div>
     ${so.remarks ? `<div class="card" style="margin-top:8px;font-size:12px;"><span class="muted">Remarks:</span> ${escapeHtml(so.remarks)}</div>` : ""}
     ${so.converted_invoice_id ? `<div class="muted" style="font-size:11.5px;margin-top:8px;">Converted to Tax Invoice.</div>` : ""}
+    ${canConvert ? `
+    <label class="field-label" style="margin-top:14px;">Sell from</label>
+    <div class="chip-row" id="so-convert-location-chips">
+      ${state.locations.map(l=>`<button class="chip ${l.code==='shop'?'selected':''}" data-so-convert-loc="${l.id}">${escapeHtml(l.name)}</button>`).join("")}
+    </div>` : ""}
     <div class="action-row" style="margin-top:14px;">
       ${canEdit ? `<button class="btn btn-outline" id="edit-so-btn">✎ Edit</button>` : ""}
       ${canConfirm ? `<button class="btn btn-outline" id="confirm-so-btn">Confirm</button>` : ""}
@@ -5984,11 +6074,20 @@ async function openSoDetail(soId){
       toast("Sales Order confirmed.", "ok");
     }catch(err){ toast(err.message); }
   });
+  sheet.querySelectorAll("[data-so-convert-loc]").forEach(b=>b.addEventListener("click", ()=>{
+    sheet.querySelectorAll("[data-so-convert-loc]").forEach(x=>x.classList.remove("selected"));
+    b.classList.add("selected");
+  }));
   const convertBtn = sheet.querySelector("#convert-so-btn");
   if(convertBtn) convertBtn.addEventListener("click", async ()=>{
-    if(!confirm(`Convert ${so.so_no} to a real Tax Invoice? This will deduct Shop stock and raise the customer's due.`)) return;
+    const selectedLoc = sheet.querySelector("[data-so-convert-loc].selected");
+    const locName = selectedLoc ? selectedLoc.textContent : "Shop";
+    if(!confirm(`Convert ${so.so_no} to a real Tax Invoice? This will deduct ${locName} stock and raise the customer's due.`)) return;
     try{
-      const result = await api("POST", `/sales-orders/${so.id}/convert`, { paymentMethod: "Cash", advance: 0 });
+      const result = await api("POST", `/sales-orders/${so.id}/convert`, {
+        paymentMethod: "Cash", advance: 0,
+        locationId: selectedLoc ? selectedLoc.dataset.soConvertLoc : undefined
+      });
       await Promise.all([loadProducts(), loadCustomers()]);
       closeAllSheets();
       toast(`Converted to ${result.invoice.challan_no}.`, "ok");

@@ -278,17 +278,21 @@ router.post("/:id/convert", (req, res) => {
     return res.status(400).json({ error: "Only a Confirmed Sales Order can be converted to an Invoice." });
   }
   const soItems = db.prepare("SELECT * FROM sales_order_items WHERE so_id = ?").all(so.id);
-  const shop = shopLocationId();
+  const { paymentMethod, advance, paperSize, deliveryMan, vehicleNumber, locationId } = req.body;
+  let saleLocation = shopLocationId();
+  if (locationId) {
+    const loc = inventory.getLocationById(locationId);
+    if (loc && loc.active) saleLocation = loc.id;
+  }
+  const saleLocationName = inventory.getLocationById(saleLocation).name;
 
   for (const it of soItems) {
     if (!it.size_id) continue;
-    const atShop = inventory.getStock(it.size_id, shop);
-    if (atShop < it.pieces) {
-      return res.status(400).json({ error: `Can't convert — only ${atShop} left in Shop stock for ${it.name} (${it.size_label}), this order needs ${it.pieces}.` });
+    const atLocation = inventory.getStock(it.size_id, saleLocation);
+    if (atLocation < it.pieces) {
+      return res.status(400).json({ error: `Can't convert — only ${atLocation} left in ${saleLocationName} stock for ${it.name} (${it.size_label}), this order needs ${it.pieces}.` });
     }
   }
-
-  const { paymentMethod, advance, paperSize, deliveryMan, vehicleNumber } = req.body;
 
   function nextDocNo() {
     const row = db.prepare("SELECT value FROM counters WHERE name = ?").get("estimate-no");
@@ -318,10 +322,10 @@ router.post("/:id/convert", (req, res) => {
     db.prepare(`
       INSERT INTO invoices (id, challan_no, doc_type, date, created_at, customer_id, subtotal, discount_type, discount_value,
         discount_amount, tax_type, cgst, sgst, igst, transport, loading, gst_on_charges, round_off, total, advance, balance_due,
-        payment_method, paper_size, delivery_man, vehicle_number, delivery_address, remarks)
+        payment_method, paper_size, delivery_man, vehicle_number, delivery_address, remarks, location_id)
       VALUES (@id, @challanNo, 'invoice', @date, @createdAt, @customerId, @subtotal, @discountType, @discountValue,
         @discountAmount, @taxType, @cgst, @sgst, @igst, @transport, @loading, @gstOnCharges, @roundOffAmount, @total, @advance,
-        @balanceDue, @paymentMethod, @paperSize, @deliveryMan, @vehicleNumber, @deliveryAddress, @remarks)
+        @balanceDue, @paymentMethod, @paperSize, @deliveryMan, @vehicleNumber, @deliveryAddress, @remarks, @locationId)
     `).run({
       id: invoiceId, challanNo: nextDocNo(), date: todayStr(), createdAt: Date.now(), customerId: so.customer_id,
       subtotal: so.subtotal, discountType: so.discount_type, discountValue: so.discount_value, discountAmount: so.discount_amount,
@@ -329,7 +333,8 @@ router.post("/:id/convert", (req, res) => {
       gstOnCharges: so.gst_on_charges, roundOffAmount: so.round_off, total: so.total, advance: advanceApplied, balanceDue,
       paymentMethod: paymentMethod || "Cash", paperSize: paperSize === "A4" ? "A4" : "A5",
       deliveryMan: (deliveryMan || "").trim(), vehicleNumber: (vehicleNumber || "").trim(),
-      deliveryAddress: so.delivery_address, remarks: `Converted from ${so.so_no}`
+      deliveryAddress: so.delivery_address, remarks: `Converted from ${so.so_no}`,
+      locationId: saleLocation
     });
 
     soItems.forEach(it => {
@@ -340,7 +345,7 @@ router.post("/:id/convert", (req, res) => {
         it.size_label, it.pieces, it.per_piece, it.unit_label, it.qty, it.rate, it.gst_rate
       );
       if (it.size_id) {
-        inventory.addStock(it.size_id, shop, -it.pieces);
+        inventory.addStock(it.size_id, saleLocation, -it.pieces);
         syncProductStockStmt.run(it.product_id);
       }
     });

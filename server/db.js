@@ -928,6 +928,16 @@ if (addedPurchaseLocation || addedStockInLocation) {
   if (addedStockInLocation) db.prepare("UPDATE stock_ins SET location_id = ? WHERE location_id IS NULL").run(warehouseId);
 }
 
+// A sale/challan previously ALWAYS deducted from Shop — this column lets
+// staff instead choose Warehouse per-document (requirement: "sale to
+// warehouse"). Existing rows predate this column and get backfilled to
+// Shop, matching every invoice ever created under the old Shop-only rule.
+const addedInvoiceLocation = addColumn("invoices", "location_id", "TEXT REFERENCES locations(id)");
+if (addedInvoiceLocation) {
+  const shopId = db.prepare("SELECT id FROM locations WHERE code = 'shop'").get().id;
+  db.prepare("UPDATE invoices SET location_id = ? WHERE location_id IS NULL").run(shopId);
+}
+
 // Where the data lives — the backup module needs the on-disk paths, and this
 // is the single place that knows them.
 db.dataDir = DATA_DIR;

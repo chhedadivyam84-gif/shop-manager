@@ -104,7 +104,10 @@ router.post("/", (req, res) => {
   subtotal = round2(subtotal); cgst = round2(cgst); sgst = round2(sgst); igst = round2(igst);
   const total = round2(subtotal + cgst + sgst + igst);
 
-  const shop = shopLocationId();
+  // A return credits stock back to wherever the original sale actually
+  // deducted it from — Shop by default, but Warehouse if that invoice was
+  // sold from there (see invoices.js's location_id).
+  const returnLocation = invoice.location_id || shopLocationId();
   const id = uid("SR");
   const returnNo = nextReturnNo();
 
@@ -120,14 +123,14 @@ router.post("/", (req, res) => {
 
   db.transaction(() => {
     insertReturn.run(id, returnNo, todayStr(), Date.now(), invoiceId, invoice.customer_id, (reason || "").trim(),
-      subtotal, cgst, sgst, igst, total, method, shop, "");
+      subtotal, cgst, sgst, igst, total, method, returnLocation, "");
 
     const touchedProducts = new Set();
     items.forEach(({ invItem, pieces, qty }) => {
       insertItem.run(id, invItem.id, invItem.product_id, invItem.size_id, invItem.name, invItem.size_label,
         pieces, invItem.unit_label, qty, invItem.rate, invItem.gst_rate);
       if (invItem.size_id) {
-        inventory.addStock(invItem.size_id, shop, pieces);
+        inventory.addStock(invItem.size_id, returnLocation, pieces);
         if (invItem.product_id) touchedProducts.add(invItem.product_id);
       }
     });
@@ -149,21 +152,21 @@ router.post("/:id/void", requireRole("owner"), (req, res) => {
   if (!sr) return res.status(404).json({ error: "Sales Return not found." });
   if (sr.voided) return res.status(400).json({ error: "This return is already voided." });
   const items = db.prepare("SELECT * FROM sales_return_items WHERE return_id = ?").all(sr.id);
-  const shop = sr.location_id || shopLocationId();
+  const location = sr.location_id || shopLocationId();
 
   try {
     db.transaction(() => {
       const touchedProducts = new Set();
       items.forEach(it => {
         if (!it.size_id) return;
-        const atShop = inventory.getStock(it.size_id, shop);
-        if (atShop < it.pieces) {
-          throw { status: 400, error: `Can't void — ${it.name} stock has already been used elsewhere (only ${atShop} left, this return added ${it.pieces}).` };
+        const atLocation = inventory.getStock(it.size_id, location);
+        if (atLocation < it.pieces) {
+          throw { status: 400, error: `Can't void — ${it.name} stock has already been used elsewhere (only ${atLocation} left, this return added ${it.pieces}).` };
         }
       });
       items.forEach(it => {
         if (!it.size_id) return;
-        inventory.addStock(it.size_id, shop, -it.pieces);
+        inventory.addStock(it.size_id, location, -it.pieces);
         if (it.product_id) touchedProducts.add(it.product_id);
       });
       touchedProducts.forEach(pid => syncProductStockStmt.run(pid));

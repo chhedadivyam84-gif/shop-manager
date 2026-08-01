@@ -688,6 +688,10 @@ function sizeShopStock(size){
   const row = (size.byLocation||[]).find(l=>l.code==="shop");
   return row ? row.quantity : size.stock;
 }
+function sizeWarehouseStock(size){
+  const row = (size.byLocation||[]).find(l=>l.code==="warehouse");
+  return row ? row.quantity : 0;
+}
 function renderBillingProducts(){
   const q = (document.getElementById("billing-search").value||"").toLowerCase();
   const list = state.products.filter(p=>
@@ -696,12 +700,17 @@ function renderBillingProducts(){
   const wrap = document.getElementById("billing-product-list");
   wrap.innerHTML = list.map(p=>{
     const priceLabel = !p.sizes.length ? "⚠ No price — tap Edit" : (p.sizes.length>1 ? "From "+fmt(Math.min(...p.sizes.map(s=>s.price))) : fmt(p.sizes[0].price));
-    // Billing only cares whether SHOP has any of this — Warehouse-only stock
-    // isn't sellable from here (matches the server: invoices deduct Shop only).
-    const out = !p.sizes.some(s=>sizeShopStock(s)>0);
+    // Billing only ever DEDUCTS from Shop — a sale can't draw on Warehouse
+    // stock (matches the server). Both are shown here purely for visibility,
+    // so staff can see "0 in Shop, 20 in Warehouse" and know to transfer
+    // stock first, rather than assuming the product has none at all.
+    const shopTotal = p.sizes.reduce((s,sz)=>s+sizeShopStock(sz),0);
+    const warehouseTotal = p.sizes.reduce((s,sz)=>s+sizeWarehouseStock(sz),0);
+    const out = shopTotal<=0;
+    const stockLine = `&#127978; Shop: ${shopTotal}${warehouseTotal>0?` · &#127974; Warehouse: ${warehouseTotal}`:""}`;
     return `<div class="list-row" data-open-product="${p.id}" style="cursor:pointer;">
       <div class="swatch"></div>
-      <div><div class="row-title">${escapeHtml(p.name)}</div><div class="row-sub">${escapeHtml(p.brand||"")} · ${priceLabel}</div></div>
+      <div><div class="row-title">${escapeHtml(p.name)}</div><div class="row-sub">${escapeHtml(p.brand||"")} · ${priceLabel}</div><div class="row-sub">${stockLine}</div></div>
       <div class="row-right">${out?'<span class="pill danger">Out of stock</span>':'<button class="gold-fab" data-quickadd="'+p.id+'" style="width:30px;height:30px;">+</button>'}</div>
     </div>`;
   }).join("") || `<div class="empty-hint">No matching products.</div>`;
@@ -1440,7 +1449,13 @@ function renderProductDetailSheet(context){
     sheet.querySelector("#transfer-stock-btn").addEventListener("click", ()=>openTransferStock(p));
     loadStockInHistory(p.id);
   } else {
-    stockArea.innerHTML = `<div class="muted" style="font-size:11.5px;">${selectedSize ? selectedSize.stock+" "+escapeHtml(p.unit||"")+" available in "+escapeHtml(selectedSize.label) : ""} · edit stock levels from Inventory</div>`;
+    // Billing/Purchase/Quotation/PO/SO all only ever act on Shop (sales) or a
+    // chosen location (purchases) — showing both here is for visibility only,
+    // so staff aren't misled by the single denormalised total into thinking
+    // stock sitting in Warehouse is sellable right now.
+    const shopQty = selectedSize ? sizeShopStock(selectedSize) : 0;
+    const warehouseQty = selectedSize ? sizeWarehouseStock(selectedSize) : 0;
+    stockArea.innerHTML = `<div class="muted" style="font-size:11.5px;">${selectedSize ? `&#127978; Shop: ${shopQty} · &#127974; Warehouse: ${warehouseQty} ${escapeHtml(p.unit||"")} (${escapeHtml(selectedSize.label)})` : ""} · edit stock levels from Inventory</div>`;
   }
   sheet.querySelectorAll("[data-size]").forEach(b=>{
     b.addEventListener("click", ()=>{ state.ctx.selectedSizeIdx = parseInt(b.dataset.size); renderProductDetailSheet(context); });

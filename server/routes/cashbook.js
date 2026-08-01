@@ -105,6 +105,7 @@ router.put("/:id", (req, res) => {
   const e = db.prepare("SELECT * FROM cash_entries WHERE id = ?").get(req.params.id);
   if (!e) return res.status(404).json({ error: "Entry not found." });
   if (e.voided) return res.status(400).json({ error: "Can't edit a deleted entry." });
+  if (e.source_type) return res.status(400).json({ error: `This entry was created automatically from a ${e.source_type === "payment" ? "customer receipt" : "supplier payment"} — edit it there instead.` });
 
   const { date, type, party, category, remarks } = req.body;
   const amount = req.body.amount !== undefined ? round2(Number(req.body.amount)) : e.amount;
@@ -124,8 +125,17 @@ router.post("/:id/void", requireRole("owner"), (req, res) => {
   const e = db.prepare("SELECT * FROM cash_entries WHERE id = ?").get(req.params.id);
   if (!e) return res.status(404).json({ error: "Entry not found." });
   if (e.voided) return res.status(400).json({ error: "Entry already deleted." });
+  if (e.source_type) return res.status(400).json({ error: `This entry was created automatically from a ${e.source_type === "payment" ? "customer receipt" : "supplier payment"} — void it there instead.` });
 
-  db.prepare("UPDATE cash_entries SET voided = 1 WHERE id = ?").run(e.id);
+  db.transaction(() => {
+    db.prepare("UPDATE cash_entries SET voided = 1 WHERE id = ?").run(e.id);
+    // A Bank Deposit/Withdrawal has a matching leg in bank_entries sharing
+    // this link_id -- both sides of the same real-world movement void
+    // together, or the two books would disagree about where the money went.
+    if (e.link_id) {
+      db.prepare("UPDATE bank_entries SET voided = 1 WHERE link_id = ? AND voided = 0").run(e.link_id);
+    }
+  })();
   logAction(req, "cashbook.void", `${e.type === "in" ? "+" : "-"}${e.amount} on ${e.date}`);
   res.json({ ok: true });
 });

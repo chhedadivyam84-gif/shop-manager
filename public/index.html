@@ -58,6 +58,8 @@
           <div class="stat-card plain"><div class="label">Today's Profit (est.)</div><div class="value" id="stat-profit">₹0</div></div>
           <div class="stat-card plain"><div class="label">Outstanding (Receivable)</div><div class="value red" id="stat-outstanding">₹0</div></div>
           <div class="stat-card plain"><div class="label">Payable</div><div class="value red" id="stat-payable">₹0</div></div>
+          <div class="stat-card plain"><div class="label">Cash Balance</div><div class="value" id="stat-cash">₹0</div></div>
+          <div class="stat-card plain"><div class="label">Bank Balance</div><div class="value" id="stat-bank">₹0</div></div>
           <div class="stat-card plain"><div class="label">Low Stock</div><div class="value" id="stat-lowstock">0</div></div>
         </div>
 
@@ -279,6 +281,13 @@
       <!-- BANK BOOK -->
       <div class="screen" id="screen-bankbook">
         <a href="#" id="bb-back-link" class="muted" style="font-size:12px;font-weight:700;">&larr; Back to Home</a>
+
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;">
+          <div class="section-title" style="margin:0;">Accounts</div>
+          <a href="#" id="bb-manage-accounts-link" style="font-size:12px;font-weight:700;">Manage Accounts</a>
+        </div>
+        <div class="chip-row" id="bb-account-chips"></div>
+
         <div class="card" id="bankbook-summary" style="margin-top:10px;"></div>
 
         <div class="charge-grid" style="margin-top:10px;">
@@ -290,10 +299,7 @@
           <button class="btn btn-outline" id="bb-filter-clear" style="flex:1;">All</button>
         </div>
 
-        <div style="display:flex;gap:8px;margin-top:14px;">
-          <button class="btn btn-gold" id="bb-add-in" style="flex:1;">+ Bank In</button>
-          <button class="btn btn-outline" id="bb-add-out" style="flex:1;border-color:var(--danger);color:var(--danger);">+ Bank Out</button>
-        </div>
+        <button class="btn btn-gold" id="bb-add-entry" style="margin-top:14px;">+ New Entry</button>
 
         <div class="section-title">Ledger</div>
         <div class="card" id="bankbook-list"></div>
@@ -635,6 +641,7 @@
   <div class="sheet" id="sheet-opening-stock"></div>
   <div class="sheet" id="sheet-cash-entry"></div>
   <div class="sheet" id="sheet-bank-entry"></div>
+  <div class="sheet" id="sheet-bank-account"></div>
   <div class="sheet" id="sheet-purchase-detail"></div>
   <div class="sheet" id="sheet-po-detail"></div>
   <div class="sheet" id="sheet-quotation-detail"></div>

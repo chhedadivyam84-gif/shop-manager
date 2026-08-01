@@ -52,7 +52,7 @@ let state = {
   billingLocationId: null,
   paperSize: "A5", editingInvoiceId: null,
   cbFrom: "", cbTo: "", cbEntries: [],
-  bbFrom: "", bbTo: "", bbEntries: [],
+  bbFrom: "", bbTo: "", bbEntries: [], bankAccounts: [], bbAccountId: null,
   // Purchase Entry (Phase 1) — a standalone cart, separate from state.cart
   // (Billing's sales cart), since a purchase invoice's line shape (per-line
   // discount, GST computed forward not backed-out, no stock cap) differs from
@@ -242,6 +242,10 @@ async function initApp(){
   if(appInited){ await renderAll(); return; }
   appInited = true;
 
+  // Marks #screen-home "active" (every .screen starts display:none in CSS
+  // until switchTab does this) — without it, a fresh login renders a blank
+  // Home screen until the user happens to tap a nav tab themselves.
+  document.getElementById("screen-home").classList.add("active");
   document.getElementById("hdr-main").textContent = greeting();
   document.getElementById("hdr-sub").textContent = isOwner()?"Owner Dashboard":"Staff Dashboard";
   document.getElementById("avatar-btn").addEventListener("click", openSettings);
@@ -379,8 +383,8 @@ async function initApp(){
   });
 
   document.getElementById("bb-back-link").addEventListener("click", (e)=>{ e.preventDefault(); switchTab("home"); });
-  document.getElementById("bb-add-in").addEventListener("click", ()=>openBankEntry("in"));
-  document.getElementById("bb-add-out").addEventListener("click", ()=>openBankEntry("out"));
+  document.getElementById("bb-manage-accounts-link").addEventListener("click", (e)=>{ e.preventDefault(); openManageBankAccounts(); });
+  document.getElementById("bb-add-entry").addEventListener("click", ()=>openBankEntry());
   document.getElementById("bb-filter-from").addEventListener("change", (e)=>{ state.bbFrom = e.target.value; renderBankBook(); });
   document.getElementById("bb-filter-to").addEventListener("change", (e)=>{ state.bbTo = e.target.value; renderBankBook(); });
   document.getElementById("bb-filter-today").addEventListener("click", ()=>{
@@ -583,7 +587,7 @@ async function switchTab(tab){
 }
 
 async function renderAll(){
-  await Promise.all([loadProducts(), loadCustomers(), loadSuppliers(), loadLocations()]);
+  await Promise.all([loadProducts(), loadCustomers(), loadSuppliers(), loadLocations(), loadBankAccounts()]);
   await renderHome();
   const activeTab = document.querySelector("nav.bottom .tab.active");
   const tab = activeTab ? activeTab.dataset.tab : "home";
@@ -596,6 +600,7 @@ async function loadProducts(){ state.products = await api("GET","/products"); }
 async function loadCustomers(){ state.customers = await api("GET","/customers"); }
 async function loadSuppliers(){ state.suppliers = await api("GET","/suppliers"); }
 async function loadLocations(){ state.locations = await api("GET","/locations"); }
+async function loadBankAccounts(){ state.bankAccounts = await api("GET","/bank-accounts"); }
 
 /* ============================================================
    HOME
@@ -609,6 +614,8 @@ async function renderHome(){
   document.getElementById("stat-profit").textContent = fmt(d.todaysProfit);
   document.getElementById("stat-outstanding").textContent = fmt(d.outstandingTotal) + (d.outstandingCount? " · "+d.outstandingCount+" cust.":"");
   document.getElementById("stat-payable").textContent = fmt(d.payableTotal) + (d.payableCount? " · "+d.payableCount+" supp.":"");
+  document.getElementById("stat-cash").textContent = fmt(d.cashBalance);
+  document.getElementById("stat-bank").textContent = fmt(d.bankBalance);
   document.getElementById("stat-lowstock").textContent = d.lowStockCount;
 
   const max = Math.max(1, ...d.revenueChart.map(x=>x.total));
@@ -2339,6 +2346,37 @@ function renderQuickPaymentResults(){
    ============================================================ */
 const PAYMENT_MODES = ["Cash","UPI","Bank Transfer","Cheque","Credit Card","Other"];
 
+/** Shared by Sale Payment / Purchase Payment / Bank Entry sheets — a bank
+ *  account chip row that only matters once the Payment Mode isn't Cash, and
+ *  which the payment auto-posts into (see server/bankLink.js). */
+function bankAccountChipsHtml(prefix, selectedId){
+  const accounts = (state.bankAccounts||[]).filter(a=>a.active);
+  return `
+    <label class="field-label" id="${prefix}-label" style="display:none;">Bank Account</label>
+    <div class="chip-row" id="${prefix}-chips" style="display:none;">
+      ${accounts.length ? accounts.map((a,i)=>`<button class="chip ${selectedId?(selectedId===a.id?'selected':''):(i===0?'selected':'')}" data-bankacct="${a.id}">${escapeHtml(a.name)}</button>`).join("")
+        : `<span class="muted" style="font-size:12px;">No bank accounts yet — add one from Bank Book.</span>`}
+    </div>
+  `;
+}
+function toggleBankAccountChips(sheet, prefix, method){
+  const show = method !== "Cash";
+  const label = sheet.querySelector(`#${prefix}-label`);
+  const chips = sheet.querySelector(`#${prefix}-chips`);
+  if(label) label.style.display = show ? "" : "none";
+  if(chips) chips.style.display = show ? "" : "none";
+}
+function wireBankAccountChips(sheet, prefix){
+  sheet.querySelectorAll(`#${prefix}-chips [data-bankacct]`).forEach(b=>b.addEventListener("click", ()=>{
+    sheet.querySelectorAll(`#${prefix}-chips [data-bankacct]`).forEach(x=>x.classList.remove("selected"));
+    b.classList.add("selected");
+  }));
+}
+function getSelectedBankAccountId(sheet, prefix){
+  const sel = sheet.querySelector(`#${prefix}-chips [data-bankacct].selected`);
+  return sel ? sel.dataset.bankacct : null;
+}
+
 /** `editEntry` is a ledger entry (type:"payment") to edit in place, or omitted for a new payment. */
 function openRecordPayment(customer, editEntry){
   const sheet = document.getElementById("sheet-record-payment");
@@ -2362,6 +2400,7 @@ function openRecordPayment(customer, editEntry){
     <div class="chip-row" id="rp-method-chips">
       ${PAYMENT_MODES.map((m,i)=>`<button class="chip ${(e?e.label===m:i===0)?'selected':''}" data-method="${m}">${m}</button>`).join("")}
     </div>
+    ${bankAccountChipsHtml("rp-bankacct", e?e.bankAccountId:null)}
     <label class="field-label">Bank Name <span class="muted" style="font-weight:400;">— optional</span></label>
     <input type="text" id="rp-bank" value="${escapeHtml(e?e.bankName||"":"")}" placeholder="e.g. HDFC Bank">
     <label class="field-label">UPI ID <span class="muted" style="font-weight:400;">— optional</span></label>
@@ -2378,21 +2417,28 @@ function openRecordPayment(customer, editEntry){
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
   sheet.querySelectorAll("[data-method]").forEach(b=>b.addEventListener("click", ()=>{
     sheet.querySelectorAll("[data-method]").forEach(x=>x.classList.remove("selected")); b.classList.add("selected");
+    toggleBankAccountChips(sheet, "rp-bankacct", b.dataset.method);
   }));
+  toggleBankAccountChips(sheet, "rp-bankacct", sheet.querySelector("[data-method].selected").dataset.method);
+  wireBankAccountChips(sheet, "rp-bankacct");
   sheet.querySelector("#rp-save").addEventListener("click", async ()=>{
     const amount = parseFloat(document.getElementById("rp-amount").value);
     if(!amount || amount<=0){ toast("Enter a valid amount."); return; }
+    const method = sheet.querySelector("[data-method].selected").dataset.method;
+    const bankAccountId = getSelectedBankAccountId(sheet, "rp-bankacct");
+    if(method!=="Cash" && !bankAccountId){ toast("Choose a bank account for this payment mode."); return; }
     const btn = document.getElementById("rp-save");
     btn.disabled = true;
     try{
       const attachment = await readAttachmentInput(document.getElementById("rp-attachment"));
       const body = {
-        amount, method: sheet.querySelector("[data-method].selected").dataset.method,
+        amount, method,
         date: document.getElementById("rp-date").value,
         referenceNo: document.getElementById("rp-reference").value.trim(),
         bankName: document.getElementById("rp-bank").value.trim(),
         upiId: document.getElementById("rp-upi").value.trim(),
         note: document.getElementById("rp-note").value.trim(),
+        bankAccountId: method==="Cash" ? null : bankAccountId,
         attachment
       };
       if(e) await api("PUT", `/customers/${customer.id}/payments/${e.id}`, body);
@@ -2586,6 +2632,7 @@ function openRecordPurchasePayment(supplier, editEntry){
     <div class="chip-row" id="pp-method-chips">
       ${PAYMENT_MODES.map((m,i)=>`<button class="chip ${(e?e.label===m:i===0)?'selected':''}" data-method="${m}">${m}</button>`).join("")}
     </div>
+    ${bankAccountChipsHtml("pp-bankacct", e?e.bankAccountId:null)}
     <label class="field-label">Bank Name <span class="muted" style="font-weight:400;">— optional</span></label>
     <input type="text" id="pp-bank" value="${escapeHtml(e?e.bankName||"":"")}" placeholder="e.g. HDFC Bank">
     <label class="field-label">UPI ID <span class="muted" style="font-weight:400;">— optional</span></label>
@@ -2602,21 +2649,28 @@ function openRecordPurchasePayment(supplier, editEntry){
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
   sheet.querySelectorAll("[data-method]").forEach(b=>b.addEventListener("click", ()=>{
     sheet.querySelectorAll("[data-method]").forEach(x=>x.classList.remove("selected")); b.classList.add("selected");
+    toggleBankAccountChips(sheet, "pp-bankacct", b.dataset.method);
   }));
+  toggleBankAccountChips(sheet, "pp-bankacct", sheet.querySelector("[data-method].selected").dataset.method);
+  wireBankAccountChips(sheet, "pp-bankacct");
   sheet.querySelector("#pp-save").addEventListener("click", async ()=>{
     const amount = parseFloat(document.getElementById("pp-amount").value);
     if(!amount || amount<=0){ toast("Enter a valid amount."); return; }
+    const method = sheet.querySelector("[data-method].selected").dataset.method;
+    const bankAccountId = getSelectedBankAccountId(sheet, "pp-bankacct");
+    if(method!=="Cash" && !bankAccountId){ toast("Choose a bank account for this payment mode."); return; }
     const btn = document.getElementById("pp-save");
     btn.disabled = true;
     try{
       const attachment = await readAttachmentInput(document.getElementById("pp-attachment"));
       const body = {
-        amount, method: sheet.querySelector("[data-method].selected").dataset.method,
+        amount, method,
         date: document.getElementById("pp-date").value,
         referenceNo: document.getElementById("pp-reference").value.trim(),
         bankName: document.getElementById("pp-bank").value.trim(),
         upiId: document.getElementById("pp-upi").value.trim(),
         note: document.getElementById("pp-note").value.trim(),
+        bankAccountId: method==="Cash" ? null : bankAccountId,
         attachment
       };
       if(e) await api("PUT", `/suppliers/${supplier.id}/payments/${e.id}`, body);
@@ -4093,15 +4147,42 @@ function printCashBook(){
    ============================================================ */
 function bankBookQuery(){
   const p = new URLSearchParams();
+  if(state.bbAccountId) p.set("accountId", state.bbAccountId);
   if(state.bbFrom) p.set("from", state.bbFrom);
   if(state.bbTo) p.set("to", state.bbTo);
   return p.toString();
 }
+function renderBankAccountChips(){
+  const wrap = document.getElementById("bb-account-chips");
+  if(!wrap) return;
+  const accounts = (state.bankAccounts||[]).filter(a=>a.active);
+  if(!state.bbAccountId || !accounts.find(a=>a.id===state.bbAccountId)){
+    state.bbAccountId = accounts.length ? accounts[0].id : null;
+  }
+  wrap.innerHTML = accounts.length ? accounts.map(a=>`
+    <button class="chip ${state.bbAccountId===a.id?'selected':''}" data-bb-account="${a.id}">${escapeHtml(a.name)}</button>
+  `).join("") : `<div class="empty-hint" style="padding:8px 4px;">No bank accounts yet — tap "Manage Accounts" to add one.</div>`;
+  wrap.querySelectorAll("[data-bb-account]").forEach(b=>{
+    b.addEventListener("click", ()=>{
+      state.bbAccountId = b.dataset.bbAccount;
+      renderBankBook();
+    });
+  });
+}
 async function renderBankBook(){
+  await loadBankAccounts();
+  renderBankAccountChips();
   const fromEl = document.getElementById("bb-filter-from");
   const toEl = document.getElementById("bb-filter-to");
   if(fromEl) fromEl.value = state.bbFrom;
   if(toEl) toEl.value = state.bbTo;
+
+  if(!state.bbAccountId){
+    document.getElementById("bankbook-summary").innerHTML = "";
+    document.getElementById("bankbook-list").innerHTML = `<div class="empty-hint">Add a bank account above to get started.</div>`;
+    state.bbEntries = [];
+    return;
+  }
 
   const q = bankBookQuery();
   try{
@@ -4115,91 +4196,437 @@ async function renderBankBook(){
   }catch(e){ toast(e.message); }
 }
 function renderBankBookSummary(s){
+  const account = (state.bankAccounts||[]).find(a=>a.id===state.bbAccountId);
   const row = (label, value, cls) =>
     `<div class="inv-flex" style="margin-bottom:4px;${cls||""}"><span class="muted">${label}</span><span>${value}</span></div>`;
   document.getElementById("bankbook-summary").innerHTML = `
-    <div style="font-weight:800;font-size:14px;margin-bottom:6px;">${s.from===s.to ? s.from : s.from+" to "+s.to}</div>
+    <div style="font-weight:800;font-size:14px;margin-bottom:2px;">${account?escapeHtml(account.name):""}</div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:6px;">${s.from===s.to ? s.from : s.from+" to "+s.to}</div>
     ${row("Opening Balance", fmt(s.openingBalance))}
     ${row("Total Bank In", "+"+fmt(s.totalIn), "color:var(--ok);")}
     ${row("Total Bank Out", "-"+fmt(s.totalOut), "color:var(--danger);")}
     <div class="inv-flex" style="font-weight:800;border-top:1px solid var(--border);padding-top:6px;font-size:15px;"><span>Closing Balance</span><span>${fmt(s.closingBalance)}</span></div>
   `;
 }
+/** A row auto-posted from a Customer Receipt/Supplier Payment, or one leg of
+ *  a Deposit/Withdrawal/Transfer, can't be edited or voided from here (the
+ *  backend rejects it) — those rows render without a click handler and with
+ *  a small note instead, matching what the API will actually let you do. */
 function renderBankBookList(entries){
-  document.getElementById("bankbook-list").innerHTML = entries.length ? entries.map(e=>`
-    <div class="list-row" data-bb-entry="${e.id}" style="cursor:pointer;">
+  document.getElementById("bankbook-list").innerHTML = entries.length ? entries.map(e=>{
+    const editable = !e.source_type && !e.link_id;
+    const title = e.party || e.txn_type || e.category || (e.type==="in"?"Bank In":"Bank Out");
+    const subParts = [e.date];
+    if(e.txn_type) subParts.push(e.txn_type); else if(e.category) subParts.push(e.category);
+    if(e.payment_mode) subParts.push(e.payment_mode);
+    if(e.reference_no) subParts.push("Ref "+e.reference_no);
+    return `
+    <div class="list-row" ${editable?`data-bb-entry="${e.id}" style="cursor:pointer;"`:""}>
       <div>
-        <div class="row-title">${escapeHtml(e.party || e.category || (e.type==="in"?"Bank In":"Bank Out"))}</div>
-        <div class="row-sub">${e.date}${e.category && e.party ? " · "+escapeHtml(e.category) : ""}${e.remarks ? " · "+escapeHtml(e.remarks) : ""}</div>
-        <div class="row-sub">Balance ${fmt(e.runningBalance)}</div>
+        <div class="row-title">${escapeHtml(title)}</div>
+        <div class="row-sub">${subParts.map(escapeHtml).join(" · ")}</div>
+        ${e.remarks ? `<div class="row-sub">${escapeHtml(e.remarks)}</div>` : ""}
+        <div class="row-sub">Balance ${fmt(e.runningBalance)}${!editable?` · <span class="muted">auto-posted, not editable here</span>`:""}</div>
       </div>
       <div class="row-right row-title" style="color:${e.type==="in"?"var(--ok)":"var(--danger)"};">${e.type==="in"?"+":"-"}${fmt(e.amount)}</div>
     </div>
-  `).join("") : `<div class="empty-hint">No bank entries in this range yet.</div>`;
+  `;
+  }).join("") : `<div class="empty-hint">No bank entries in this range yet.</div>`;
   document.querySelectorAll("[data-bb-entry]").forEach(el=>{
     el.addEventListener("click", ()=>{
       const entry = state.bbEntries.find(e=>e.id===el.dataset.bbEntry);
-      if(entry) openBankEntry(entry.type, entry);
+      if(entry) openBankEntry(entry);
     });
   });
 }
-/** One sheet serves both "add" (editEntry omitted) and "edit" of a bank entry. */
-function openBankEntry(type, editEntry){
+
+/* ------------------------------------------------------------------
+   SHEET: Bank Entry — one unified form for every Bank Entry Module
+   transaction type. Deposit/Withdrawal/Transfer post straight to
+   bankbook.js; Customer Receipt/Supplier Payment post through the
+   existing customer/supplier payment routes (see server/bankLink.js)
+   so due and the ledger stay a single source of truth; the rest are
+   plain bankbook.js entries with a fixed direction.
+   ------------------------------------------------------------------ */
+const BANK_TXN_TYPES = ["Bank Deposit","Bank Withdrawal","Bank Transfer","Customer Receipt","Supplier Payment","Bank Charges","Interest Received","Refund"];
+function wireChipGroup(sheet, containerSel, itemSel){
+  sheet.querySelectorAll(`${containerSel} ${itemSel}`).forEach(b=>b.addEventListener("click", ()=>{
+    sheet.querySelectorAll(`${containerSel} ${itemSel}`).forEach(x=>x.classList.remove("selected")); b.classList.add("selected");
+  }));
+}
+function bankAccountChipsInner(selectedId){
+  const accounts = (state.bankAccounts||[]).filter(a=>a.active);
+  if(!accounts.length) return `<span class="muted" style="font-size:12px;">No bank accounts yet — add one via "Manage Accounts".</span>`;
+  return accounts.map((a,i)=>`<button class="chip ${selectedId?(selectedId===a.id?'selected':''):(i===0?'selected':'')}" data-be-account="${a.id}">${escapeHtml(a.name)}</button>`).join("");
+}
+function renderBankEntryTypeFields(sheet, type){
+  const wrap = sheet.querySelector("#be-fields");
+  const defaultAccount = state.bbAccountId;
+
+  if(type==="Bank Deposit" || type==="Bank Withdrawal"){
+    wrap.innerHTML = `
+      <label class="field-label">${type==="Bank Deposit"?"Deposit into":"Withdraw from"} Account</label>
+      <div class="chip-row" id="be-account-chips">${bankAccountChipsInner(defaultAccount)}</div>
+      <label class="field-label">Amount (₹)</label>
+      <input type="number" inputmode="decimal" step="any" min="0" id="be-amount" placeholder="0">
+      <label class="field-label">Reference No. <span class="muted" style="font-weight:400;">— optional</span></label>
+      <input type="text" id="be-reference" placeholder="e.g. deposit slip no.">
+      <label class="field-label">Remarks <span class="muted" style="font-weight:400;">— optional</span></label>
+      <input type="text" id="be-remarks" placeholder="">
+      <label class="field-label">Attachment <span class="muted" style="font-weight:400;">— optional</span></label>
+      <input type="file" id="be-attachment" accept="image/jpeg,image/png,image/webp,application/pdf">
+    `;
+    wireChipGroup(sheet, "#be-account-chips", "[data-be-account]");
+    return;
+  }
+
+  if(type==="Bank Transfer"){
+    wrap.innerHTML = `
+      <label class="field-label">From Account</label>
+      <div class="chip-row" id="be-from-chips">${bankAccountChipsInner(defaultAccount)}</div>
+      <label class="field-label">To Account</label>
+      <div class="chip-row" id="be-to-chips">${(state.bankAccounts||[]).filter(a=>a.active).map(a=>`<button class="chip" data-be-to="${a.id}">${escapeHtml(a.name)}</button>`).join("")}</div>
+      <label class="field-label">Amount (₹)</label>
+      <input type="number" inputmode="decimal" step="any" min="0" id="be-amount" placeholder="0">
+      <label class="field-label">Reference No. <span class="muted" style="font-weight:400;">— optional</span></label>
+      <input type="text" id="be-reference" placeholder="">
+      <label class="field-label">Remarks <span class="muted" style="font-weight:400;">— optional</span></label>
+      <input type="text" id="be-remarks" placeholder="">
+      <label class="field-label">Attachment <span class="muted" style="font-weight:400;">— optional</span></label>
+      <input type="file" id="be-attachment" accept="image/jpeg,image/png,image/webp,application/pdf">
+    `;
+    wireChipGroup(sheet, "#be-from-chips", "[data-be-account]");
+    wireChipGroup(sheet, "#be-to-chips", "[data-be-to]");
+    return;
+  }
+
+  if(type==="Customer Receipt" || type==="Supplier Payment"){
+    const isCust = type==="Customer Receipt";
+    const list = isCust ? state.customers : state.suppliers;
+    wrap.innerHTML = `
+      <label class="field-label">${isCust?"Customer":"Supplier"}</label>
+      <div class="searchbar" style="margin-top:0;"><span>&#128269;</span><input type="text" id="be-party-search" placeholder="Search by name${isCust?' or phone':''}"></div>
+      <div class="chip-row" id="be-party-chips" style="margin-top:8px;"></div>
+      <label class="field-label">Amount (₹)</label>
+      <input type="number" inputmode="decimal" step="any" min="0" id="be-amount" placeholder="0">
+      <label class="field-label">Payment Mode</label>
+      <div class="chip-row" id="be-method-chips">
+        ${PAYMENT_MODES.map((m,i)=>`<button class="chip ${i===0?'selected':''}" data-be-method="${m}">${m}</button>`).join("")}
+      </div>
+      <label class="field-label" id="be-bankacct-label" style="display:none;">Bank Account</label>
+      <div class="chip-row" id="be-bankacct-chips" style="display:none;">${bankAccountChipsInner(defaultAccount)}</div>
+      <label class="field-label">Reference No. <span class="muted" style="font-weight:400;">— optional</span></label>
+      <input type="text" id="be-reference" placeholder="">
+      <label class="field-label">Remarks <span class="muted" style="font-weight:400;">— optional</span></label>
+      <input type="text" id="be-remarks" placeholder="">
+      <label class="field-label">Attachment <span class="muted" style="font-weight:400;">— optional</span></label>
+      <input type="file" id="be-attachment" accept="image/jpeg,image/png,image/webp,application/pdf">
+    `;
+    let selectedPartyId = null;
+    const renderPartyChips = (q) => {
+      q = (q||"").toLowerCase();
+      let matches = list;
+      if(q) matches = list.filter(x=>x.name.toLowerCase().includes(q) || (isCust && (x.phone||"").includes(q)));
+      matches = matches.slice(0,8);
+      const chipsEl = sheet.querySelector("#be-party-chips");
+      chipsEl.innerHTML = matches.length ? matches.map(x=>`<button class="chip ${selectedPartyId===x.id?'selected':''}" data-be-party="${x.id}">${escapeHtml(x.name)}</button>`).join("")
+        : `<span class="muted" style="font-size:12px;">No match.</span>`;
+      chipsEl.querySelectorAll("[data-be-party]").forEach(b=>b.addEventListener("click", ()=>{
+        selectedPartyId = b.dataset.beParty;
+        chipsEl.querySelectorAll("[data-be-party]").forEach(x=>x.classList.remove("selected"));
+        b.classList.add("selected");
+      }));
+    };
+    renderPartyChips("");
+    sheet.querySelector("#be-party-search").addEventListener("input", (ev)=>renderPartyChips(ev.target.value));
+    sheet._beSelectedPartyId = () => selectedPartyId;
+    sheet.querySelectorAll("[data-be-method]").forEach(b=>b.addEventListener("click", ()=>{
+      sheet.querySelectorAll("[data-be-method]").forEach(x=>x.classList.remove("selected")); b.classList.add("selected");
+      const show = b.dataset.beMethod !== "Cash";
+      sheet.querySelector("#be-bankacct-label").style.display = show?"":"none";
+      sheet.querySelector("#be-bankacct-chips").style.display = show?"":"none";
+    }));
+    wireChipGroup(sheet, "#be-bankacct-chips", "[data-be-account]");
+    return;
+  }
+
+  if(type==="Bank Charges" || type==="Interest Received"){
+    wrap.innerHTML = `
+      <label class="field-label">Bank Account</label>
+      <div class="chip-row" id="be-account-chips">${bankAccountChipsInner(defaultAccount)}</div>
+      <label class="field-label">Amount (₹)</label>
+      <input type="number" inputmode="decimal" step="any" min="0" id="be-amount" placeholder="0">
+      <label class="field-label">Reference No. <span class="muted" style="font-weight:400;">— optional</span></label>
+      <input type="text" id="be-reference" placeholder="">
+      <label class="field-label">Remarks <span class="muted" style="font-weight:400;">— optional</span></label>
+      <input type="text" id="be-remarks" placeholder="">
+      <label class="field-label">Attachment <span class="muted" style="font-weight:400;">— optional</span></label>
+      <input type="file" id="be-attachment" accept="image/jpeg,image/png,image/webp,application/pdf">
+    `;
+    wireChipGroup(sheet, "#be-account-chips", "[data-be-account]");
+    return;
+  }
+
+  if(type==="Refund"){
+    wrap.innerHTML = `
+      <label class="field-label">Bank Account</label>
+      <div class="chip-row" id="be-account-chips">${bankAccountChipsInner(defaultAccount)}</div>
+      <label class="field-label">Direction</label>
+      <div class="chip-row" id="be-dir-chips">
+        <button class="chip" data-be-dir="in">Money In (received)</button>
+        <button class="chip selected" data-be-dir="out">Money Out (refunded)</button>
+      </div>
+      <label class="field-label">Party <span class="muted" style="font-weight:400;">— optional</span></label>
+      <input type="text" id="be-party" placeholder="e.g. customer or supplier name">
+      <label class="field-label">Amount (₹)</label>
+      <input type="number" inputmode="decimal" step="any" min="0" id="be-amount" placeholder="0">
+      <label class="field-label">Reference No. <span class="muted" style="font-weight:400;">— optional</span></label>
+      <input type="text" id="be-reference" placeholder="">
+      <label class="field-label">Remarks <span class="muted" style="font-weight:400;">— optional</span></label>
+      <input type="text" id="be-remarks" placeholder="">
+      <label class="field-label">Attachment <span class="muted" style="font-weight:400;">— optional</span></label>
+      <input type="file" id="be-attachment" accept="image/jpeg,image/png,image/webp,application/pdf">
+    `;
+    wireChipGroup(sheet, "#be-account-chips", "[data-be-account]");
+    wireChipGroup(sheet, "#be-dir-chips", "[data-be-dir]");
+    return;
+  }
+}
+async function saveBankEntry(sheet, type){
+  const btn = sheet.querySelector("#be-save");
+  const date = document.getElementById("be-date").value;
+  const amount = parseFloat((document.getElementById("be-amount")||{}).value);
+  if(!amount || amount<=0){ toast("Enter a valid amount."); return; }
+  btn.disabled = true;
+  try{
+    const attachment = await readAttachmentInput(document.getElementById("be-attachment"));
+    const remarks = (document.getElementById("be-remarks")||{}).value?.trim() || "";
+    const referenceNo = (document.getElementById("be-reference")||{}).value?.trim() || "";
+
+    if(type==="Bank Deposit" || type==="Bank Withdrawal"){
+      const accEl = sheet.querySelector("#be-account-chips [data-be-account].selected");
+      if(!accEl){ toast("Choose a bank account."); btn.disabled=false; return; }
+      const endpoint = type==="Bank Deposit" ? "/bankbook/deposit" : "/bankbook/withdrawal";
+      await api("POST", endpoint, { date, accountId: accEl.dataset.beAccount, amount, referenceNo, remarks, attachment });
+
+    } else if(type==="Bank Transfer"){
+      const fromEl = sheet.querySelector("#be-from-chips [data-be-account].selected");
+      const toEl = sheet.querySelector("#be-to-chips [data-be-to].selected");
+      if(!fromEl || !toEl){ toast("Choose both accounts to transfer between."); btn.disabled=false; return; }
+      if(fromEl.dataset.beAccount === toEl.dataset.beTo){ toast("Choose two different accounts."); btn.disabled=false; return; }
+      await api("POST", "/bankbook/transfer", { date, fromAccountId: fromEl.dataset.beAccount, toAccountId: toEl.dataset.beTo, amount, referenceNo, remarks, attachment });
+
+    } else if(type==="Customer Receipt" || type==="Supplier Payment"){
+      const isCust = type==="Customer Receipt";
+      const partyId = sheet._beSelectedPartyId ? sheet._beSelectedPartyId() : null;
+      if(!partyId){ toast(`Choose a ${isCust?"customer":"supplier"}.`); btn.disabled=false; return; }
+      const method = sheet.querySelector("#be-method-chips [data-be-method].selected").dataset.beMethod;
+      const bankAccEl = sheet.querySelector("#be-bankacct-chips [data-be-account].selected");
+      if(method!=="Cash" && !bankAccEl){ toast("Choose a bank account for this payment mode."); btn.disabled=false; return; }
+      const path = isCust ? `/customers/${partyId}/payments` : `/suppliers/${partyId}/payments`;
+      await api("POST", path, { amount, method, bankAccountId: method==="Cash"?null:bankAccEl.dataset.beAccount, referenceNo, note: remarks, date, attachment });
+
+    } else if(type==="Bank Charges" || type==="Interest Received"){
+      const accEl = sheet.querySelector("#be-account-chips [data-be-account].selected");
+      if(!accEl){ toast("Choose a bank account."); btn.disabled=false; return; }
+      await api("POST", "/bankbook", { date, accountId: accEl.dataset.beAccount, type: type==="Bank Charges"?"out":"in", txnType: type, amount, referenceNo, remarks, attachment });
+
+    } else if(type==="Refund"){
+      const accEl = sheet.querySelector("#be-account-chips [data-be-account].selected");
+      if(!accEl){ toast("Choose a bank account."); btn.disabled=false; return; }
+      const dir = sheet.querySelector("#be-dir-chips [data-be-dir].selected").dataset.beDir;
+      const party = (document.getElementById("be-party")||{}).value?.trim() || "";
+      await api("POST", "/bankbook", { date, accountId: accEl.dataset.beAccount, type: dir, txnType: "Refund", party, referenceNo, remarks, attachment });
+    }
+
+    closeAllSheets();
+    await renderBankBook();
+    await renderHome();
+    toast("Entry saved.", "ok");
+  }catch(err){ toast(err.message); }
+  finally{ btn.disabled = false; }
+}
+/** ADD mode (no editEntry): full transaction-type switcher, dispatching to
+ *  whichever endpoint that type actually needs (see saveBankEntry). EDIT
+ *  mode only ever reaches a plain, directly-entered row — renderBankBookList
+ *  never attaches a click handler to a source-linked or paired one — so it's
+ *  a fixed, simpler form straight onto PUT /bankbook/:id. */
+function openBankEntry(editEntry){
   const sheet = document.getElementById("sheet-bank-entry");
-  const isIn = type==="in";
+  const e = editEntry;
+
+  if(e){
+    sheet.innerHTML = `
+      <div class="sheet-handle"></div>
+      <button class="sheet-close" data-sheetclose>✕</button>
+      <div class="sheet-title">Edit ${escapeHtml(e.txn_type || e.category || (e.type==="in"?"Bank In":"Bank Out"))}</div>
+      <label class="field-label">Date</label>
+      <input type="date" id="bbe-date" value="${e.date}">
+      <label class="field-label">Bank Account</label>
+      <div class="chip-row" id="bbe-account-chips">${bankAccountChipsInner(e.bank_account_id)}</div>
+      <label class="field-label">Type</label>
+      <div class="chip-row" id="bbe-dir-chips">
+        <button class="chip ${e.type==='in'?'selected':''}" data-dir="in">Bank In</button>
+        <button class="chip ${e.type==='out'?'selected':''}" data-dir="out">Bank Out</button>
+      </div>
+      <label class="field-label">Amount (₹)</label>
+      <input type="number" inputmode="decimal" step="any" min="0" id="bbe-amount" value="${e.amount}">
+      <label class="field-label">Party <span class="muted" style="font-weight:400;">— optional</span></label>
+      <input type="text" id="bbe-party" value="${escapeHtml(e.party||"")}">
+      <label class="field-label">Payment Mode <span class="muted" style="font-weight:400;">— optional</span></label>
+      <input type="text" id="bbe-mode" value="${escapeHtml(e.payment_mode||"")}">
+      <label class="field-label">Reference No. <span class="muted" style="font-weight:400;">— optional</span></label>
+      <input type="text" id="bbe-reference" value="${escapeHtml(e.reference_no||"")}">
+      <label class="field-label">Remarks <span class="muted" style="font-weight:400;">— optional</span></label>
+      <input type="text" id="bbe-remarks" value="${escapeHtml(e.remarks||"")}">
+      <label class="field-label">Attachment <span class="muted" style="font-weight:400;">— optional</span></label>
+      <input type="file" id="bbe-attachment" accept="image/jpeg,image/png,image/webp,application/pdf">
+      ${e.attachment_path ? `<div class="muted" style="font-size:11px;margin-top:2px;">Current: <a href="/api/attachments/${e.attachment_path}" target="_blank">${escapeHtml(e.attachment_name||"attachment")}</a> — choose a new file to replace it.</div>` : ""}
+      <button class="btn btn-primary" id="bbe-save" style="margin-top:16px;">Update Entry</button>
+      ${isOwner() ? `<div style="margin-top:12px;text-align:center;"><a href="#" id="bbe-delete-link" class="btn-danger-link">Delete this entry</a></div>` : ""}
+    `;
+    sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+    wireChipGroup(sheet, "#bbe-account-chips", "[data-be-account]");
+    wireChipGroup(sheet, "#bbe-dir-chips", "[data-dir]");
+    sheet.querySelector("#bbe-save").addEventListener("click", async ()=>{
+      const amount = parseFloat(document.getElementById("bbe-amount").value);
+      if(!amount || amount<=0){ toast("Enter a valid amount."); return; }
+      const accountEl = sheet.querySelector("#bbe-account-chips [data-be-account].selected");
+      if(!accountEl){ toast("Choose a bank account."); return; }
+      const btn = document.getElementById("bbe-save");
+      btn.disabled = true;
+      try{
+        const attachment = await readAttachmentInput(document.getElementById("bbe-attachment"));
+        await api("PUT", `/bankbook/${e.id}`, {
+          date: document.getElementById("bbe-date").value,
+          accountId: accountEl.dataset.beAccount,
+          type: sheet.querySelector("#bbe-dir-chips [data-dir].selected").dataset.dir,
+          amount,
+          party: document.getElementById("bbe-party").value.trim(),
+          paymentMode: document.getElementById("bbe-mode").value.trim(),
+          referenceNo: document.getElementById("bbe-reference").value.trim(),
+          remarks: document.getElementById("bbe-remarks").value.trim(),
+          attachment
+        });
+        closeAllSheets();
+        await renderBankBook();
+        toast("Entry updated.", "ok");
+      }catch(err){ toast(err.message); }
+      finally{ btn.disabled = false; }
+    });
+    const deleteLink = sheet.querySelector("#bbe-delete-link");
+    if(deleteLink) deleteLink.addEventListener("click", async (ev)=>{
+      ev.preventDefault();
+      if(confirm("Delete this bank entry? This can't be undone from here.")){
+        try{
+          await api("POST", `/bankbook/${e.id}/void`);
+          closeAllSheets();
+          await renderBankBook();
+          toast("Entry deleted.", "ok");
+        }catch(err){ toast(err.message); }
+      }
+    });
+    showSheet("sheet-bank-entry");
+    return;
+  }
+
   sheet.innerHTML = `
     <div class="sheet-handle"></div>
     <button class="sheet-close" data-sheetclose>✕</button>
-    <div class="sheet-title">${editEntry ? "Edit " : ""}${isIn ? "Bank In" : "Bank Out"}</div>
+    <div class="sheet-title">New Bank Entry</div>
+    <label class="field-label">Transaction Type</label>
+    <div class="chip-row" id="be-type-chips">
+      ${BANK_TXN_TYPES.map((t,i)=>`<button class="chip ${i===0?'selected':''}" data-type="${t}">${t}</button>`).join("")}
+    </div>
     <label class="field-label">Date</label>
-    <input type="date" id="bbe-date" value="${editEntry ? editEntry.date : todayISO()}">
-    <label class="field-label">Amount (₹)</label>
-    <input type="number" inputmode="decimal" step="any" min="0" id="bbe-amount" value="${editEntry ? editEntry.amount : ""}" placeholder="0">
-    <label class="field-label">Party / Person <span class="muted" style="font-weight:400;">— optional</span></label>
-    <input type="text" id="bbe-party" value="${editEntry ? escapeHtml(editEntry.party||"") : ""}" placeholder="e.g. Ramesh, Electricity Board">
-    <label class="field-label">Category <span class="muted" style="font-weight:400;">— optional</span></label>
-    <input type="text" id="bbe-category" value="${editEntry ? escapeHtml(editEntry.category||"") : ""}" placeholder="e.g. Cheque, NEFT, Bank Charges">
-    <label class="field-label">Remarks <span class="muted" style="font-weight:400;">— optional</span></label>
-    <input type="text" id="bbe-remarks" value="${editEntry ? escapeHtml(editEntry.remarks||"") : ""}" placeholder="e.g. Cheque #123456">
-    <button class="btn btn-primary" id="bbe-save" style="margin-top:16px;">${editEntry ? "Update Entry" : "Save Entry"}</button>
-    ${editEntry && isOwner() ? `<div style="margin-top:12px;text-align:center;"><a href="#" id="bbe-delete-link" class="btn-danger-link">Delete this entry</a></div>` : ""}
+    <input type="date" id="be-date" value="${todayISO()}">
+    <div id="be-fields"></div>
+    <button class="btn btn-primary" id="be-save" style="margin-top:16px;">Save Entry</button>
   `;
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
-  sheet.querySelector("#bbe-save").addEventListener("click", async ()=>{
-    const amount = parseFloat(document.getElementById("bbe-amount").value);
-    if(!amount || amount<=0){ toast("Enter a valid amount."); return; }
-    const payload = {
-      date: document.getElementById("bbe-date").value,
-      type,
-      amount,
-      party: document.getElementById("bbe-party").value.trim(),
-      category: document.getElementById("bbe-category").value.trim(),
-      remarks: document.getElementById("bbe-remarks").value.trim()
-    };
-    const btn = document.getElementById("bbe-save");
-    btn.disabled = true;
-    try{
-      if(editEntry) await api("PUT", `/bankbook/${editEntry.id}`, payload);
-      else await api("POST", "/bankbook", payload);
-      closeAllSheets();
-      await renderBankBook();
-      toast(editEntry ? "Entry updated." : "Entry saved.", "ok");
-    }catch(err){ toast(err.message); }
-    finally{ btn.disabled = false; }
-  });
-  const deleteLink = sheet.querySelector("#bbe-delete-link");
-  if(deleteLink) deleteLink.addEventListener("click", async (e)=>{
-    e.preventDefault();
-    if(confirm("Delete this bank entry? This can't be undone from here.")){
-      try{
-        await api("POST", `/bankbook/${editEntry.id}/void`);
-        closeAllSheets();
-        await renderBankBook();
-        toast("Entry deleted.", "ok");
-      }catch(err){ toast(err.message); }
-    }
-  });
+  let currentType = BANK_TXN_TYPES[0];
+  renderBankEntryTypeFields(sheet, currentType);
+  sheet.querySelectorAll("[data-type]").forEach(b=>b.addEventListener("click", ()=>{
+    sheet.querySelectorAll("[data-type]").forEach(x=>x.classList.remove("selected")); b.classList.add("selected");
+    currentType = b.dataset.type;
+    renderBankEntryTypeFields(sheet, currentType);
+  }));
+  sheet.querySelector("#be-save").addEventListener("click", ()=>saveBankEntry(sheet, currentType));
   showSheet("sheet-bank-entry");
+}
+
+/* ------------------------------------------------------------------
+   SHEET: Manage Bank Accounts — list with live balances, add new,
+   archive/reactivate (archived accounts drop out of every picker but
+   keep their history and balance).
+   ------------------------------------------------------------------ */
+function openManageBankAccounts(){
+  const sheet = document.getElementById("sheet-bank-account");
+  const renderList = () => {
+    const accounts = state.bankAccounts||[];
+    sheet.innerHTML = `
+      <div class="sheet-handle"></div>
+      <button class="sheet-close" data-sheetclose>✕</button>
+      <div class="sheet-title">Bank Accounts</div>
+      <div class="card" id="bam-list" style="margin-bottom:14px;">
+        ${accounts.length ? accounts.map(a=>`
+          <div class="list-row">
+            <div>
+              <div class="row-title">${escapeHtml(a.name)}${a.active?"":' <span class="pill">Archived</span>'}</div>
+              <div class="row-sub">${escapeHtml(a.bank_name||"")}${a.account_no?" · "+escapeHtml(a.account_no):""}</div>
+            </div>
+            <div class="row-right" style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
+              <div class="row-title">${fmt(a.balance)}</div>
+              ${isOwner() ? `<a href="#" data-bam-toggle="${a.id}" data-bam-active="${a.active}" style="font-size:11px;">${a.active?"Archive":"Reactivate"}</a>` : ""}
+            </div>
+          </div>
+        `).join("") : `<div class="empty-hint">No bank accounts yet.</div>`}
+      </div>
+      <div class="section-title" style="margin-top:0;">Add Account</div>
+      <label class="field-label">Account Name</label>
+      <input type="text" id="bam-name" placeholder="e.g. HDFC Current A/c">
+      <label class="field-label">Bank Name <span class="muted" style="font-weight:400;">— optional</span></label>
+      <input type="text" id="bam-bank-name" placeholder="e.g. HDFC Bank">
+      <label class="field-label">Account No. <span class="muted" style="font-weight:400;">— optional</span></label>
+      <input type="text" id="bam-account-no" placeholder="">
+      <label class="field-label">Opening Balance (₹) <span class="muted" style="font-weight:400;">— optional</span></label>
+      <input type="number" inputmode="decimal" step="any" id="bam-opening" placeholder="0">
+      <button class="btn btn-primary" id="bam-save" style="margin-top:16px;">Add Account</button>
+    `;
+    sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+    sheet.querySelectorAll("[data-bam-toggle]").forEach(link=>link.addEventListener("click", async (ev)=>{
+      ev.preventDefault();
+      const nowActive = link.dataset.bamActive !== "1";
+      try{
+        await api("POST", `/bank-accounts/${link.dataset.bamToggle}/active`, { active: nowActive });
+        await loadBankAccounts();
+        renderList();
+        renderBankAccountChips();
+        toast(nowActive?"Account reactivated.":"Account archived.", "ok");
+      }catch(err){ toast(err.message); }
+    }));
+    sheet.querySelector("#bam-save").addEventListener("click", async ()=>{
+      const name = document.getElementById("bam-name").value.trim();
+      if(!name){ toast("Enter an account name."); return; }
+      const btn = document.getElementById("bam-save");
+      btn.disabled = true;
+      try{
+        await api("POST", "/bank-accounts", {
+          name,
+          bankName: document.getElementById("bam-bank-name").value.trim(),
+          accountNo: document.getElementById("bam-account-no").value.trim(),
+          openingBalance: parseFloat(document.getElementById("bam-opening").value) || 0
+        });
+        await loadBankAccounts();
+        renderList();
+        renderBankAccountChips();
+        toast("Bank account added.", "ok");
+      }catch(err){ toast(err.message); }
+      finally{ btn.disabled = false; }
+    });
+  };
+  renderList();
+  showSheet("sheet-bank-account");
 }
 function printBankBook(){
   const rows = [...state.bbEntries].reverse();

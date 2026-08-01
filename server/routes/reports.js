@@ -65,6 +65,19 @@ router.get("/dashboard", (req, res) => {
   const products = db.prepare("SELECT * FROM products").all();
   const lowStockCount = products.filter(p => p.stock < 15).length;
 
+  const cashBalance = round2(db.prepare(`
+    SELECT COALESCE(SUM(CASE WHEN type = 'in' THEN amount ELSE -amount END), 0) AS net
+    FROM cash_entries WHERE voided = 0
+  `).get().net);
+  const bankAccountsList = db.prepare("SELECT * FROM bank_accounts WHERE active = 1").all();
+  const bankBalance = round2(bankAccountsList.reduce((sum, a) => {
+    const net = db.prepare(`
+      SELECT COALESCE(SUM(CASE WHEN type = 'in' THEN amount ELSE -amount END), 0) AS net
+      FROM bank_entries WHERE bank_account_id = ? AND voided = 0
+    `).get(a.id).net;
+    return sum + a.opening_balance + net;
+  }, 0));
+
   const days = [];
   for (let i = 6; i >= 0; i--) {
     const d = new Date();
@@ -94,6 +107,7 @@ router.get("/dashboard", (req, res) => {
 
   res.json({
     todaysSales, todaysProfit, outstandingTotal, outstandingCount, payableTotal, payableCount, lowStockCount,
+    cashBalance, bankBalance,
     revenueChart: days, bestSellers: soldRows, topCustomers, recentInvoices
   });
 });

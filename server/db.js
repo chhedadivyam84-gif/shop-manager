@@ -245,11 +245,26 @@ CREATE TABLE IF NOT EXISTS cash_entries (
   created_at INTEGER NOT NULL
 );
 
+-- One row per real bank account the shop holds (current a/c at whichever
+-- banks). Each account's balance is opening_balance + the running total of
+-- its own non-voided bank_entries rows -- never stored directly, so it can
+-- never drift out of sync with the ledger that produced it.
+CREATE TABLE IF NOT EXISTS bank_accounts (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  bank_name TEXT DEFAULT '',
+  account_no TEXT DEFAULT '',
+  opening_balance REAL NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL
+);
+
 -- Bank Book: identical shape and purpose to cash_entries above, just a
 -- separate running balance for the bank account instead of the cash drawer —
--- a manual entry here is NOT created automatically from a Bank-method sale/
--- purchase payment (those already have their own record); this is for
--- everything else that moves through the bank (transfers, cheques, charges).
+-- extended (via addColumn migrations further down) with a transaction-type
+-- taxonomy, payment mode/reference, optional party link, attachment, and a
+-- link_id used to pair the two legs of a Deposit/Withdrawal/Transfer, or tie
+-- an entry back to the customer/supplier payment that auto-created it.
 CREATE TABLE IF NOT EXISTS bank_entries (
   id TEXT PRIMARY KEY,
   date TEXT NOT NULL,
@@ -967,6 +982,59 @@ const addedInvoiceLocation = addColumn("invoices", "location_id", "TEXT REFERENC
 if (addedInvoiceLocation) {
   const shopId = db.prepare("SELECT id FROM locations WHERE code = 'shop'").get().id;
   db.prepare("UPDATE invoices SET location_id = ? WHERE location_id IS NULL").run(shopId);
+}
+
+/* ------------------------------------------------------------------
+   BANK ENTRY MODULE
+   Multi-account Bank Book, a transaction-type taxonomy on top of the old
+   plain in/out bank_entries row, and auto-posting from the existing
+   customer/supplier payment routes so Cash Book/Bank Book stay in sync
+   with "Record Payment" without that screen changing at all.
+   ------------------------------------------------------------------ */
+addColumn("bank_entries", "bank_account_id", "TEXT REFERENCES bank_accounts(id)");
+addColumn("bank_entries", "txn_type", "TEXT DEFAULT ''");
+addColumn("bank_entries", "payment_mode", "TEXT DEFAULT ''");
+addColumn("bank_entries", "reference_no", "TEXT DEFAULT ''");
+addColumn("bank_entries", "party_type", "TEXT DEFAULT ''");
+addColumn("bank_entries", "party_id", "TEXT DEFAULT ''");
+addColumn("bank_entries", "attachment_path", "TEXT DEFAULT ''");
+addColumn("bank_entries", "attachment_name", "TEXT DEFAULT ''");
+// Pairs the two legs of a Deposit/Withdrawal/Transfer (one bank_entries row
+// + one cash_entries row, or two bank_entries rows) so voiding one side can
+// find and void the other. Also shared with cash_entries.link_id below.
+addColumn("bank_entries", "link_id", "TEXT DEFAULT ''");
+// When this entry was auto-created by a customer/supplier payment rather
+// than entered directly here, source_type/source_id point back at it —
+// voiding must go through that payment, not this row, so the due and the
+// ledger entry can never drift apart.
+addColumn("bank_entries", "source_type", "TEXT DEFAULT ''");
+addColumn("bank_entries", "source_id", "TEXT DEFAULT ''");
+
+addColumn("cash_entries", "link_id", "TEXT DEFAULT ''");
+addColumn("cash_entries", "source_type", "TEXT DEFAULT ''");
+addColumn("cash_entries", "source_id", "TEXT DEFAULT ''");
+
+// Which bank account a Bank-method customer/supplier payment hit, so it can
+// auto-post the matching bank_entries row. NULL for Cash-method payments.
+addColumn("payments", "bank_account_id", "TEXT REFERENCES bank_accounts(id)");
+addColumn("purchase_payments", "bank_account_id", "TEXT REFERENCES bank_accounts(id)");
+
+// Every bank_entries row ever created before multi-account support existed
+// belongs to one real account by definition -- it just wasn't recorded which
+// one. Give them a home ("Main Bank Account") rather than leaving orphaned
+// entries with no account to add up into, so existing Bank Book history and
+// its balance survive this migration intact.
+const bankEntryCols = columnsOf("bank_entries");
+if (bankEntryCols.includes("bank_account_id")) {
+  const anyUnassigned = db.prepare("SELECT COUNT(*) AS n FROM bank_entries WHERE bank_account_id IS NULL").get().n;
+  if (anyUnassigned > 0) {
+    db.exec(`
+      INSERT OR IGNORE INTO bank_accounts (id, name, bank_name, account_no, opening_balance, active, created_at)
+      VALUES ('BANKACC_main', 'Main Bank Account', '', '', 0, 1, ${Date.now()})
+    `);
+    db.prepare("UPDATE bank_entries SET bank_account_id = 'BANKACC_main' WHERE bank_account_id IS NULL").run();
+    db.prepare("UPDATE bank_entries SET txn_type = CASE type WHEN 'in' THEN 'Bank Deposit' ELSE 'Bank Withdrawal' END WHERE txn_type = ''").run();
+  }
 }
 
 // Where the data lives — the backup module needs the on-disk paths, and this

@@ -3,6 +3,7 @@ const db = require("../db");
 const { uid, logAction, round2, todayStr } = require("../util");
 const { requireRole } = require("../auth");
 const { saveAttachment } = require("../attachments");
+const { postPaymentToLedger, voidLinkedLedgerEntry } = require("../bankLink");
 const { buildXlsx } = require("../xlsx");
 
 const router = express.Router();
@@ -44,7 +45,7 @@ function buildCustomerDetail(id) {
     ...invoiceRows.map(h => ({ type: "invoice", id: h.id, label: h.challan_no, amount: h.total, date: h.date, at: h.created_at })),
     ...payments.map(p => ({
       type: "payment", id: p.id, label: p.method, amount: -p.amount, note: p.note,
-      referenceNo: p.reference_no, bankName: p.bank_name, upiId: p.upi_id,
+      referenceNo: p.reference_no, bankName: p.bank_name, upiId: p.upi_id, bankAccountId: p.bank_account_id,
       attachmentPath: p.attachment_path, attachmentName: p.attachment_name,
       againstInvoiceNo: p.invoice_id ? (invoiceNoById[p.invoice_id] || null) : null,
       date: p.payment_date || new Date(p.created_at).toISOString().slice(0, 10), at: p.created_at
@@ -152,6 +153,7 @@ router.post("/:id/payments", (req, res) => {
   const referenceNo = (req.body.referenceNo || "").trim();
   const bankName = (req.body.bankName || "").trim();
   const upiId = (req.body.upiId || "").trim();
+  const bankAccountId = req.body.bankAccountId || null;
   const paymentDate = (req.body.date || "").trim() || todayStr();
 
   let invoiceId = null;
@@ -166,13 +168,24 @@ router.post("/:id/payments", (req, res) => {
   catch (err) { return res.status(400).json({ error: err.message }); }
 
   const id = uid("PAY");
-  db.transaction(() => {
-    db.prepare(`
-      INSERT INTO payments (id, customer_id, amount, method, note, invoice_id, reference_no, bank_name, upi_id, attachment_path, attachment_name, payment_date, voided, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
-    `).run(id, c.id, amount, method, note, invoiceId, referenceNo, bankName, upiId, attachment ? attachment.path : "", attachment ? attachment.name : "", paymentDate, Date.now());
-    db.prepare("UPDATE customers SET due = MAX(0, due - ?) WHERE id = ?").run(amount, c.id);
-  })();
+  try {
+    db.transaction(() => {
+      db.prepare(`
+        INSERT INTO payments (id, customer_id, amount, method, note, invoice_id, reference_no, bank_name, upi_id, bank_account_id, attachment_path, attachment_name, payment_date, voided, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+      `).run(id, c.id, amount, method, note, invoiceId, referenceNo, bankName, upiId, bankAccountId, attachment ? attachment.path : "", attachment ? attachment.name : "", paymentDate, Date.now());
+      db.prepare("UPDATE customers SET due = MAX(0, due - ?) WHERE id = ?").run(amount, c.id);
+      // Auto-posts into Cash Book (method Cash) or Bank Book (any other
+      // method) so this screen keeps working unchanged while the ledgers
+      // stay in sync with it — see server/bankLink.js.
+      postPaymentToLedger({
+        bankAccountId, method, amount, date: paymentDate,
+        partyType: "customer", partyId: c.id, partyName: c.name,
+        txnType: "Customer Receipt", referenceNo, attachment,
+        sourceType: "payment", sourceId: id, direction: "in"
+      });
+    })();
+  } catch (err) { return res.status(400).json({ error: err.message }); }
 
   logAction(req, "payment.record", `${c.name}: ${amount} (${method})`);
   res.status(201).json(db.prepare("SELECT * FROM customers WHERE id = ?").get(c.id));
@@ -197,6 +210,7 @@ router.put("/:id/payments/:paymentId", (req, res) => {
   const referenceNo = (req.body.referenceNo ?? p.reference_no).trim();
   const bankName = (req.body.bankName ?? p.bank_name).trim();
   const upiId = (req.body.upiId ?? p.upi_id).trim();
+  const bankAccountId = req.body.bankAccountId !== undefined ? req.body.bankAccountId : p.bank_account_id;
   const paymentDate = (req.body.date || "").trim() || p.payment_date;
 
   let attachmentPath = p.attachment_path, attachmentName = p.attachment_name;
@@ -206,12 +220,25 @@ router.put("/:id/payments/:paymentId", (req, res) => {
   } catch (err) { return res.status(400).json({ error: err.message }); }
 
   const delta = round2(amount - p.amount);
-  db.transaction(() => {
-    db.prepare(`
-      UPDATE payments SET amount=?, method=?, note=?, reference_no=?, bank_name=?, upi_id=?, attachment_path=?, attachment_name=?, payment_date=? WHERE id=?
-    `).run(amount, method, note, referenceNo, bankName, upiId, attachmentPath, attachmentName, paymentDate, p.id);
-    if (delta) db.prepare("UPDATE customers SET due = MAX(0, due - ?) WHERE id = ?").run(delta, c.id);
-  })();
+  try {
+    db.transaction(() => {
+      db.prepare(`
+        UPDATE payments SET amount=?, method=?, note=?, reference_no=?, bank_name=?, upi_id=?, bank_account_id=?, attachment_path=?, attachment_name=?, payment_date=? WHERE id=?
+      `).run(amount, method, note, referenceNo, bankName, upiId, bankAccountId, attachmentPath, attachmentName, paymentDate, p.id);
+      if (delta) db.prepare("UPDATE customers SET due = MAX(0, due - ?) WHERE id = ?").run(delta, c.id);
+      // Re-derive the linked ledger entry from scratch rather than patching
+      // it in place — simplest way to handle a switch between Cash/Bank or
+      // between bank accounts without leaving a stale row behind.
+      voidLinkedLedgerEntry("payment", p.id);
+      postPaymentToLedger({
+        bankAccountId, method, amount, date: paymentDate,
+        partyType: "customer", partyId: c.id, partyName: c.name,
+        txnType: "Customer Receipt", referenceNo,
+        attachment: attachmentPath ? { path: attachmentPath, name: attachmentName } : null,
+        sourceType: "payment", sourceId: p.id, direction: "in"
+      });
+    })();
+  } catch (err) { return res.status(400).json({ error: err.message }); }
 
   logAction(req, "payment.edit", `${c.name}: ${p.amount} -> ${amount}`);
   res.json(db.prepare("SELECT * FROM customers WHERE id = ?").get(c.id));
@@ -227,6 +254,7 @@ router.post("/:id/payments/:paymentId/void", requireRole("owner"), (req, res) =>
   db.transaction(() => {
     db.prepare("UPDATE payments SET voided = 1 WHERE id = ?").run(p.id);
     db.prepare("UPDATE customers SET due = due + ? WHERE id = ?").run(p.amount, c.id);
+    voidLinkedLedgerEntry("payment", p.id);
   })();
 
   logAction(req, "payment.void", `${c.name}: ${p.amount} (${p.method})`);

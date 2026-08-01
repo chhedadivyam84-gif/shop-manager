@@ -3,6 +3,7 @@ const db = require("../db");
 const { uid, logAction, round2, todayStr } = require("../util");
 const { requireRole } = require("../auth");
 const { saveAttachment } = require("../attachments");
+const { postPaymentToLedger, voidLinkedLedgerEntry } = require("../bankLink");
 const { buildXlsx } = require("../xlsx");
 
 const router = express.Router();
@@ -49,7 +50,7 @@ function buildSupplierDetail(id) {
     ...purchaseInvoiceRows.map(h => ({ type: "purchase", source: "purchases", id: h.id, label: h.invoice_no || "(no invoice no.)", amount: h.total, date: h.date, at: h.created_at })),
     ...payments.map(p => ({
       type: "payment", id: p.id, label: p.method, amount: -p.amount, note: p.note,
-      referenceNo: p.reference_no, bankName: p.bank_name, upiId: p.upi_id,
+      referenceNo: p.reference_no, bankName: p.bank_name, upiId: p.upi_id, bankAccountId: p.bank_account_id,
       attachmentPath: p.attachment_path, attachmentName: p.attachment_name,
       againstInvoiceNo: p.stock_in_id ? (invoiceNoById[p.stock_in_id] || null) : null,
       date: p.payment_date || new Date(p.created_at).toISOString().slice(0, 10), at: p.created_at
@@ -160,6 +161,7 @@ router.post("/:id/payments", (req, res) => {
   const referenceNo = (req.body.referenceNo || "").trim();
   const bankName = (req.body.bankName || "").trim();
   const upiId = (req.body.upiId || "").trim();
+  const bankAccountId = req.body.bankAccountId || null;
   const paymentDate = (req.body.date || "").trim() || todayStr();
 
   let stockInId = null;
@@ -174,13 +176,21 @@ router.post("/:id/payments", (req, res) => {
   catch (err) { return res.status(400).json({ error: err.message }); }
 
   const id = uid("PPAY");
-  db.transaction(() => {
-    db.prepare(`
-      INSERT INTO purchase_payments (id, supplier_id, stock_in_id, amount, method, reference_no, bank_name, upi_id, attachment_path, attachment_name, note, payment_date, voided, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
-    `).run(id, s.id, stockInId, amount, method, referenceNo, bankName, upiId, attachment ? attachment.path : "", attachment ? attachment.name : "", note, paymentDate, Date.now());
-    db.prepare("UPDATE suppliers SET due = MAX(0, due - ?) WHERE id = ?").run(amount, s.id);
-  })();
+  try {
+    db.transaction(() => {
+      db.prepare(`
+        INSERT INTO purchase_payments (id, supplier_id, stock_in_id, amount, method, reference_no, bank_name, upi_id, bank_account_id, attachment_path, attachment_name, note, payment_date, voided, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+      `).run(id, s.id, stockInId, amount, method, referenceNo, bankName, upiId, bankAccountId, attachment ? attachment.path : "", attachment ? attachment.name : "", note, paymentDate, Date.now());
+      db.prepare("UPDATE suppliers SET due = MAX(0, due - ?) WHERE id = ?").run(amount, s.id);
+      postPaymentToLedger({
+        bankAccountId, method, amount, date: paymentDate,
+        partyType: "supplier", partyId: s.id, partyName: s.name,
+        txnType: "Supplier Payment", referenceNo, attachment,
+        sourceType: "purchase_payment", sourceId: id, direction: "out"
+      });
+    })();
+  } catch (err) { return res.status(400).json({ error: err.message }); }
 
   logAction(req, "purchase_payment.record", `${s.name}: ${amount} (${method})`);
   res.status(201).json(db.prepare("SELECT * FROM suppliers WHERE id = ?").get(s.id));
@@ -200,6 +210,7 @@ router.put("/:id/payments/:paymentId", (req, res) => {
   const referenceNo = (req.body.referenceNo ?? p.reference_no).trim();
   const bankName = (req.body.bankName ?? p.bank_name).trim();
   const upiId = (req.body.upiId ?? p.upi_id).trim();
+  const bankAccountId = req.body.bankAccountId !== undefined ? req.body.bankAccountId : p.bank_account_id;
   const paymentDate = (req.body.date || "").trim() || p.payment_date;
 
   let attachmentPath = p.attachment_path, attachmentName = p.attachment_name;
@@ -209,12 +220,22 @@ router.put("/:id/payments/:paymentId", (req, res) => {
   } catch (err) { return res.status(400).json({ error: err.message }); }
 
   const delta = round2(amount - p.amount);
-  db.transaction(() => {
-    db.prepare(`
-      UPDATE purchase_payments SET amount=?, method=?, note=?, reference_no=?, bank_name=?, upi_id=?, attachment_path=?, attachment_name=?, payment_date=? WHERE id=?
-    `).run(amount, method, note, referenceNo, bankName, upiId, attachmentPath, attachmentName, paymentDate, p.id);
-    if (delta) db.prepare("UPDATE suppliers SET due = MAX(0, due - ?) WHERE id = ?").run(delta, s.id);
-  })();
+  try {
+    db.transaction(() => {
+      db.prepare(`
+        UPDATE purchase_payments SET amount=?, method=?, note=?, reference_no=?, bank_name=?, upi_id=?, bank_account_id=?, attachment_path=?, attachment_name=?, payment_date=? WHERE id=?
+      `).run(amount, method, note, referenceNo, bankName, upiId, bankAccountId, attachmentPath, attachmentName, paymentDate, p.id);
+      if (delta) db.prepare("UPDATE suppliers SET due = MAX(0, due - ?) WHERE id = ?").run(delta, s.id);
+      voidLinkedLedgerEntry("purchase_payment", p.id);
+      postPaymentToLedger({
+        bankAccountId, method, amount, date: paymentDate,
+        partyType: "supplier", partyId: s.id, partyName: s.name,
+        txnType: "Supplier Payment", referenceNo,
+        attachment: attachmentPath ? { path: attachmentPath, name: attachmentName } : null,
+        sourceType: "purchase_payment", sourceId: p.id, direction: "out"
+      });
+    })();
+  } catch (err) { return res.status(400).json({ error: err.message }); }
 
   logAction(req, "purchase_payment.edit", `${s.name}: ${p.amount} -> ${amount}`);
   res.json(db.prepare("SELECT * FROM suppliers WHERE id = ?").get(s.id));
@@ -230,6 +251,7 @@ router.post("/:id/payments/:paymentId/void", requireRole("owner"), (req, res) =>
   db.transaction(() => {
     db.prepare("UPDATE purchase_payments SET voided = 1 WHERE id = ?").run(p.id);
     db.prepare("UPDATE suppliers SET due = due + ? WHERE id = ?").run(p.amount, s.id);
+    voidLinkedLedgerEntry("purchase_payment", p.id);
   })();
 
   logAction(req, "purchase_payment.void", `${s.name}: ${p.amount} (${p.method})`);

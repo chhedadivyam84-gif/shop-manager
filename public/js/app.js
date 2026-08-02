@@ -159,7 +159,7 @@ async function initLogin(){
   const wrap = document.getElementById("staff-picker");
   wrap.innerHTML = staffList.length ? staffList.map(s=>`
     <button class="qa-btn" data-staff="${s.id}">
-      <span class="ic avatar" style="width:28px;height:28px;font-size:11px;display:inline-flex;">${initials(s.name)}</span>
+      <span class="ic avatar" style="width:34px;height:34px;font-size:13px;display:inline-flex;flex-shrink:0;">${initials(s.name)}</span>
       ${escapeHtml(s.name)}${s.role==="owner" ? " (Owner)" : ""}
     </button>`).join("") : `<div class="empty-hint">Couldn't reach the server. Check the app is running.</div>`;
   wrap.querySelectorAll("[data-staff]").forEach(b=>{

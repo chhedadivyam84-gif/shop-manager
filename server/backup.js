@@ -169,11 +169,21 @@ function snapshotForDownload() {
 /* ------------------------------------------------------------
    SCHEDULE
    One backup shortly after startup (so a freshly-booted shop PC
-   is covered without waiting a day), then every 24h. setInterval
+   is covered without waiting a day), then a recurring one. setInterval
    is enough — this app is a single long-lived process, and a
    missed tick during a reboot is caught by the next startup run.
+
+   The recurring interval is short (15 min) ONLY when cloud backup is
+   configured — that's the ephemeral-disk (Render) case, where the gap
+   between "last cloud backup" and "next redeploy" is exactly the window
+   in which anything the shop entered live can be silently lost forever
+   (see the SIGTERM handler in index.js for the other half of this fix).
+   A local-only PC's disk is never wiped out from under it, so it stays
+   on the calmer daily cadence — no reason to spam data/backups/ with a
+   snapshot every 15 minutes when nothing is actually at risk there.
    ------------------------------------------------------------ */
 const DAY_MS = 24 * 60 * 60 * 1000;
+const CLOUD_INTERVAL_MS = 15 * 60 * 1000;
 
 function startSchedule() {
   const kick = async (trigger) => {
@@ -185,9 +195,10 @@ function startSchedule() {
       console.error("[backup] FAILED:", err.message);
     }
   };
+  const intervalMs = cloudConfig().enabled ? CLOUD_INTERVAL_MS : DAY_MS;
   // Delay the first run a little so it doesn't compete with startup work.
   setTimeout(() => kick("startup"), 10_000).unref?.();
-  setInterval(() => kick("scheduled"), DAY_MS).unref?.();
+  setInterval(() => kick("scheduled"), intervalMs).unref?.();
 }
 
 module.exports = {

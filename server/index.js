@@ -152,4 +152,30 @@ app.listen(PORT, "0.0.0.0", () => {
   // server is up so a backup can never delay accepting requests.
   backup.startSchedule();
 });
+
+// On an ephemeral-disk host (Render), a code deploy kills THIS process and
+// boots a brand new container with an empty disk — restore.js then repopulates
+// it from whatever the last cloud backup happened to be. Without this hook,
+// anything the shop entered live after that last backup and before the deploy
+// is silently gone forever the moment the old container is torn down. Render
+// sends SIGTERM (with a short grace period) before the hard kill, so taking
+// one last snapshot right here closes that gap for the one event that
+// actually destroys the disk — routine restarts/spin-downs don't reach this
+// (the process just stops, disk survives), only a genuine redeploy does.
+let shuttingDown = false;
+process.on("SIGTERM", () => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log("[shutdown] SIGTERM received — taking a final backup before exit...");
+  const done = () => process.exit(0);
+  // Don't let a stalled cloud upload hold up the exit past Render's own grace
+  // period — the local VACUUM INTO snapshot (the part that matters most,
+  // since restore.js prefers cloud but local-first design assumes it can
+  // stand alone) has already landed synchronously inside runBackup by then.
+  const forceTimer = setTimeout(done, 8000).unref?.();
+  require("./backup").runBackup("pre-shutdown")
+    .then(r => console.log(`[shutdown] backup complete: ${r.file} (${r.size} bytes)${r.cloud.ok ? " + cloud" : ""}`))
+    .catch(err => console.error("[shutdown] backup FAILED:", err.message))
+    .finally(() => { clearTimeout(forceTimer); done(); });
+});
 }

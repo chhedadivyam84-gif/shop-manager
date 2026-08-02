@@ -52,7 +52,7 @@ button, input, select{font-family:inherit;}
 /* Pulls just the "Enter PIN for X" prompt + dots (and everything below
    them) up closer to the title above, instead of shifting the whole login
    screen — scoped to the PIN step only, the staff-picker step is untouched. */
-#login-step-pin{margin-top:-14px;}
+#login-step-pin{margin-top:-40px;}
 #login .logo{
   width:64px;height:64px;border-radius:16px;
   background:var(--gold);

@@ -341,6 +341,18 @@ table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #178a6e;color:#0
 }
 #toast.ok{background:var(--ok);}
 
+/* Floating WhatsApp shortcut — visible on every screen (the wrap spans and
+   centers with the app shell exactly like #toast does; height:0 + a single
+   absolutely-positioned child inside keeps it from blocking clicks anywhere
+   else on the page). z-index sits BELOW .scrim/.sheet (40/41) on purpose —
+   it should disappear behind an open sheet, not float on top of one. */
+.wa-fab-wrap{position:fixed;left:0;right:0;bottom:0;max-width:460px;margin:0 auto;height:0;pointer-events:none;z-index:35;}
+.wa-fab{
+  position:absolute;right:16px;bottom:70px;width:52px;height:52px;border-radius:50%;
+  background:#25d366;border:none;display:flex;align-items:center;justify-content:center;
+  box-shadow:0 4px 14px rgba(0,0,0,.28);pointer-events:auto;cursor:pointer;
+}
+
 @media print{
   html,body{background:#fff !important;margin:0;}
   /* Isolating the printed page via position:absolute (the previous approach)
@@ -375,13 +387,13 @@ table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #178a6e;color:#0
    grows with the viewport, in two steps.
    ============================================================ */
 @media (min-width: 768px){
-  #shell, nav.bottom, .sheet, .fullscreen, #toast{ max-width:900px; }
+  #shell, nav.bottom, .sheet, .fullscreen, #toast, .wa-fab-wrap{ max-width:900px; }
   main{ padding-left:32px; padding-right:32px; }
   .stat-grid{ grid-template-columns:repeat(4,1fr); }
   .dim-grid, .charge-grid{ grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); }
 }
 @media (min-width: 1200px){
-  #shell, nav.bottom, .sheet, .fullscreen, #toast{ max-width:1180px; }
+  #shell, nav.bottom, .sheet, .fullscreen, #toast, .wa-fab-wrap{ max-width:1180px; }
   main{ padding-left:48px; padding-right:48px; }
 }
 /* A bottom tab bar and slide-up sheets both make sense on a touchscreen

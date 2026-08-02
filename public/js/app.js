@@ -265,6 +265,7 @@ async function initApp(){
     });
   });
   document.getElementById("qa-payment").addEventListener("click", openQuickPayment);
+  document.getElementById("wa-fab-btn").addEventListener("click", ()=>openWhatsApp());
 
   document.querySelectorAll("[data-close-fs]").forEach(b=>{
     b.addEventListener("click", ()=>closeFullscreen(b.dataset.closeFs));
@@ -561,6 +562,7 @@ async function initApp(){
   document.getElementById("inv-download").addEventListener("click", downloadInvoicePdf);
   document.getElementById("inv-print").addEventListener("click", ()=>window.print());
   document.getElementById("inv-whatsapp").addEventListener("click", shareWhatsApp);
+  document.getElementById("inv-whatsapp-pdf").addEventListener("click", shareInvoicePdfWhatsApp);
   document.getElementById("inv-server-print").addEventListener("click", printViaServer);
 
   await renderAll();
@@ -2051,6 +2053,7 @@ async function openCustomerDetail(customerId){
     <div class="action-row" style="margin-top:10px;">
       <button class="btn btn-outline" id="edit-cust-btn">✎ Edit</button>
       ${detail.due>0 ? `<button class="btn btn-gold" id="record-payment-btn">Sale Payment</button>` : ""}
+      ${detail.phone ? `<button class="btn btn-outline" id="wa-chat-cust-btn">💬 Chat on WhatsApp</button>` : ""}
       <button class="btn btn-outline" id="print-ledger-btn">Print Ledger</button>
       <button class="btn btn-outline" id="export-ledger-btn">Export Excel</button>
       ${isOwner() ? `<button class="btn btn-outline" id="opening-balance-btn">Opening Outstanding</button>` : ""}
@@ -2102,6 +2105,8 @@ async function openCustomerDetail(customerId){
   });
   const recordPaymentBtn = sheet.querySelector("#record-payment-btn");
   if(recordPaymentBtn) recordPaymentBtn.addEventListener("click", ()=>openRecordPayment(detail));
+  const waChatCustBtn = sheet.querySelector("#wa-chat-cust-btn");
+  if(waChatCustBtn) waChatCustBtn.addEventListener("click", ()=>openWhatsApp(detail.phone));
   const openingBalanceBtn = sheet.querySelector("#opening-balance-btn");
   if(openingBalanceBtn) openingBalanceBtn.addEventListener("click", ()=>openCustomerOpeningBalance(detail));
   sheet.querySelector("#print-ledger-btn").addEventListener("click", ()=>printPartyLedger(detail,"Customer"));
@@ -2196,6 +2201,7 @@ function renderPartyLedgerRow(l, partyType, partyId){
       <div><span class="row-title" style="color:var(--ok);">${fmt(-l.amount)}</span></div>
       <div class="muted" style="font-size:10.5px;">Bal ${fmt(l.runningBalance)}</div>
       <div style="display:flex;gap:8px;">
+        <a href="#" data-share-payment-whatsapp="${l.id}" class="btn-danger-link" style="font-size:11px;color:#128c4a;">💬 Share</a>
         <a href="#" data-edit-payment="${l.id}" class="btn-danger-link" style="font-size:11px;color:var(--navy);">Edit</a>
         ${isOwner() ? `<a href="#" data-void-payment="${l.id}" class="btn-danger-link" style="font-size:11px;">Void</a>` : ""}
       </div>
@@ -2217,6 +2223,24 @@ function wirePartyLedgerActions(sheet, detail, partyType){
           toast("Payment voided.", "ok");
         }catch(err){ toast(err.message); }
       }
+    });
+  });
+  sheet.querySelectorAll("[data-share-payment-whatsapp]").forEach(a=>{
+    a.addEventListener("click", (e)=>{
+      e.preventDefault();
+      const entry = detail.ledger.find(l=>l.type==="payment" && String(l.id)===a.dataset.sharePaymentWhatsapp);
+      if(!entry) return;
+      const verb = partyType==="customer" ? "Payment received from" : "Payment made to";
+      const lines = [
+        `Receipt`,
+        `${verb} ${detail.name}`,
+        `Date: ${entry.date}`,
+        `Amount: ${fmt(Math.abs(entry.amount))}`,
+        `Mode: ${entry.label}`,
+        entry.referenceNo ? `Ref#: ${entry.referenceNo}` : "",
+        entry.note ? `Note: ${entry.note}` : ""
+      ].filter(Boolean);
+      openWhatsApp(detail.phone, lines.join("\n"));
     });
   });
   sheet.querySelectorAll("[data-edit-payment]").forEach(a=>{
@@ -2552,6 +2576,7 @@ async function openSupplierDetail(supplierId){
     <div class="action-row" style="margin-top:10px;">
       <button class="btn btn-outline" id="edit-supplier-btn">✎ Edit</button>
       ${detail.due>0 ? `<button class="btn btn-gold" id="record-purchase-payment-btn">Purchase Payment</button>` : ""}
+      ${detail.phone ? `<button class="btn btn-outline" id="wa-chat-cust-btn">💬 Chat on WhatsApp</button>` : ""}
       <button class="btn btn-outline" id="print-ledger-btn">Print Ledger</button>
       <button class="btn btn-outline" id="export-ledger-btn">Export Excel</button>
       ${isOwner() ? `<button class="btn btn-outline" id="opening-balance-btn">Opening Outstanding</button>` : ""}
@@ -2575,6 +2600,8 @@ async function openSupplierDetail(supplierId){
   sheet.querySelector("#edit-supplier-btn").addEventListener("click", ()=>{ closeAllSheets(); openAddSupplier(detail); });
   const recordPaymentBtn = sheet.querySelector("#record-purchase-payment-btn");
   if(recordPaymentBtn) recordPaymentBtn.addEventListener("click", ()=>openRecordPurchasePayment(detail));
+  const waChatCustBtn = sheet.querySelector("#wa-chat-cust-btn");
+  if(waChatCustBtn) waChatCustBtn.addEventListener("click", ()=>openWhatsApp(detail.phone));
   const openingBalanceBtn = sheet.querySelector("#opening-balance-btn");
   if(openingBalanceBtn) openingBalanceBtn.addEventListener("click", ()=>openSupplierOpeningBalance(detail));
   sheet.querySelector("#print-ledger-btn").addEventListener("click", ()=>printPartyLedger(detail,"Supplier"));
@@ -3720,74 +3747,119 @@ function renderInvoicePageContent(){
       : `<strong>NO GURANTEE AND WARRANTY FOR DECORATIVE PRODUCTS AND AIR BUBBLES IN LAMMINATES, ACRYLIC AND PVC LAMINATES OR ANY SHADE VARIATION AFTER INSTALLATION. NO EXCHANGE. NO RETURN IN ANY CONDITION. PLEASE CHECK THE MATERIAL ON DELIVERY.</strong>`}</div>
   `;
 }
+/**
+ * Rasterises the on-screen invoice/challan into a jsPDF document and hands
+ * back both the pdf object and a sensible filename — shared by the Download
+ * button and the Share-as-PDF-on-WhatsApp button below, so there's exactly
+ * one place that knows how to turn the preview into a PDF.
+ */
+async function buildInvoicePdf(){
+  if(typeof html2canvas === "undefined" || typeof window.jspdf === "undefined"){
+    throw new Error("PDF libraries not loaded");
+  }
+  const node = document.getElementById("invoice-page-content");
+  // The printed page itself uses only hex colours (see .invoice-page in
+  // style.css), but html2canvas 1.4.1 also walks and resolves styles on
+  // ANCESTOR elements (body, the fullscreen wrapper, :root) for layout
+  // context, and those still use the app's oklch() theme — which this old
+  // html2canvas build cannot parse, so it throws before any image is drawn.
+  // `onclone` lets us patch the OFF-SCREEN CLONE that html2canvas rasterises
+  // — never the live page the user is looking at — by overriding the theme
+  // variables with plain hex equivalents just for that clone.
+  const canvas = await html2canvas(node, {
+    scale:2, backgroundColor:"#ffffff", useCORS:true,
+    onclone: (clonedDoc) => {
+      const style = clonedDoc.createElement("style");
+      style.textContent = `:root{
+        --navy:#1e2a4a; --navy-2:#182140; --gold:#d4a94a; --gold-2:#c2963c;
+        --bg:#fbfaf8; --bg-outer:#f0efeb; --card:#ffffff; --border:#e0dfda;
+        --text:#262b38; --muted:#6b7280; --ok:#2e9e5b; --ok-bg:#dcf3e4;
+        --warn-bg:#f5e7c9; --warn-text:#8a6a1f; --danger:#c0392b; --danger-bg:#f6dcd8;
+      }
+      /* This PDF path rasterises the on-screen card as-is, bypassing the
+         @media print rules entirely — reset the screen-only rounded-corner
+         card look here too so the downloaded PDF frames like a printed
+         sheet, not a floating app card. */
+      #invoice-page-content{border-radius:0 !important;box-shadow:none !important;border:1.5px solid #333 !important;}`;
+      clonedDoc.head.appendChild(style);
+    }
+  });
+  const { jsPDF } = window.jspdf;
+  const isA4 = state.paperSize==="A4";
+  const pdf = new jsPDF({unit:"mm", format: isA4 ? "a4" : "a5"});
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+  const imgWidth = pageWidth;
+  // A long item list can make the captured canvas taller than one page —
+  // slice it into page-height chunks and add each as its own PDF page,
+  // rather than the previous Math.min(), which silently cropped anything
+  // past the first page instead of continuing onto a second one.
+  const pxPerMm = canvas.width / imgWidth;
+  const pageHeightPx = Math.round(pageHeight * pxPerMm);
+  let renderedPx = 0, firstPage = true;
+  while (renderedPx < canvas.height) {
+    const sliceHeightPx = Math.min(pageHeightPx, canvas.height - renderedPx);
+    const sliceCanvas = document.createElement("canvas");
+    sliceCanvas.width = canvas.width;
+    sliceCanvas.height = sliceHeightPx;
+    sliceCanvas.getContext("2d").drawImage(
+      canvas, 0, renderedPx, canvas.width, sliceHeightPx, 0, 0, canvas.width, sliceHeightPx
+    );
+    if (!firstPage) pdf.addPage();
+    pdf.addImage(sliceCanvas.toDataURL("image/png"), "PNG", 0, 0, imgWidth, sliceHeightPx / pxPerMm);
+    renderedPx += sliceHeightPx;
+    firstPage = false;
+  }
+  const fname = (lastPreviewInvoice && lastPreviewInvoice.challan_no ? lastPreviewInvoice.challan_no : "invoice") + ".pdf";
+  return { pdf, fname };
+}
 async function downloadInvoicePdf(){
   const btn = document.getElementById("inv-download");
   const originalText = btn.textContent;
   btn.textContent = "⏳ Preparing...";
   btn.disabled = true;
   try{
-    if(typeof html2canvas === "undefined" || typeof window.jspdf === "undefined"){
-      throw new Error("PDF libraries not loaded");
-    }
-    const node = document.getElementById("invoice-page-content");
-    // The printed page itself uses only hex colours (see .invoice-page in
-    // style.css), but html2canvas 1.4.1 also walks and resolves styles on
-    // ANCESTOR elements (body, the fullscreen wrapper, :root) for layout
-    // context, and those still use the app's oklch() theme — which this old
-    // html2canvas build cannot parse, so it throws before any image is drawn.
-    // `onclone` lets us patch the OFF-SCREEN CLONE that html2canvas rasterises
-    // — never the live page the user is looking at — by overriding the theme
-    // variables with plain hex equivalents just for that clone.
-    const canvas = await html2canvas(node, {
-      scale:2, backgroundColor:"#ffffff", useCORS:true,
-      onclone: (clonedDoc) => {
-        const style = clonedDoc.createElement("style");
-        style.textContent = `:root{
-          --navy:#1e2a4a; --navy-2:#182140; --gold:#d4a94a; --gold-2:#c2963c;
-          --bg:#fbfaf8; --bg-outer:#f0efeb; --card:#ffffff; --border:#e0dfda;
-          --text:#262b38; --muted:#6b7280; --ok:#2e9e5b; --ok-bg:#dcf3e4;
-          --warn-bg:#f5e7c9; --warn-text:#8a6a1f; --danger:#c0392b; --danger-bg:#f6dcd8;
-        }
-        /* This PDF path rasterises the on-screen card as-is, bypassing the
-           @media print rules entirely — reset the screen-only rounded-corner
-           card look here too so the downloaded PDF frames like a printed
-           sheet, not a floating app card. */
-        #invoice-page-content{border-radius:0 !important;box-shadow:none !important;border:1.5px solid #333 !important;}`;
-        clonedDoc.head.appendChild(style);
-      }
-    });
-    const { jsPDF } = window.jspdf;
-    const isA4 = state.paperSize==="A4";
-    const pdf = new jsPDF({unit:"mm", format: isA4 ? "a4" : "a5"});
-    const pageWidth = pdf.internal.pageSize.getWidth();
-    const pageHeight = pdf.internal.pageSize.getHeight();
-    const imgWidth = pageWidth;
-    // A long item list can make the captured canvas taller than one page —
-    // slice it into page-height chunks and add each as its own PDF page,
-    // rather than the previous Math.min(), which silently cropped anything
-    // past the first page instead of continuing onto a second one.
-    const pxPerMm = canvas.width / imgWidth;
-    const pageHeightPx = Math.round(pageHeight * pxPerMm);
-    let renderedPx = 0, firstPage = true;
-    while (renderedPx < canvas.height) {
-      const sliceHeightPx = Math.min(pageHeightPx, canvas.height - renderedPx);
-      const sliceCanvas = document.createElement("canvas");
-      sliceCanvas.width = canvas.width;
-      sliceCanvas.height = sliceHeightPx;
-      sliceCanvas.getContext("2d").drawImage(
-        canvas, 0, renderedPx, canvas.width, sliceHeightPx, 0, 0, canvas.width, sliceHeightPx
-      );
-      if (!firstPage) pdf.addPage();
-      pdf.addImage(sliceCanvas.toDataURL("image/png"), "PNG", 0, 0, imgWidth, sliceHeightPx / pxPerMm);
-      renderedPx += sliceHeightPx;
-      firstPage = false;
-    }
-    const fname = (lastPreviewInvoice && lastPreviewInvoice.challan_no ? lastPreviewInvoice.challan_no : "invoice") + ".pdf";
+    const { pdf, fname } = await buildInvoicePdf();
     pdf.save(fname);
   }catch(e){
     console.error("PDF generation failed, falling back to print dialog", e);
     toast("Couldn't build a PDF directly — opening the print dialog instead.");
     window.print();
+  }finally{
+    btn.textContent = originalText;
+    btn.disabled = false;
+  }
+}
+/**
+ * "Share as PDF" on WhatsApp — the ONLY way a web page can hand an actual
+ * file to WhatsApp specifically (wa.me only ever pre-fills text, it has no
+ * concept of an attachment) is the native Web Share API, which opens the
+ * device's own share sheet; the user picks WhatsApp (Messenger OR Business —
+ * both show up there if installed, which is the OS's job, not this page's)
+ * from whatever's registered to accept a PDF. Desktop browsers and older
+ * mobile browsers don't support sharing files this way, so this falls back
+ * to just downloading the PDF and telling the user to attach it manually.
+ */
+async function shareInvoicePdfWhatsApp(){
+  const btn = document.getElementById("inv-whatsapp-pdf");
+  if(!btn) return;
+  const originalText = btn.textContent;
+  btn.textContent = "⏳ Preparing...";
+  btn.disabled = true;
+  try{
+    const { pdf, fname } = await buildInvoicePdf();
+    const blob = pdf.output("blob");
+    const file = new File([blob], fname, { type: "application/pdf" });
+    if(navigator.canShare && navigator.canShare({ files: [file] })){
+      await navigator.share({ files: [file], title: fname });
+    } else {
+      pdf.save(fname);
+      toast("Your browser can't hand a file straight to WhatsApp — the PDF downloaded instead, attach it from there.");
+    }
+  }catch(e){
+    if(e && e.name === "AbortError") return; // user cancelled the share sheet — not an error
+    console.error("Share-as-PDF failed", e);
+    toast("Couldn't share the PDF. Try Download PDF and attach it manually.");
   }finally{
     btn.textContent = originalText;
     btn.disabled = false;
@@ -3845,6 +3917,28 @@ async function printViaServer(){
   }
 }
 
+/**
+ * Single entry point for every WhatsApp link in the app — `phone` (any
+ * format, digits extracted and prefixed with the India country code) opens
+ * that chat directly, without needing the number saved as a contact; omit
+ * it to open WhatsApp's own chat list. `text`, if given, arrives pre-filled
+ * in the message box.
+ *
+ * wa.me already degrades sensibly on its own: no WhatsApp Desktop app on a
+ * PC falls back to WhatsApp Web in a new tab, and on a phone the OS (not
+ * this page) owns whatever happens when no WhatsApp app is registered for
+ * the link — a web page has no API to ask "is WhatsApp installed?", so
+ * this doesn't try to fake that check. The one failure a page CAN detect
+ * is a popup blocker silently eating window.open, which is what the toast
+ * below actually covers.
+ */
+function openWhatsApp(phone, text){
+  const num = phone ? "91" + String(phone).replace(/\D/g,"") : "";
+  const url = "https://wa.me/" + num + (text ? ("?text=" + encodeURIComponent(text)) : "");
+  const win = window.open(url, "_blank");
+  if(!win) toast("Couldn't open WhatsApp — allow pop-ups for this site, or install WhatsApp to use this.");
+}
+
 function shareWhatsApp(){
   const inv = lastPreviewInvoice; if(!inv) return;
   const cust = state.customers.find(c=>c.id===inv.customer_id);
@@ -3853,9 +3947,7 @@ function shareWhatsApp(){
   const text = challan
     ? `Delivery Challan ${inv.challan_no}\nDate: ${inv.date}\nTo: ${cust?cust.name:"Walk-in"}\nItems: ${inv.items.length} · ${totalPieces} pcs`
     : `Invoice ${inv.challan_no}\nDate: ${inv.date}\nCustomer: ${cust?cust.name:"Walk-in"}\nTotal: ${fmt(inv.total)}${inv.balance_due>0?`\nBalance Due: ${fmt(inv.balance_due)}`:""}`;
-  const phone = cust && cust.phone ? cust.phone.replace(/\D/g,"") : "";
-  const url = "https://wa.me/" + (phone?("91"+phone):"") + "?text=" + encodeURIComponent(text);
-  window.open(url, "_blank");
+  openWhatsApp(cust && cust.phone, text);
 }
 
 /* ============================================================
@@ -5943,8 +6035,7 @@ function sharePoWhatsApp(po){
     ...po.items.map(it=>`${it.name} (${it.size_label||""}) x${it.pieces} @ ${fmt(it.rate)}`),
     `Grand Total: ${fmt(po.total)}`
   ].filter(Boolean);
-  const text = encodeURIComponent(lines.join("\n"));
-  window.open(`https://wa.me/?text=${text}`, "_blank");
+  openWhatsApp(sup && sup.phone, lines.join("\n"));
 }
 
 /* ============================================================
@@ -6528,9 +6619,7 @@ function shareQuotationWhatsApp(q){
     ...q.items.map(it=>`${it.name} (${it.size_label||""}) x${it.pieces} @ ${fmt(it.rate)}`),
     `Grand Total: ${fmt(q.total)}`
   ].filter(Boolean);
-  const phone = cust && cust.phone ? cust.phone.replace(/\D/g,"") : "";
-  const text = encodeURIComponent(lines.join("\n"));
-  window.open(`https://wa.me/${phone?("91"+phone):""}?text=${text}`, "_blank");
+  openWhatsApp(cust && cust.phone, lines.join("\n"));
 }
 
 /* ============================================================
@@ -7086,9 +7175,7 @@ function shareSoWhatsApp(so){
     ...so.items.map(it=>`${it.name} (${it.size_label||""}) x${it.pieces} @ ${fmt(it.rate)}`),
     `Grand Total: ${fmt(so.total)}`
   ].filter(Boolean);
-  const phone = cust && cust.phone ? cust.phone.replace(/\D/g,"") : "";
-  const text = encodeURIComponent(lines.join("\n"));
-  window.open(`https://wa.me/${phone?("91"+phone):""}?text=${text}`, "_blank");
+  openWhatsApp(cust && cust.phone, lines.join("\n"));
 }
 
 /* ============================================================

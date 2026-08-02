@@ -107,8 +107,9 @@ router.get("/:id/ledger/export", (req, res) => {
 
 /** Sets (or adds another) starting balance for this supplier — Payable
  *  raises due, Advance lowers it. Not restricted to once, so a mistaken
- *  entry can be voided and re-entered rather than being permanent. */
-router.post("/:id/opening-balance", (req, res) => {
+ *  entry can be voided and re-entered rather than being permanent. Owner-only:
+ *  opening balances are a financial starting point, not routine data entry. */
+router.post("/:id/opening-balance", requireRole("owner"), (req, res) => {
   const s = db.prepare("SELECT * FROM suppliers WHERE id = ?").get(req.params.id);
   if (!s) return res.status(404).json({ error: "Supplier not found." });
   const amount = round2(Number(req.body.amount));
@@ -129,6 +130,38 @@ router.post("/:id/opening-balance", (req, res) => {
 
   logAction(req, "supplier.opening_balance", `${s.name}: ${amount} (${balanceType})`);
   res.status(201).json(db.prepare("SELECT * FROM suppliers WHERE id = ?").get(s.id));
+});
+
+// Corrects a mistyped amount/date/type/remarks on an opening balance that
+// hasn't been voided — due is adjusted by the DIFFERENCE between the old and
+// new contribution (each signed: Advance negative, Payable positive), the
+// same delta approach used for editing a purchase payment.
+router.put("/:id/opening-balance/:obId", requireRole("owner"), (req, res) => {
+  const s = db.prepare("SELECT * FROM suppliers WHERE id = ?").get(req.params.id);
+  if (!s) return res.status(404).json({ error: "Supplier not found." });
+  const o = db.prepare("SELECT * FROM supplier_opening_balances WHERE id = ? AND supplier_id = ?").get(req.params.obId, s.id);
+  if (!o) return res.status(404).json({ error: "Opening balance entry not found." });
+  if (o.voided) return res.status(400).json({ error: "Can't edit a voided entry." });
+
+  const amount = round2(Number(req.body.amount));
+  if (!amount || amount <= 0) return res.status(400).json({ error: "Enter a valid opening balance amount." });
+  const balanceType = req.body.balanceType === "Advance" ? "Advance" : "Payable";
+  const date = (req.body.date || "").trim() || o.date;
+  const remarks = (req.body.remarks ?? o.remarks).trim();
+
+  const oldContribution = o.balance_type === "Advance" ? -o.amount : o.amount;
+  const newContribution = balanceType === "Advance" ? -amount : amount;
+  const delta = round2(newContribution - oldContribution);
+
+  db.transaction(() => {
+    db.prepare(`
+      UPDATE supplier_opening_balances SET date=?, amount=?, balance_type=?, remarks=? WHERE id=?
+    `).run(date, amount, balanceType, remarks, o.id);
+    if (delta) db.prepare("UPDATE suppliers SET due = MAX(0, due + ?) WHERE id = ?").run(delta, s.id);
+  })();
+
+  logAction(req, "supplier.opening_balance_edit", `${s.name}: ${o.amount} (${o.balance_type}) -> ${amount} (${balanceType})`);
+  res.json(db.prepare("SELECT * FROM suppliers WHERE id = ?").get(s.id));
 });
 
 router.post("/:id/opening-balance/:obId/void", requireRole("owner"), (req, res) => {
@@ -263,12 +296,35 @@ router.post("/", (req, res) => {
   if (!name || !String(name).trim()) {
     return res.status(400).json({ error: "Supplier name is required." });
   }
+  // Opening Outstanding is entered at the same moment the supplier is
+  // created (the natural, one-time entry point per the Opening Outstanding
+  // spec) — owner-only, same as the standalone opening-balance route below.
+  const openingAmount = round2(Number(req.body.openingBalance) || 0);
+  if (openingAmount > 0 && (!req.session || req.session.role !== "owner")) {
+    return res.status(403).json({ error: "Only the shop owner can set an Opening Outstanding amount." });
+  }
+
   const id = uid("SUP");
-  db.prepare(`
-    INSERT INTO suppliers (id, name, phone, address, gst, state, due, created_at, gst_type)
-    VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
-  `).run(id, name.trim(), (phone || "").trim(), (address || "").trim(), (gst || "").trim(), (state || "").trim(), Date.now(), gstType === "IGST" ? "IGST" : "CGST_SGST");
-  logAction(req, "supplier.create", name.trim());
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO suppliers (id, name, phone, address, gst, state, due, created_at, gst_type)
+      VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
+    `).run(id, name.trim(), (phone || "").trim(), (address || "").trim(), (gst || "").trim(), (state || "").trim(), Date.now(), gstType === "IGST" ? "IGST" : "CGST_SGST");
+
+    if (openingAmount > 0) {
+      const balanceType = req.body.openingBalanceType === "Advance" ? "Advance" : "Payable";
+      const date = (req.body.openingDate || "").trim() || todayStr();
+      const remarks = (req.body.openingRemarks || "").trim();
+      db.prepare(`
+        INSERT INTO supplier_opening_balances (id, supplier_id, date, amount, balance_type, remarks, voided, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+      `).run(uid("SOB"), id, date, openingAmount, balanceType, remarks, Date.now());
+      if (balanceType === "Advance") db.prepare("UPDATE suppliers SET due = MAX(0, due - ?) WHERE id = ?").run(openingAmount, id);
+      else db.prepare("UPDATE suppliers SET due = due + ? WHERE id = ?").run(openingAmount, id);
+    }
+  })();
+
+  logAction(req, "supplier.create", name.trim() + (openingAmount > 0 ? ` (opening ${openingAmount})` : ""));
   res.status(201).json(db.prepare("SELECT * FROM suppliers WHERE id = ?").get(id));
 });
 

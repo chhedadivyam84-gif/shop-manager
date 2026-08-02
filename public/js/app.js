@@ -166,12 +166,29 @@ async function initLogin(){
     b.addEventListener("click", ()=>selectStaff(b.dataset.staff));
   });
 
+  // iOS-style keypad: big number, small letter caption underneath (purely
+  // decorative here — nothing in this app maps letters to digits) so the
+  // pad reads like the passcode screen everyone already knows, rather than
+  // a generic dialpad.
+  const PIN_KEYS = [
+    {k:"1", letters:""},   {k:"2", letters:"ABC"},  {k:"3", letters:"DEF"},
+    {k:"4", letters:"GHI"},{k:"5", letters:"JKL"},  {k:"6", letters:"MNO"},
+    {k:"7", letters:"PQRS"},{k:"8", letters:"TUV"}, {k:"9", letters:"WXYZ"},
+    {k:"", blank:true},    {k:"0", letters:""},     {k:"⌫", backspace:true}
+  ];
   const pad = document.getElementById("pinpad");
   pad.innerHTML = "";
-  ["1","2","3","4","5","6","7","8","9","","0","⌫"].forEach(k=>{
+  PIN_KEYS.forEach(({k, letters, blank, backspace})=>{
     const b = document.createElement("button");
-    b.textContent = k;
-    if(k===""){ b.style.visibility="hidden"; }
+    if(blank){
+      b.className = "pk-blank";
+    } else if(backspace){
+      b.className = "pk-backspace";
+      b.setAttribute("aria-label", "Delete");
+      b.innerHTML = `<svg viewBox="0 0 24 24"><path d="M22 3H7c-.69 0-1.23.35-1.59.88L0 12l5.41 8.11c.36.53.9.89 1.59.89h15c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-3 12.59L17.59 17 14 13.41 10.41 17 9 15.59 12.59 12 9 8.41 10.41 7 14 10.59 17.59 7 19 8.41 15.41 12 19 15.59z"/></svg>`;
+    } else {
+      b.innerHTML = `<span class="pk-num">${k}</span>${letters ? `<span class="pk-letters">${letters}</span>` : ""}`;
+    }
     b.addEventListener("click", ()=>handleKey(k));
     pad.appendChild(b);
   });

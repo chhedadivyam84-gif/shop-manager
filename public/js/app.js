@@ -3866,6 +3866,12 @@ async function buildInvoicePdf(){
     throw new Error("PDF libraries not loaded");
   }
   const node = document.getElementById("invoice-page-content");
+  const { jsPDF } = window.jspdf;
+  const isA4 = state.paperSize==="A4";
+  const pdf = new jsPDF({unit:"mm", format: isA4 ? "a4" : "a5"});
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+  const imgWidth = pageWidth;
   // The printed page itself uses only hex colours (see .invoice-page in
   // style.css), but html2canvas 1.4.1 also walks and resolves styles on
   // ANCESTOR elements (body, the fullscreen wrapper, :root) for layout
@@ -3888,16 +3894,23 @@ async function buildInvoicePdf(){
          @media print rules entirely — reset the screen-only rounded-corner
          card look here too so the downloaded PDF frames like a printed
          sheet, not a floating app card. */
-      #invoice-page-content{border-radius:0 !important;box-shadow:none !important;border:1.5px solid #333 !important;}`;
+      #invoice-page-content{border-radius:0 !important;box-shadow:none !important;border:1.5px solid #333 !important;}
+      /* #fs-invoice's 460px max-width and .size-a5's 360px max-width are
+         both screen-preview caps (keep the on-screen card phone-width and
+         centred) — harmless on screen, but this capture is later stretched
+         to fill the PDF's full page width (addImage always draws it at
+         imgWidth=pageWidth). Left in place, that stretch scales height by
+         the SAME factor as width (pageWidth / 360px), which for A5 inflates
+         a legitimate one-page-tall layout by ~1.55x and spills it onto a
+         second page. Forcing the captured width to the real page width
+         up front (mirroring what @media print already does for the browser
+         print path) makes the later scale factor ~1:1, so the capture's
+         proportions match the physical page instead of being stretched. */
+      #fs-invoice{max-width:none !important;}
+      #invoice-page-content{max-width:none !important;width:${pageWidth}mm !important;margin-left:0 !important;margin-right:0 !important;}`;
       clonedDoc.head.appendChild(style);
     }
   });
-  const { jsPDF } = window.jspdf;
-  const isA4 = state.paperSize==="A4";
-  const pdf = new jsPDF({unit:"mm", format: isA4 ? "a4" : "a5"});
-  const pageWidth = pdf.internal.pageSize.getWidth();
-  const pageHeight = pdf.internal.pageSize.getHeight();
-  const imgWidth = pageWidth;
   // A long item list can make the captured canvas taller than one page —
   // slice it into page-height chunks and add each as its own PDF page,
   // rather than the previous Math.min(), which silently cropped anything

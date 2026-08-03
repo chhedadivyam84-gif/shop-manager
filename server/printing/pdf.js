@@ -149,14 +149,16 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
   // so every column keeps the same relative ratio to the others as before —
   // not just a gap left where the column was, or all the freed space dumped
   // into one column.
-  const cols = showRate
-    ? [{ h: "Sr No.", w: CONTENT_W * 0.065 }, { h: "Product Description", w: CONTENT_W * 0.33 },
-       { h: "Size", w: CONTENT_W * 0.13 }, { h: "Unit", w: CONTENT_W * 0.095 },
-       { h: "Qty", w: CONTENT_W * 0.10, align: "right" },
-       { h: "Rate", w: CONTENT_W * 0.13, align: "right" },
-       { h: "Amount", w: 0, align: "right" }]
-    : [{ h: "Sr No.", w: CONTENT_W * 0.09 }, { h: "Product Description", w: CONTENT_W * 0.48 },
-       { h: "Size", w: CONTENT_W * 0.18 }, { h: "Unit", w: CONTENT_W * 0.12 }, { h: "Qty", w: 0, align: "right" }];
+  // Column layout is FIXED regardless of showRate — Rate/Amount columns
+  // always exist so the printed page looks identical either way; only their
+  // cell CONTENTS go blank in itemValues() below when showRate is off.
+  const cols = [
+    { h: "Sr No.", w: CONTENT_W * 0.065 }, { h: "Product Description", w: CONTENT_W * 0.33 },
+    { h: "Size", w: CONTENT_W * 0.13 }, { h: "Unit", w: CONTENT_W * 0.095 },
+    { h: "Qty", w: CONTENT_W * 0.10, align: "right" },
+    { h: "Rate", w: CONTENT_W * 0.13, align: "right" },
+    { h: "Amount", w: 0, align: "right" }
+  ];
   const fixedW = cols.reduce((s, c) => s + c.w, 0);
   cols[cols.length - 1].w = CONTENT_W - fixedW;
   const colX = [MARGIN];
@@ -185,33 +187,31 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
   const effectiveRatePct = taxableGoods > 0 ? Math.round(((cgstAmt + sgstAmt + igstAmt) / taxableGoods) * 100) : 0;
   const halfRatePct = Math.round(effectiveRatePct / 2);
 
-  // A "Without Rate" print (showRate false) carries no prices at all, so
-  // there is no totals box at all — mirrors the browser template
-  // (renderInvoicePageContent in public/js/app.js).
+  // The totals box keeps the SAME layout regardless of showRate — mirrors
+  // the browser template (renderInvoicePageContent in public/js/app.js).
+  // Only the money values that depend on item pricing (Subtotal, Discount,
+  // Grand Total) go blank instead of printing a misleading "0.00" when the
+  // rate itself isn't shown. Transport/Additional Charges are real entered
+  // rupee amounts independent of any item rate, so they still print.
   const totalsRows = [];
-  if (showRate) {
-    totalsRows.push(["Subtotal", fmtPaise(challan ? challanSubtotal : invoice.subtotal)]);
-    totalsRows.push(["Discount", (challan ? 0 : invoice.discount_amount) > 0 ? "-" + fmtPaise(invoice.discount_amount) : fmtPaise(0)]);
-    totalsRows.push(["Transport", fmtPaise(invoice.transport)]);
-    if (invoice.loading) totalsRows.push(["Additional Charges", fmtPaise(invoice.loading)]);
-    if (gstEnabled) {
-      if (invoice.tax_type === "IGST") totalsRows.push([`IGST ${effectiveRatePct}%`, fmtPaise(igstAmt)]);
-      else { totalsRows.push([`CGST ${halfRatePct}%`, fmtPaise(cgstAmt)]); totalsRows.push([`SGST ${halfRatePct}%`, fmtPaise(sgstAmt)]); }
-    }
-    if (!challan && invoice.round_off) totalsRows.push(["Round Off", (invoice.round_off > 0 ? "+" : "") + fmtPaise(invoice.round_off)]);
-    totalsRows.push(["Grand Total", fmtPaise(displayTotal), true]);
-    if (!challan && invoice.advance > 0) {
-      totalsRows.push(["Advance Paid", "-" + fmtPaise(invoice.advance)]);
-      totalsRows.push(["Balance Due", fmtPaise(invoice.balance_due), true]);
-    }
+  totalsRows.push(["Subtotal", showRate ? fmtPaise(challan ? challanSubtotal : invoice.subtotal) : ""]);
+  totalsRows.push(["Discount", showRate ? ((challan ? 0 : invoice.discount_amount) > 0 ? "-" + fmtPaise(invoice.discount_amount) : fmtPaise(0)) : ""]);
+  totalsRows.push(["Transport", fmtPaise(invoice.transport)]);
+  if (invoice.loading) totalsRows.push(["Additional Charges", fmtPaise(invoice.loading)]);
+  if (gstEnabled) {
+    if (invoice.tax_type === "IGST") totalsRows.push([`IGST ${effectiveRatePct}%`, fmtPaise(igstAmt)]);
+    else { totalsRows.push([`CGST ${halfRatePct}%`, fmtPaise(cgstAmt)]); totalsRows.push([`SGST ${halfRatePct}%`, fmtPaise(sgstAmt)]); }
+  }
+  if (!challan && invoice.round_off) totalsRows.push(["Round Off", (invoice.round_off > 0 ? "+" : "") + fmtPaise(invoice.round_off)]);
+  totalsRows.push(["Grand Total", showRate ? fmtPaise(displayTotal) : "", true]);
+  if (!challan && invoice.advance > 0) {
+    totalsRows.push(["Advance Paid", "-" + fmtPaise(invoice.advance)]);
+    totalsRows.push(["Balance Due", fmtPaise(invoice.balance_due), true]);
   }
   const totalsBoxH = totalsRows.length * fs(4.6);
 
-  // Without a totals box, the delivery-details block takes the full page
-  // width instead of just the left 58% — and "Amount in Words" is dropped
-  // since there's no grand total to express when nothing has a price.
   const deliveryAddr = invoice.delivery_address || (customer && customer.address) || "";
-  const bottomLeftWidth = showRate ? CONTENT_W * 0.58 : CONTENT_W;
+  const bottomLeftWidth = CONTENT_W * 0.58;
   const bottomLeftLines = [];
   if (deliveryAddr) doc.splitTextToSize("Delivery Address: " + deliveryAddr, bottomLeftWidth - 6).forEach(l => bottomLeftLines.push(l));
   if (invoice.remarks) doc.splitTextToSize("Remarks: " + invoice.remarks, bottomLeftWidth - 6).forEach(l => bottomLeftLines.push(l));
@@ -263,11 +263,9 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
       ? "1 pc"
       : Pricing.formatQty(it.qty, mode).replace(" " + unit, "")
         + (mode !== "UNIT" && it.pieces ? ` (${it.pieces}pc)` : "");
-    return showRate
-      ? [String(i + 1), it.name, it.size_label || "-", unit,
-         qtyText, fmtPaise(it.rate).replace("Rs. ", ""),
-         fmtPaise(it.qty * it.rate).replace("Rs. ", "")]
-      : [String(i + 1), it.name, it.size_label || "-", unit, qtyText];
+    return [String(i + 1), it.name, it.size_label || "-", unit, qtyText,
+      showRate ? fmtPaise(it.rate).replace("Rs. ", "") : "",
+      showRate ? fmtPaise(it.qty * it.rate).replace("Rs. ", "") : ""];
   };
 
   let curTableTopY = tableTopY;
@@ -355,20 +353,18 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
   let bl = bottomTopY + fs(4);
   bottomLeftLines.forEach(l => { doc.text(l, MARGIN + 3, bl); bl += fs(4); });
 
-  if (showRate) {
-    let tr = bottomTopY;
-    totalsRows.forEach(([label, value, bold]) => {
-      tr += fs(4.6);
-      doc.setFont("helvetica", bold ? "bold" : "normal"); doc.setFontSize(bold ? fs(9) : fs(7.5));
-      doc.text(label, bottomRightX + 2, tr - fs(1.2));
-      doc.text(value, PAGE_W - MARGIN - 2, tr - fs(1.2), { align: "right" });
-      doc.setDrawColor(0); line(tr, bottomRightX, PAGE_W - MARGIN);
-    });
-  }
+  let tr = bottomTopY;
+  totalsRows.forEach(([label, value, bold]) => {
+    tr += fs(4.6);
+    doc.setFont("helvetica", bold ? "bold" : "normal"); doc.setFontSize(bold ? fs(9) : fs(7.5));
+    doc.text(label, bottomRightX + 2, tr - fs(1.2));
+    doc.text(value, PAGE_W - MARGIN - 2, tr - fs(1.2), { align: "right" });
+    doc.setDrawColor(0); line(tr, bottomRightX, PAGE_W - MARGIN);
+  });
 
   doc.setDrawColor(0);
   doc.rect(MARGIN, bottomTopY, CONTENT_W, bottomBoxH);
-  if (showRate) doc.line(bottomRightX, bottomTopY, bottomRightX, bottomTopY + bottomBoxH);
+  doc.line(bottomRightX, bottomTopY, bottomRightX, bottomTopY + bottomBoxH);
   y = bottomTopY + bottomBoxH;
 
   // ---- Signature row: Receiver / Stamp / Authorised Signatory ----

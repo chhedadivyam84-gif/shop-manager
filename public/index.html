@@ -706,10 +706,10 @@
         <button class="fs-close" data-close-fs="fs-invoice">&#10005;</button>
       </div>
     </div>
-    <label class="check-row" id="challan-rate-toggle-row" style="display:none;margin:0 16px 8px;color:#fff;">
-      <input type="checkbox" id="challan-rate-toggle">
-      <span>Show Rate &amp; Amount on this printout</span>
-    </label>
+    <div class="chip-row" id="challan-rate-toggle-row" style="display:none;margin:0 16px 8px;">
+      <button class="chip selected" data-challan-rate="true">Print With Rate</button>
+      <button class="chip" data-challan-rate="false">Print Without Rate</button>
+    </div>
     <div class="invoice-page" id="invoice-page-content"></div>
     <div class="print-status-row" id="print-status-row" style="display:none;"></div>
     <div class="inv-actions">

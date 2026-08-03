@@ -3598,12 +3598,18 @@ function openInvoicePreview(existingInvoice){
   // Resets to off (the original, still-default behaviour) each time a fresh
   // challan is opened, rather than remembering the last choice.
   const toggleRow = document.getElementById("challan-rate-toggle-row");
-  const toggle = document.getElementById("challan-rate-toggle");
-  if(toggleRow) toggleRow.style.display = challan ? "flex" : "none";
-  if(toggle){
-    toggle.checked = false;
+  if(toggleRow){
+    toggleRow.style.display = challan ? "flex" : "none";
     state.challanShowRate = false;
-    toggle.onchange = () => { state.challanShowRate = toggle.checked; renderInvoicePageContent(); };
+    toggleRow.querySelectorAll("[data-challan-rate]").forEach(b=>{
+      b.classList.toggle("selected", b.dataset.challanRate === "false");
+      b.onclick = () => {
+        state.challanShowRate = b.dataset.challanRate === "true";
+        toggleRow.querySelectorAll("[data-challan-rate]").forEach(x=>
+          x.classList.toggle("selected", x === b));
+        renderInvoicePageContent();
+      };
+    });
   }
 
   // Silent printing needs a real, saved invoice to look up server-side — an
@@ -3705,11 +3711,16 @@ function renderInvoicePageContent(){
   const challan = inv.doc_type === "challan";
   document.getElementById("invoice-page-content").classList.toggle("size-a5", !isA4);
 
-  // A challan hides Rate/GST%/Amount by default (it carries no GST invoice
-  // meaning) but can show them on this printout via the "Show Rate" toggle —
-  // "Delivery Challan (With Rate)" vs "(Without Rate)" from the same entry.
+  // A challan's item table and totals box keep EXACTLY the same layout
+  // whether "Show Rate" is on or off — only the Rate/Amount cell CONTENTS
+  // (and the money values in the totals box below) go blank, never hidden
+  // columns and never a "0.00", so staff can write the real figures in by
+  // hand after printing. "Delivery Challan (With Rate)" vs "(Without Rate)"
+  // is a PRINT-TIME choice on the same saved document — the item rate is
+  // stored either way (see server/routes/invoices.js), this toggle only
+  // controls whether it's PRINTED.
   const showRate = !challan || state.challanShowRate;
-  const head = `<th class="c-sn">Sr No.</th><th>Product Description</th><th class="c-size">Size</th><th class="c-unit">Unit</th><th class="c-num">Qty</th>${showRate ? `<th class="c-num">Rate</th><th class="c-num c-amt">Amount</th>` : ""}`;
+  const head = `<th class="c-sn">Sr No.</th><th>Product Description</th><th class="c-size">Size</th><th class="c-unit">Unit</th><th class="c-num">Qty</th><th class="c-num">Rate</th><th class="c-num c-amt">Amount</th>`;
   const rows = inv.items.map((it,i)=>{
     const mode = it.mode || "UNIT";
     const unit = it.unit_label || (Pricing.MODES[mode] && Pricing.MODES[mode].unit) || "";
@@ -3723,7 +3734,7 @@ function renderInvoicePageContent(){
       ? "1 pc"
       : `${Pricing.formatQty(it.qty, mode).replace(" "+unit,"")}${mode !== "UNIT" && it.pieces ? `<div class="c-pieces">(${it.pieces} pc)</div>` : ""}`;
     const base = `<td class="c-sn">${i+1}</td><td>${escapeHtml(it.name)}</td><td class="c-size">${escapeHtml(it.size_label||"—")}</td><td class="c-unit">${escapeHtml(unit)}</td><td class="c-num">${qtyCell}</td>`;
-    return `<tr>${base}${showRate ? `<td class="c-num">${fmtPaise(it.rate).replace("Rs. ","")}</td><td class="c-num c-amt">${fmtPaise(it.qty*it.rate)}</td>` : ""}</tr>`;
+    return `<tr>${base}<td class="c-num">${showRate ? fmtPaise(it.rate).replace("Rs. ","") : ""}</td><td class="c-num c-amt">${showRate ? fmtPaise(it.qty*it.rate) : ""}</td></tr>`;
   }).join("");
   // Total Quantity is the physical piece count across all items, not the
   // billed area/length sum — matching what gets counted at load/unload,
@@ -3733,7 +3744,7 @@ function renderInvoicePageContent(){
   const tfoot = `<tfoot><tr>
     <td colspan="4" style="text-align:right;">Total Quantity</td>
     <td class="c-num">${totalQtyForFoot}</td>
-    <td colspan="${showRate?3:1}"></td>
+    <td colspan="3"></td>
   </tr></tfoot>`;
 
   // Priced invoice: full totals. Challan: same boxed layout for visual
@@ -3758,26 +3769,27 @@ function renderInvoicePageContent(){
   const effectiveRatePct = taxableGoods > 0 ? Math.round(((cgst+sgst+igst) / taxableGoods) * 100) : 0;
   const halfRatePct = Math.round(effectiveRatePct / 2);
 
-  // A "Without Rate" print (showRate false) carries no prices at all, so the
-  // totals box — and the "Amount in Words" line, which has nothing to
-  // express — are dropped entirely rather than shown with zeroes. The
-  // delivery-details box then takes the full page width.
-  const totalsBox = !showRate ? "" : `<div class="erp-totals-box">
-    <div class="erp-tb-row"><span>Subtotal</span><span>${fmtPaise(challan?challanSubtotal:inv.subtotal)}</span></div>
-    <div class="erp-tb-row"><span>Discount</span><span>${discountAmt>0?"-":""}${fmtPaise(discountAmt)}</span></div>
+  // The totals box keeps the SAME layout regardless of showRate — only the
+  // money values that depend on item pricing (Subtotal, Discount, Grand
+  // Total) go blank instead of printing a misleading "0.00" when the rate
+  // itself isn't shown. Transport/Additional Charges are real entered
+  // rupee amounts independent of any item rate, so they still print.
+  const totalsBox = `<div class="erp-totals-box">
+    <div class="erp-tb-row"><span>Subtotal</span><span>${showRate ? fmtPaise(challan?challanSubtotal:inv.subtotal) : ""}</span></div>
+    <div class="erp-tb-row"><span>Discount</span><span>${showRate ? (discountAmt>0?"-":"")+fmtPaise(discountAmt) : ""}</span></div>
     <div class="erp-tb-row"><span>Transport</span><span>${fmtPaise(inv.transport)}</span></div>
     ${inv.loading ? `<div class="erp-tb-row"><span>Additional Charges</span><span>${fmtPaise(inv.loading)}</span></div>` : ""}
     ${!gstEnabled ? "" : isIGST
       ? `<div class="erp-tb-row"><span>IGST ${effectiveRatePct}%</span><span>${fmtPaise(igst)}</span></div>`
       : `<div class="erp-tb-row"><span>CGST ${halfRatePct}%</span><span>${fmtPaise(cgst)}</span></div><div class="erp-tb-row"><span>SGST ${halfRatePct}%</span><span>${fmtPaise(sgst)}</span></div>`}
     ${!challan && inv.round_off ? `<div class="erp-tb-row"><span>Round Off</span><span>${inv.round_off>0?"+":""}${fmtPaise(inv.round_off)}</span></div>` : ""}
-    <div class="erp-tb-row erp-tb-grand"><span>Grand Total</span><span>${fmtPaise(displayTotal)}</span></div>
+    <div class="erp-tb-row erp-tb-grand"><span>Grand Total</span><span>${showRate ? fmtPaise(displayTotal) : ""}</span></div>
     ${!challan && inv.advance>0 ? `<div class="erp-tb-row"><span>Advance Paid</span><span>-${fmtPaise(inv.advance)}</span></div>
     <div class="erp-tb-row" style="font-weight:800;"><span>Balance Due</span><span>${fmtPaise(inv.balance_due)}</span></div>` : ""}
   </div>`;
 
   const deliveryAddr = inv.delivery_address || (cust && cust.address) || "";
-  const bottomLeft = `<div class="erp-bottom-left"${showRate ? "" : ` style="border-right:none;"`}>
+  const bottomLeft = `<div class="erp-bottom-left">
     ${deliveryAddr ? `<div><b>Delivery Address:</b> ${escapeHtml(deliveryAddr)}</div>` : ""}
     ${inv.remarks ? `<div><b>Remarks:</b> ${escapeHtml(inv.remarks)}</div>` : ""}
     ${showRate ? `<div><b>Amount in Words:</b> ${Pricing.amountInWords(displayTotal)}</div>` : ""}

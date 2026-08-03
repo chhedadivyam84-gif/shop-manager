@@ -589,7 +589,6 @@ async function initApp(){
   document.getElementById("paper-a4").addEventListener("click", ()=>setPaper("A4"));
   document.getElementById("inv-download").addEventListener("click", downloadInvoicePdf);
   document.getElementById("inv-print").addEventListener("click", ()=>window.print());
-  document.getElementById("inv-whatsapp").addEventListener("click", shareWhatsApp);
   document.getElementById("inv-whatsapp-pdf").addEventListener("click", shareInvoicePdfWhatsApp);
   document.getElementById("inv-server-print").addEventListener("click", printViaServer);
 
@@ -2373,7 +2372,13 @@ function printPartyLedger(detail, partyLabel){
       th,td{border:1px solid #000;padding:4px 6px;text-align:left;}
       th{background:#eee;} .num{text-align:right;}
       .totals{margin-top:10px;font-size:12px;}
+      /* This opens as its own blank browser tab (window.open), so it needs
+         its own way back — there's no app header/nav here to fall back on.
+         Hidden on the printed page itself; only shown on screen. */
+      .back-link{display:inline-block;margin-bottom:12px;font-size:12px;color:#1e2a4a;text-decoration:none;}
+      @media print{ .back-link{display:none;} }
     </style></head><body>
+    <a href="#" class="back-link" onclick="window.close();return false;">&larr; Back to Home</a>
     <h1>${escapeHtml(detail.name)} — Party Ledger</h1>
     <div class="sub">${partyLabel} · ${detail.phone?escapeHtml(detail.phone):""}${detail.gst?" · GST "+escapeHtml(detail.gst):""}</div>
     <table><thead><tr><th>Date</th><th>Type</th><th>Invoice No</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th><th>Remarks</th></tr></thead>
@@ -4040,17 +4045,6 @@ function openWhatsApp(phone, text){
   const url = "https://wa.me/" + num + (text ? ("?text=" + encodeURIComponent(text)) : "");
   const win = window.open(url, "_blank");
   if(!win) toast("Couldn't open WhatsApp — allow pop-ups for this site, or install WhatsApp to use this.");
-}
-
-function shareWhatsApp(){
-  const inv = lastPreviewInvoice; if(!inv) return;
-  const cust = state.customers.find(c=>c.id===inv.customer_id);
-  const challan = inv.doc_type === "challan";
-  const totalPieces = inv.items.reduce((s,it)=>s+(Number(it.pieces)||0),0);
-  const text = challan
-    ? `Delivery Challan ${inv.challan_no}\nDate: ${inv.date}\nTo: ${cust?cust.name:"Walk-in"}\nItems: ${inv.items.length} · ${totalPieces} pcs`
-    : `Invoice ${inv.challan_no}\nDate: ${inv.date}\nCustomer: ${cust?cust.name:"Walk-in"}\nTotal: ${fmt(inv.total)}${inv.balance_due>0?`\nBalance Due: ${fmt(inv.balance_due)}`:""}`;
-  openWhatsApp(cust && cust.phone, text);
 }
 
 /* ============================================================

@@ -218,14 +218,13 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
   if (showRate) doc.splitTextToSize("Amount in Words: " + Pricing.amountInWords(displayTotal), bottomLeftWidth - 6).forEach(l => bottomLeftLines.push(l));
   const bottomBoxH = Math.max(totalsBoxH, bottomLeftLines.length * fs(4) + 4) + 3;
 
-  const signRowH = fs(16);
   const termsText = challan
     ? "PLYWOOD, BLACKBOARD, ARE MANUFACTURED FROM NATURAL WOOD WHICH IS BELOW BIO DEGRADEBLE, WE DONOT GUARANTEE AGAINST ANY NATURAL DECAY DEFICIENTY, DETORATION AND LIKE INCLUDING MANUFACTURING DEFACT AND/OR IMPERFACT QUALITY"
     : "NO GURANTEE AND WARRANTY FOR DECORATIVE PRODUCTS AND AIR BUBBLES IN LAMMINATES, ACRYLIC AND PVC LAMINATES OR ANY SHADE VARIATION AFTER INSTALLATION. NO EXCHANGE. NO RETURN IN ANY CONDITION. PLEASE CHECK THE MATERIAL ON DELIVERY.";
   const termLines = doc.splitTextToSize(termsText, CONTENT_W - 6);
   const termsBoxH = termLines.length * fs(3.2) + fs(6);
 
-  const footerReserve = bottomBoxH + signRowH + termsBoxH;
+  const footerReserve = bottomBoxH + termsBoxH;
   const tableTargetBottom = PAGE_H - MARGIN - footerReserve;
 
   // Row height stays CONSTANT regardless of item count — a long order pages
@@ -366,34 +365,6 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
   doc.rect(MARGIN, bottomTopY, CONTENT_W, bottomBoxH);
   doc.line(bottomRightX, bottomTopY, bottomRightX, bottomTopY + bottomBoxH);
   y = bottomTopY + bottomBoxH;
-
-  // ---- Signature row: Receiver / Stamp / Authorised Signatory ----
-  const signTopY = y;
-  const signW = CONTENT_W / 3;
-  const signLabelY = signTopY + signRowH - fs(3);
-  doc.setFont("helvetica", "normal"); doc.setFontSize(fs(7));
-  const signLineY = signLabelY - fs(2);
-  [
-    ["Receiver Signature", MARGIN + signW * 0.5],
-    ["__STAMP__", MARGIN + signW * 1.5],
-    ["For " + (settings.business_name || "Shop") + "\nAuthorised Signatory", MARGIN + signW * 2.5]
-  ].forEach(([label, cx]) => {
-    if (label === "__STAMP__") {
-      doc.setDrawColor(160);
-      doc.setLineDashPattern([1, 1], 0);
-      doc.rect(cx - signW * 0.3, signTopY + fs(3), signW * 0.6, fs(7));
-      doc.setLineDashPattern([], 0);
-      doc.setTextColor(160); doc.setFontSize(fs(6.5));
-      doc.text("Company Stamp", cx, signTopY + fs(3) + fs(4.2), { align: "center" });
-      doc.setTextColor(0); doc.setFontSize(fs(7));
-    } else {
-      doc.line(cx - signW * 0.4, signLineY, cx + signW * 0.4, signLineY);
-      doc.text(label, cx, signLabelY, { align: "center" });
-    }
-    doc.setDrawColor(0);
-  });
-  doc.rect(MARGIN, signTopY, CONTENT_W, signRowH);
-  y = signTopY + signRowH;
 
   // ---- Terms & conditions, full width ----
   const termsTopY = y;

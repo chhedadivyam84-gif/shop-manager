@@ -3844,12 +3844,6 @@ function renderInvoicePageContent(){
       ${totalsBox}
     </div>
 
-    <div class="erp-sign-row">
-      <span>Receiver Signature</span>
-      <span class="erp-stamp-box">Company Stamp</span>
-      <span>For ${escapeHtml(cfg.business_name)}<br>Authorised Signatory</span>
-    </div>
-
     <div class="erp-terms">${challan
       ? `<strong>PLYWOOD, BLACKBOARD, ARE MANUFACTURED FROM NATURAL WOOD WHICH IS BELOW BIO DEGRADEBLE, WE DONOT GUARANTEE AGAINST ANY NATURAL DECAY DEFICIENTY, DETORATION AND LIKE INCLUDING MANUFACTURING DEFACT AND/OR IMPERFACT QUALITY</strong>`
       : `<strong>NO GURANTEE AND WARRANTY FOR DECORATIVE PRODUCTS AND AIR BUBBLES IN LAMMINATES, ACRYLIC AND PVC LAMINATES OR ANY SHADE VARIATION AFTER INSTALLATION. NO EXCHANGE. NO RETURN IN ANY CONDITION. PLEASE CHECK THE MATERIAL ON DELIVERY.</strong>`}</div>

@@ -6618,7 +6618,9 @@ async function openQuotationDetail(quotationId){
   const canAccept = ["Draft","Sent"].includes(q.status);
   const canConvert = q.status === "Accepted";
   const canCancel = !["Converted","Cancelled"].includes(q.status);
-  const canDelete = q.status === "Draft";
+  // A Draft can be deleted by any staff; any other status is owner-only —
+  // mirrors the server-side check in DELETE /quotations/:id.
+  const canDelete = q.status === "Draft" || isOwner();
   const cust = state.customers.find(c=>c.id===q.customer_id);
   sheet.innerHTML = `
     <div class="sheet-handle"></div>
@@ -6659,7 +6661,7 @@ async function openQuotationDetail(quotationId){
       <button class="btn btn-outline" id="share-quotation-btn">Share (WhatsApp)</button>
     </div>
     ${canCancel ? `<div style="margin-top:12px;text-align:center;"><a href="#" id="cancel-quotation-link" class="btn-danger-link">Cancel this quotation</a></div>` : ""}
-    ${canDelete ? `<div style="margin-top:8px;text-align:center;"><a href="#" id="delete-quotation-link" class="btn-danger-link">Delete this draft</a></div>` : ""}
+    ${canDelete ? `<div style="margin-top:8px;text-align:center;"><a href="#" id="delete-quotation-link" class="btn-danger-link">${q.status==="Draft"?"Delete this draft":"Delete this quotation"}</a></div>` : ""}
   `;
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
   const editBtn = sheet.querySelector("#edit-quotation-btn");
@@ -6707,11 +6709,14 @@ async function openQuotationDetail(quotationId){
   const deleteLink = sheet.querySelector("#delete-quotation-link");
   if(deleteLink) deleteLink.addEventListener("click", async (e)=>{
     e.preventDefault();
-    if(confirm(`Delete this draft permanently? This can't be undone.`)){
+    const msg = q.status==="Draft"
+      ? "Delete this draft permanently? This can't be undone."
+      : `Permanently delete ${q.quotation_no} (${q.status})? This can't be undone and leaves a gap in the quotation number series.`;
+    if(confirm(msg)){
       try{
         await api("DELETE", `/quotations/${q.id}`);
         closeAllSheets();
-        toast("Draft deleted.", "ok");
+        toast(q.status==="Draft" ? "Draft deleted." : "Quotation deleted.", "ok");
       }catch(err){ toast(err.message); }
     }
   });

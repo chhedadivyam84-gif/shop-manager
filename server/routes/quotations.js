@@ -381,12 +381,18 @@ router.post("/:id/convert", (req, res) => {
   });
 });
 
-/** A Draft (never sent) can be deleted outright — nothing depends on it yet. */
+/**
+ * A Draft (never sent) can be deleted by any staff — nothing depends on it
+ * yet. Any other status is a genuine hard delete, owner-only, mirroring
+ * invoices.js/purchases.js's owner-only DELETE. Unlike those, a quotation
+ * never touches stock or a customer's due (that only happens at "Convert to
+ * Invoice"), so there's nothing to reverse first — just the row itself.
+ */
 router.delete("/:id", (req, res) => {
   const q = db.prepare("SELECT * FROM quotations WHERE id = ?").get(req.params.id);
   if (!q) return res.status(404).json({ error: "Quotation not found." });
-  if (q.status !== "Draft") {
-    return res.status(400).json({ error: "Only a Draft Quotation can be deleted. Cancel it instead." });
+  if (q.status !== "Draft" && !(req.session && req.session.role === "owner")) {
+    return res.status(403).json({ error: "Only the owner can delete a quotation that isn't a Draft." });
   }
   db.prepare("DELETE FROM quotations WHERE id = ?").run(q.id);
   logAction(req, "quotation.delete", `${q.quotation_no}`);

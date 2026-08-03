@@ -109,6 +109,17 @@ router.get("/", (req, res) => {
   res.json(rows.map(withStatus));
 });
 
+/**
+ * Lets the New Purchase screen show what number THIS purchase will get
+ * before it's saved — peeks the counter without incrementing it (mirrors
+ * quotations.js's /next-number), so an abandoned form never burns a number.
+ */
+router.get("/next-number", (req, res) => {
+  const row = db.prepare("SELECT value FROM counters WHERE name = ?").get("purchase-no");
+  const next = row ? row.value + 1 : 1;
+  res.json({ purchaseNo: `PU${String(next).padStart(7, "0")}` });
+});
+
 router.get("/:id", (req, res) => {
   const p = db.prepare("SELECT * FROM purchases WHERE id = ?").get(req.params.id);
   if (!p) return res.status(404).json({ error: "Purchase not found." });

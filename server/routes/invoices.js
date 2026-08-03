@@ -151,6 +151,20 @@ router.get("/", (req, res) => {
   res.json(invoices.map(withStatus));
 });
 
+/**
+ * Lets the Billing screen show what number THIS document will get before
+ * it's saved — peeks the counter without incrementing it (mirrors
+ * quotations.js's /next-number), so switching between Tax Invoice and
+ * Delivery Challan on an unsaved form, or abandoning it, never burns a
+ * number from either series.
+ */
+router.get("/next-number", (req, res) => {
+  const counterName = req.query.docType === "challan" ? "challan-no" : "estimate-no";
+  const row = db.prepare("SELECT value FROM counters WHERE name = ?").get(counterName);
+  const next = row ? row.value + 1 : 1;
+  res.json({ challanNo: `SP${String(next).padStart(7, "0")}` });
+});
+
 router.get("/:id", (req, res) => {
   const inv = db.prepare("SELECT * FROM invoices WHERE id = ?").get(req.params.id);
   if (!inv) return res.status(404).json({ error: "Invoice not found." });

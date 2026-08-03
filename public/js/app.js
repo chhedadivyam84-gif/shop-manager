@@ -50,7 +50,7 @@ let state = {
   // long-standing default; "warehouse" is opt-in per sale (requirement:
   // "sale to warehouse"). Stored as a location ID once locations load.
   billingLocationId: null,
-  paperSize: "A5", editingInvoiceId: null,
+  paperSize: "A5", editingInvoiceId: null, docNo: null,
   cbFrom: "", cbTo: "", cbEntries: [],
   bbFrom: "", bbTo: "", bbEntries: [], bankAccounts: [], bbAccountId: null,
   inqStatus: "All", inquiries: [], staffNames: [],
@@ -62,7 +62,7 @@ let state = {
     supplierId: null, purchaseType: "Local", paymentMethod: "Credit",
     date: "", invoiceNo: "", dueDate: "", vehicleNumber: "", transportName: "", lrNumber: "", remarks: "",
     transport: 0, loading: 0, otherCharges: 0, roundOff: true, cart: [], editingPurchaseId: null, locationId: null,
-    gstEnabled: true
+    gstEnabled: true, purchaseNo: null
   },
   po: {
     supplierId: null, purchaseType: "Local", date: "", deliveryAddress: "", expectedDeliveryDate: "",
@@ -930,6 +930,34 @@ function setDocType(type){
   if(toggleWrap) toggleWrap.style.opacity = state.editingInvoiceId ? "0.55" : "";
   renderCart();
   renderTotals();
+  renderBillingNumber();
+}
+/**
+ * Shows the number THIS document will get before it's saved. Editing an
+ * existing invoice/challan already knows its real number (set by
+ * editExistingInvoice via state.docNo); a brand-new one asks the server for
+ * a live peek at the next number in the CURRENT doc type's series (see GET
+ * /invoices/next-number) — switching Tax Invoice <-> Delivery Challan
+ * re-peeks since each doc type has its own independent counter.
+ */
+async function renderBillingNumber(){
+  const el = document.getElementById("billing-number-display");
+  const label = document.getElementById("billing-number-label");
+  if(!el) return;
+  const challan = isChallanMode();
+  if(label) label.textContent = challan ? "Challan No." : "Estimate No.";
+  if(state.editingInvoiceId && state.docNo){
+    el.textContent = state.docNo;
+    return;
+  }
+  el.textContent = "…";
+  try{
+    const { challanNo } = await api("GET", `/invoices/next-number?docType=${state.docType}`);
+    state.docNo = challanNo;
+    el.textContent = challanNo;
+  }catch{
+    el.textContent = "—";
+  }
 }
 
 /** Small dismissible banner shown atop Billing while an existing document is being edited. */
@@ -947,6 +975,7 @@ function renderEditModeBanner(){
   document.getElementById("cancel-edit-link").addEventListener("click", (e)=>{
     e.preventDefault();
     state.editingInvoiceId = null;
+    state.docNo = null;
     state.cart = []; state.selectedCustomerId = null; state.taxTypeOverride = null; state.advance = 0; state.discountValue = 0;
     state.transport = 0; state.loading = 0; state.deliveryMan = "";
     state.vehicleNumber = ""; state.deliveryAddress = ""; state.remarks = ""; state.gstEnabled = true;
@@ -983,6 +1012,7 @@ async function editExistingInvoice(inv){
   // silently re-derive a different tax type than what was billed.
   state.taxTypeOverride = inv.tax_type === "IGST" ? "IGST" : "CGST_SGST";
   state.docType = inv.doc_type;
+  state.docNo = inv.challan_no;
   state.discountType = inv.discount_type || "pct";
   state.discountValue = inv.discount_value || 0;
   state.advance = 0; // the original advance was already applied at creation time
@@ -1316,6 +1346,7 @@ async function completeSale(){
     state.transport = 0; state.loading = 0; state.deliveryMan = "";
     state.vehicleNumber = ""; state.deliveryAddress = ""; state.remarks = ""; state.gstEnabled = true;
     state.editingInvoiceId = null;
+    state.docNo = null;
     document.getElementById("advance-input").value = 0;
     document.getElementById("discount-value").value = 0;
     const tIn = document.getElementById("transport-input"); if(tIn) tIn.value = 0;
@@ -5076,8 +5107,31 @@ async function renderPurchaseScreen(){
   renderPurchaseCart();
   renderPurchaseDueDateVisibility();
   renderPurchaseTotals();
+  await renderPurchaseNumber();
   const saveBtn = document.getElementById("pur-save-btn");
   if(saveBtn) saveBtn.textContent = state.pur.editingPurchaseId ? "Update Purchase & Update Stock" : "Save Purchase & Update Stock";
+}
+/**
+ * Shows the number THIS purchase will get before it's saved — mirrors
+ * renderQuotationNumber(). Editing an existing purchase already knows its
+ * real purchase_no (set by editExistingPurchase); a brand-new one asks the
+ * server for a live peek at the next number (see GET /purchases/next-number).
+ */
+async function renderPurchaseNumber(){
+  const el = document.getElementById("pur-number-display");
+  if(!el) return;
+  if(state.pur.editingPurchaseId && state.pur.purchaseNo){
+    el.textContent = state.pur.purchaseNo;
+    return;
+  }
+  el.textContent = "…";
+  try{
+    const { purchaseNo } = await api("GET", "/purchases/next-number");
+    state.pur.purchaseNo = purchaseNo;
+    el.textContent = purchaseNo;
+  }catch{
+    el.textContent = "—";
+  }
 }
 function renderPurchaseLocationChips(){
   const wrap = document.getElementById("pur-location-chips");
@@ -5111,7 +5165,7 @@ function renderPurchaseEditBanner(){
       supplierId: null, purchaseType: "Local", paymentMethod: "Credit",
       date: "", invoiceNo: "", dueDate: "", vehicleNumber: "", transportName: "", lrNumber: "", remarks: "",
       transport: 0, loading: 0, otherCharges: 0, roundOff: true, cart: [], editingPurchaseId: null, locationId: null,
-      gstEnabled: true
+      gstEnabled: true, purchaseNo: null
     };
     const set = (id, val) => { const inp=document.getElementById(id); if(inp) inp.value = val; };
     set("pur-invoice-no", ""); set("pur-due-date", ""); set("pur-vehicle", "");
@@ -5459,7 +5513,7 @@ async function savePurchase(){
       supplierId: null, purchaseType: "Local", paymentMethod: "Credit",
       date: "", invoiceNo: "", dueDate: "", vehicleNumber: "", transportName: "", lrNumber: "", remarks: "",
       transport: 0, loading: 0, otherCharges: 0, roundOff: true, cart: [], editingPurchaseId: null, locationId: null,
-      gstEnabled: true
+      gstEnabled: true, purchaseNo: null
     };
     const set = (id, val) => { const el=document.getElementById(id); if(el) el.value = val; };
     set("pur-invoice-no", ""); set("pur-due-date", ""); set("pur-vehicle", "");
@@ -5586,6 +5640,7 @@ async function editExistingPurchase(p){
   state.pur.otherCharges = p.other_charges || 0;
   state.pur.roundOff = true;
   state.pur.editingPurchaseId = p.id;
+  state.pur.purchaseNo = p.purchase_no;
   state.pur.locationId = p.location_id || null;
   state.pur.gstEnabled = p.gst_enabled !== 0;
 

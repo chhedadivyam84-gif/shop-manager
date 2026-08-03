@@ -43,7 +43,7 @@ let state = {
   // changes or a new invoice starts, so it never silently leaks between bills.
   taxTypeOverride: null,
   discountType: "pct", discountValue: 0, advance: 0, paymentMethod: "Cash",
-  transport: 0, loading: 0, roundOff: true, docType: "invoice", challanShowRate: false, gstOnCharges: true, deliveryMan: "",
+  transport: 0, loading: 0, roundOff: true, docType: "invoice", challanShowRate: false, gstOnCharges: true, gstEnabled: true, deliveryMan: "",
   vehicleNumber: "", deliveryAddress: "", remarks: "",
   invBrandFilter: "All", reportType: "Sales", partyMode: "customer",
   // Which location a Bill/Challan sells from — "shop" is every invoice's
@@ -61,7 +61,8 @@ let state = {
   pur: {
     supplierId: null, purchaseType: "Local", paymentMethod: "Credit",
     date: "", invoiceNo: "", dueDate: "", vehicleNumber: "", transportName: "", lrNumber: "", remarks: "",
-    transport: 0, loading: 0, otherCharges: 0, roundOff: true, cart: [], editingPurchaseId: null, locationId: null
+    transport: 0, loading: 0, otherCharges: 0, roundOff: true, cart: [], editingPurchaseId: null, locationId: null,
+    gstEnabled: true
   },
   po: {
     supplierId: null, purchaseType: "Local", date: "", deliveryAddress: "", expectedDeliveryDate: "",
@@ -305,6 +306,11 @@ async function initApp(){
       renderTotals();
     });
   });
+  document.querySelectorAll('[data-gstenabled]').forEach(b=>{
+    b.addEventListener("click", ()=>{
+      setGstEnabled(b.dataset.gstenabled === "true");
+    });
+  });
   document.getElementById("discount-value").addEventListener("input", (e)=>{
     state.discountValue = parseFloat(e.target.value)||0; renderTotals();
   });
@@ -437,6 +443,11 @@ async function initApp(){
       document.querySelectorAll('[data-pur-type]').forEach(x=>x.classList.remove("selected"));
       b.classList.add("selected");
       renderPurchaseTotals();
+    });
+  });
+  document.querySelectorAll('[data-pur-gstenabled]').forEach(b=>{
+    b.addEventListener("click", ()=>{
+      setPurGstEnabled(b.dataset.purGstenabled === "true");
     });
   });
   document.querySelectorAll('[data-pur-pay]').forEach(b=>{
@@ -872,6 +883,22 @@ function isChallanMode(){ return state.docType === "challan"; }
  * action buttons, but leaves the item list — including sizes and quantities —
  * exactly as-is, since a challan still needs those.
  */
+/**
+ * "GST Invoice" vs "Non-GST Invoice" — a per-invoice toggle independent of
+ * doc type. When off, the GST Type chips (CGST+SGST/IGST) and the "Apply GST
+ * on Transport & Loading" checkbox are moot, so both hide along with them;
+ * computeTotals()/renderTotals() do the actual skip of tax calculation.
+ */
+function setGstEnabled(on){
+  state.gstEnabled = on;
+  document.querySelectorAll('[data-gstenabled]').forEach(b=>
+    b.classList.toggle("selected", (b.dataset.gstenabled === "true") === on));
+  const gstTypeSection = document.getElementById("gst-type-section");
+  if(gstTypeSection) gstTypeSection.style.display = on ? "" : "none";
+  const gstChargesRow = document.getElementById("gst-on-charges-row");
+  if(gstChargesRow) gstChargesRow.style.display = (on && !isChallanMode()) ? "flex" : "none";
+  renderTotals();
+}
 function setDocType(type){
   state.docType = type === "challan" ? "challan" : "invoice";
   const challan = isChallanMode();
@@ -885,7 +912,7 @@ function setDocType(type){
   const roundoffRow = document.getElementById("roundoff-toggle-row");
   if(roundoffRow) roundoffRow.style.display = challan ? "none" : "flex";
   const gstChargesRow = document.getElementById("gst-on-charges-row");
-  if(gstChargesRow) gstChargesRow.style.display = challan ? "none" : "flex";
+  if(gstChargesRow) gstChargesRow.style.display = (challan || !state.gstEnabled) ? "none" : "flex";
   const note = document.getElementById("challan-note");
   if(note) note.style.display = challan ? "block" : "none";
   const itemsTitle = document.getElementById("items-title");
@@ -922,10 +949,11 @@ function renderEditModeBanner(){
     state.editingInvoiceId = null;
     state.cart = []; state.selectedCustomerId = null; state.taxTypeOverride = null; state.advance = 0; state.discountValue = 0;
     state.transport = 0; state.loading = 0; state.deliveryMan = "";
-    state.vehicleNumber = ""; state.deliveryAddress = ""; state.remarks = "";
+    state.vehicleNumber = ""; state.deliveryAddress = ""; state.remarks = ""; state.gstEnabled = true;
     const set = (id, val) => { const inp=document.getElementById(id); if(inp) inp.value = val; };
     set("advance-input", 0); set("discount-value", 0); set("transport-input", 0); set("loading-input", 0);
     set("delivery-man-input", ""); set("vehicle-number-input", ""); set("delivery-address-input", ""); set("remarks-input", "");
+    setGstEnabled(true);
     renderEditModeBanner();
     renderBilling();
     toast("Edit cancelled.");
@@ -963,6 +991,7 @@ async function editExistingInvoice(inv){
   state.transport = inv.transport || 0;
   state.loading = inv.loading || 0;
   state.gstOnCharges = inv.gst_on_charges !== 0;
+  state.gstEnabled = inv.gst_enabled !== 0;
   state.deliveryMan = inv.delivery_man || "";
   state.vehicleNumber = inv.vehicle_number || "";
   state.deliveryAddress = inv.delivery_address || "";
@@ -990,6 +1019,7 @@ async function editExistingInvoice(inv){
   document.querySelectorAll('[data-disc]').forEach(b=>b.classList.toggle("selected", b.dataset.disc===state.discountType));
   const gstChargesToggle = document.getElementById("gst-on-charges-toggle");
   if(gstChargesToggle) gstChargesToggle.checked = state.gstOnCharges;
+  setGstEnabled(state.gstEnabled);
   renderEditModeBanner();
   renderTotals();
   toast(`Editing ${inv.challan_no} — make your changes, then save.`, "ok");
@@ -1152,13 +1182,18 @@ function computeTotals(){
   discount = round2(Math.min(Math.max(0,discount), subtotal));
 
   const taxType = currentTaxType();
+  // "Non-GST Invoice" (state.gstEnabled === false) skips tax entirely — no
+  // goods tax, no ancillary tax, no CGST/SGST/IGST — mirrors
+  // server/routes/invoices.js's computeTotals().
   let goodsTax = 0;
-  lines.forEach((r,i)=>{
-    const share = subtotal>0 ? (r.amount/subtotal)*discount : 0;
-    const taxable = Math.max(0, r.amount-share);
-    goodsTax += taxable * ((state.cart[i].gstRate||18)/100);
-  });
-  goodsTax = round2(goodsTax);
+  if(state.gstEnabled){
+    lines.forEach((r,i)=>{
+      const share = subtotal>0 ? (r.amount/subtotal)*discount : 0;
+      const taxable = Math.max(0, r.amount-share);
+      goodsTax += taxable * ((state.cart[i].gstRate||18)/100);
+    });
+    goodsTax = round2(goodsTax);
+  }
 
   // Whether Transport/Loading are taxed is a per-invoice toggle
   // (state.gstOnCharges). When on, they're taxed at the invoice's own
@@ -1170,11 +1205,13 @@ function computeTotals(){
   const loading = round2(Math.max(0, state.loading||0));
   const taxableGoods = round2(subtotal - discount);
   const effectiveRate = taxableGoods>0 ? goodsTax/taxableGoods : 0;
-  const ancillaryTax = state.gstOnCharges ? round2((transport+loading) * effectiveRate) : 0;
+  const ancillaryTax = (state.gstEnabled && state.gstOnCharges) ? round2((transport+loading) * effectiveRate) : 0;
   const totalTax = round2(goodsTax + ancillaryTax);
 
   let cgst=0, sgst=0, igst=0;
-  if(taxType==="IGST") igst = totalTax; else { cgst = round2(totalTax/2); sgst = round2(totalTax-cgst); }
+  if(state.gstEnabled){
+    if(taxType==="IGST") igst = totalTax; else { cgst = round2(totalTax/2); sgst = round2(totalTax-cgst); }
+  }
 
   // Transport/loading now sit BEFORE GST — GST is the last line before the
   // grand total, computed on top of them rather than added after tax.
@@ -1223,8 +1260,7 @@ function renderTotals(){
     ${t.discount>0 ? row("Discount", "-"+fmtPaise(t.discount), "color:var(--danger);") : ""}
     ${t.transport>0 ? row("Transport", fmtPaise(t.transport)) : ""}
     ${t.loading>0 ? row("Loading", fmtPaise(t.loading)) : ""}
-    ${row("Taxable Amount", fmtPaise(t.taxableGoods))}
-    ${t.taxType==="IGST"
+    ${!state.gstEnabled ? "" : t.taxType==="IGST"
       ? row(`IGST (${t.effectiveRatePct}%)`, fmtPaise(t.igst))
       : row(`CGST (${halfRatePct}%)`, fmtPaise(t.cgst)) + row(`SGST (${halfRatePct}%)`, fmtPaise(t.sgst))}
     ${t.roundOffAmount!==0 ? row("Round off", (t.roundOffAmount>0?"+":"")+fmtPaise(t.roundOffAmount)) : ""}
@@ -1265,7 +1301,7 @@ async function completeSale(){
       discountType: state.discountType, discountValue: state.discountValue,
       advance: state.advance, paymentMethod: state.paymentMethod, paperSize: state.paperSize,
       transport: state.transport, loading: state.loading, roundOff: state.roundOff,
-      gstOnCharges: state.gstOnCharges, deliveryMan: state.deliveryMan,
+      gstOnCharges: state.gstOnCharges, gstEnabled: state.gstEnabled, deliveryMan: state.deliveryMan,
       vehicleNumber: state.vehicleNumber, deliveryAddress: state.deliveryAddress, remarks: state.remarks,
       // Only sent when staff explicitly picked a GST Type for this invoice —
       // omitted (undefined) falls back to the customer's Customer Master
@@ -1278,7 +1314,7 @@ async function completeSale(){
       : await api("POST", "/invoices", payload);
     state.cart = []; state.advance = 0; state.discountValue = 0; state.taxTypeOverride = null;
     state.transport = 0; state.loading = 0; state.deliveryMan = "";
-    state.vehicleNumber = ""; state.deliveryAddress = ""; state.remarks = "";
+    state.vehicleNumber = ""; state.deliveryAddress = ""; state.remarks = ""; state.gstEnabled = true;
     state.editingInvoiceId = null;
     document.getElementById("advance-input").value = 0;
     document.getElementById("discount-value").value = 0;
@@ -1288,6 +1324,7 @@ async function completeSale(){
     const vnIn = document.getElementById("vehicle-number-input"); if(vnIn) vnIn.value = "";
     const daIn = document.getElementById("delivery-address-input"); if(daIn) daIn.value = "";
     const rmIn = document.getElementById("remarks-input"); if(rmIn) rmIn.value = "";
+    setGstEnabled(true);
     renderEditModeBanner();
     await Promise.all([loadProducts(), loadCustomers()]);
     await renderBilling(); await renderHome();
@@ -3678,8 +3715,11 @@ function renderInvoicePageContent(){
   const challanSubtotal = inv.items.reduce((s,it)=>s+(it.qty*it.rate||0),0);
   const displayTotal = challan ? (challanSubtotal + inv.transport + inv.loading) : inv.total;
   const discountAmt = challan ? 0 : (inv.discount_amount || 0);
-  const cgst = challan ? 0 : (inv.cgst || 0), sgst = challan ? 0 : (inv.sgst || 0), igst = challan ? 0 : (inv.igst || 0);
-  const isIGST = !challan && inv.tax_type === "IGST";
+  // A challan never carries real GST, and "Non-GST Invoice" (gst_enabled=0)
+  // deliberately has none either — both skip the tax rows entirely.
+  const gstEnabled = !challan && inv.gst_enabled !== 0;
+  const cgst = gstEnabled ? (inv.cgst || 0) : 0, sgst = gstEnabled ? (inv.sgst || 0) : 0, igst = gstEnabled ? (inv.igst || 0) : 0;
+  const isIGST = gstEnabled && inv.tax_type === "IGST";
   // Effective rate shown next to the CGST/SGST/IGST label — derived from the
   // actual stored tax and taxable value (works for a mixed-rate bill too,
   // since it's a weighted average, not any single item's GST%), not hardcoded.
@@ -3687,13 +3727,16 @@ function renderInvoicePageContent(){
   const effectiveRatePct = taxableGoods > 0 ? Math.round(((cgst+sgst+igst) / taxableGoods) * 100) : 0;
   const halfRatePct = Math.round(effectiveRatePct / 2);
 
-  const totalsBox = `<div class="erp-totals-box">
+  // A "Without Rate" print (showRate false) carries no prices at all, so the
+  // totals box — and the "Amount in Words" line, which has nothing to
+  // express — are dropped entirely rather than shown with zeroes. The
+  // delivery-details box then takes the full page width.
+  const totalsBox = !showRate ? "" : `<div class="erp-totals-box">
     <div class="erp-tb-row"><span>Subtotal</span><span>${fmtPaise(challan?challanSubtotal:inv.subtotal)}</span></div>
     <div class="erp-tb-row"><span>Discount</span><span>${discountAmt>0?"-":""}${fmtPaise(discountAmt)}</span></div>
     <div class="erp-tb-row"><span>Transport</span><span>${fmtPaise(inv.transport)}</span></div>
     ${inv.loading ? `<div class="erp-tb-row"><span>Additional Charges</span><span>${fmtPaise(inv.loading)}</span></div>` : ""}
-    ${!challan ? `<div class="erp-tb-row"><span>Taxable Amount</span><span>${fmtPaise(taxableGoods)}</span></div>` : ""}
-    ${isIGST
+    ${!gstEnabled ? "" : isIGST
       ? `<div class="erp-tb-row"><span>IGST ${effectiveRatePct}%</span><span>${fmtPaise(igst)}</span></div>`
       : `<div class="erp-tb-row"><span>CGST ${halfRatePct}%</span><span>${fmtPaise(cgst)}</span></div><div class="erp-tb-row"><span>SGST ${halfRatePct}%</span><span>${fmtPaise(sgst)}</span></div>`}
     ${!challan && inv.round_off ? `<div class="erp-tb-row"><span>Round Off</span><span>${inv.round_off>0?"+":""}${fmtPaise(inv.round_off)}</span></div>` : ""}
@@ -3703,10 +3746,10 @@ function renderInvoicePageContent(){
   </div>`;
 
   const deliveryAddr = inv.delivery_address || (cust && cust.address) || "";
-  const bottomLeft = `<div class="erp-bottom-left">
+  const bottomLeft = `<div class="erp-bottom-left"${showRate ? "" : ` style="border-right:none;"`}>
     ${deliveryAddr ? `<div><b>Delivery Address:</b> ${escapeHtml(deliveryAddr)}</div>` : ""}
     ${inv.remarks ? `<div><b>Remarks:</b> ${escapeHtml(inv.remarks)}</div>` : ""}
-    <div><b>Amount in Words:</b> ${Pricing.amountInWords(displayTotal)}</div>
+    ${showRate ? `<div><b>Amount in Words:</b> ${Pricing.amountInWords(displayTotal)}</div>` : ""}
   </div>`;
 
   const bannerText = challan ? "DELIVERY CHALLAN" : "ESTIMATE CHALLAN";
@@ -5067,7 +5110,8 @@ function renderPurchaseEditBanner(){
     state.pur = {
       supplierId: null, purchaseType: "Local", paymentMethod: "Credit",
       date: "", invoiceNo: "", dueDate: "", vehicleNumber: "", transportName: "", lrNumber: "", remarks: "",
-      transport: 0, loading: 0, otherCharges: 0, roundOff: true, cart: [], editingPurchaseId: null, locationId: null
+      transport: 0, loading: 0, otherCharges: 0, roundOff: true, cart: [], editingPurchaseId: null, locationId: null,
+      gstEnabled: true
     };
     const set = (id, val) => { const inp=document.getElementById(id); if(inp) inp.value = val; };
     set("pur-invoice-no", ""); set("pur-due-date", ""); set("pur-vehicle", "");
@@ -5075,6 +5119,7 @@ function renderPurchaseEditBanner(){
     set("pur-transport-input", 0); set("pur-loading-input", 0); set("pur-other-input", 0);
     document.querySelectorAll('[data-pur-type]').forEach(x=>x.classList.toggle("selected", x.dataset.purType==="Local"));
     document.querySelectorAll('[data-pur-pay]').forEach(x=>x.classList.toggle("selected", x.dataset.purPay==="Credit"));
+    setPurGstEnabled(true);
     renderPurchaseScreen();
     toast("Edit cancelled.");
   });
@@ -5310,21 +5355,38 @@ function renderPurchaseDueDateVisibility(){
   const row = document.getElementById("pur-due-date-row");
   if(row) row.style.display = state.pur.paymentMethod === "Credit" ? "block" : "none";
 }
+/**
+ * "GST Purchase" vs "Non-GST Purchase" — mirrors setGstEnabled() on the
+ * Billing screen. When off, Purchase Type (which only decides CGST+SGST vs
+ * IGST) is moot, so its chip row hides along with the tax rows.
+ */
+function setPurGstEnabled(on){
+  state.pur.gstEnabled = on;
+  document.querySelectorAll('[data-pur-gstenabled]').forEach(b=>
+    b.classList.toggle("selected", (b.dataset.purGstenabled === "true") === on));
+  const typeSection = document.getElementById("pur-type-section");
+  if(typeSection) typeSection.style.display = on ? "" : "none";
+  renderPurchaseTotals();
+}
 /* Mirrors computeTotals() in server/routes/purchases.js exactly, including
    the order of rounding — the preview must match what the server will store. */
 function computePurchaseTotals(){
   const lines = state.pur.cart.map(purchaseLineCalc);
   const subtotal = round2(lines.reduce((s,r)=>s+r.amount,0));
   const discountAmount = round2(lines.reduce((s,r)=>s+r.discountAmount,0));
-  const goodsTax = round2(lines.reduce((s,r)=>s+r.gstAmt,0));
+  // "Non-GST Purchase" (state.pur.gstEnabled === false) skips tax entirely —
+  // mirrors server/routes/purchases.js's computeTotals().
+  const goodsTax = state.pur.gstEnabled ? round2(lines.reduce((s,r)=>s+r.gstAmt,0)) : 0;
 
   const transport = round2(Math.max(0, state.pur.transport||0));
   const loading = round2(Math.max(0, state.pur.loading||0));
   const otherCharges = round2(Math.max(0, state.pur.otherCharges||0));
 
   let cgst=0, sgst=0, igst=0;
-  if(state.pur.purchaseType==="Interstate") igst = goodsTax;
-  else { cgst = round2(goodsTax/2); sgst = round2(goodsTax-cgst); }
+  if(state.pur.gstEnabled){
+    if(state.pur.purchaseType==="Interstate") igst = goodsTax;
+    else { cgst = round2(goodsTax/2); sgst = round2(goodsTax-cgst); }
+  }
 
   const preRound = subtotal - discountAmount + cgst + sgst + igst + transport + loading + otherCharges;
   const total = round2(state.pur.roundOff ? Math.round(preRound) : preRound);
@@ -5342,7 +5404,7 @@ function renderPurchaseTotals(){
     ${t.transport>0 ? row("Transport", fmtPaise(t.transport)) : ""}
     ${t.loading>0 ? row("Loading / Unloading", fmtPaise(t.loading)) : ""}
     ${t.otherCharges>0 ? row("Other Charges", fmtPaise(t.otherCharges)) : ""}
-    ${state.pur.purchaseType==="Interstate"
+    ${!state.pur.gstEnabled ? "" : state.pur.purchaseType==="Interstate"
       ? row("IGST", fmtPaise(t.igst))
       : row("CGST", fmtPaise(t.cgst)) + row("SGST", fmtPaise(t.sgst))}
     ${t.roundOffAmount!==0 ? row("Round off", (t.roundOffAmount>0?"+":"")+fmtPaise(t.roundOffAmount)) : ""}
@@ -5379,6 +5441,7 @@ async function savePurchase(){
       otherCharges: state.pur.otherCharges,
       roundOff: state.pur.roundOff,
       locationId: state.pur.locationId,
+      gstEnabled: state.pur.gstEnabled,
       // Only the raw inputs are sent — the server recomputes every derived
       // figure itself, same principle as completeSale() on the Billing side.
       items: state.pur.cart.map(c=>({
@@ -5395,7 +5458,8 @@ async function savePurchase(){
     state.pur = {
       supplierId: null, purchaseType: "Local", paymentMethod: "Credit",
       date: "", invoiceNo: "", dueDate: "", vehicleNumber: "", transportName: "", lrNumber: "", remarks: "",
-      transport: 0, loading: 0, otherCharges: 0, roundOff: true, cart: [], editingPurchaseId: null, locationId: null
+      transport: 0, loading: 0, otherCharges: 0, roundOff: true, cart: [], editingPurchaseId: null, locationId: null,
+      gstEnabled: true
     };
     const set = (id, val) => { const el=document.getElementById(id); if(el) el.value = val; };
     set("pur-invoice-no", ""); set("pur-due-date", ""); set("pur-vehicle", "");
@@ -5403,6 +5467,7 @@ async function savePurchase(){
     set("pur-transport-input", 0); set("pur-loading-input", 0); set("pur-other-input", 0);
     document.querySelectorAll('[data-pur-type]').forEach(x=>x.classList.toggle("selected", x.dataset.purType==="Local"));
     document.querySelectorAll('[data-pur-pay]').forEach(x=>x.classList.toggle("selected", x.dataset.purPay==="Credit"));
+    setPurGstEnabled(true);
     renderPurchaseEditBanner();
     await Promise.all([loadProducts(), loadSuppliers()]);
     await renderHome();
@@ -5522,6 +5587,7 @@ async function editExistingPurchase(p){
   state.pur.roundOff = true;
   state.pur.editingPurchaseId = p.id;
   state.pur.locationId = p.location_id || null;
+  state.pur.gstEnabled = p.gst_enabled !== 0;
 
   closeAllSheets();
   switchTab("purchase");
@@ -5540,6 +5606,7 @@ async function editExistingPurchase(p){
   set("pur-other-input", state.pur.otherCharges);
   document.querySelectorAll('[data-pur-type]').forEach(x=>x.classList.toggle("selected", x.dataset.purType===state.pur.purchaseType));
   document.querySelectorAll('[data-pur-pay]').forEach(x=>x.classList.toggle("selected", x.dataset.purPay===state.pur.paymentMethod));
+  setPurGstEnabled(state.pur.gstEnabled);
   renderPurchaseDueDateVisibility();
   renderPurchaseEditBanner();
   toast(`Editing ${p.purchase_no} — make your changes, then save.`, "ok");

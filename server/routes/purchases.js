@@ -46,24 +46,30 @@ function nextPurchaseNo() {
  * discountAmount, so this just sums rather than re-deriving a share of one
  * total discount the way the sales side does.
  */
-function computeTotals({ items, taxType, transport, loading, otherCharges, roundOff }) {
+function computeTotals({ items, taxType, transport, loading, otherCharges, roundOff, gstEnabled }) {
   const subtotal = round2(items.reduce((s, it) => s + it.amount, 0));
   const discountAmount = round2(items.reduce((s, it) => s + it.discountAmount, 0));
 
+  // "Non-GST Purchase" (gstEnabled === false) skips tax entirely — no goods
+  // tax, no CGST/SGST/IGST — mirrors invoices.js's computeTotals.
   let goodsTax = 0;
-  items.forEach(it => {
-    const taxable = Math.max(0, it.amount - it.discountAmount);
-    goodsTax += taxable * (it.gstRate / 100);
-  });
-  goodsTax = round2(goodsTax);
+  if (gstEnabled !== false) {
+    items.forEach(it => {
+      const taxable = Math.max(0, it.amount - it.discountAmount);
+      goodsTax += taxable * (it.gstRate / 100);
+    });
+    goodsTax = round2(goodsTax);
+  }
 
   const transportAmt = round2(Math.max(0, Number(transport) || 0));
   const loadingAmt = round2(Math.max(0, Number(loading) || 0));
   const otherAmt = round2(Math.max(0, Number(otherCharges) || 0));
 
   let cgst = 0, sgst = 0, igst = 0;
-  if (taxType === "IGST") igst = goodsTax;
-  else { cgst = round2(goodsTax / 2); sgst = round2(goodsTax - cgst); }
+  if (gstEnabled !== false) {
+    if (taxType === "IGST") igst = goodsTax;
+    else { cgst = round2(goodsTax / 2); sgst = round2(goodsTax - cgst); }
+  }
 
   const preRound = subtotal - discountAmount + cgst + sgst + igst + transportAmt + loadingAmt + otherAmt;
   const total = round2(roundOff ? Math.round(preRound) : preRound);
@@ -117,6 +123,7 @@ router.post("/", (req, res) => {
     transport, loading, otherCharges, roundOff, locationId,
     items: rawItems
   } = req.body;
+  const gstEnabled = req.body.gstEnabled !== false;
 
   if (!Array.isArray(rawItems) || !rawItems.length) {
     return res.status(400).json({ error: "Add at least one product to the purchase." });
@@ -178,7 +185,7 @@ router.post("/", (req, res) => {
     });
   }
 
-  const totals = computeTotals({ items, taxType, transport, loading, otherCharges, roundOff });
+  const totals = computeTotals({ items, taxType, transport, loading, otherCharges, roundOff, gstEnabled });
   const id = uid("PUR");
   const purchaseNo = nextPurchaseNo();
   const purchaseDate = (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) ? date : todayStr();
@@ -188,11 +195,11 @@ router.post("/", (req, res) => {
     INSERT INTO purchases (id, purchase_no, date, created_at, supplier_id, supplier_invoice_no,
       purchase_type, tax_type, subtotal, discount_amount, cgst, sgst, igst, transport, loading,
       other_charges, round_off, total, payment_method, due_date, vehicle_number, transport_name,
-      lr_number, remarks, voided, location_id)
+      lr_number, remarks, voided, location_id, gst_enabled)
     VALUES (@id, @purchaseNo, @date, @createdAt, @supplierId, @supplierInvoiceNo,
       @purchaseType, @taxType, @subtotal, @discountAmount, @cgst, @sgst, @igst, @transport, @loading,
       @otherCharges, @roundOffAmount, @total, @paymentMethod, @dueDate, @vehicleNumber, @transportName,
-      @lrNumber, @remarks, 0, @locationId)
+      @lrNumber, @remarks, 0, @locationId, @gstEnabled)
   `);
   const insertItem = db.prepare(`
     INSERT INTO purchase_items
@@ -212,7 +219,8 @@ router.post("/", (req, res) => {
       roundOffAmount: totals.roundOffAmount, total: totals.total,
       paymentMethod: paymentMethod || "Credit", dueDate: (dueDate || "").trim(),
       vehicleNumber: (vehicleNumber || "").trim(), transportName: (transportName || "").trim(),
-      lrNumber: (lrNumber || "").trim(), remarks: (remarks || "").trim(), locationId: targetLocationId
+      lrNumber: (lrNumber || "").trim(), remarks: (remarks || "").trim(), locationId: targetLocationId,
+      gstEnabled: gstEnabled ? 1 : 0
     });
 
     const touchedProducts = new Set();
@@ -257,6 +265,7 @@ router.put("/:id", (req, res) => {
     transport, loading, otherCharges, roundOff, locationId,
     items: rawItems
   } = req.body;
+  const gstEnabled = req.body.gstEnabled !== false;
 
   if (!Array.isArray(rawItems) || !rawItems.length) {
     return res.status(400).json({ error: "Add at least one product to the purchase." });
@@ -348,7 +357,7 @@ router.put("/:id", (req, res) => {
       });
     }
 
-    const totals = computeTotals({ items, taxType, transport, loading, otherCharges, roundOff });
+    const totals = computeTotals({ items, taxType, transport, loading, otherCharges, roundOff, gstEnabled });
     const purchaseDate = (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) ? date : p.date;
 
     // 4. Replace the line items.
@@ -375,7 +384,7 @@ router.put("/:id", (req, res) => {
         cgst=@cgst, sgst=@sgst, igst=@igst, transport=@transport, loading=@loading, other_charges=@otherCharges,
         round_off=@roundOffAmount, total=@total, payment_method=@paymentMethod, due_date=@dueDate,
         vehicle_number=@vehicleNumber, transport_name=@transportName, lr_number=@lrNumber, remarks=@remarks,
-        location_id=@locationId
+        location_id=@locationId, gst_enabled=@gstEnabled
       WHERE id=@id
     `).run({
       id: p.id, supplierId, supplierInvoiceNo: trimmedSupplierInvoiceNo, date: purchaseDate,
@@ -384,7 +393,8 @@ router.put("/:id", (req, res) => {
       otherCharges: totals.otherCharges, roundOffAmount: totals.roundOffAmount, total: totals.total,
       paymentMethod: paymentMethod || "Credit", dueDate: (dueDate || "").trim(),
       vehicleNumber: (vehicleNumber || "").trim(), transportName: (transportName || "").trim(),
-      lrNumber: (lrNumber || "").trim(), remarks: (remarks || "").trim(), locationId: newLocationId
+      lrNumber: (lrNumber || "").trim(), remarks: (remarks || "").trim(), locationId: newLocationId,
+      gstEnabled: gstEnabled ? 1 : 0
     });
 
     // 7. Bump the (possibly new) supplier's due, only if Credit.

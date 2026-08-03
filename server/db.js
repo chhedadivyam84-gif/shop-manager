@@ -1056,6 +1056,14 @@ if (bankEntryCols.includes("bank_account_id")) {
   }
 }
 
+// Optional GST per document — "GST Invoice" vs "Non-GST Invoice" (and the
+// purchase-side equivalent). Defaults to 1 (GST on) so every invoice/purchase
+// ever created before this column existed keeps computing tax exactly as it
+// already does; only a document where staff explicitly switches this off at
+// entry time skips CGST/SGST/IGST.
+addColumn("invoices", "gst_enabled", "INTEGER NOT NULL DEFAULT 1");
+addColumn("purchases", "gst_enabled", "INTEGER NOT NULL DEFAULT 1");
+
 // Where the data lives — the backup module needs the on-disk paths, and this
 // is the single place that knows them.
 db.dataDir = DATA_DIR;

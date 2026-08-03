@@ -176,33 +176,46 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
 
   // Effective rate shown next to the CGST/SGST/IGST label — derived from the
   // actual stored tax and taxable value (a weighted average, so it's still
-  // correct on a mixed-rate bill), not hardcoded.
-  const cgstAmt = challan ? 0 : (invoice.cgst || 0), sgstAmt = challan ? 0 : (invoice.sgst || 0), igstAmt = challan ? 0 : (invoice.igst || 0);
+  // correct on a mixed-rate bill), not hardcoded. A challan never carries
+  // real GST, and "Non-GST Invoice" (gst_enabled=0) deliberately has none
+  // either — both skip the tax rows entirely.
+  const gstEnabled = !challan && invoice.gst_enabled !== 0;
+  const cgstAmt = gstEnabled ? (invoice.cgst || 0) : 0, sgstAmt = gstEnabled ? (invoice.sgst || 0) : 0, igstAmt = gstEnabled ? (invoice.igst || 0) : 0;
   const taxableGoods = Math.max(0, (invoice.subtotal || 0) - (invoice.discount_amount || 0));
   const effectiveRatePct = taxableGoods > 0 ? Math.round(((cgstAmt + sgstAmt + igstAmt) / taxableGoods) * 100) : 0;
   const halfRatePct = Math.round(effectiveRatePct / 2);
 
+  // A "Without Rate" print (showRate false) carries no prices at all, so
+  // there is no totals box at all — mirrors the browser template
+  // (renderInvoicePageContent in public/js/app.js).
   const totalsRows = [];
-  totalsRows.push(["Subtotal", fmtPaise(challan ? challanSubtotal : invoice.subtotal)]);
-  totalsRows.push(["Discount", (challan ? 0 : invoice.discount_amount) > 0 ? "-" + fmtPaise(invoice.discount_amount) : fmtPaise(0)]);
-  totalsRows.push(["Transport", fmtPaise(invoice.transport)]);
-  if (invoice.loading) totalsRows.push(["Additional Charges", fmtPaise(invoice.loading)]);
-  if (!challan) totalsRows.push(["Taxable Amount", fmtPaise(taxableGoods)]);
-  if (!challan && invoice.tax_type === "IGST") totalsRows.push([`IGST ${effectiveRatePct}%`, fmtPaise(igstAmt)]);
-  else { totalsRows.push([`CGST ${halfRatePct}%`, fmtPaise(cgstAmt)]); totalsRows.push([`SGST ${halfRatePct}%`, fmtPaise(sgstAmt)]); }
-  if (!challan && invoice.round_off) totalsRows.push(["Round Off", (invoice.round_off > 0 ? "+" : "") + fmtPaise(invoice.round_off)]);
-  totalsRows.push(["Grand Total", fmtPaise(displayTotal), true]);
-  if (!challan && invoice.advance > 0) {
-    totalsRows.push(["Advance Paid", "-" + fmtPaise(invoice.advance)]);
-    totalsRows.push(["Balance Due", fmtPaise(invoice.balance_due), true]);
+  if (showRate) {
+    totalsRows.push(["Subtotal", fmtPaise(challan ? challanSubtotal : invoice.subtotal)]);
+    totalsRows.push(["Discount", (challan ? 0 : invoice.discount_amount) > 0 ? "-" + fmtPaise(invoice.discount_amount) : fmtPaise(0)]);
+    totalsRows.push(["Transport", fmtPaise(invoice.transport)]);
+    if (invoice.loading) totalsRows.push(["Additional Charges", fmtPaise(invoice.loading)]);
+    if (gstEnabled) {
+      if (invoice.tax_type === "IGST") totalsRows.push([`IGST ${effectiveRatePct}%`, fmtPaise(igstAmt)]);
+      else { totalsRows.push([`CGST ${halfRatePct}%`, fmtPaise(cgstAmt)]); totalsRows.push([`SGST ${halfRatePct}%`, fmtPaise(sgstAmt)]); }
+    }
+    if (!challan && invoice.round_off) totalsRows.push(["Round Off", (invoice.round_off > 0 ? "+" : "") + fmtPaise(invoice.round_off)]);
+    totalsRows.push(["Grand Total", fmtPaise(displayTotal), true]);
+    if (!challan && invoice.advance > 0) {
+      totalsRows.push(["Advance Paid", "-" + fmtPaise(invoice.advance)]);
+      totalsRows.push(["Balance Due", fmtPaise(invoice.balance_due), true]);
+    }
   }
   const totalsBoxH = totalsRows.length * fs(4.6);
 
+  // Without a totals box, the delivery-details block takes the full page
+  // width instead of just the left 58% — and "Amount in Words" is dropped
+  // since there's no grand total to express when nothing has a price.
   const deliveryAddr = invoice.delivery_address || (customer && customer.address) || "";
+  const bottomLeftWidth = showRate ? CONTENT_W * 0.58 : CONTENT_W;
   const bottomLeftLines = [];
-  if (deliveryAddr) doc.splitTextToSize("Delivery Address: " + deliveryAddr, CONTENT_W * 0.58 - 6).forEach(l => bottomLeftLines.push(l));
-  if (invoice.remarks) doc.splitTextToSize("Remarks: " + invoice.remarks, CONTENT_W * 0.58 - 6).forEach(l => bottomLeftLines.push(l));
-  doc.splitTextToSize("Amount in Words: " + Pricing.amountInWords(displayTotal), CONTENT_W * 0.58 - 6).forEach(l => bottomLeftLines.push(l));
+  if (deliveryAddr) doc.splitTextToSize("Delivery Address: " + deliveryAddr, bottomLeftWidth - 6).forEach(l => bottomLeftLines.push(l));
+  if (invoice.remarks) doc.splitTextToSize("Remarks: " + invoice.remarks, bottomLeftWidth - 6).forEach(l => bottomLeftLines.push(l));
+  if (showRate) doc.splitTextToSize("Amount in Words: " + Pricing.amountInWords(displayTotal), bottomLeftWidth - 6).forEach(l => bottomLeftLines.push(l));
   const bottomBoxH = Math.max(totalsBoxH, bottomLeftLines.length * fs(4) + 4) + 3;
 
   const signRowH = fs(16);
@@ -342,18 +355,20 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
   let bl = bottomTopY + fs(4);
   bottomLeftLines.forEach(l => { doc.text(l, MARGIN + 3, bl); bl += fs(4); });
 
-  let tr = bottomTopY;
-  totalsRows.forEach(([label, value, bold]) => {
-    tr += fs(4.6);
-    doc.setFont("helvetica", bold ? "bold" : "normal"); doc.setFontSize(bold ? fs(9) : fs(7.5));
-    doc.text(label, bottomRightX + 2, tr - fs(1.2));
-    doc.text(value, PAGE_W - MARGIN - 2, tr - fs(1.2), { align: "right" });
-    doc.setDrawColor(0); line(tr, bottomRightX, PAGE_W - MARGIN);
-  });
+  if (showRate) {
+    let tr = bottomTopY;
+    totalsRows.forEach(([label, value, bold]) => {
+      tr += fs(4.6);
+      doc.setFont("helvetica", bold ? "bold" : "normal"); doc.setFontSize(bold ? fs(9) : fs(7.5));
+      doc.text(label, bottomRightX + 2, tr - fs(1.2));
+      doc.text(value, PAGE_W - MARGIN - 2, tr - fs(1.2), { align: "right" });
+      doc.setDrawColor(0); line(tr, bottomRightX, PAGE_W - MARGIN);
+    });
+  }
 
   doc.setDrawColor(0);
   doc.rect(MARGIN, bottomTopY, CONTENT_W, bottomBoxH);
-  doc.line(bottomRightX, bottomTopY, bottomRightX, bottomTopY + bottomBoxH);
+  if (showRate) doc.line(bottomRightX, bottomTopY, bottomRightX, bottomTopY + bottomBoxH);
   y = bottomTopY + bottomBoxH;
 
   // ---- Signature row: Receiver / Stamp / Authorised Signatory ----

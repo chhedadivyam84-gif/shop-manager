@@ -164,6 +164,15 @@
           <input type="number" id="discount-value" placeholder="0" min="0" value="0">
         </div>
 
+        <div class="section-title">GST</div>
+        <div class="card">
+          <div class="chip-row" id="gst-enabled-chips">
+            <button class="chip selected" data-gstenabled="true">GST Invoice</button>
+            <button class="chip" data-gstenabled="false">Non-GST Invoice</button>
+          </div>
+        </div>
+
+        <div id="gst-type-section">
         <div class="section-title">GST Type</div>
         <div class="card">
           <div class="chip-row" id="gst-type-chips">
@@ -171,6 +180,7 @@
             <button class="chip" data-gsttype="IGST">IGST (18%)</button>
           </div>
         </div>
+        </div><!-- /#gst-type-section -->
 
         <div class="section-title">Totals</div>
         <div class="card" id="totals-card"></div>
@@ -341,11 +351,18 @@
           </div>
           <label class="field-label" style="margin-top:10px;">Stock goes to</label>
           <div class="chip-row" id="pur-location-chips"></div>
+          <label class="field-label" style="margin-top:10px;">GST</label>
+          <div class="chip-row" id="pur-gst-enabled-chips">
+            <button class="chip selected" data-pur-gstenabled="true">GST Purchase</button>
+            <button class="chip" data-pur-gstenabled="false">Non-GST Purchase</button>
+          </div>
+          <div id="pur-type-section">
           <label class="field-label" style="margin-top:10px;">Purchase Type</label>
           <div class="chip-row" id="pur-type-chips">
             <button class="chip selected" data-pur-type="Local">Local (CGST + SGST)</button>
             <button class="chip" data-pur-type="Interstate">Interstate (IGST)</button>
           </div>
+          </div><!-- /#pur-type-section -->
           <label class="field-label" style="margin-top:10px;">Payment Type</label>
           <div class="chip-row" id="pur-pay-chips">
             <button class="chip" data-pur-pay="Cash">Cash</button>

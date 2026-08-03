@@ -4122,8 +4122,25 @@ async function renderSalePaymentsReport(body){
       <div class="list-row"><div>
         <div class="row-title">${escapeHtml(r.customer_name)}</div>
         <div class="row-sub">${escapeHtml(r.payment_date||"")} · ${escapeHtml(r.method)}${r.reference_no?" · Ref# "+escapeHtml(r.reference_no):""}${r.note?" · "+escapeHtml(r.note):""}</div>
-      </div><div class="row-right row-title" style="color:var(--ok);">${fmt(r.amount)}</div></div>
+      </div>
+      <div class="row-right" style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
+        <div class="row-title" style="color:var(--ok);">${fmt(r.amount)}</div>
+        ${isOwner() ? `<a href="#" data-void-sale-payment="${r.id}" data-customer-id="${r.customer_id}" class="btn-danger-link" style="font-size:11px;">Void</a>` : ""}
+      </div></div>
     `).join("") : `<div class="empty-hint">No payments recorded yet.</div>`);
+  body.querySelectorAll("[data-void-sale-payment]").forEach(a=>{
+    a.addEventListener("click", async (e)=>{
+      e.preventDefault();
+      if(confirm("Void this payment? The customer's due will go back up.")){
+        try{
+          await api("POST", `/customers/${a.dataset.customerId}/payments/${a.dataset.voidSalePayment}/void`);
+          await loadCustomers();
+          await renderSalePaymentsReport(body);
+          toast("Payment voided.", "ok");
+        }catch(err){ toast(err.message); }
+      }
+    });
+  });
 }
 
 async function renderPurchasePaymentsReport(body){
@@ -4133,8 +4150,25 @@ async function renderPurchasePaymentsReport(body){
       <div class="list-row"><div>
         <div class="row-title">${escapeHtml(r.supplier_name)}</div>
         <div class="row-sub">${escapeHtml(r.payment_date||"")} · ${escapeHtml(r.method)}${r.reference_no?" · Ref# "+escapeHtml(r.reference_no):""}${r.note?" · "+escapeHtml(r.note):""}</div>
-      </div><div class="row-right row-title" style="color:var(--danger);">${fmt(r.amount)}</div></div>
+      </div>
+      <div class="row-right" style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
+        <div class="row-title" style="color:var(--danger);">${fmt(r.amount)}</div>
+        ${isOwner() ? `<a href="#" data-void-purchase-payment="${r.id}" data-supplier-id="${r.supplier_id}" class="btn-danger-link" style="font-size:11px;">Void</a>` : ""}
+      </div></div>
     `).join("") : `<div class="empty-hint">No payments recorded yet.</div>`);
+  body.querySelectorAll("[data-void-purchase-payment]").forEach(a=>{
+    a.addEventListener("click", async (e)=>{
+      e.preventDefault();
+      if(confirm("Void this payment? The supplier's due will go back up.")){
+        try{
+          await api("POST", `/suppliers/${a.dataset.supplierId}/payments/${a.dataset.voidPurchasePayment}/void`);
+          await loadSuppliers();
+          await renderPurchasePaymentsReport(body);
+          toast("Payment voided.", "ok");
+        }catch(err){ toast(err.message); }
+      }
+    });
+  });
 }
 
 async function renderProfitReport(body){

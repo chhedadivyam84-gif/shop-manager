@@ -3725,7 +3725,7 @@ function renderInvoicePageContent(){
   // stored either way (see server/routes/invoices.js), this toggle only
   // controls whether it's PRINTED.
   const showRate = !challan || state.challanShowRate;
-  const head = `<th class="c-sn">Sr No.</th><th>Product Description</th><th class="c-size">Size</th><th class="c-unit">Unit</th><th class="c-num">Qty</th><th class="c-num">Rate</th><th class="c-num c-amt">Amount</th>`;
+  const head = `<th class="c-sn">Sr No.</th><th>${challan ? "Product / Item" : "Product Description"}</th><th class="c-size">${challan ? "Description" : "Size"}</th><th class="c-unit">Unit</th><th class="c-num">Qty</th><th class="c-num">Rate</th><th class="c-num c-amt">Amount</th>`;
   const rows = inv.items.map((it,i)=>{
     const mode = it.mode || "UNIT";
     const unit = it.unit_label || (Pricing.MODES[mode] && Pricing.MODES[mode].unit) || "";

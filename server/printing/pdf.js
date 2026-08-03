@@ -153,8 +153,8 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
   // always exist so the printed page looks identical either way; only their
   // cell CONTENTS go blank in itemValues() below when showRate is off.
   const cols = [
-    { h: "Sr No.", w: CONTENT_W * 0.065 }, { h: "Product Description", w: CONTENT_W * 0.33 },
-    { h: "Size", w: CONTENT_W * 0.13 }, { h: "Unit", w: CONTENT_W * 0.095 },
+    { h: "Sr No.", w: CONTENT_W * 0.065 }, { h: challan ? "Product / Item" : "Product Description", w: CONTENT_W * 0.33 },
+    { h: challan ? "Description" : "Size", w: CONTENT_W * 0.13 }, { h: "Unit", w: CONTENT_W * 0.095 },
     { h: "Qty", w: CONTENT_W * 0.10, align: "right" },
     { h: "Rate", w: CONTENT_W * 0.13, align: "right" },
     { h: "Amount", w: 0, align: "right" }

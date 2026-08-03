@@ -261,6 +261,65 @@ router.get("/purchases", (req, res) => {
   res.json(rows);
 });
 
+/** Every Delivery Challan, newest first — the Challan Report. A challan
+ *  carries no GST/pricing meaning, so this shows item/piece counts and any
+ *  Transport/Loading charge rather than a rupee "sale" figure. */
+router.get("/challans", (req, res) => {
+  const rows = db.prepare(`
+    SELECT i.challan_no, i.date, c.name AS customer_name, i.transport, i.loading,
+      (SELECT COUNT(*) FROM invoice_items WHERE invoice_id = i.id) AS item_count,
+      (SELECT COALESCE(SUM(pieces),0) FROM invoice_items WHERE invoice_id = i.id) AS total_pieces
+    FROM invoices i LEFT JOIN customers c ON c.id = i.customer_id
+    WHERE i.voided = 0 AND i.doc_type = 'challan'
+    ORDER BY i.created_at DESC
+  `).all();
+  res.json(rows);
+});
+
+/** Every Tax Invoice, newest first — the Tax Invoice Report (one row per
+ *  document, unlike /profit's per-line breakdown). */
+router.get("/tax-invoices", (req, res) => {
+  const rows = db.prepare(`
+    SELECT i.challan_no, i.date, c.name AS customer_name, i.payment_method, i.total, i.balance_due
+    FROM invoices i LEFT JOIN customers c ON c.id = i.customer_id
+    WHERE i.voided = 0 AND i.doc_type = 'invoice'
+    ORDER BY i.created_at DESC
+  `).all();
+  res.json(rows);
+});
+
+/** Every Purchase Bill, newest first — one row per bill, unlike /purchases'
+ *  per-line breakdown. Merges the older single-line stock_ins (each row IS
+ *  one bill) with the newer multi-line purchases (grouped by purchase_no),
+ *  same merge /purchases already does at the line level. */
+router.get("/purchase-bills", (req, res) => {
+  const stockInRows = db.prepare(`
+    SELECT id, invoice_no AS bill_no, purchase_date AS date, supplier AS supplier_name, grand_total, created_at, 1 AS item_count
+    FROM stock_ins
+  `).all();
+  const purchaseRows = db.prepare(`
+    SELECT p.id, p.purchase_no AS bill_no, p.date, s.name AS supplier_name, p.total AS grand_total, p.created_at,
+      (SELECT COUNT(*) FROM purchase_items WHERE purchase_id = p.id) AS item_count
+    FROM purchases p LEFT JOIN suppliers s ON s.id = p.supplier_id
+    WHERE p.voided = 0
+  `).all();
+  const rows = [...stockInRows, ...purchaseRows].sort((a, b) => b.created_at - a.created_at);
+  res.json(rows);
+});
+
+/** Tax Invoice revenue grouped by salesperson (the "Salesperson" / delivery_man
+ *  field entered on Billing) — invoices with none recorded fall under
+ *  "Unassigned" rather than being silently dropped. */
+router.get("/salesman-wise", (req, res) => {
+  const rows = db.prepare(`
+    SELECT COALESCE(NULLIF(TRIM(delivery_man),''), 'Unassigned') AS label,
+      COALESCE(SUM(total),0) AS value, COUNT(*) AS invoices
+    FROM invoices WHERE voided = 0 AND doc_type = 'invoice'
+    GROUP BY label ORDER BY value DESC
+  `).all();
+  res.json(rows);
+});
+
 /** Sales grouped by brand — revenue and units, not just stock on hand. */
 router.get("/brand-wise", (req, res) => {
   const rows = db.prepare(`
@@ -501,6 +560,44 @@ router.get("/export", (req, res) => {
     rows = [["Date", "Invoice No", "Supplier", "Product", "Size", "Qty", "Rate", "GST%", "Transport", "Grand Total"]];
     db.prepare("SELECT * FROM stock_ins ORDER BY created_at DESC").all().forEach(r =>
       rows.push([r.purchase_date, r.invoice_no, r.supplier, r.product_name, r.size_label, r.qty, r.rate, r.gst_rate, r.transport, r.grand_total]));
+  } else if (type === "Challan") {
+    filename = "challan-report";
+    rows = [["Challan No", "Date", "Customer", "Items", "Total Pieces", "Transport", "Loading"]];
+    db.prepare(`
+      SELECT i.challan_no, i.date, c.name AS customer_name, i.transport, i.loading,
+        (SELECT COUNT(*) FROM invoice_items WHERE invoice_id = i.id) AS item_count,
+        (SELECT COALESCE(SUM(pieces),0) FROM invoice_items WHERE invoice_id = i.id) AS total_pieces
+      FROM invoices i LEFT JOIN customers c ON c.id = i.customer_id
+      WHERE i.voided = 0 AND i.doc_type = 'challan' ORDER BY i.created_at DESC
+    `).all().forEach(r => rows.push([r.challan_no, r.date, r.customer_name || "Walk-in", r.item_count, r.total_pieces, r.transport, r.loading]));
+  } else if (type === "TaxInvoice") {
+    filename = "tax-invoice-report";
+    rows = [["Estimate No", "Date", "Customer", "Payment Method", "Total", "Balance Due"]];
+    db.prepare(`
+      SELECT i.challan_no, i.date, c.name AS customer_name, i.payment_method, i.total, i.balance_due
+      FROM invoices i LEFT JOIN customers c ON c.id = i.customer_id
+      WHERE i.voided = 0 AND i.doc_type = 'invoice' ORDER BY i.created_at DESC
+    `).all().forEach(r => rows.push([r.challan_no, r.date, r.customer_name || "Walk-in", r.payment_method, r.total, r.balance_due]));
+  } else if (type === "PurchaseBill") {
+    filename = "purchase-bill-report";
+    rows = [["Bill No", "Date", "Supplier", "Items", "Grand Total"]];
+    const stockInRows = db.prepare(`
+      SELECT invoice_no AS bill_no, purchase_date AS date, supplier AS supplier_name, grand_total, created_at, 1 AS item_count FROM stock_ins
+    `).all();
+    const purchaseRows = db.prepare(`
+      SELECT p.purchase_no AS bill_no, p.date, s.name AS supplier_name, p.total AS grand_total, p.created_at,
+        (SELECT COUNT(*) FROM purchase_items WHERE purchase_id = p.id) AS item_count
+      FROM purchases p LEFT JOIN suppliers s ON s.id = p.supplier_id WHERE p.voided = 0
+    `).all();
+    [...stockInRows, ...purchaseRows].sort((a, b) => b.created_at - a.created_at)
+      .forEach(r => rows.push([r.bill_no || "", r.date || "", r.supplier_name || "Unknown Supplier", r.item_count, r.grand_total]));
+  } else if (type === "Salesman") {
+    filename = "salesman-wise-report";
+    rows = [["Salesperson", "Total Sales", "Invoices"]];
+    db.prepare(`
+      SELECT COALESCE(NULLIF(TRIM(delivery_man),''), 'Unassigned') AS label, COALESCE(SUM(total),0) AS value, COUNT(*) AS invoices
+      FROM invoices WHERE voided = 0 AND doc_type = 'invoice' GROUP BY label ORDER BY value DESC
+    `).all().forEach(r => rows.push([r.label, round2(r.value), r.invoices]));
   } else if (type === "Brand") {
     filename = "brand-wise-report";
     rows = [["Brand", "Revenue", "Pieces Sold", "Invoices"]];

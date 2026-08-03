@@ -4060,6 +4060,10 @@ async function renderReport(){
   const body = document.getElementById("report-body");
   try{
     if(state.reportType==="Purchase") return renderPurchaseReport(body);
+    if(state.reportType==="Challan") return renderChallanReport(body);
+    if(state.reportType==="TaxInvoice") return renderTaxInvoiceReport(body);
+    if(state.reportType==="PurchaseBill") return renderPurchaseBillReport(body);
+    if(state.reportType==="Salesman") return renderSalesmanReport(body);
     if(state.reportType==="Party") return renderPartyReport(body);
     if(state.reportType==="PartyProduct") return renderPartyProductReport(body);
     if(state.reportType==="Profit") return renderProfitReport(body);
@@ -4111,6 +4115,48 @@ async function renderPurchaseReport(body){
     `).join("") : `<div class="empty-hint">No purchases recorded yet.</div>`);
 }
 
+async function renderChallanReport(body){
+  const rows = await api("GET","/reports/challans");
+  body.innerHTML = `<div style="font-weight:800;font-size:14px;">Challan Report</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every Delivery Challan issued, newest first</div>` +
+    (rows.length ? rows.map(r=>`
+      <div class="list-row"><div>
+        <div class="row-title">${escapeHtml(r.challan_no)}</div>
+        <div class="row-sub">${escapeHtml(r.date)} · ${escapeHtml(r.customer_name||"Walk-in")}</div>
+        <div class="row-sub">${r.item_count} item${r.item_count!==1?"s":""} · ${r.total_pieces} pcs${(r.transport||r.loading)?" · Transport+Loading "+fmt((r.transport||0)+(r.loading||0)):""}</div>
+      </div></div>
+    `).join("") : `<div class="empty-hint">No delivery challans issued yet.</div>`);
+}
+async function renderTaxInvoiceReport(body){
+  const rows = await api("GET","/reports/tax-invoices");
+  body.innerHTML = `<div style="font-weight:800;font-size:14px;">Tax Invoice Report</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every Tax Invoice issued, newest first</div>` +
+    (rows.length ? rows.map(r=>`
+      <div class="list-row"><div>
+        <div class="row-title">${escapeHtml(r.challan_no)}</div>
+        <div class="row-sub">${escapeHtml(r.date)} · ${escapeHtml(r.customer_name||"Walk-in")} · ${escapeHtml(r.payment_method)}</div>
+        ${r.balance_due>0?`<div class="row-sub" style="color:var(--danger);">Due ${fmt(r.balance_due)}</div>`:""}
+      </div><div class="row-right row-title">${fmt(r.total)}</div></div>
+    `).join("") : `<div class="empty-hint">No tax invoices issued yet.</div>`);
+}
+async function renderPurchaseBillReport(body){
+  const rows = await api("GET","/reports/purchase-bills");
+  body.innerHTML = `<div style="font-weight:800;font-size:14px;">Purchase Bill Report</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every purchase bill recorded, newest first</div>` +
+    (rows.length ? rows.map(r=>`
+      <div class="list-row"><div>
+        <div class="row-title">${escapeHtml(r.bill_no||"—")}</div>
+        <div class="row-sub">${escapeHtml(r.date||"")} · ${escapeHtml(r.supplier_name||"Unknown Supplier")} · ${r.item_count} item${r.item_count!==1?"s":""}</div>
+      </div><div class="row-right row-title">${fmt(r.grand_total)}</div></div>
+    `).join("") : `<div class="empty-hint">No purchase bills recorded yet.</div>`);
+}
+async function renderSalesmanReport(body){
+  const rows = await api("GET","/reports/salesman-wise");
+  const max = Math.max(1, ...rows.map(r=>r.value));
+  body.innerHTML = `<div style="font-weight:800;font-size:14px;">Salesman-wise Sales</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Tax Invoice revenue by salesperson</div>` +
+    (rows.length ? rows.map(r=>`
+      <div style="margin-bottom:10px;">
+        <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700;margin-bottom:4px;"><span>${escapeHtml(r.label)}</span><span>${fmt(r.value)} · ${r.invoices} inv.</span></div>
+        <div style="height:8px;background:var(--bg-outer);border-radius:100px;"><div style="height:100%;width:${max>0?(r.value/max)*100:0}%;background:var(--navy);border-radius:100px;"></div></div>
+      </div>`).join("") : `<div class="empty-hint">No sales recorded yet.</div>`);
+}
 async function renderLocationStockReport(body){
   const rows = await api("GET","/reports/stock-by-location");
   const codeIcon = code => code==="shop" ? "&#127978;" : code==="warehouse" ? "&#127974;" : "&#128230;";

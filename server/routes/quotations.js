@@ -105,6 +105,21 @@ router.get("/", (req, res) => {
   res.json(rows);
 });
 
+/**
+ * Lets the New Quotation screen show what number THIS quotation will get
+ * before it's saved. Peeks the counter without incrementing it (unlike
+ * nextQuotationNo() above) — an abandoned form must not burn a number and
+ * leave a gap in the series. There's a small window where two staff opening
+ * the screen at once could see the same "next" number, but the number
+ * actually stored is only ever assigned at save time by nextQuotationNo(),
+ * so no two saved quotations can ever collide.
+ */
+router.get("/next-number", (req, res) => {
+  const row = db.prepare("SELECT value FROM counters WHERE name = ?").get("quotation-no");
+  const next = row ? row.value + 1 : 1;
+  res.json({ quotationNo: `SQ${String(next).padStart(7, "0")}` });
+});
+
 router.get("/:id", (req, res) => {
   const q = db.prepare("SELECT * FROM quotations WHERE id = ?").get(req.params.id);
   if (!q) return res.status(404).json({ error: "Quotation not found." });

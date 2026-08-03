@@ -72,7 +72,7 @@ let state = {
   quotation: {
     customerId: null, saleType: "Local", date: "", validUntil: "", terms: "", remarks: "",
     discountType: "pct", discountValue: 0, transport: 0, loading: 0, gstOnCharges: true, roundOff: true,
-    cart: [], editingQuotationId: null
+    cart: [], editingQuotationId: null, quotationNo: null
   },
   so: {
     customerId: null, saleType: "Local", date: "", deliveryAddress: "", expectedDeliveryDate: "", remarks: "",
@@ -6171,6 +6171,30 @@ async function renderQuotationScreen(){
   renderQuotationProducts();
   renderQuotationCart();
   renderQuotationTotals();
+  await renderQuotationNumber();
+}
+/**
+ * Shows the number THIS quotation will get before it's saved. Editing an
+ * existing quotation already knows its real quotation_no (set by
+ * editExistingQuotation); a brand-new one asks the server for a live peek
+ * at the next number in the series (see GET /quotations/next-number) so it
+ * never has to be invented or hardcoded client-side.
+ */
+async function renderQuotationNumber(){
+  const el = document.getElementById("quotation-number-display");
+  if(!el) return;
+  if(state.quotation.editingQuotationId && state.quotation.quotationNo){
+    el.textContent = state.quotation.quotationNo;
+    return;
+  }
+  el.textContent = "…";
+  try{
+    const { quotationNo } = await api("GET", "/quotations/next-number");
+    state.quotation.quotationNo = quotationNo;
+    el.textContent = quotationNo;
+  }catch{
+    el.textContent = "—";
+  }
 }
 function renderQuotationEditBanner(){
   const el = document.getElementById("quotation-edit-mode-banner");
@@ -6194,7 +6218,7 @@ function resetQuotationState(){
   state.quotation = {
     customerId: null, saleType: "Local", date: "", validUntil: "", terms: "", remarks: "",
     discountType: "pct", discountValue: 0, transport: 0, loading: 0, gstOnCharges: true, roundOff: true,
-    cart: [], editingQuotationId: null
+    cart: [], editingQuotationId: null, quotationNo: null
   };
   const set = (id, val) => { const el=document.getElementById(id); if(el) el.value = val; };
   set("quotation-valid-until", ""); set("quotation-terms", ""); set("quotation-remarks", "");
@@ -6650,6 +6674,7 @@ function editExistingQuotation(q){
   state.quotation.gstOnCharges = !!q.gst_on_charges;
   state.quotation.roundOff = true;
   state.quotation.editingQuotationId = q.id;
+  state.quotation.quotationNo = q.quotation_no;
 
   switchTab("quotation");
   renderQuotationScreen().then(()=>{

@@ -268,7 +268,7 @@ router.get("/purchases", (req, res) => {
  *  than a rupee "sale" figure. */
 router.get("/challans", (req, res) => {
   const salesRows = db.prepare(`
-    SELECT i.challan_no, i.date, c.name AS party_name, i.transport, i.loading,
+    SELECT i.id, i.challan_no, i.date, c.name AS party_name, i.transport, i.loading,
       (SELECT COUNT(*) FROM invoice_items WHERE invoice_id = i.id) AS item_count,
       (SELECT COALESCE(SUM(pieces),0) FROM invoice_items WHERE invoice_id = i.id) AS total_pieces,
       i.created_at
@@ -276,7 +276,7 @@ router.get("/challans", (req, res) => {
     WHERE i.voided = 0 AND i.doc_type = 'challan'
   `).all().map(r => ({ ...r, type: "Sales" }));
   const purchaseRows = db.prepare(`
-    SELECT p.purchase_no AS challan_no, p.date, s.name AS party_name, p.transport, p.loading,
+    SELECT p.id, p.purchase_no AS challan_no, p.date, s.name AS party_name, p.transport, p.loading,
       (SELECT COUNT(*) FROM purchase_items WHERE purchase_id = p.id) AS item_count,
       (SELECT COALESCE(SUM(pieces),0) FROM purchase_items WHERE purchase_id = p.id) AS total_pieces,
       p.created_at
@@ -293,11 +293,11 @@ router.get("/challans", (req, res) => {
  *  status lifecycle; this is a read-only combined view. */
 router.get("/orders", (req, res) => {
   const poRows = db.prepare(`
-    SELECT po.po_no AS order_no, po.date, s.name AS party_name, po.total, po.status, po.created_at
+    SELECT po.id, po.po_no AS order_no, po.date, s.name AS party_name, po.total, po.status, po.created_at
     FROM purchase_orders po LEFT JOIN suppliers s ON s.id = po.supplier_id
   `).all().map(r => ({ ...r, type: "Purchase" }));
   const soRows = db.prepare(`
-    SELECT so.so_no AS order_no, so.date, c.name AS party_name, so.total, so.status, so.created_at
+    SELECT so.id, so.so_no AS order_no, so.date, c.name AS party_name, so.total, so.status, so.created_at
     FROM sales_orders so LEFT JOIN customers c ON c.id = so.customer_id
   `).all().map(r => ({ ...r, type: "Sales" }));
   const rows = [...poRows, ...soRows].sort((a, b) => b.created_at - a.created_at);
@@ -308,7 +308,7 @@ router.get("/orders", (req, res) => {
  *  document, unlike /profit's per-line breakdown). */
 router.get("/tax-invoices", (req, res) => {
   const rows = db.prepare(`
-    SELECT i.challan_no, i.date, c.name AS customer_name, i.payment_method, i.total, i.balance_due
+    SELECT i.id, i.challan_no, i.date, c.name AS customer_name, i.payment_method, i.total, i.balance_due
     FROM invoices i LEFT JOIN customers c ON c.id = i.customer_id
     WHERE i.voided = 0 AND i.doc_type = 'invoice'
     ORDER BY i.created_at DESC
@@ -324,13 +324,13 @@ router.get("/purchase-bills", (req, res) => {
   const stockInRows = db.prepare(`
     SELECT id, invoice_no AS bill_no, purchase_date AS date, supplier AS supplier_name, grand_total, created_at, 1 AS item_count
     FROM stock_ins
-  `).all();
+  `).all().map(r => ({ ...r, source: "stock_in" }));
   const purchaseRows = db.prepare(`
     SELECT p.id, p.purchase_no AS bill_no, p.date, s.name AS supplier_name, p.total AS grand_total, p.created_at,
       (SELECT COUNT(*) FROM purchase_items WHERE purchase_id = p.id) AS item_count
     FROM purchases p LEFT JOIN suppliers s ON s.id = p.supplier_id
     WHERE p.voided = 0
-  `).all();
+  `).all().map(r => ({ ...r, source: "purchase" }));
   const rows = [...stockInRows, ...purchaseRows].sort((a, b) => b.created_at - a.created_at);
   res.json(rows);
 });

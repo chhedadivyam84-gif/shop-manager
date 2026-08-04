@@ -4135,45 +4135,63 @@ async function renderPurchaseReport(body){
 
 async function renderChallanReport(body){
   const rows = await api("GET","/reports/challans");
-  body.innerHTML = `<div style="font-weight:800;font-size:14px;">Challan Report</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every Delivery Challan (sales) and Purchase Challan (goods received), newest first</div>` +
+  body.innerHTML = `<div style="font-weight:800;font-size:14px;">Challan Report</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every Delivery Challan (sales) and Purchase Challan (goods received), newest first — tap a row to open it</div>` +
     (rows.length ? rows.map(r=>`
-      <div class="list-row"><div>
+      <div class="list-row" style="cursor:pointer;" ${r.type==="Sales"?`data-open-invoice="${r.id}"`:`data-open-purchase="${r.id}"`}><div>
         <div class="row-title">${escapeHtml(r.challan_no)} <span class="pill ${r.type==="Sales"?"ok":"warn"}" style="font-size:9.5px;">${r.type}</span></div>
         <div class="row-sub">${escapeHtml(r.date)} · ${escapeHtml(r.party_name||(r.type==="Sales"?"Walk-in":"Unknown Supplier"))}</div>
         <div class="row-sub">${r.item_count} item${r.item_count!==1?"s":""} · ${r.total_pieces} pcs${(r.transport||r.loading)?" · Transport+Loading "+fmt((r.transport||0)+(r.loading||0)):""}</div>
       </div></div>
     `).join("") : `<div class="empty-hint">No challans recorded yet.</div>`);
+  body.querySelectorAll("[data-open-invoice]").forEach(el=>{
+    el.addEventListener("click", ()=>openExistingInvoice(el.dataset.openInvoice));
+  });
+  body.querySelectorAll("[data-open-purchase]").forEach(el=>{
+    el.addEventListener("click", ()=>openPurchaseDetail(el.dataset.openPurchase));
+  });
 }
 async function renderOrdersReport(body){
   const rows = await api("GET","/reports/orders");
-  body.innerHTML = `<div style="font-weight:800;font-size:14px;">Orders Report</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every Purchase Order and Sales Order, newest first</div>` +
+  body.innerHTML = `<div style="font-weight:800;font-size:14px;">Orders Report</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every Purchase Order and Sales Order, newest first — tap a row to open it</div>` +
     (rows.length ? rows.map(r=>`
-      <div class="list-row"><div>
+      <div class="list-row" style="cursor:pointer;" ${r.type==="Sales"?`data-open-so="${r.id}"`:`data-open-po="${r.id}"`}><div>
         <div class="row-title">${escapeHtml(r.order_no)} <span class="pill ${r.type==="Sales"?"ok":"warn"}" style="font-size:9.5px;">${r.type}</span></div>
         <div class="row-sub">${escapeHtml(r.date)} · ${escapeHtml(r.party_name||(r.type==="Sales"?"Walk-in":"Unknown Supplier"))}</div>
       </div><div class="row-right"><div class="row-title">${fmt(r.total)}</div><span class="pill ${(r.type==="Sales"?SO_STATUS_PILL:PO_STATUS_PILL)[r.status]||''}">${escapeHtml(r.status)}</span></div></div>
     `).join("") : `<div class="empty-hint">No orders recorded yet.</div>`);
+  body.querySelectorAll("[data-open-po]").forEach(el=>{
+    el.addEventListener("click", ()=>openPoDetail(el.dataset.openPo));
+  });
+  body.querySelectorAll("[data-open-so]").forEach(el=>{
+    el.addEventListener("click", ()=>openSoDetail(el.dataset.openSo));
+  });
 }
 async function renderTaxInvoiceReport(body){
   const rows = await api("GET","/reports/tax-invoices");
-  body.innerHTML = `<div style="font-weight:800;font-size:14px;">Tax Invoice Report</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every Tax Invoice issued, newest first</div>` +
+  body.innerHTML = `<div style="font-weight:800;font-size:14px;">Tax Invoice Report</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every Tax Invoice issued, newest first — tap a row to open it</div>` +
     (rows.length ? rows.map(r=>`
-      <div class="list-row"><div>
+      <div class="list-row" style="cursor:pointer;" data-open-invoice="${r.id}"><div>
         <div class="row-title">${escapeHtml(r.challan_no)}</div>
         <div class="row-sub">${escapeHtml(r.date)} · ${escapeHtml(r.customer_name||"Walk-in")} · ${escapeHtml(r.payment_method)}</div>
         ${r.balance_due>0?`<div class="row-sub" style="color:var(--danger);">Due ${fmt(r.balance_due)}</div>`:""}
       </div><div class="row-right row-title">${fmt(r.total)}</div></div>
     `).join("") : `<div class="empty-hint">No tax invoices issued yet.</div>`);
+  body.querySelectorAll("[data-open-invoice]").forEach(el=>{
+    el.addEventListener("click", ()=>openExistingInvoice(el.dataset.openInvoice));
+  });
 }
 async function renderPurchaseBillReport(body){
   const rows = await api("GET","/reports/purchase-bills");
-  body.innerHTML = `<div style="font-weight:800;font-size:14px;">Purchase Bill Report</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every purchase bill recorded, newest first</div>` +
+  body.innerHTML = `<div style="font-weight:800;font-size:14px;">Purchase Bill Report</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every purchase bill recorded, newest first — tap a row to open it</div>` +
     (rows.length ? rows.map(r=>`
-      <div class="list-row"><div>
+      <div class="list-row" ${r.source==="purchase"?`style="cursor:pointer;" data-open-purchase="${r.id}"`:""}><div>
         <div class="row-title">${escapeHtml(r.bill_no||"—")}</div>
         <div class="row-sub">${escapeHtml(r.date||"")} · ${escapeHtml(r.supplier_name||"Unknown Supplier")} · ${r.item_count} item${r.item_count!==1?"s":""}</div>
       </div><div class="row-right row-title">${fmt(r.grand_total)}</div></div>
     `).join("") : `<div class="empty-hint">No purchase bills recorded yet.</div>`);
+  body.querySelectorAll("[data-open-purchase]").forEach(el=>{
+    el.addEventListener("click", ()=>openPurchaseDetail(el.dataset.openPurchase));
+  });
 }
 async function renderSalesmanReport(body){
   const rows = await api("GET","/reports/salesman-wise");

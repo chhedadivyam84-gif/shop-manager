@@ -89,6 +89,7 @@ app.use("/api/quotations", requireAuth, require("./routes/quotations"));
 app.use("/api/sales-orders", requireAuth, require("./routes/salesOrders"));
 app.use("/api/sales-returns", requireAuth, require("./routes/salesReturns"));
 app.use("/api/purchase-returns", requireAuth, require("./routes/purchaseReturns"));
+app.use("/api/stock-ins", requireAuth, require("./routes/stockIns"));
 app.use("/api/locations", requireAuth, require("./routes/locations"));
 app.use("/api/transfers", requireAuth, require("./routes/transfers"));
 app.use("/api/staff", requireAuth, requireRole("owner"), require("./routes/staff"));

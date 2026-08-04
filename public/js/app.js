@@ -7030,105 +7030,162 @@ const SHOP_HEADER_CSS = `
   .shop-addr{font-size:11px;color:#333;margin-top:2px;}
   .shop-contact{font-size:11px;color:#333;margin-top:2px;}
 `;
-// Printed Quotation uses the SAME erp-* letterhead/table/totals-box layout
-// as the real Tax Invoice (renderInvoicePageContent) — just labeled
-// "QUOTATION" with a Quotation No./Valid Until doc box instead of an
-// Estimate No. one — so a quotation reads as a proper document rather than
-// a plain table. Standalone popup (not the live app's #fs-invoice), so it
-// links the site's own stylesheet to reuse those classes verbatim instead
-// of duplicating them.
+const QUOTATION_PRINT_CSS = `
+  * { box-sizing: border-box; }
+  body{margin:0;background:#e8e8e8;font-family:Arial,Helvetica,sans-serif;color:#1a1a1a;}
+  .q2-page{max-width:800px;margin:16px auto;background:#fff;padding:22px 26px;border:1px solid #ccc;}
+  .q2-header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding-bottom:10px;border-bottom:2px solid #12224b;}
+  .q2-header-left{display:flex;align-items:center;gap:12px;}
+  .q2-crest{width:52px;height:52px;border-radius:50%;border:2px solid #c9962e;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:18px;color:#12224b;flex:0 0 auto;}
+  .q2-biz-name{font-size:22px;font-weight:800;color:#12224b;letter-spacing:.02em;}
+  .q2-biz-tag{font-size:10.5px;font-weight:700;color:#c9962e;letter-spacing:.03em;margin-top:1px;}
+  .q2-qbox{background:#12224b;color:#fff;padding:8px 14px;border-radius:4px;min-width:210px;}
+  .q2-qbox-title{font-size:15px;font-weight:800;letter-spacing:.08em;text-align:right;margin-bottom:4px;}
+  .q2-qbox table{width:100%;font-size:10.5px;border-collapse:collapse;}
+  .q2-qbox td{padding:1.5px 0;}
+  .q2-qbox td:first-child{color:#c9d0e6;}
+  .q2-qbox td:last-child{text-align:right;font-weight:700;}
+  .q2-addr-line{font-size:10.5px;color:#444;margin-top:8px;}
+  .q2-contact-line{font-size:10.5px;color:#444;margin-top:2px;}
+  .q2-boxes{display:flex;gap:12px;margin-top:14px;}
+  .q2-box{flex:1;border:1px solid #d3ac5a;border-radius:4px;padding:8px 12px;}
+  .q2-box-label{font-size:10px;font-weight:800;color:#c9962e;letter-spacing:.05em;text-transform:uppercase;margin-bottom:5px;}
+  .q2-kv{display:flex;gap:6px;font-size:10.5px;margin-bottom:2px;}
+  .q2-kv span{color:#666;flex:0 0 auto;}
+  .q2-kv b{font-weight:700;}
+  table.q2-items{width:100%;border-collapse:collapse;margin-top:14px;font-size:9.5px;}
+  table.q2-items th{background:#12224b;color:#fff;font-size:8.5px;text-transform:uppercase;letter-spacing:.02em;padding:5px 4px;text-align:left;border:1px solid #12224b;}
+  table.q2-items td{padding:4px;border:1px solid #ddd;vertical-align:top;}
+  table.q2-items td.num, table.q2-items th.num{text-align:right;white-space:nowrap;}
+  table.q2-items tfoot td{font-weight:800;border-top:1.5px solid #12224b;background:#f5f1e6;}
+  .q2-footer{display:flex;gap:14px;margin-top:12px;align-items:flex-start;}
+  .q2-footer-left{flex:1;border:1px solid #d3ac5a;border-radius:4px;padding:8px 12px;font-size:10px;line-height:1.6;}
+  .q2-footer-left ol{margin:2px 0 0;padding-left:16px;}
+  .q2-footer-right{flex:0 0 44%;border:1px solid #ccc;border-radius:4px;overflow:hidden;}
+  .q2-tb-row{display:flex;justify-content:space-between;padding:4px 10px;font-size:10.5px;border-bottom:1px solid #eee;}
+  .q2-tb-discount{color:#b03434;}
+  .q2-grand{display:flex;justify-content:space-between;padding:7px 10px;background:#12224b;color:#fff;font-weight:800;font-size:12.5px;}
+  .q2-words{margin-top:8px;font-size:10.5px;background:#f5f1e6;border:1px solid #d3ac5a;border-radius:4px;padding:6px 12px;}
+  .q2-sign-row{display:flex;justify-content:space-between;margin-top:34px;font-size:10.5px;}
+  .q2-sign-row div{width:44%;border-top:1px solid #888;padding-top:4px;text-align:center;}
+  .q2-thankyou{text-align:center;background:#12224b;color:#fff;font-size:10px;padding:6px;margin-top:16px;border-radius:4px;}
+  @media print{
+    body{background:#fff;}
+    .q2-page{border:none;margin:0;max-width:none;}
+  }
+`;
+// Matches a specific reference Quotation template the shop asked for
+// (navy/gold branded layout with boxed sections), built with real data
+// only — fields the app doesn't collect per-quotation (Contact Person,
+// Payment Terms, Delivery Time, Price Basis, Warranty, Packing Charges,
+// Salesperson, a QR code) are left out rather than shown blank/fake.
+// Standalone popup, fully self-contained styling (not reusing the Tax
+// Invoice's erp-* classes — this is a different visual system).
 function printQuotation(q){
-  const cfg = state.settings;
+  const cfg = state.settings || {};
   const cust = state.customers.find(c=>c.id===q.customer_id);
-  const head = `<th class="c-sn">Sr No.</th><th>Product Description</th><th class="c-size">Size</th><th class="c-unit">Unit</th><th class="c-num">Qty</th><th class="c-num">Rate</th><th class="c-num c-amt">Amount</th>`;
+
   const rows = q.items.map((it,i)=>{
     const mode = it.mode || "UNIT";
     const unit = it.unit_label || (Pricing.MODES[mode] && Pricing.MODES[mode].unit) || "";
-    const qtyCell = mode !== "UNIT" && it.pieces === 1
-      ? "1 pc"
-      : `${Pricing.formatQty(it.qty, mode).replace(" "+unit,"")}${mode !== "UNIT" && it.pieces ? `<div class="c-pieces">(${it.pieces} pc)</div>` : ""}`;
-    return `<tr><td class="c-sn">${i+1}</td><td>${escapeHtml(it.name)}</td><td class="c-size">${escapeHtml(it.size_label||"—")}</td><td class="c-unit">${escapeHtml(unit)}</td><td class="c-num">${qtyCell}</td><td class="c-num">${fmtPaise(it.rate).replace("Rs. ","")}</td><td class="c-num c-amt">${fmtPaise(it.qty*it.rate)}</td></tr>`;
+    const product = it.product_id ? state.products.find(p=>p.id===it.product_id) : null;
+    const thicknessCell = it.thickness_in ? `${it.thickness_in} in` : "—";
+    return `<tr>
+      <td>${i+1}</td>
+      <td>${escapeHtml((product && product.code) || "—")}</td>
+      <td>${escapeHtml(it.name)}</td>
+      <td>${escapeHtml(it.brand||"—")}</td>
+      <td>${escapeHtml(it.size_label||"—")}</td>
+      <td>${thicknessCell}</td>
+      <td>${escapeHtml(unit)}</td>
+      <td class="num">${Pricing.formatQty(it.qty, mode).replace(" "+unit,"")}</td>
+      <td class="num">${fmtPaise(it.rate)}</td>
+      <td class="num">${fmtPaise(it.qty*it.rate)}</td>
+    </tr>`;
   }).join("");
   const totalQtyForFoot = round2(q.items.reduce((s,it)=>s+(Number(it.pieces)||0),0));
-  const tfoot = `<tfoot><tr><td colspan="4" style="text-align:right;">Total Quantity</td><td class="c-num">${totalQtyForFoot}</td><td colspan="3"></td></tr></tfoot>`;
 
-  const taxableGoods = Math.max(0, (q.subtotal||0) - (q.discount_amount||0));
-  const effectiveRatePct = taxableGoods > 0 ? Math.round(((q.cgst+q.sgst+q.igst) / taxableGoods) * 100) : 0;
-  const halfRatePct = Math.round(effectiveRatePct / 2);
+  const notes = [];
+  if(q.terms) notes.push(...q.terms.split("\n").filter(Boolean));
+  if(q.remarks) notes.push(q.remarks);
+  if(!notes.length) notes.push("Goods once sold will not be taken back.");
+
   const isIGST = q.tax_type === "IGST";
-  const totalsBox = `<div class="erp-totals-box">
-    <div class="erp-tb-row"><span>Subtotal</span><span>${fmtPaise(q.subtotal)}</span></div>
-    <div class="erp-tb-row"><span>Discount</span><span>${(q.discount_amount>0?"-":"")+fmtPaise(q.discount_amount)}</span></div>
-    ${q.transport>0?`<div class="erp-tb-row"><span>Transport</span><span>${fmtPaise(q.transport)}</span></div>`:""}
-    ${q.loading?`<div class="erp-tb-row"><span>Additional Charges</span><span>${fmtPaise(q.loading)}</span></div>`:""}
-    ${isIGST
-      ? `<div class="erp-tb-row"><span>IGST ${effectiveRatePct}%</span><span>${fmtPaise(q.igst)}</span></div>`
-      : `<div class="erp-tb-row"><span>CGST ${halfRatePct}%</span><span>${fmtPaise(q.cgst)}</span></div><div class="erp-tb-row"><span>SGST ${halfRatePct}%</span><span>${fmtPaise(q.sgst)}</span></div>`}
-    ${q.round_off ? `<div class="erp-tb-row"><span>Round Off</span><span>${q.round_off>0?"+":""}${fmtPaise(q.round_off)}</span></div>` : ""}
-    <div class="erp-tb-row erp-tb-grand"><span>Grand Total</span><span>${fmtPaise(q.total)}</span></div>
-  </div>`;
-
-  const bottomLeft = `<div class="erp-bottom-left">
-    ${q.remarks ? `<div><b>Remarks:</b> ${escapeHtml(q.remarks)}</div>` : ""}
-    <div><b>Amount in Words:</b> ${Pricing.amountInWords(q.total)}</div>
-  </div>`;
 
   const bodyHtml = `
-    <div class="erp-banner">QUOTATION</div>
-    <div class="erp-header">
-      <div class="erp-biz-name">${escapeHtml(cfg.business_name)}</div>
-      ${cfg.tagline ? `<div class="erp-tag">${escapeHtml(cfg.tagline)}</div>` : ""}
-      ${cfg.address ? `<div class="erp-addr">${escapeHtml(cfg.address)}</div>` : ""}
-      <div class="erp-contact-line">${[
-        cfg.gstin ? `GSTIN: ${escapeHtml(cfg.gstin)}` : "",
-        cfg.phones ? `Ph: ${escapeHtml(cfg.phones)}` : "",
-        "Email: swagatply@gmail.com", "Website: www.swagatply.com"
-      ].filter(Boolean).join("  |  ")}</div>
-    </div>
-
-    <div class="erp-parties">
-      <div class="erp-party-box">
-        <div class="erp-box-label">Buyer</div>
-        <div class="erp-box-name">${cust?escapeHtml(cust.name):"Walk-in Customer"}</div>
-        ${cust&&cust.address ? `<div>${escapeHtml(cust.address)}</div>` : ""}
-        ${cust&&cust.phone ? `<div>Mobile: ${escapeHtml(cust.phone)}</div>` : ""}
-        ${cust&&cust.gst ? `<div>GSTIN: ${escapeHtml(cust.gst)}</div>` : ""}
-        ${cust&&cust.state ? `<div>State: ${escapeHtml(cust.state)}</div>` : ""}
+    <div class="q2-header">
+      <div class="q2-header-left">
+        <div class="q2-crest">SP</div>
+        <div>
+          <div class="q2-biz-name">${escapeHtml(cfg.business_name||"")}</div>
+          ${cfg.tagline ? `<div class="q2-biz-tag">${escapeHtml(cfg.tagline)}</div>` : ""}
+        </div>
       </div>
-      <div class="erp-doc-box">
-        <div class="erp-kv"><span>Quotation No.</span><b>${escapeHtml(q.quotation_no)}</b></div>
-        <div class="erp-kv"><span>Date</span><b>${q.date}</b></div>
-        ${q.valid_until ? `<div class="erp-kv"><span>Valid Until</span><b>${q.valid_until}</b></div>` : ""}
-        <div class="erp-kv"><span>Status</span><b>${escapeHtml(q.status)}</b></div>
+      <div class="q2-qbox">
+        <div class="q2-qbox-title">QUOTATION</div>
+        <table>
+          <tr><td>Quotation No.</td><td>${escapeHtml(q.quotation_no)}</td></tr>
+          <tr><td>Date</td><td>${q.date}</td></tr>
+          ${q.valid_until ? `<tr><td>Valid Till</td><td>${q.valid_until}</td></tr>` : ""}
+        </table>
       </div>
     </div>
+    ${cfg.address ? `<div class="q2-addr-line">${escapeHtml(cfg.address)}</div>` : ""}
+    <div class="q2-contact-line">${[
+      cfg.phones ? `Ph: ${escapeHtml(cfg.phones)}` : "",
+      cfg.gstin ? `GSTIN: ${escapeHtml(cfg.gstin)}` : "",
+      "Email: swagatply@gmail.com", "Website: www.swagatply.com"
+    ].filter(Boolean).join("  |  ")}</div>
 
-    <div class="erp-table-wrap">
-      <table class="erp-table">
-        <thead><tr>${head}</tr></thead>
-        <tbody>${rows}</tbody>
-        ${tfoot}
-      </table>
+    <div class="q2-boxes">
+      <div class="q2-box">
+        <div class="q2-box-label">Customer Details</div>
+        <div class="q2-kv"><span>Customer Name:</span><b>${cust?escapeHtml(cust.name):"Walk-in Customer"}</b></div>
+        ${cust&&cust.phone ? `<div class="q2-kv"><span>Mobile:</span><b>${escapeHtml(cust.phone)}</b></div>` : ""}
+        ${cust&&cust.gst ? `<div class="q2-kv"><span>GST No.:</span><b>${escapeHtml(cust.gst)}</b></div>` : ""}
+        ${cust&&cust.address ? `<div class="q2-kv"><span>Billing Address:</span><b>${escapeHtml(cust.address)}</b></div>` : ""}
+      </div>
     </div>
 
-    <div class="erp-bottom">
-      ${bottomLeft}
-      ${totalsBox}
-    </div>
+    <table class="q2-items">
+      <thead><tr>
+        <th>Sr.No.</th><th>Product Code</th><th>Product Name &amp; Description</th><th>Brand</th>
+        <th>Size</th><th>Thickness</th><th>Unit</th><th class="num">Qty</th><th class="num">Rate (₹)</th><th class="num">Amount (₹)</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+      <tfoot><tr><td colspan="7" style="text-align:right;">Total Quantity</td><td class="num">${totalQtyForFoot}</td><td colspan="2"></td></tr></tfoot>
+    </table>
 
-    <div class="erp-terms">
-      ${q.terms ? `<div style="margin-bottom:4px;">${escapeHtml(q.terms).replace(/\n/g,"<br>")}</div>` : ""}
-      <strong>NO GURANTEE AND WARRANTY FOR DECORATIVE PRODUCTS AND AIR BUBBLES IN LAMMINATES, ACRYLIC AND PVC LAMINATES OR ANY SHADE VARIATION AFTER INSTALLATION. NO EXCHANGE. NO RETURN IN ANY CONDITION. PLEASE CHECK THE MATERIAL ON DELIVERY.</strong>
+    <div class="q2-footer">
+      <div class="q2-footer-left">
+        <div class="q2-box-label">Remarks / Notes</div>
+        <ol>${notes.map(n=>`<li>${escapeHtml(n)}</li>`).join("")}</ol>
+      </div>
+      <div class="q2-footer-right">
+        <div class="q2-tb-row"><span>Sub Total</span><span>${fmtPaise(q.subtotal)}</span></div>
+        ${q.discount_amount>0 ? `<div class="q2-tb-row q2-tb-discount"><span>Discount</span><span>-${fmtPaise(q.discount_amount)}</span></div>` : ""}
+        ${q.transport>0 ? `<div class="q2-tb-row"><span>Transportation Charges</span><span>${fmtPaise(q.transport)}</span></div>` : ""}
+        ${q.loading>0 ? `<div class="q2-tb-row"><span>Labour / Installation Charges</span><span>${fmtPaise(q.loading)}</span></div>` : ""}
+        ${isIGST
+          ? `<div class="q2-tb-row"><span>IGST</span><span>${fmtPaise(q.igst)}</span></div>`
+          : `<div class="q2-tb-row"><span>CGST</span><span>${fmtPaise(q.cgst)}</span></div><div class="q2-tb-row"><span>SGST</span><span>${fmtPaise(q.sgst)}</span></div>`}
+        ${q.round_off ? `<div class="q2-tb-row"><span>Round Off</span><span>${q.round_off>0?"+":""}${fmtPaise(q.round_off)}</span></div>` : ""}
+        <div class="q2-grand"><span>GRAND TOTAL</span><span>${fmtPaise(q.total)}</span></div>
+      </div>
     </div>
+    <div class="q2-words"><b>Amount in Words:</b> ${Pricing.amountInWords(q.total)}</div>
+
+    <div class="q2-sign-row">
+      <div>For ${escapeHtml(cfg.business_name||"")}<br><br><br>Authorized Signatory</div>
+      <div>Customer Signature &amp; Stamp<br><br><br></div>
+    </div>
+    <div class="q2-thankyou">Thank you for your enquiry. We look forward to serving you.</div>
   `;
 
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(q.quotation_no)}</title>
-    <link rel="stylesheet" href="/css/style.css">
-    <style>body{margin:0;background:#fff;}</style>
+    <style>${QUOTATION_PRINT_CSS}</style>
     </head><body>
-    <div id="fs-invoice" style="display:block;">
-      <div class="invoice-page size-a5" style="margin:16px auto;">${bodyHtml}</div>
-    </div>
+    <div class="q2-page">${bodyHtml}</div>
     <script>window.onload=()=>window.print();</script>
     </body></html>`;
   const w = window.open("", "_blank");

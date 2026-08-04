@@ -7004,36 +7004,105 @@ const SHOP_HEADER_CSS = `
   .shop-addr{font-size:11px;color:#333;margin-top:2px;}
   .shop-contact{font-size:11px;color:#333;margin-top:2px;}
 `;
+// Printed Quotation uses the SAME erp-* letterhead/table/totals-box layout
+// as the real Tax Invoice (renderInvoicePageContent) — just labeled
+// "QUOTATION" with a Quotation No./Valid Until doc box instead of an
+// Estimate No. one — so a quotation reads as a proper document rather than
+// a plain table. Standalone popup (not the live app's #fs-invoice), so it
+// links the site's own stylesheet to reuse those classes verbatim instead
+// of duplicating them.
 function printQuotation(q){
+  const cfg = state.settings;
   const cust = state.customers.find(c=>c.id===q.customer_id);
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(q.quotation_no)}</title>
-    <style>
-      body{font-family:Arial,Helvetica,sans-serif;padding:20px;color:#000;}
-      h1{font-size:16px;margin:0 0 2px;} .sub{font-size:11px;color:#555;margin-bottom:14px;}
-      table{width:100%;border-collapse:collapse;font-size:11px;margin-top:10px;}
-      th,td{border:1px solid #000;padding:4px 6px;text-align:left;}
-      th{background:#eee;} .num{text-align:right;}
-      .totals{margin-top:10px;font-size:12px;text-align:right;}
-      ${SHOP_HEADER_CSS}
-    </style></head><body>
-    ${printShopHeaderHtml()}
-    <h1>Quotation — ${escapeHtml(q.quotation_no)}</h1>
-    <div class="sub">${q.date}${q.valid_until?" · Valid until "+q.valid_until:""} · Status: ${escapeHtml(q.status)}</div>
-    <div class="sub">${cust?"To: "+escapeHtml(cust.name):""}</div>
-    <table><thead><tr><th>#</th><th>Product</th><th>Size</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Disc.</th><th class="num">GST%</th><th class="num">Amount</th></tr></thead>
-    <tbody>${q.items.map((it,i)=>`<tr><td>${i+1}</td><td>${escapeHtml(it.name)}</td><td>${escapeHtml(it.size_label||"")}</td>
-      <td class="num">${it.pieces}</td><td class="num">${fmt(it.rate)}</td><td class="num">${fmt(it.discount_amount)}</td>
-      <td class="num">${it.gst_rate}%</td><td class="num">${fmt(round2(it.qty*it.rate-it.discount_amount))}</td></tr>`).join("")}</tbody></table>
-    <div class="totals">
-      Subtotal: ${fmt(q.subtotal)}<br>
-      ${q.discount_amount>0?`Discount: -${fmt(q.discount_amount)}<br>`:""}
-      ${q.transport>0?`Transport: ${fmt(q.transport)}<br>`:""}
-      ${q.loading>0?`Loading: ${fmt(q.loading)}<br>`:""}
-      ${q.tax_type==="IGST"?`IGST: ${fmt(q.igst)}<br>`:`CGST: ${fmt(q.cgst)}<br>SGST: ${fmt(q.sgst)}<br>`}
-      <strong>Grand Total: ${fmt(q.total)}</strong>
+  const head = `<th class="c-sn">Sr No.</th><th>Product Description</th><th class="c-size">Size</th><th class="c-unit">Unit</th><th class="c-num">Qty</th><th class="c-num">Rate</th><th class="c-num c-amt">Amount</th>`;
+  const rows = q.items.map((it,i)=>{
+    const mode = it.mode || "UNIT";
+    const unit = it.unit_label || (Pricing.MODES[mode] && Pricing.MODES[mode].unit) || "";
+    const qtyCell = mode !== "UNIT" && it.pieces === 1
+      ? "1 pc"
+      : `${Pricing.formatQty(it.qty, mode).replace(" "+unit,"")}${mode !== "UNIT" && it.pieces ? `<div class="c-pieces">(${it.pieces} pc)</div>` : ""}`;
+    return `<tr><td class="c-sn">${i+1}</td><td>${escapeHtml(it.name)}</td><td class="c-size">${escapeHtml(it.size_label||"—")}</td><td class="c-unit">${escapeHtml(unit)}</td><td class="c-num">${qtyCell}</td><td class="c-num">${fmtPaise(it.rate).replace("Rs. ","")}</td><td class="c-num c-amt">${fmtPaise(it.qty*it.rate)}</td></tr>`;
+  }).join("");
+  const totalQtyForFoot = round2(q.items.reduce((s,it)=>s+(Number(it.pieces)||0),0));
+  const tfoot = `<tfoot><tr><td colspan="4" style="text-align:right;">Total Quantity</td><td class="c-num">${totalQtyForFoot}</td><td colspan="3"></td></tr></tfoot>`;
+
+  const taxableGoods = Math.max(0, (q.subtotal||0) - (q.discount_amount||0));
+  const effectiveRatePct = taxableGoods > 0 ? Math.round(((q.cgst+q.sgst+q.igst) / taxableGoods) * 100) : 0;
+  const halfRatePct = Math.round(effectiveRatePct / 2);
+  const isIGST = q.tax_type === "IGST";
+  const totalsBox = `<div class="erp-totals-box">
+    <div class="erp-tb-row"><span>Subtotal</span><span>${fmtPaise(q.subtotal)}</span></div>
+    <div class="erp-tb-row"><span>Discount</span><span>${(q.discount_amount>0?"-":"")+fmtPaise(q.discount_amount)}</span></div>
+    ${q.transport>0?`<div class="erp-tb-row"><span>Transport</span><span>${fmtPaise(q.transport)}</span></div>`:""}
+    ${q.loading?`<div class="erp-tb-row"><span>Additional Charges</span><span>${fmtPaise(q.loading)}</span></div>`:""}
+    ${isIGST
+      ? `<div class="erp-tb-row"><span>IGST ${effectiveRatePct}%</span><span>${fmtPaise(q.igst)}</span></div>`
+      : `<div class="erp-tb-row"><span>CGST ${halfRatePct}%</span><span>${fmtPaise(q.cgst)}</span></div><div class="erp-tb-row"><span>SGST ${halfRatePct}%</span><span>${fmtPaise(q.sgst)}</span></div>`}
+    ${q.round_off ? `<div class="erp-tb-row"><span>Round Off</span><span>${q.round_off>0?"+":""}${fmtPaise(q.round_off)}</span></div>` : ""}
+    <div class="erp-tb-row erp-tb-grand"><span>Grand Total</span><span>${fmtPaise(q.total)}</span></div>
+  </div>`;
+
+  const bottomLeft = `<div class="erp-bottom-left">
+    ${q.remarks ? `<div><b>Remarks:</b> ${escapeHtml(q.remarks)}</div>` : ""}
+    <div><b>Amount in Words:</b> ${Pricing.amountInWords(q.total)}</div>
+  </div>`;
+
+  const bodyHtml = `
+    <div class="erp-banner">QUOTATION</div>
+    <div class="erp-header">
+      <div class="erp-biz-name">${escapeHtml(cfg.business_name)}</div>
+      ${cfg.tagline ? `<div class="erp-tag">${escapeHtml(cfg.tagline)}</div>` : ""}
+      ${cfg.address ? `<div class="erp-addr">${escapeHtml(cfg.address)}</div>` : ""}
+      <div class="erp-contact-line">${[
+        cfg.gstin ? `GSTIN: ${escapeHtml(cfg.gstin)}` : "",
+        cfg.phones ? `Ph: ${escapeHtml(cfg.phones)}` : "",
+        "Email: swagatply@gmail.com", "Website: www.swagatply.com"
+      ].filter(Boolean).join("  |  ")}</div>
     </div>
-    ${q.terms?`<div class="sub" style="margin-top:10px;white-space:pre-line;"><strong>Terms &amp; Conditions:</strong><br>${escapeHtml(q.terms)}</div>`:""}
-    ${q.remarks?`<div class="sub">Remarks: ${escapeHtml(q.remarks)}</div>`:""}
+
+    <div class="erp-parties">
+      <div class="erp-party-box">
+        <div class="erp-box-label">Buyer</div>
+        <div class="erp-box-name">${cust?escapeHtml(cust.name):"Walk-in Customer"}</div>
+        ${cust&&cust.address ? `<div>${escapeHtml(cust.address)}</div>` : ""}
+        ${cust&&cust.phone ? `<div>Mobile: ${escapeHtml(cust.phone)}</div>` : ""}
+        ${cust&&cust.gst ? `<div>GSTIN: ${escapeHtml(cust.gst)}</div>` : ""}
+        ${cust&&cust.state ? `<div>State: ${escapeHtml(cust.state)}</div>` : ""}
+      </div>
+      <div class="erp-doc-box">
+        <div class="erp-kv"><span>Quotation No.</span><b>${escapeHtml(q.quotation_no)}</b></div>
+        <div class="erp-kv"><span>Date</span><b>${q.date}</b></div>
+        ${q.valid_until ? `<div class="erp-kv"><span>Valid Until</span><b>${q.valid_until}</b></div>` : ""}
+        <div class="erp-kv"><span>Status</span><b>${escapeHtml(q.status)}</b></div>
+      </div>
+    </div>
+
+    <div class="erp-table-wrap">
+      <table class="erp-table">
+        <thead><tr>${head}</tr></thead>
+        <tbody>${rows}</tbody>
+        ${tfoot}
+      </table>
+    </div>
+
+    <div class="erp-bottom">
+      ${bottomLeft}
+      ${totalsBox}
+    </div>
+
+    <div class="erp-terms">
+      ${q.terms ? `<div style="margin-bottom:4px;">${escapeHtml(q.terms).replace(/\n/g,"<br>")}</div>` : ""}
+      <strong>NO GURANTEE AND WARRANTY FOR DECORATIVE PRODUCTS AND AIR BUBBLES IN LAMMINATES, ACRYLIC AND PVC LAMINATES OR ANY SHADE VARIATION AFTER INSTALLATION. NO EXCHANGE. NO RETURN IN ANY CONDITION. PLEASE CHECK THE MATERIAL ON DELIVERY.</strong>
+    </div>
+  `;
+
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(q.quotation_no)}</title>
+    <link rel="stylesheet" href="/css/style.css">
+    <style>body{margin:0;background:#fff;}</style>
+    </head><body>
+    <div id="fs-invoice" style="display:block;">
+      <div class="invoice-page size-a5" style="margin:16px auto;">${bodyHtml}</div>
+    </div>
     <script>window.onload=()=>window.print();</script>
     </body></html>`;
   const w = window.open("", "_blank");

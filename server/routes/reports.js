@@ -274,10 +274,16 @@ router.get("/purchases", (req, res) => {
  * tells us which table to look in; if a number is mistyped and matches no
  * known prefix (or is right but doesn't exist in the expected table), every
  * series gets tried as a fallback before giving up.
+ * Falls back to a customer/supplier NAME search when the query doesn't
+ * match any document number series — a single match opens that party
+ * directly (same one-click feel as a number match); more than one match
+ * is too ambiguous to guess, so the caller is told to browse the filtered
+ * Customers/Suppliers list instead.
  */
 router.get("/search-number", (req, res) => {
-  const raw = String(req.query.q || "").trim().toUpperCase();
-  if (!raw) return res.status(400).json({ error: "Enter a document number." });
+  const raw = String(req.query.q || "").trim();
+  if (!raw) return res.status(400).json({ error: "Enter a document number or name." });
+  const upper = raw.toUpperCase();
 
   const series = [
     { prefix: "SQ", type: "quotation", table: "quotations", col: "quotation_no" },
@@ -291,14 +297,33 @@ router.get("/search-number", (req, res) => {
   ];
   const matchedPrefix = series
     .slice().sort((a, b) => b.prefix.length - a.prefix.length)
-    .find(s => raw.startsWith(s.prefix));
+    .find(s => upper.startsWith(s.prefix));
   const ordered = matchedPrefix ? [matchedPrefix, ...series.filter(s => s !== matchedPrefix)] : series;
 
   for (const s of ordered) {
-    const row = db.prepare(`SELECT id FROM ${s.table} WHERE ${s.col} = ?`).get(raw);
-    if (row) return res.json({ type: s.type, id: row.id, number: raw });
+    const row = db.prepare(`SELECT id FROM ${s.table} WHERE ${s.col} = ?`).get(upper);
+    if (row) return res.json({ type: s.type, id: row.id, number: upper });
   }
-  res.status(404).json({ error: `No document found with number "${raw}".` });
+
+  const like = `%${raw}%`;
+  const customers = db.prepare("SELECT id, name FROM customers WHERE name LIKE ? COLLATE NOCASE").all(like);
+  const suppliers = db.prepare("SELECT id, name FROM suppliers WHERE name LIKE ? COLLATE NOCASE").all(like);
+  const totalMatches = customers.length + suppliers.length;
+
+  if (totalMatches === 1) {
+    return customers.length === 1
+      ? res.json({ type: "customer", id: customers[0].id, name: customers[0].name })
+      : res.json({ type: "supplier", id: suppliers[0].id, name: suppliers[0].name });
+  }
+  if (totalMatches > 1) {
+    // Picks whichever side actually has matches so the fallback list isn't
+    // empty — if it's a mix of both, customers wins the tie-break (the
+    // Customers/Suppliers toggle only shows one side at a time).
+    const partyMode = customers.length > 0 ? "customer" : "supplier";
+    return res.json({ type: "nameSearch", query: raw, count: totalMatches, partyMode });
+  }
+
+  res.status(404).json({ error: `No document or party found matching "${raw}".` });
 });
 
 router.get("/challans", (req, res) => {

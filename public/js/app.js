@@ -397,11 +397,21 @@ async function initApp(){
     if(!q) return;
     try{
       const result = await api("GET", `/reports/search-number?q=${encodeURIComponent(q)}`);
+      if(result.type === "nameSearch"){
+        await switchTab("customers");
+        state.partyMode = result.partyMode;
+        document.querySelectorAll('[data-party-mode]').forEach(x=>x.classList.toggle("selected", x.dataset.partyMode===result.partyMode));
+        document.getElementById("cust-search").value = result.query;
+        await renderCustomersList();
+        toast(`${result.count} matches for "${result.query}" — pick one below.`);
+        return;
+      }
       e.target.value = "";
       const openers = {
         invoice: openExistingInvoice, quotation: openQuotationDetail, salesOrder: openSoDetail,
         purchaseOrder: openPoDetail, purchase: openPurchaseDetail,
-        purchaseReturn: openPurchaseReturnDetail, salesReturn: openSalesReturnDetail
+        purchaseReturn: openPurchaseReturnDetail, salesReturn: openSalesReturnDetail,
+        customer: openCustomerDetail, supplier: openSupplierDetail
       };
       const opener = openers[result.type];
       if(opener) opener(result.id); else toast(`Found ${result.number}, but can't open it here.`);

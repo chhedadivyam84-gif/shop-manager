@@ -428,6 +428,7 @@ async function initApp(){
   document.getElementById("inq-add-btn").addEventListener("click", ()=>openInquiry());
 
   document.getElementById("pur-back-link").addEventListener("click", (e)=>{ e.preventDefault(); switchTab("home"); });
+  document.getElementById("pur-clear-link").addEventListener("click", (e)=>{ e.preventDefault(); clearPurchaseForm(); });
   document.querySelectorAll('[data-pur-doctype]').forEach(b=>{
     b.addEventListener("click", ()=>setPurDocType(b.dataset.purDoctype));
   });
@@ -5492,6 +5493,29 @@ function renderPurchaseLineCalc(idx){
 function renderPurchaseDueDateVisibility(){
   const row = document.getElementById("pur-due-date-row");
   if(row) row.style.display = (state.pur.paymentMethod === "Credit" && state.pur.docType !== "challan") ? "block" : "none";
+}
+/** Wipes the New Purchase form back to blank — supplier, items, charges,
+ *  and any in-progress edit — without touching anything already saved.
+ *  Same reset used after a successful save / cancelled edit, just
+ *  reachable on demand instead of only as a side effect of those. */
+function clearPurchaseForm(){
+  state.pur = {
+    docType: "purchase", supplierId: null, purchaseType: "Local", paymentMethod: "Credit",
+    date: "", invoiceNo: "", dueDate: "", vehicleNumber: "", transportName: "", lrNumber: "", remarks: "",
+    transport: 0, loading: 0, otherCharges: 0, roundOff: true, cart: [], editingPurchaseId: null, locationId: null,
+    gstEnabled: true, purchaseNo: null
+  };
+  const set = (id, val) => { const el=document.getElementById(id); if(el) el.value = val; };
+  set("pur-invoice-no", ""); set("pur-due-date", ""); set("pur-vehicle", "");
+  set("pur-transport-name", ""); set("pur-lr", ""); set("pur-remarks", "");
+  set("pur-transport-input", 0); set("pur-loading-input", 0); set("pur-other-input", 0);
+  const searchEl = document.getElementById("pur-supplier-search"); if(searchEl) searchEl.value = "";
+  document.querySelectorAll('[data-pur-type]').forEach(x=>x.classList.toggle("selected", x.dataset.purType==="Local"));
+  document.querySelectorAll('[data-pur-pay]').forEach(x=>x.classList.toggle("selected", x.dataset.purPay==="Credit"));
+  setPurGstEnabled(true);
+  setPurDocType("purchase");
+  renderPurchaseScreen();
+  toast("Form cleared.");
 }
 function isPurChallanMode(){ return state.pur.docType === "challan"; }
 /**

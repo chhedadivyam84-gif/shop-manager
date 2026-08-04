@@ -266,6 +266,41 @@ router.get("/purchases", (req, res) => {
  *  list, distinguished by `type`. Neither carries GST/pricing meaning, so
  *  this shows item/piece counts and any Transport/Loading charge rather
  *  than a rupee "sale" figure. */
+
+/**
+ * Jump straight to a document by its printed number (SP0000005, SQ0000012,
+ * ...) instead of hunting through the right report. Every doc-type's number
+ * series has its own 2-3 letter prefix, so the prefix alone almost always
+ * tells us which table to look in; if a number is mistyped and matches no
+ * known prefix (or is right but doesn't exist in the expected table), every
+ * series gets tried as a fallback before giving up.
+ */
+router.get("/search-number", (req, res) => {
+  const raw = String(req.query.q || "").trim().toUpperCase();
+  if (!raw) return res.status(400).json({ error: "Enter a document number." });
+
+  const series = [
+    { prefix: "SQ", type: "quotation", table: "quotations", col: "quotation_no" },
+    { prefix: "SO", type: "salesOrder", table: "sales_orders", col: "so_no" },
+    { prefix: "PO", type: "purchaseOrder", table: "purchase_orders", col: "po_no" },
+    { prefix: "PC", type: "purchase", table: "purchases", col: "purchase_no" },
+    { prefix: "PU", type: "purchase", table: "purchases", col: "purchase_no" },
+    { prefix: "PR", type: "purchaseReturn", table: "purchase_returns", col: "return_no" },
+    { prefix: "SR", type: "salesReturn", table: "sales_returns", col: "return_no" },
+    { prefix: "SP", type: "invoice", table: "invoices", col: "challan_no" }
+  ];
+  const matchedPrefix = series
+    .slice().sort((a, b) => b.prefix.length - a.prefix.length)
+    .find(s => raw.startsWith(s.prefix));
+  const ordered = matchedPrefix ? [matchedPrefix, ...series.filter(s => s !== matchedPrefix)] : series;
+
+  for (const s of ordered) {
+    const row = db.prepare(`SELECT id FROM ${s.table} WHERE ${s.col} = ?`).get(raw);
+    if (row) return res.json({ type: s.type, id: row.id, number: raw });
+  }
+  res.status(404).json({ error: `No document found with number "${raw}".` });
+});
+
 router.get("/challans", (req, res) => {
   const salesRows = db.prepare(`
     SELECT i.id, i.challan_no, i.date, c.name AS party_name, i.transport, i.loading, i.converted_invoice_id,

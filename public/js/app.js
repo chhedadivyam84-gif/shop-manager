@@ -391,6 +391,22 @@ async function initApp(){
   document.getElementById("export-csv-btn").addEventListener("click", ()=>{
     window.open("/api/reports/export?type="+encodeURIComponent(state.reportType), "_blank");
   });
+  document.getElementById("doc-number-search").addEventListener("keydown", async (e)=>{
+    if(e.key !== "Enter") return;
+    const q = e.target.value.trim();
+    if(!q) return;
+    try{
+      const result = await api("GET", `/reports/search-number?q=${encodeURIComponent(q)}`);
+      e.target.value = "";
+      const openers = {
+        invoice: openExistingInvoice, quotation: openQuotationDetail, salesOrder: openSoDetail,
+        purchaseOrder: openPoDetail, purchase: openPurchaseDetail,
+        purchaseReturn: openPurchaseReturnDetail, salesReturn: openSalesReturnDetail
+      };
+      const opener = openers[result.type];
+      if(opener) opener(result.id); else toast(`Found ${result.number}, but can't open it here.`);
+    }catch(err){ toast(err.message); }
+  });
 
   document.getElementById("cb-add-in").addEventListener("click", ()=>openCashEntry("in"));
   document.getElementById("cb-add-out").addEventListener("click", ()=>openCashEntry("out"));

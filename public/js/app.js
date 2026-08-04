@@ -2648,9 +2648,10 @@ function openCustomerOpeningBalance(customer, editEntry){
    SHEET: Supplier Detail (ledger + Purchase Payment)
    ============================================================ */
 async function openSupplierDetail(supplierId){
-  const [detail, pos] = await Promise.all([
+  const [detail, pos, purchaseReturns] = await Promise.all([
     api("GET", `/suppliers/${supplierId}`),
-    api("GET", `/purchase-orders?supplierId=${supplierId}`)
+    api("GET", `/purchase-orders?supplierId=${supplierId}`),
+    api("GET", `/purchase-returns?supplierId=${supplierId}`)
   ]);
   const sheet = document.getElementById("sheet-supplier-detail");
   sheet.innerHTML = `
@@ -2679,6 +2680,14 @@ async function openSupplierDetail(supplierId){
         <div class="row-right"><div class="row-title">${fmt(po.total)}</div><span class="pill ${PO_STATUS_PILL[po.status]||''}">${escapeHtml(po.status)}</span></div>
       </div>`).join("")}
     </div>` : ""}
+    ${purchaseReturns.length ? `
+    <div class="section-title">Purchase Returns</div>
+    <div class="card">${purchaseReturns.map(pr=>`
+      <div class="list-row" data-open-purchase-return="${pr.id}" style="cursor:pointer;">
+        <div><div class="row-title">${escapeHtml(pr.return_no)}</div><div class="row-sub">${pr.date}${pr.voided?" · Voided":""}</div></div>
+        <div class="row-right row-title">${fmt(pr.total)}</div>
+      </div>`).join("")}
+    </div>` : ""}
     <div class="section-title">Ledger</div>
     <div class="card">${detail.ledger.length ? detail.ledger.map(l=>renderPartyLedgerRow(l,"supplier",detail.id)).join("") : `<div class="empty-hint">No activity yet.</div>`}</div>
     ${isOwner() ? `<div style="margin-top:16px;display:flex;flex-direction:column;gap:8px;align-items:center;">
@@ -2704,6 +2713,9 @@ async function openSupplierDetail(supplierId){
   wirePartyLedgerActions(sheet, detail, "supplier");
   sheet.querySelectorAll("[data-open-purchase]").forEach(el=>{
     el.addEventListener("click", ()=>{ closeAllSheets(); openPurchaseDetail(el.dataset.openPurchase); });
+  });
+  sheet.querySelectorAll("[data-open-purchase-return]").forEach(el=>{
+    el.addEventListener("click", ()=>{ closeAllSheets(); openPurchaseReturnDetail(el.dataset.openPurchaseReturn); });
   });
   sheet.querySelectorAll("[data-open-stock-in]").forEach(el=>{
     el.addEventListener("click", async ()=>{
@@ -5627,6 +5639,7 @@ async function openPurchaseDetail(purchaseId){
     </div>
     <div class="action-row" style="margin-top:14px;">
       ${!p.voided?'<button class="btn btn-outline" id="edit-purchase-btn">✎ Edit</button>':''}
+      ${!p.voided?'<button class="btn btn-outline" id="return-purchase-btn">Return Items</button>':''}
       ${isOwner() && !p.voided ? '<button class="btn btn-outline" id="void-purchase-btn">Void</button>' : ''}
     </div>
     ${isOwner() ? `<div style="margin-top:12px;text-align:center;"><a href="#" id="delete-purchase-link" class="btn-danger-link">Delete this purchase</a></div>` : ""}
@@ -5634,6 +5647,8 @@ async function openPurchaseDetail(purchaseId){
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
   const editBtn = sheet.querySelector("#edit-purchase-btn");
   if(editBtn) editBtn.addEventListener("click", ()=>{ closeAllSheets(); editExistingPurchase(p); });
+  const returnBtn = sheet.querySelector("#return-purchase-btn");
+  if(returnBtn) returnBtn.addEventListener("click", ()=>{ closeAllSheets(); openPurchaseReturn(p); });
   const voidBtn = sheet.querySelector("#void-purchase-btn");
   if(voidBtn) voidBtn.addEventListener("click", async ()=>{
     if(confirm(`Void ${p.purchase_no}? Stock and the supplier's due will be reversed.`)){
@@ -7512,7 +7527,12 @@ async function openSalesReturn(invoice){
       const pieces = parseFloat(inp.value) || 0;
       if(pieces > 0){
         const it = returnableRows[inp.dataset.srQty];
-        items.push({ invoiceItemId: it.id, pieces, rate: it.rate, gstRate: it.gst_rate });
+        // qty scales down proportionally with pieces for a partial return —
+        // same per-piece rate the item actually sold at (mirrors the server's
+        // computation) so an area/length-billed item's preview isn't just
+        // pieces*rate (which would badly understate a Sq.ft/Rft item).
+        const perPieceQty = it.pieces > 0 ? it.qty / it.pieces : 0;
+        items.push({ invoiceItemId: it.id, pieces, qty: round2(perPieceQty * pieces), rate: it.rate, gstRate: it.gst_rate });
       }
     });
     return items;
@@ -7520,8 +7540,8 @@ async function openSalesReturn(invoice){
 
   function renderPreview(){
     const items = collectItems();
-    const subtotal = round2(items.reduce((s,it)=>s+it.pieces*it.rate,0));
-    const gst = round2(items.reduce((s,it)=>s+round2(it.pieces*it.rate)*(it.gstRate/100),0));
+    const subtotal = round2(items.reduce((s,it)=>s+it.qty*it.rate,0));
+    const gst = round2(items.reduce((s,it)=>s+round2(it.qty*it.rate)*(it.gstRate/100),0));
     const total = round2(subtotal + gst);
     document.getElementById("sr-preview-card").innerHTML = `
       <div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Subtotal</span><span>${fmt(subtotal)}</span></div>
@@ -7563,7 +7583,7 @@ async function openSalesReturnDetail(returnId){
     <div class="card">${sr.items.map(it=>`
       <div class="list-row">
         <div><div class="row-title">${escapeHtml(it.name)}</div><div class="row-sub">${escapeHtml(it.size_label||"")} · ${it.pieces} ${escapeHtml(it.unit_label||"")} @ ${fmt(it.rate)}</div></div>
-        <div class="row-right row-title">${fmt(round2(it.pieces*it.rate*(1+it.gst_rate/100)))}</div>
+        <div class="row-right row-title">${fmt(round2(it.qty*it.rate*(1+it.gst_rate/100)))}</div>
       </div>`).join("")}
     </div>
     <div class="card" style="margin-top:8px;">
@@ -7612,12 +7632,199 @@ function printSalesReturn(sr){
     <table><thead><tr><th>#</th><th>Product</th><th>Size</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">GST%</th><th class="num">Amount</th></tr></thead>
     <tbody>${sr.items.map((it,i)=>`<tr><td>${i+1}</td><td>${escapeHtml(it.name)}</td><td>${escapeHtml(it.size_label||"")}</td>
       <td class="num">${it.pieces}</td><td class="num">${fmt(it.rate)}</td>
-      <td class="num">${it.gst_rate}%</td><td class="num">${fmt(round2(it.pieces*it.rate*(1+it.gst_rate/100)))}</td></tr>`).join("")}</tbody></table>
+      <td class="num">${it.gst_rate}%</td><td class="num">${fmt(round2(it.qty*it.rate*(1+it.gst_rate/100)))}</td></tr>`).join("")}</tbody></table>
     <div class="totals">
       Subtotal: ${fmt(sr.subtotal)}<br>
       ${sr.igst>0?`IGST: ${fmt(sr.igst)}<br>`:`CGST: ${fmt(sr.cgst)}<br>SGST: ${fmt(sr.sgst)}<br>`}
       <strong>Credit Total: ${fmt(sr.total)}</strong><br>
       Refund Method: ${escapeHtml(sr.refund_method)}
+    </div>
+    <script>window.onload=()=>window.print();</script>
+    </body></html>`;
+  const w = window.open("", "_blank");
+  w.document.write(html);
+  w.document.close();
+}
+
+/* ============================================================
+   SHEET: Purchase Return — pick items/quantities off a past Purchase.
+   Mirrors Sales Return exactly, just against a Purchase/Supplier instead
+   of an Invoice/Customer, and stock/due move in the opposite direction
+   (goods leave, what's owed to the supplier goes down).
+   ============================================================ */
+async function openPurchaseReturn(purchase){
+  const sheet = document.getElementById("sheet-purchase-return");
+  const supplier = state.suppliers.find(s=>s.id===purchase.supplier_id);
+
+  const priorReturns = await api("GET", `/purchase-returns?purchaseId=${purchase.id}`);
+  const returnedById = {};
+  await Promise.all(priorReturns.filter(r=>!r.voided).map(async r=>{
+    const full = await api("GET", `/purchase-returns/${r.id}`);
+    full.items.forEach(it=>{ returnedById[it.purchase_item_id] = (returnedById[it.purchase_item_id]||0) + it.pieces; });
+  }));
+  const returnableRows = purchase.items.map(it=>({
+    ...it,
+    alreadyReturned: returnedById[it.id] || 0
+  }));
+
+  function render(){
+    sheet.innerHTML = `
+      <div class="sheet-handle"></div>
+      <button class="sheet-close" data-sheetclose>✕</button>
+      <div class="sheet-title">Purchase Return</div>
+      <div class="muted" style="font-size:12px;margin-bottom:10px;">Against ${escapeHtml(purchase.purchase_no)}${supplier?" · "+escapeHtml(supplier.name):""}</div>
+      <div class="card">${returnableRows.map((it,idx)=>{
+        const remaining = round2(it.pieces - it.alreadyReturned);
+        return `
+        <div class="list-row" style="align-items:flex-start;">
+          <div style="flex:1;">
+            <div class="row-title">${escapeHtml(it.name)}</div>
+            <div class="row-sub">${escapeHtml(it.size_label||"")} · Bought ${it.pieces} ${escapeHtml(it.unit_label||"")} @ ${fmt(it.rate)}${it.alreadyReturned>0?` · ${it.alreadyReturned} already returned`:""}</div>
+          </div>
+          <div class="qty-step">
+            <input type="number" inputmode="decimal" step="any" min="0" max="${remaining}"
+                   value="" placeholder="0" data-pr-qty="${idx}" style="width:70px;" ${remaining<=0?"disabled":""}>
+          </div>
+        </div>`;
+      }).join("")}</div>
+      <label class="field-label" style="margin-top:12px;">Reason <span class="muted" style="font-weight:400;">— optional</span></label>
+      <input type="text" id="pr-reason" placeholder="e.g. Damaged, wrong size">
+      <label class="field-label" style="margin-top:10px;">Refund Method</label>
+      <div class="chip-row" id="pr-refund-chips">
+        <button class="chip selected" data-pr-refund="AdjustDue">Adjust Against Due</button>
+        <button class="chip" data-pr-refund="Cash">Cash</button>
+        <button class="chip" data-pr-refund="Bank">Bank</button>
+      </div>
+      <div class="card" id="pr-preview-card" style="margin-top:12px;"></div>
+      <button class="btn btn-primary" id="pr-save-btn" style="margin-top:14px;width:100%;">Save Return</button>
+    `;
+    sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+    sheet.querySelectorAll("[data-pr-qty]").forEach(inp=>inp.addEventListener("input", renderPreview));
+    sheet.querySelectorAll("[data-pr-refund]").forEach(b=>b.addEventListener("click", ()=>{
+      sheet.querySelectorAll("[data-pr-refund]").forEach(x=>x.classList.remove("selected"));
+      b.classList.add("selected");
+    }));
+    sheet.querySelector("#pr-save-btn").addEventListener("click", save);
+    renderPreview();
+  }
+
+  function collectItems(){
+    const items = [];
+    sheet.querySelectorAll("[data-pr-qty]").forEach(inp=>{
+      const pieces = parseFloat(inp.value) || 0;
+      if(pieces > 0){
+        const it = returnableRows[inp.dataset.prQty];
+        // qty scales down proportionally with pieces for a partial return —
+        // same per-piece rate the item actually cost (mirrors the server's
+        // computation) so an area/length-billed item's preview isn't just
+        // pieces*rate (which would badly understate a Sq.ft/Rft item).
+        const perPieceQty = it.pieces > 0 ? it.qty / it.pieces : 0;
+        items.push({ purchaseItemId: it.id, pieces, qty: round2(perPieceQty * pieces), rate: it.rate, gstRate: it.gst_rate });
+      }
+    });
+    return items;
+  }
+
+  function renderPreview(){
+    const items = collectItems();
+    const subtotal = round2(items.reduce((s,it)=>s+it.qty*it.rate,0));
+    const gst = round2(items.reduce((s,it)=>s+round2(it.qty*it.rate)*(it.gstRate/100),0));
+    const total = round2(subtotal + gst);
+    document.getElementById("pr-preview-card").innerHTML = `
+      <div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Subtotal</span><span>${fmt(subtotal)}</span></div>
+      <div class="inv-flex" style="margin-bottom:4px;"><span class="muted">GST</span><span>${fmt(gst)}</span></div>
+      <div class="inv-flex" style="font-weight:800;border-top:1px solid var(--border);padding-top:6px;"><span>Debit Total</span><span>${fmt(total)}</span></div>
+    `;
+  }
+
+  async function save(){
+    const items = collectItems();
+    if(!items.length){ toast("Enter a quantity to return for at least one item."); return; }
+    const refundMethod = sheet.querySelector("[data-pr-refund].selected").dataset.prRefund;
+    const btn = sheet.querySelector("#pr-save-btn");
+    btn.disabled = true;
+    try{
+      const saved = await api("POST", "/purchase-returns", {
+        purchaseId: purchase.id, reason: document.getElementById("pr-reason").value.trim(),
+        refundMethod, items: items.map(it=>({ purchaseItemId: it.purchaseItemId, pieces: it.pieces }))
+      });
+      await Promise.all([loadProducts(), loadSuppliers()]);
+      closeAllSheets();
+      toast(`Return ${saved.return_no} saved (${fmt(saved.total)}).`, "ok");
+    }catch(err){ toast(err.message); }
+    finally{ btn.disabled = false; }
+  }
+
+  render();
+  showSheet("sheet-purchase-return");
+}
+async function openPurchaseReturnDetail(returnId){
+  const pr = await api("GET", `/purchase-returns/${returnId}`);
+  const sheet = document.getElementById("sheet-purchase-return-detail");
+  const supplier = state.suppliers.find(s=>s.id===pr.supplier_id);
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">${escapeHtml(pr.return_no)} ${pr.voided?'<span class="pill danger">Voided</span>':''}</div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px;">${pr.date}${supplier?" · "+escapeHtml(supplier.name):""}${pr.reason?"<br>Reason: "+escapeHtml(pr.reason):""}</div>
+    <div class="card">${pr.items.map(it=>`
+      <div class="list-row">
+        <div><div class="row-title">${escapeHtml(it.name)}</div><div class="row-sub">${escapeHtml(it.size_label||"")} · ${it.pieces} ${escapeHtml(it.unit_label||"")} @ ${fmt(it.rate)}</div></div>
+        <div class="row-right row-title">${fmt(round2(it.qty*it.rate*(1+it.gst_rate/100)))}</div>
+      </div>`).join("")}
+    </div>
+    <div class="card" style="margin-top:8px;">
+      <div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Subtotal</span><span>${fmt(pr.subtotal)}</span></div>
+      ${pr.igst>0
+        ? `<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">IGST</span><span>${fmt(pr.igst)}</span></div>`
+        : `<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">CGST</span><span>${fmt(pr.cgst)}</span></div><div class="inv-flex" style="margin-bottom:4px;"><span class="muted">SGST</span><span>${fmt(pr.sgst)}</span></div>`}
+      <div class="inv-flex" style="font-weight:800;border-top:1px solid var(--border);padding-top:6px;"><span>Total</span><span>${fmt(pr.total)}</span></div>
+      <div class="muted" style="font-size:11.5px;margin-top:6px;">Refund: ${escapeHtml(pr.refund_method)}</div>
+    </div>
+    <button class="btn btn-outline" id="print-purchase-return-btn" style="margin-top:14px;width:100%;">Print</button>
+    ${!pr.voided && isOwner() ? `<div style="margin-top:14px;text-align:center;"><a href="#" id="void-purchase-return-link" class="btn-danger-link">Void this return</a></div>` : ""}
+  `;
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  sheet.querySelector("#print-purchase-return-btn").addEventListener("click", ()=>printPurchaseReturn(pr));
+  const voidLink = sheet.querySelector("#void-purchase-return-link");
+  if(voidLink) voidLink.addEventListener("click", async (e)=>{
+    e.preventDefault();
+    if(!confirm(`Void ${pr.return_no}? Stock and the supplier's due will be reversed back.`)) return;
+    try{
+      await api("POST", `/purchase-returns/${pr.id}/void`);
+      await Promise.all([loadProducts(), loadSuppliers()]);
+      closeAllSheets();
+      toast("Return voided.", "ok");
+    }catch(err){ toast(err.message); }
+  });
+  showSheet("sheet-purchase-return-detail");
+}
+
+function printPurchaseReturn(pr){
+  const supplier = state.suppliers.find(s=>s.id===pr.supplier_id);
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(pr.return_no)}</title>
+    <style>
+      body{font-family:Arial,Helvetica,sans-serif;padding:20px;color:#000;}
+      h1{font-size:16px;margin:0 0 2px;} .sub{font-size:11px;color:#555;margin-bottom:14px;}
+      table{width:100%;border-collapse:collapse;font-size:11px;margin-top:10px;}
+      th,td{border:1px solid #000;padding:4px 6px;text-align:left;}
+      th{background:#eee;} .num{text-align:right;}
+      .totals{margin-top:10px;font-size:12px;text-align:right;}
+      ${SHOP_HEADER_CSS}
+    </style></head><body>
+    ${printShopHeaderHtml()}
+    <h1>Purchase Return — ${escapeHtml(pr.return_no)}</h1>
+    <div class="sub">${pr.date}${pr.voided?" · VOIDED":""}${pr.purchase_no?" · Against "+escapeHtml(pr.purchase_no):""}</div>
+    <div class="sub">${supplier?"Supplier: "+escapeHtml(supplier.name):""}${pr.reason?" · Reason: "+escapeHtml(pr.reason):""}</div>
+    <table><thead><tr><th>#</th><th>Product</th><th>Size</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">GST%</th><th class="num">Amount</th></tr></thead>
+    <tbody>${pr.items.map((it,i)=>`<tr><td>${i+1}</td><td>${escapeHtml(it.name)}</td><td>${escapeHtml(it.size_label||"")}</td>
+      <td class="num">${it.pieces}</td><td class="num">${fmt(it.rate)}</td>
+      <td class="num">${it.gst_rate}%</td><td class="num">${fmt(round2(it.qty*it.rate*(1+it.gst_rate/100)))}</td></tr>`).join("")}</tbody></table>
+    <div class="totals">
+      Subtotal: ${fmt(pr.subtotal)}<br>
+      ${pr.igst>0?`IGST: ${fmt(pr.igst)}<br>`:`CGST: ${fmt(pr.cgst)}<br>SGST: ${fmt(pr.sgst)}<br>`}
+      <strong>Debit Total: ${fmt(pr.total)}</strong><br>
+      Refund Method: ${escapeHtml(pr.refund_method)}
     </div>
     <script>window.onload=()=>window.print();</script>
     </body></html>`;

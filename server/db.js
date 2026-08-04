@@ -567,6 +567,45 @@ CREATE TABLE IF NOT EXISTS sales_return_items (
   gst_rate REAL NOT NULL DEFAULT 18
 );
 
+-- Purchase Return: a debit note against a past Purchase — goods going back
+-- to the supplier. Reverses stock (deducted from wherever the purchase
+-- originally received it into) and, when the refund is adjusted against
+-- the account, reduces what's owed to the supplier — mirrors Sales Return's
+-- relationship to a Tax Invoice, just with the money/stock flow reversed.
+CREATE TABLE IF NOT EXISTS purchase_returns (
+  id TEXT PRIMARY KEY,
+  return_no TEXT UNIQUE NOT NULL,
+  date TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  purchase_id TEXT REFERENCES purchases(id) ON DELETE SET NULL,
+  supplier_id TEXT REFERENCES suppliers(id) ON DELETE SET NULL,
+  reason TEXT DEFAULT '',
+  subtotal REAL NOT NULL DEFAULT 0,
+  cgst REAL NOT NULL DEFAULT 0,
+  sgst REAL NOT NULL DEFAULT 0,
+  igst REAL NOT NULL DEFAULT 0,
+  total REAL NOT NULL DEFAULT 0,
+  refund_method TEXT NOT NULL DEFAULT 'AdjustDue' CHECK (refund_method IN ('AdjustDue', 'Cash', 'Bank')),
+  location_id TEXT REFERENCES locations(id),
+  voided INTEGER NOT NULL DEFAULT 0,
+  remarks TEXT DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS purchase_return_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  return_id TEXT NOT NULL REFERENCES purchase_returns(id) ON DELETE CASCADE,
+  purchase_item_id INTEGER REFERENCES purchase_items(id) ON DELETE SET NULL,
+  product_id TEXT REFERENCES products(id) ON DELETE SET NULL,
+  size_id INTEGER REFERENCES product_sizes(id) ON DELETE SET NULL,
+  name TEXT NOT NULL,
+  size_label TEXT NOT NULL DEFAULT '',
+  pieces REAL NOT NULL DEFAULT 0,
+  unit_label TEXT NOT NULL DEFAULT 'Pc',
+  qty REAL NOT NULL,
+  rate REAL NOT NULL,
+  gst_rate REAL NOT NULL DEFAULT 18
+);
+
 -- One row per silent print request sent to the shop PC's local printer. This
 -- is the audit trail behind "Printing… / Printed / Failed" on the phone —
 -- the phone polls this row's status rather than waiting on an open HTTP
@@ -615,6 +654,8 @@ CREATE INDEX IF NOT EXISTS idx_quotation_items_quotation ON quotation_items(quot
 CREATE INDEX IF NOT EXISTS idx_sales_order_items_so ON sales_order_items(so_id);
 CREATE INDEX IF NOT EXISTS idx_sales_return_items_return ON sales_return_items(return_id);
 CREATE INDEX IF NOT EXISTS idx_sales_returns_invoice ON sales_returns(invoice_id);
+CREATE INDEX IF NOT EXISTS idx_purchase_return_items_return ON purchase_return_items(return_id);
+CREATE INDEX IF NOT EXISTS idx_purchase_returns_purchase ON purchase_returns(purchase_id);
 CREATE INDEX IF NOT EXISTS idx_inquiries_date ON inquiries(date);
 `);
 

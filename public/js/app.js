@@ -356,6 +356,7 @@ async function initApp(){
 
   document.getElementById("inv-search").addEventListener("input", renderInventoryList);
   document.getElementById("inv-add-btn").addEventListener("click", ()=>openAddProduct("inventory"));
+  document.getElementById("inv-print-btn").addEventListener("click", printInventoryStock);
   document.querySelectorAll('[data-inv-stock-filter]').forEach(b=>{
     b.addEventListener("click", ()=>{
       state.invStockFilter = b.dataset.invStockFilter;
@@ -1404,9 +1405,7 @@ function renderInventoryLocationToggle(){
     b.addEventListener("click", ()=>{ state.invLocationCode = b.dataset.invLocation; renderInventoryList(); });
   });
 }
-async function renderInventoryList(){
-  renderInventoryLocationToggle();
-  renderBrandFilter();
+function filteredInventoryList(){
   const q = (document.getElementById("inv-search").value||"").toLowerCase();
   let list = state.products;
   if(state.invBrandFilter!=="All") list = list.filter(p=>p.brand===state.invBrandFilter);
@@ -1415,6 +1414,12 @@ async function renderInventoryList(){
   // a product low in Shop but fine in Warehouse only shows under the Shop tab.
   if(state.invStockFilter==="low") list = list.filter(p=>{ const s=productLocationStock(p,state.invLocationCode); return s>0 && s<5; });
   else if(state.invStockFilter==="out") list = list.filter(p=>productLocationStock(p,state.invLocationCode)<=0);
+  return list;
+}
+async function renderInventoryList(){
+  renderInventoryLocationToggle();
+  renderBrandFilter();
+  const list = filteredInventoryList();
   document.getElementById("product-count").textContent = list.length + " product" + (list.length!==1?"s":"");
   document.getElementById("inventory-list").innerHTML = `<div class="card">` + (list.length ? list.map(p=>{
     const priceLabel = !p.sizes.length ? "⚠ No price — tap Edit" : (p.sizes.length>1 ? "From "+fmt(Math.min(...p.sizes.map(s=>s.price))) : fmt(p.sizes[0].price));
@@ -1431,6 +1436,33 @@ async function renderInventoryList(){
   document.querySelectorAll("[data-open-inv-product]").forEach(el=>{
     el.addEventListener("click", ()=>openProductDetail(el.dataset.openInvProduct, "inventory"));
   });
+}
+function printInventoryStock(){
+  const list = filteredInventoryList();
+  const locName = (state.locations.find(l=>l.code===state.invLocationCode)||{}).name || "";
+  const rows = list.map(p=>{
+    const locStock = productLocationStock(p, state.invLocationCode);
+    const priceLabel = p.sizes.length ? (p.sizes.length>1 ? "From "+fmt(Math.min(...p.sizes.map(s=>s.price))) : fmt(p.sizes[0].price)) : "";
+    return `<tr><td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.brand||"")}</td><td>${escapeHtml(p.unit||"")}</td>
+      <td class="num">${locStock}</td><td class="num">${p.stock}</td><td class="num">${priceLabel}</td></tr>`;
+  }).join("");
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Stock Report</title>
+    <style>
+      body{font-family:Arial,Helvetica,sans-serif;padding:20px;color:#000;}
+      h1{font-size:16px;margin:0 0 2px;} .sub{font-size:11px;color:#555;margin-bottom:14px;}
+      table{width:100%;border-collapse:collapse;font-size:11px;}
+      th,td{border:1px solid #000;padding:4px 6px;text-align:left;}
+      th{background:#eee;} .num{text-align:right;}
+    </style></head><body>
+    <h1>Stock Report</h1>
+    <div class="sub">${locName ? locName+" · " : ""}${new Date().toLocaleDateString()} · ${list.length} product${list.length!==1?"s":""}</div>
+    <table><thead><tr><th>Product</th><th>Brand</th><th>Unit</th><th class="num">${locName||"Location"} Stock</th><th class="num">Total Stock</th><th class="num">Price</th></tr></thead>
+    <tbody>${rows || `<tr><td colspan="6">No products found.</td></tr>`}</tbody></table>
+    <script>window.onload=()=>window.print();</script>
+    </body></html>`;
+  const w = window.open("", "_blank");
+  w.document.write(html);
+  w.document.close();
 }
 
 /* ============================================================
@@ -3647,7 +3679,7 @@ function openInvoicePreview(existingInvoice){
 // Remove any edit/void/delete buttons left over from a previously-opened
 // document before deciding which ones this one needs — the set differs by
 // doc type and whether it's already voided.
-["inv-edit", "inv-void", "inv-delete", "inv-return"].forEach(id => { const el = document.getElementById(id); if(el) el.remove(); });
+["inv-edit", "inv-void", "inv-delete", "inv-return", "inv-convert"].forEach(id => { const el = document.getElementById(id); if(el) el.remove(); });
   if(existingInvoice && existingInvoice.id && !existingInvoice.voided){
     const actionsBar = document.querySelector(".inv-actions");
     const editBtn = document.createElement("button");
@@ -3660,6 +3692,19 @@ function openInvoicePreview(existingInvoice){
       returnBtn.id = "inv-return"; returnBtn.textContent = "Return Items";
       returnBtn.onclick = ()=>{ closeFullscreen("fs-invoice"); openSalesReturn(existingInvoice); };
       actionsBar.appendChild(returnBtn);
+    } else if(!existingInvoice.converted_invoice_id){
+      const convertBtn = document.createElement("button");
+      convertBtn.id = "inv-convert"; convertBtn.textContent = "Convert to Invoice";
+      convertBtn.onclick = async ()=>{
+        if(!confirm(`Raise a Tax Invoice for ${existingInvoice.challan_no}? This bills the customer for goods already delivered — it will NOT touch stock again, but will add to the customer's due.`)) return;
+        try{
+          const result = await api("POST", `/invoices/${existingInvoice.id}/convert-to-invoice`, {});
+          await loadCustomers();
+          closeFullscreen("fs-invoice");
+          toast(`Converted to ${result.invoice.challan_no}.`, "ok");
+        }catch(err){ toast(err.message); }
+      };
+      actionsBar.appendChild(convertBtn);
     }
   }
   if(existingInvoice && existingInvoice.id && isOwner()){
@@ -3813,6 +3858,7 @@ function renderInvoicePageContent(){
   const bottomLeft = `<div class="erp-bottom-left">
     ${deliveryAddr ? `<div><b>Delivery Address:</b> ${escapeHtml(deliveryAddr)}</div>` : ""}
     ${inv.remarks ? `<div><b>Remarks:</b> ${escapeHtml(inv.remarks)}</div>` : ""}
+    ${challan ? `<div><b>Status:</b> ${inv.converted_invoice_id ? "Billed (Tax Invoice raised)" : "Pending — not yet billed"}</div>` : ""}
     ${showRate ? `<div><b>Amount in Words:</b> ${Pricing.amountInWords(displayTotal)}</div>` : ""}
   </div>`;
 
@@ -4133,6 +4179,7 @@ async function renderPurchaseReport(body){
     `).join("") : `<div class="empty-hint">No purchases recorded yet.</div>`);
 }
 
+const CHALLAN_STATUS_PILL = { Pending: "warn", Billed: "ok" };
 async function renderChallanReport(body){
   const rows = await api("GET","/reports/challans");
   body.innerHTML = `<div style="font-weight:800;font-size:14px;">Challan Report</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every Delivery Challan (sales) and Purchase Challan (goods received), newest first — tap a row to open it</div>` +
@@ -4141,7 +4188,7 @@ async function renderChallanReport(body){
         <div class="row-title">${escapeHtml(r.challan_no)} <span class="pill ${r.type==="Sales"?"ok":"warn"}" style="font-size:9.5px;">${r.type}</span></div>
         <div class="row-sub">${escapeHtml(r.date)} · ${escapeHtml(r.party_name||(r.type==="Sales"?"Walk-in":"Unknown Supplier"))}</div>
         <div class="row-sub">${r.item_count} item${r.item_count!==1?"s":""} · ${r.total_pieces} pcs${(r.transport||r.loading)?" · Transport+Loading "+fmt((r.transport||0)+(r.loading||0)):""}</div>
-      </div></div>
+      </div>${r.type==="Sales"?`<div class="row-right"><span class="pill ${CHALLAN_STATUS_PILL[r.status]||''}" style="font-size:9.5px;">${escapeHtml(r.status)}</span></div>`:""}</div>
     `).join("") : `<div class="empty-hint">No challans recorded yet.</div>`);
   body.querySelectorAll("[data-open-invoice]").forEach(el=>{
     el.addEventListener("click", ()=>openExistingInvoice(el.dataset.openInvoice));

@@ -128,7 +128,10 @@ function computeTotals({ items, discountType, discountValue, advance, taxType, t
  */
 function deriveDocStatus(inv) {
   if (inv.voided) return "Cancelled";
-  if (inv.doc_type === "challan") return "Completed"; // no price/payment to track — goods have already left the shop
+  // Pending until a real Tax Invoice is raised against it via "Convert to
+  // Invoice"; Billed once that's happened. No such stage on a Tax Invoice
+  // itself — it's already the billed document.
+  if (inv.doc_type === "challan") return inv.converted_invoice_id ? "Billed" : "Pending";
   if (inv.balance_due <= 0) return "Completed";
   if (inv.advance > 0) return "Partially Completed";
   return "Pending";
@@ -521,6 +524,95 @@ router.put("/:id", (req, res) => {
   const updated = db.prepare("SELECT * FROM invoices WHERE id = ?").get(inv.id);
   const savedItems = db.prepare("SELECT * FROM invoice_items WHERE invoice_id = ?").all(inv.id);
   res.json({ ...withStatus(updated), items: savedItems });
+});
+
+/**
+ * Delivery Challan -> Tax Invoice: raises the real bill for goods that have
+ * already left the shop. No stock moves here — the challan itself deducted
+ * it at creation — this only creates a priced invoice record (same items,
+ * same rates already noted on the challan) and, unlike the challan, adds to
+ * the customer's due. All-or-nothing, and only ever runs once per challan
+ * (converted_invoice_id blocks a second conversion).
+ */
+router.post("/:id/convert-to-invoice", (req, res) => {
+  const challan = db.prepare("SELECT * FROM invoices WHERE id = ?").get(req.params.id);
+  if (!challan) return res.status(404).json({ error: "Challan not found." });
+  if (challan.doc_type !== "challan") return res.status(400).json({ error: "Only a Delivery Challan can be converted to an Invoice." });
+  if (challan.voided) return res.status(400).json({ error: "This challan has been voided." });
+  if (challan.converted_invoice_id) return res.status(400).json({ error: "This challan has already been converted to an invoice." });
+
+  const challanItems = db.prepare("SELECT * FROM invoice_items WHERE invoice_id = ?").all(challan.id);
+  if (!challanItems.length) return res.status(400).json({ error: "This challan has no items." });
+
+  const { paymentMethod, advance, discountType, discountValue, taxTypeOverride, paperSize } = req.body;
+  const gstOnCharges = req.body.gstOnCharges !== false;
+  const gstEnabled = req.body.gstEnabled !== false;
+
+  let customer = null;
+  if (challan.customer_id) customer = db.prepare("SELECT * FROM customers WHERE id = ?").get(challan.customer_id);
+  const taxType = (taxTypeOverride === "IGST" || taxTypeOverride === "CGST_SGST")
+    ? taxTypeOverride
+    : (customer && customer.gst_type === "IGST" ? "IGST" : "CGST_SGST");
+
+  // Reuse the rate/GST% already noted on the challan's own items — computeTotals
+  // just needs each line's amount and GST rate, not the full geometry.
+  const items = challanItems.map(it => ({ amount: round2(it.qty * it.rate), gstRate: it.gst_rate }));
+  const totals = computeTotals({
+    items, discountType: discountType === "flat" ? "flat" : "pct", discountValue: Number(discountValue) || 0,
+    advance, taxType, transport: challan.transport, loading: challan.loading,
+    roundOff: false, gstOnCharges, gstEnabled
+  });
+
+  const invoiceId = uid("INV");
+  const challanNo = nextDocNo("invoice");
+
+  const insertInvoice = db.prepare(`
+    INSERT INTO invoices (id, challan_no, doc_type, date, created_at, customer_id, subtotal, discount_type, discount_value,
+      discount_amount, tax_type, cgst, sgst, igst, transport, loading, gst_on_charges, gst_enabled, round_off, total, advance, balance_due,
+      payment_method, paper_size, delivery_man, vehicle_number, delivery_address, remarks, location_id)
+    VALUES (@id, @challanNo, 'invoice', @date, @createdAt, @customerId, @subtotal, @discountType, @discountValue,
+      @discountAmount, @taxType, @cgst, @sgst, @igst, @transport, @loading, @gstOnCharges, @gstEnabled, @roundOffAmount, @total, @advance,
+      @balanceDue, @paymentMethod, @paperSize, @deliveryMan, @vehicleNumber, @deliveryAddress, @remarks, @locationId)
+  `);
+  const insertItem = db.prepare(`
+    INSERT INTO invoice_items
+      (invoice_id, product_id, size_id, name, code, brand, hsn_code, mode, length_ft, width_val, thickness_in,
+       size_label, pieces, per_piece, unit_label, qty, rate, gst_rate)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  db.transaction(() => {
+    insertInvoice.run({
+      id: invoiceId, challanNo, date: todayStr(), createdAt: Date.now(), customerId: challan.customer_id || null,
+      subtotal: totals.subtotal, discountType: discountType === "flat" ? "flat" : "pct",
+      discountValue: Number(discountValue) || 0, discountAmount: totals.discountAmount,
+      taxType, cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst,
+      transport: totals.transport, loading: totals.loading, gstOnCharges: gstOnCharges ? 1 : 0,
+      gstEnabled: gstEnabled ? 1 : 0, roundOffAmount: totals.roundOffAmount,
+      total: totals.total, advance: totals.advance, balanceDue: totals.balanceDue,
+      paymentMethod: paymentMethod || "Cash", paperSize: paperSize === "A4" ? "A4" : "A5",
+      deliveryMan: challan.delivery_man, vehicleNumber: challan.vehicle_number,
+      deliveryAddress: challan.delivery_address, remarks: `Converted from ${challan.challan_no}`,
+      locationId: challan.location_id
+    });
+    // No stock movement here — the challan already took it out of stock when
+    // it was created; this is purely raising the bill for goods already gone.
+    challanItems.forEach(it => insertItem.run(
+      invoiceId, it.product_id, it.size_id, it.name, it.code, it.brand, it.hsn_code, it.mode,
+      it.length_ft, it.width_val, it.thickness_in, it.size_label, it.pieces, it.per_piece, it.unit_label,
+      it.qty, it.rate, it.gst_rate
+    ));
+    if (challan.customer_id && totals.balanceDue > 0) {
+      db.prepare("UPDATE customers SET due = due + ? WHERE id = ?").run(totals.balanceDue, challan.customer_id);
+    }
+    db.prepare("UPDATE invoices SET converted_invoice_id = ? WHERE id = ?").run(invoiceId, challan.id);
+  })();
+
+  logAction(req, "challan.convert", `${challan.challan_no} -> ${challanNo}`);
+  res.json({
+    challan: withStatus(db.prepare("SELECT * FROM invoices WHERE id = ?").get(challan.id)),
+    invoice: withStatus(db.prepare("SELECT * FROM invoices WHERE id = ?").get(invoiceId))
+  });
 });
 
 router.post("/:id/void", requireRole("owner"), (req, res) => {

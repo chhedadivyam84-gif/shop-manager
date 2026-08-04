@@ -1112,6 +1112,13 @@ addColumn("purchases", "gst_enabled", "INTEGER NOT NULL DEFAULT 1");
 // here on gets 'challan'.
 addColumn("purchases", "doc_type", "TEXT NOT NULL DEFAULT 'purchase'");
 
+// Tracks whether a Delivery Challan has since been billed — set to the new
+// row's id when a real Tax Invoice is raised against it via the "Convert to
+// Invoice" action. NULL means still pending (goods delivered, not yet
+// billed). Only meaningful on doc_type='challan' rows; a Tax Invoice never
+// sets this on itself.
+addColumn("invoices", "converted_invoice_id", "TEXT REFERENCES invoices(id) ON DELETE SET NULL");
+
 // Where the data lives — the backup module needs the on-disk paths, and this
 // is the single place that knows them.
 db.dataDir = DATA_DIR;

@@ -1105,6 +1105,13 @@ if (bankEntryCols.includes("bank_account_id")) {
 addColumn("invoices", "gst_enabled", "INTEGER NOT NULL DEFAULT 1");
 addColumn("purchases", "gst_enabled", "INTEGER NOT NULL DEFAULT 1");
 
+// Purchase Challan — a goods-received note from a supplier with no GST or
+// pricing, mirroring how invoices.doc_type distinguishes a Tax Invoice from
+// a Delivery Challan. Defaults to 'purchase' so every existing row keeps
+// its current (priced) meaning; only a document created as a challan from
+// here on gets 'challan'.
+addColumn("purchases", "doc_type", "TEXT NOT NULL DEFAULT 'purchase'");
+
 // Where the data lives — the backup module needs the on-disk paths, and this
 // is the single place that knows them.
 db.dataDir = DATA_DIR;

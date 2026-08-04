@@ -261,18 +261,46 @@ router.get("/purchases", (req, res) => {
   res.json(rows);
 });
 
-/** Every Delivery Challan, newest first — the Challan Report. A challan
- *  carries no GST/pricing meaning, so this shows item/piece counts and any
- *  Transport/Loading charge rather than a rupee "sale" figure. */
+/** Every Challan, newest first — Delivery Challan (sales, goods going out)
+ *  and Purchase Challan (goods coming in from a supplier) merged into one
+ *  list, distinguished by `type`. Neither carries GST/pricing meaning, so
+ *  this shows item/piece counts and any Transport/Loading charge rather
+ *  than a rupee "sale" figure. */
 router.get("/challans", (req, res) => {
-  const rows = db.prepare(`
-    SELECT i.challan_no, i.date, c.name AS customer_name, i.transport, i.loading,
+  const salesRows = db.prepare(`
+    SELECT i.challan_no, i.date, c.name AS party_name, i.transport, i.loading,
       (SELECT COUNT(*) FROM invoice_items WHERE invoice_id = i.id) AS item_count,
-      (SELECT COALESCE(SUM(pieces),0) FROM invoice_items WHERE invoice_id = i.id) AS total_pieces
+      (SELECT COALESCE(SUM(pieces),0) FROM invoice_items WHERE invoice_id = i.id) AS total_pieces,
+      i.created_at
     FROM invoices i LEFT JOIN customers c ON c.id = i.customer_id
     WHERE i.voided = 0 AND i.doc_type = 'challan'
-    ORDER BY i.created_at DESC
-  `).all();
+  `).all().map(r => ({ ...r, type: "Sales" }));
+  const purchaseRows = db.prepare(`
+    SELECT p.purchase_no AS challan_no, p.date, s.name AS party_name, p.transport, p.loading,
+      (SELECT COUNT(*) FROM purchase_items WHERE purchase_id = p.id) AS item_count,
+      (SELECT COALESCE(SUM(pieces),0) FROM purchase_items WHERE purchase_id = p.id) AS total_pieces,
+      p.created_at
+    FROM purchases p LEFT JOIN suppliers s ON s.id = p.supplier_id
+    WHERE p.voided = 0 AND p.doc_type = 'challan'
+  `).all().map(r => ({ ...r, type: "Purchase" }));
+  const rows = [...salesRows, ...purchaseRows].sort((a, b) => b.created_at - a.created_at);
+  res.json(rows);
+});
+
+/** Every Order, newest first — Purchase Order (sent to a supplier) and
+ *  Sales Order (confirmed from a customer) merged into one list,
+ *  distinguished by `type`. Each keeps its own creation/edit flow and
+ *  status lifecycle; this is a read-only combined view. */
+router.get("/orders", (req, res) => {
+  const poRows = db.prepare(`
+    SELECT po.po_no AS order_no, po.date, s.name AS party_name, po.total, po.status, po.created_at
+    FROM purchase_orders po LEFT JOIN suppliers s ON s.id = po.supplier_id
+  `).all().map(r => ({ ...r, type: "Purchase" }));
+  const soRows = db.prepare(`
+    SELECT so.so_no AS order_no, so.date, c.name AS party_name, so.total, so.status, so.created_at
+    FROM sales_orders so LEFT JOIN customers c ON c.id = so.customer_id
+  `).all().map(r => ({ ...r, type: "Sales" }));
+  const rows = [...poRows, ...soRows].sort((a, b) => b.created_at - a.created_at);
   res.json(rows);
 });
 

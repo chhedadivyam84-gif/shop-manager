@@ -59,7 +59,7 @@ let state = {
   // discount, GST computed forward not backed-out, no stock cap) differs from
   // a sales line.
   pur: {
-    supplierId: null, purchaseType: "Local", paymentMethod: "Credit",
+    docType: "purchase", supplierId: null, purchaseType: "Local", paymentMethod: "Credit",
     date: "", invoiceNo: "", dueDate: "", vehicleNumber: "", transportName: "", lrNumber: "", remarks: "",
     transport: 0, loading: 0, otherCharges: 0, roundOff: true, cart: [], editingPurchaseId: null, locationId: null,
     gstEnabled: true, purchaseNo: null
@@ -428,6 +428,9 @@ async function initApp(){
   document.getElementById("inq-add-btn").addEventListener("click", ()=>openInquiry());
 
   document.getElementById("pur-back-link").addEventListener("click", (e)=>{ e.preventDefault(); switchTab("home"); });
+  document.querySelectorAll('[data-pur-doctype]').forEach(b=>{
+    b.addEventListener("click", ()=>setPurDocType(b.dataset.purDoctype));
+  });
   document.getElementById("pur-supplier-search").addEventListener("input", renderPurchaseSuppliers);
   document.getElementById("pur-search").addEventListener("input", renderPurchaseProducts);
   document.getElementById("pur-date").addEventListener("change", (e)=>{ state.pur.date = e.target.value; });
@@ -4074,6 +4077,7 @@ async function renderReport(){
   try{
     if(state.reportType==="Purchase") return renderPurchaseReport(body);
     if(state.reportType==="Challan") return renderChallanReport(body);
+    if(state.reportType==="Orders") return renderOrdersReport(body);
     if(state.reportType==="TaxInvoice") return renderTaxInvoiceReport(body);
     if(state.reportType==="PurchaseBill") return renderPurchaseBillReport(body);
     if(state.reportType==="Salesman") return renderSalesmanReport(body);
@@ -4130,14 +4134,24 @@ async function renderPurchaseReport(body){
 
 async function renderChallanReport(body){
   const rows = await api("GET","/reports/challans");
-  body.innerHTML = `<div style="font-weight:800;font-size:14px;">Challan Report</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every Delivery Challan issued, newest first</div>` +
+  body.innerHTML = `<div style="font-weight:800;font-size:14px;">Challan Report</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every Delivery Challan (sales) and Purchase Challan (goods received), newest first</div>` +
     (rows.length ? rows.map(r=>`
       <div class="list-row"><div>
-        <div class="row-title">${escapeHtml(r.challan_no)}</div>
-        <div class="row-sub">${escapeHtml(r.date)} · ${escapeHtml(r.customer_name||"Walk-in")}</div>
+        <div class="row-title">${escapeHtml(r.challan_no)} <span class="pill ${r.type==="Sales"?"ok":"warn"}" style="font-size:9.5px;">${r.type}</span></div>
+        <div class="row-sub">${escapeHtml(r.date)} · ${escapeHtml(r.party_name||(r.type==="Sales"?"Walk-in":"Unknown Supplier"))}</div>
         <div class="row-sub">${r.item_count} item${r.item_count!==1?"s":""} · ${r.total_pieces} pcs${(r.transport||r.loading)?" · Transport+Loading "+fmt((r.transport||0)+(r.loading||0)):""}</div>
       </div></div>
-    `).join("") : `<div class="empty-hint">No delivery challans issued yet.</div>`);
+    `).join("") : `<div class="empty-hint">No challans recorded yet.</div>`);
+}
+async function renderOrdersReport(body){
+  const rows = await api("GET","/reports/orders");
+  body.innerHTML = `<div style="font-weight:800;font-size:14px;">Orders Report</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every Purchase Order and Sales Order, newest first</div>` +
+    (rows.length ? rows.map(r=>`
+      <div class="list-row"><div>
+        <div class="row-title">${escapeHtml(r.order_no)} <span class="pill ${r.type==="Sales"?"ok":"warn"}" style="font-size:9.5px;">${r.type}</span></div>
+        <div class="row-sub">${escapeHtml(r.date)} · ${escapeHtml(r.party_name||(r.type==="Sales"?"Walk-in":"Unknown Supplier"))}</div>
+      </div><div class="row-right"><div class="row-title">${fmt(r.total)}</div><span class="pill ${(r.type==="Sales"?SO_STATUS_PILL:PO_STATUS_PILL)[r.status]||''}">${escapeHtml(r.status)}</span></div></div>
+    `).join("") : `<div class="empty-hint">No orders recorded yet.</div>`);
 }
 async function renderTaxInvoiceReport(body){
   const rows = await api("GET","/reports/tax-invoices");
@@ -5176,11 +5190,7 @@ async function renderPurchaseScreen(){
   renderPurchaseSupplierInfo();
   renderPurchaseProducts();
   renderPurchaseCart();
-  renderPurchaseDueDateVisibility();
-  renderPurchaseTotals();
-  await renderPurchaseNumber();
-  const saveBtn = document.getElementById("pur-save-btn");
-  if(saveBtn) saveBtn.textContent = state.pur.editingPurchaseId ? "Update Purchase & Update Stock" : "Save Purchase & Update Stock";
+  setPurDocType(state.pur.docType);
 }
 /**
  * Shows the number THIS purchase will get before it's saved — mirrors
@@ -5191,13 +5201,15 @@ async function renderPurchaseScreen(){
 async function renderPurchaseNumber(){
   const el = document.getElementById("pur-number-display");
   if(!el) return;
+  const label = document.getElementById("pur-number-label");
+  if(label) label.textContent = state.pur.docType === "challan" ? "Challan No." : "Purchase No.";
   if(state.pur.editingPurchaseId && state.pur.purchaseNo){
     el.textContent = state.pur.purchaseNo;
     return;
   }
   el.textContent = "…";
   try{
-    const { purchaseNo } = await api("GET", "/purchases/next-number");
+    const { purchaseNo } = await api("GET", `/purchases/next-number?docType=${state.pur.docType}`);
     state.pur.purchaseNo = purchaseNo;
     el.textContent = purchaseNo;
   }catch{
@@ -5233,7 +5245,7 @@ function renderPurchaseEditBanner(){
   document.getElementById("cancel-purchase-edit-link").addEventListener("click", (e)=>{
     e.preventDefault();
     state.pur = {
-      supplierId: null, purchaseType: "Local", paymentMethod: "Credit",
+      docType: "purchase", supplierId: null, purchaseType: "Local", paymentMethod: "Credit",
       date: "", invoiceNo: "", dueDate: "", vehicleNumber: "", transportName: "", lrNumber: "", remarks: "",
       transport: 0, loading: 0, otherCharges: 0, roundOff: true, cart: [], editingPurchaseId: null, locationId: null,
       gstEnabled: true, purchaseNo: null
@@ -5245,6 +5257,7 @@ function renderPurchaseEditBanner(){
     document.querySelectorAll('[data-pur-type]').forEach(x=>x.classList.toggle("selected", x.dataset.purType==="Local"));
     document.querySelectorAll('[data-pur-pay]').forEach(x=>x.classList.toggle("selected", x.dataset.purPay==="Credit"));
     setPurGstEnabled(true);
+    setPurDocType("purchase");
     renderPurchaseScreen();
     toast("Edit cancelled.");
   });
@@ -5478,7 +5491,39 @@ function renderPurchaseLineCalc(idx){
 }
 function renderPurchaseDueDateVisibility(){
   const row = document.getElementById("pur-due-date-row");
-  if(row) row.style.display = state.pur.paymentMethod === "Credit" ? "block" : "none";
+  if(row) row.style.display = (state.pur.paymentMethod === "Credit" && state.pur.docType !== "challan") ? "block" : "none";
+}
+function isPurChallanMode(){ return state.pur.docType === "challan"; }
+/**
+ * Switch between Purchase Entry and Purchase Challan — mirrors setDocType()
+ * on Billing. A challan is a goods-received note with no GST/pricing/due
+ * impact (see server/routes/purchases.js), so this hides the GST/Purchase
+ * Type/Payment Type/round-off controls in one move; the item list — sizes
+ * and quantities — stays exactly as-is, since a challan still needs those.
+ */
+function setPurDocType(type){
+  state.pur.docType = type === "challan" ? "challan" : "purchase";
+  const challan = isPurChallanMode();
+  document.querySelectorAll('[data-pur-doctype]').forEach(b=>
+    b.classList.toggle("selected", b.dataset.purDoctype === state.pur.docType));
+  const pricing = document.getElementById("pur-pricing");
+  if(pricing) pricing.style.display = challan ? "none" : "";
+  const payment = document.getElementById("pur-payment");
+  if(payment) payment.style.display = challan ? "none" : "";
+  const roundoffRow = document.getElementById("pur-roundoff-row");
+  if(roundoffRow) roundoffRow.style.display = challan ? "none" : "flex";
+  // Which document TYPE this is can't change once saved — number series and
+  // stock/due behaviour are fixed at creation — so lock the toggle while editing.
+  const toggleWrap = document.getElementById("pur-doctype-toggle");
+  if(toggleWrap) toggleWrap.style.pointerEvents = state.pur.editingPurchaseId ? "none" : "";
+  if(toggleWrap) toggleWrap.style.opacity = state.pur.editingPurchaseId ? "0.55" : "";
+  const saveBtn = document.getElementById("pur-save-btn");
+  if(saveBtn) saveBtn.textContent = state.pur.editingPurchaseId
+    ? (challan ? "Update Purchase Challan" : "Update Purchase & Update Stock")
+    : (challan ? "Save Purchase Challan & Update Stock" : "Save Purchase & Update Stock");
+  renderPurchaseDueDateVisibility();
+  renderPurchaseTotals();
+  renderPurchaseNumber();
 }
 /**
  * "GST Purchase" vs "Non-GST Purchase" — mirrors setGstEnabled() on the
@@ -5496,16 +5541,22 @@ function setPurGstEnabled(on){
 /* Mirrors computeTotals() in server/routes/purchases.js exactly, including
    the order of rounding — the preview must match what the server will store. */
 function computePurchaseTotals(){
+  const transport = round2(Math.max(0, state.pur.transport||0));
+  const loading = round2(Math.max(0, state.pur.loading||0));
+  const otherCharges = round2(Math.max(0, state.pur.otherCharges||0));
+  // A Purchase Challan is a goods-received note: no GST, no discount, no
+  // supplier due — only Transport/Loading/Other Charges are real, exactly
+  // like a Delivery Challan on the sales side (see server/routes/purchases.js).
+  if(isPurChallanMode()){
+    const total = round2(transport + loading + otherCharges);
+    return {subtotal:0, discountAmount:0, cgst:0, sgst:0, igst:0, transport, loading, otherCharges, roundOffAmount:0, total};
+  }
   const lines = state.pur.cart.map(purchaseLineCalc);
   const subtotal = round2(lines.reduce((s,r)=>s+r.amount,0));
   const discountAmount = round2(lines.reduce((s,r)=>s+r.discountAmount,0));
   // "Non-GST Purchase" (state.pur.gstEnabled === false) skips tax entirely —
   // mirrors server/routes/purchases.js's computeTotals().
   const goodsTax = state.pur.gstEnabled ? round2(lines.reduce((s,r)=>s+r.gstAmt,0)) : 0;
-
-  const transport = round2(Math.max(0, state.pur.transport||0));
-  const loading = round2(Math.max(0, state.pur.loading||0));
-  const otherCharges = round2(Math.max(0, state.pur.otherCharges||0));
 
   let cgst=0, sgst=0, igst=0;
   if(state.pur.gstEnabled){
@@ -5529,7 +5580,7 @@ function renderPurchaseTotals(){
     ${t.transport>0 ? row("Transport", fmtPaise(t.transport)) : ""}
     ${t.loading>0 ? row("Loading / Unloading", fmtPaise(t.loading)) : ""}
     ${t.otherCharges>0 ? row("Other Charges", fmtPaise(t.otherCharges)) : ""}
-    ${!state.pur.gstEnabled ? "" : state.pur.purchaseType==="Interstate"
+    ${(isPurChallanMode() || !state.pur.gstEnabled) ? "" : state.pur.purchaseType==="Interstate"
       ? row("IGST", fmtPaise(t.igst))
       : row("CGST", fmtPaise(t.cgst)) + row("SGST", fmtPaise(t.sgst))}
     ${t.roundOffAmount!==0 ? row("Round off", (t.roundOffAmount>0?"+":"")+fmtPaise(t.roundOffAmount)) : ""}
@@ -5551,6 +5602,7 @@ async function savePurchase(){
   btn.disabled = true;
   try{
     const payload = {
+      docType: state.pur.docType,
       supplierId: state.pur.supplierId,
       supplierInvoiceNo: state.pur.invoiceNo,
       date: document.getElementById("pur-date").value || state.pur.date,
@@ -5581,7 +5633,7 @@ async function savePurchase(){
       ? await api("PUT", `/purchases/${editingId}`, payload)
       : await api("POST", "/purchases", payload);
     state.pur = {
-      supplierId: null, purchaseType: "Local", paymentMethod: "Credit",
+      docType: "purchase", supplierId: null, purchaseType: "Local", paymentMethod: "Credit",
       date: "", invoiceNo: "", dueDate: "", vehicleNumber: "", transportName: "", lrNumber: "", remarks: "",
       transport: 0, loading: 0, otherCharges: 0, roundOff: true, cart: [], editingPurchaseId: null, locationId: null,
       gstEnabled: true, purchaseNo: null
@@ -5593,10 +5645,11 @@ async function savePurchase(){
     document.querySelectorAll('[data-pur-type]').forEach(x=>x.classList.toggle("selected", x.dataset.purType==="Local"));
     document.querySelectorAll('[data-pur-pay]').forEach(x=>x.classList.toggle("selected", x.dataset.purPay==="Credit"));
     setPurGstEnabled(true);
+    setPurDocType("purchase");
     renderPurchaseEditBanner();
     await Promise.all([loadProducts(), loadSuppliers()]);
     await renderHome();
-    toast(`Purchase ${saved.purchase_no} ${editingId?"updated":"saved"} — Grand Total ${fmt(saved.total)}`, "ok");
+    toast(`${saved.doc_type==="challan"?"Purchase Challan":"Purchase"} ${saved.purchase_no} ${editingId?"updated":"saved"}${saved.doc_type==="challan"?"":" — Grand Total "+fmt(saved.total)}`, "ok");
     switchTab("home");
   }catch(e){
     toast(e.message);
@@ -5611,21 +5664,30 @@ async function savePurchase(){
 async function openPurchaseDetail(purchaseId){
   const p = await api("GET", `/purchases/${purchaseId}`);
   const sheet = document.getElementById("sheet-purchase-detail");
+  const challan = p.doc_type === "challan";
   const lineTotal = it => {
+    if(challan) return 0;
     const taxable = round2(it.qty*it.rate - it.discount_amount);
     return round2(taxable + taxable*(it.gst_rate/100));
   };
   sheet.innerHTML = `
     <div class="sheet-handle"></div>
     <button class="sheet-close" data-sheetclose>✕</button>
-    <div class="sheet-title">${escapeHtml(p.purchase_no)} ${p.voided?'<span class="pill danger">Voided</span>':`<span class="pill ${p.status==='Completed'?'ok':p.status==='Pending'?'warn':''}">${escapeHtml(p.status)}</span>`}</div>
-    <div class="muted" style="font-size:12px;margin-bottom:10px;">${p.date} · ${escapeHtml(p.supplier_invoice_no||"(no invoice no.)")} · ${escapeHtml(p.purchase_type)} · ${escapeHtml(p.payment_method)}</div>
+    <div class="sheet-title">${escapeHtml(p.purchase_no)} ${challan?'<span class="pill">Purchase Challan</span>':''} ${p.voided?'<span class="pill danger">Voided</span>':`<span class="pill ${p.status==='Completed'?'ok':p.status==='Pending'?'warn':''}">${escapeHtml(p.status)}</span>`}</div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px;">${p.date} · ${escapeHtml(p.supplier_invoice_no||"(no invoice no.)")}${challan?"":" · "+escapeHtml(p.purchase_type)+" · "+escapeHtml(p.payment_method)}</div>
     <div class="card">${p.items.map(it=>`
       <div class="list-row">
-        <div><div class="row-title">${escapeHtml(it.name)}</div><div class="row-sub">${escapeHtml(it.size_label||"")} · ${it.pieces} ${escapeHtml(it.unit_label||"")} × ${fmt(it.rate)}${it.discount_amount>0?" · disc. "+fmt(it.discount_amount):""}</div></div>
-        <div class="row-right row-title">${fmt(lineTotal(it))}</div>
+        <div><div class="row-title">${escapeHtml(it.name)}</div><div class="row-sub">${escapeHtml(it.size_label||"")} · ${it.pieces} ${escapeHtml(it.unit_label||"")}${challan?"":" × "+fmt(it.rate)+(it.discount_amount>0?" · disc. "+fmt(it.discount_amount):"")}</div></div>
+        ${challan?"":`<div class="row-right row-title">${fmt(lineTotal(it))}</div>`}
       </div>`).join("")}
     </div>
+    ${challan ? `
+    <div class="card" style="margin-top:8px;">
+      ${p.transport>0?`<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Transport</span><span>${fmt(p.transport)}</span></div>`:""}
+      ${p.loading>0?`<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Loading</span><span>${fmt(p.loading)}</span></div>`:""}
+      ${p.other_charges>0?`<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Other Charges</span><span>${fmt(p.other_charges)}</span></div>`:""}
+      <div class="inv-flex" style="font-weight:800;border-top:1px solid var(--border);padding-top:6px;"><span>Total</span><span>${fmt(p.total)}</span></div>
+    </div>` : `
     <div class="card" style="margin-top:8px;">
       <div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Subtotal</span><span>${fmt(p.subtotal)}</span></div>
       ${p.discount_amount>0?`<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Discount</span><span>-${fmt(p.discount_amount)}</span></div>`:""}
@@ -5636,7 +5698,7 @@ async function openPurchaseDetail(purchaseId){
         ? `<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">IGST</span><span>${fmt(p.igst)}</span></div>`
         : `<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">CGST</span><span>${fmt(p.cgst)}</span></div><div class="inv-flex" style="margin-bottom:4px;"><span class="muted">SGST</span><span>${fmt(p.sgst)}</span></div>`}
       <div class="inv-flex" style="font-weight:800;border-top:1px solid var(--border);padding-top:6px;"><span>Total</span><span>${fmt(p.total)}</span></div>
-    </div>
+    </div>`}
     <div class="action-row" style="margin-top:14px;">
       ${!p.voided?'<button class="btn btn-outline" id="edit-purchase-btn">✎ Edit</button>':''}
       ${!p.voided?'<button class="btn btn-outline" id="return-purchase-btn">Return Items</button>':''}
@@ -5699,6 +5761,7 @@ async function editExistingPurchase(p){
       discountType: it.discount_amount>0 ? "flat" : "pct", discountValue: it.discount_amount>0 ? it.discount_amount : 0
     };
   });
+  state.pur.docType = p.doc_type === "challan" ? "challan" : "purchase";
   state.pur.supplierId = p.supplier_id;
   state.pur.purchaseType = p.purchase_type;
   state.pur.paymentMethod = p.payment_method;
@@ -5736,6 +5799,7 @@ async function editExistingPurchase(p){
   document.querySelectorAll('[data-pur-type]').forEach(x=>x.classList.toggle("selected", x.dataset.purType===state.pur.purchaseType));
   document.querySelectorAll('[data-pur-pay]').forEach(x=>x.classList.toggle("selected", x.dataset.purPay===state.pur.paymentMethod));
   setPurGstEnabled(state.pur.gstEnabled);
+  setPurDocType(state.pur.docType);
   renderPurchaseDueDateVisibility();
   renderPurchaseEditBanner();
   toast(`Editing ${p.purchase_no} — make your changes, then save.`, "ok");

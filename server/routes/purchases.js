@@ -38,6 +38,18 @@ function nextPurchaseNo() {
   `).run("purchase-no", next);
   return `PU${String(next).padStart(7, "0")}`;
 }
+// Purchase Challan runs on its OWN number series ("PC0000001…"), same reason
+// Tax Invoice and Delivery Challan don't share one — see invoices.js's
+// nextDocNo() comment.
+function nextPurchaseChallanNo() {
+  const row = db.prepare("SELECT value FROM counters WHERE name = ?").get("purchase-challan-no");
+  const next = row ? row.value + 1 : 1;
+  db.prepare(`
+    INSERT INTO counters (name, value) VALUES (?, ?)
+    ON CONFLICT(name) DO UPDATE SET value = excluded.value
+  `).run("purchase-challan-no", next);
+  return `PC${String(next).padStart(7, "0")}`;
+}
 
 /**
  * Mirrors invoices.js's computeTotals, but discount is PER LINE here (the
@@ -115,9 +127,12 @@ router.get("/", (req, res) => {
  * quotations.js's /next-number), so an abandoned form never burns a number.
  */
 router.get("/next-number", (req, res) => {
-  const row = db.prepare("SELECT value FROM counters WHERE name = ?").get("purchase-no");
+  const isChallan = req.query.docType === "challan";
+  const counterName = isChallan ? "purchase-challan-no" : "purchase-no";
+  const prefix = isChallan ? "PC" : "PU";
+  const row = db.prepare("SELECT value FROM counters WHERE name = ?").get(counterName);
   const next = row ? row.value + 1 : 1;
-  res.json({ purchaseNo: `PU${String(next).padStart(7, "0")}` });
+  res.json({ purchaseNo: `${prefix}${String(next).padStart(7, "0")}` });
 });
 
 router.get("/:id", (req, res) => {
@@ -135,6 +150,7 @@ router.post("/", (req, res) => {
     items: rawItems
   } = req.body;
   const gstEnabled = req.body.gstEnabled !== false;
+  const isChallan = req.body.docType === "challan";
 
   if (!Array.isArray(rawItems) || !rawItems.length) {
     return res.status(400).json({ error: "Add at least one product to the purchase." });
@@ -196,18 +212,33 @@ router.post("/", (req, res) => {
     });
   }
 
-  const totals = computeTotals({ items, taxType, transport, loading, otherCharges, roundOff, gstEnabled });
+  // A Purchase Challan is a goods-received note, never a priced bill: no
+  // GST, no discount, no supplier due — regardless of anything the client
+  // sent for those fields. Transport/Loading/Other Charges ARE kept though,
+  // same real-charges-survive-the-challan rule invoices.js uses for a
+  // Delivery Challan.
+  const challanTransport = round2(Math.max(0, Number(transport) || 0));
+  const challanLoading = round2(Math.max(0, Number(loading) || 0));
+  const challanOther = round2(Math.max(0, Number(otherCharges) || 0));
+  const challanTotals = {
+    subtotal: 0, discountAmount: 0, cgst: 0, sgst: 0, igst: 0,
+    transport: challanTransport, loading: challanLoading, otherCharges: challanOther,
+    roundOffAmount: 0, total: round2(challanTransport + challanLoading + challanOther)
+  };
+  const totals = isChallan
+    ? challanTotals
+    : computeTotals({ items, taxType, transport, loading, otherCharges, roundOff, gstEnabled });
   const id = uid("PUR");
-  const purchaseNo = nextPurchaseNo();
+  const purchaseNo = isChallan ? nextPurchaseChallanNo() : nextPurchaseNo();
   const purchaseDate = (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) ? date : todayStr();
   const targetLocationId = resolveLocationId(locationId);
 
   const insertPurchase = db.prepare(`
-    INSERT INTO purchases (id, purchase_no, date, created_at, supplier_id, supplier_invoice_no,
+    INSERT INTO purchases (id, purchase_no, doc_type, date, created_at, supplier_id, supplier_invoice_no,
       purchase_type, tax_type, subtotal, discount_amount, cgst, sgst, igst, transport, loading,
       other_charges, round_off, total, payment_method, due_date, vehicle_number, transport_name,
       lr_number, remarks, voided, location_id, gst_enabled)
-    VALUES (@id, @purchaseNo, @date, @createdAt, @supplierId, @supplierInvoiceNo,
+    VALUES (@id, @purchaseNo, @docType, @date, @createdAt, @supplierId, @supplierInvoiceNo,
       @purchaseType, @taxType, @subtotal, @discountAmount, @cgst, @sgst, @igst, @transport, @loading,
       @otherCharges, @roundOffAmount, @total, @paymentMethod, @dueDate, @vehicleNumber, @transportName,
       @lrNumber, @remarks, 0, @locationId, @gstEnabled)
@@ -222,13 +253,15 @@ router.post("/", (req, res) => {
 
   db.transaction(() => {
     insertPurchase.run({
-      id, purchaseNo, date: purchaseDate, createdAt: Date.now(), supplierId,
+      id, purchaseNo, docType: isChallan ? "challan" : "purchase",
+      date: purchaseDate, createdAt: Date.now(), supplierId,
       supplierInvoiceNo: trimmedSupplierInvoiceNo, purchaseType: purchaseTypeVal, taxType,
       subtotal: totals.subtotal, discountAmount: totals.discountAmount,
       cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst,
       transport: totals.transport, loading: totals.loading, otherCharges: totals.otherCharges,
       roundOffAmount: totals.roundOffAmount, total: totals.total,
-      paymentMethod: paymentMethod || "Credit", dueDate: (dueDate || "").trim(),
+      // A challan has no tender; store a dash rather than a misleading "Credit".
+      paymentMethod: isChallan ? "—" : (paymentMethod || "Credit"), dueDate: (dueDate || "").trim(),
       vehicleNumber: (vehicleNumber || "").trim(), transportName: (transportName || "").trim(),
       lrNumber: (lrNumber || "").trim(), remarks: (remarks || "").trim(), locationId: targetLocationId,
       gstEnabled: gstEnabled ? 1 : 0
@@ -248,10 +281,11 @@ router.post("/", (req, res) => {
 
     // Only Credit leaves a payable balance — Cash/UPI/Bank are settled at the
     // moment of purchase, same as how a Sales invoice's payment method works.
-    if ((paymentMethod || "Credit") === "Credit") bumpDue.run(totals.total, supplierId);
+    // A challan never carries a due regardless of payment method.
+    if (!isChallan && (paymentMethod || "Credit") === "Credit") bumpDue.run(totals.total, supplierId);
   })();
 
-  logAction(req, "purchase.create", `${purchaseNo}: ${supplier.name} — ${totals.total}`);
+  logAction(req, isChallan ? "purchase_challan.create" : "purchase.create", `${purchaseNo}: ${supplier.name} — ${totals.total}`);
   const saved = db.prepare("SELECT * FROM purchases WHERE id = ?").get(id);
   const savedItems = db.prepare("SELECT * FROM purchase_items WHERE purchase_id = ?").all(id);
   res.status(201).json({ ...withStatus(saved), items: savedItems });
@@ -269,6 +303,9 @@ router.put("/:id", (req, res) => {
   const p = db.prepare("SELECT * FROM purchases WHERE id = ?").get(req.params.id);
   if (!p) return res.status(404).json({ error: "Purchase not found." });
   if (p.voided) return res.status(400).json({ error: "Cannot edit a voided purchase." });
+  // doc_type is fixed at creation — editing never changes which document
+  // this is, same rule invoices.js uses for Tax Invoice vs Delivery Challan.
+  const isChallan = p.doc_type === "challan";
 
   const {
     supplierId, supplierInvoiceNo, date, purchaseType, paymentMethod, dueDate,
@@ -331,8 +368,9 @@ router.put("/:id", (req, res) => {
       touchedProducts.add(it.product_id);
     });
 
-    // 2. Reverse the OLD supplier's due (only Credit purchases carried one).
-    if (p.payment_method === "Credit") reduceDue.run(p.total, p.supplier_id);
+    // 2. Reverse the OLD supplier's due (only Credit purchases carried one;
+    //    a challan never did).
+    if (!isChallan && p.payment_method === "Credit") reduceDue.run(p.total, p.supplier_id);
 
     // 3. Build + validate the NEW items — identical logic to POST / above.
     const piecesBySize = {};
@@ -368,7 +406,17 @@ router.put("/:id", (req, res) => {
       });
     }
 
-    const totals = computeTotals({ items, taxType, transport, loading, otherCharges, roundOff, gstEnabled });
+    const challanTransport = round2(Math.max(0, Number(transport) || 0));
+    const challanLoading = round2(Math.max(0, Number(loading) || 0));
+    const challanOther = round2(Math.max(0, Number(otherCharges) || 0));
+    const challanTotals = {
+      subtotal: 0, discountAmount: 0, cgst: 0, sgst: 0, igst: 0,
+      transport: challanTransport, loading: challanLoading, otherCharges: challanOther,
+      roundOffAmount: 0, total: round2(challanTransport + challanLoading + challanOther)
+    };
+    const totals = isChallan
+      ? challanTotals
+      : computeTotals({ items, taxType, transport, loading, otherCharges, roundOff, gstEnabled });
     const purchaseDate = (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) ? date : p.date;
 
     // 4. Replace the line items.
@@ -402,14 +450,14 @@ router.put("/:id", (req, res) => {
       purchaseType: purchaseTypeVal, taxType, subtotal: totals.subtotal, discountAmount: totals.discountAmount,
       cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst, transport: totals.transport, loading: totals.loading,
       otherCharges: totals.otherCharges, roundOffAmount: totals.roundOffAmount, total: totals.total,
-      paymentMethod: paymentMethod || "Credit", dueDate: (dueDate || "").trim(),
+      paymentMethod: isChallan ? "—" : (paymentMethod || "Credit"), dueDate: (dueDate || "").trim(),
       vehicleNumber: (vehicleNumber || "").trim(), transportName: (transportName || "").trim(),
       lrNumber: (lrNumber || "").trim(), remarks: (remarks || "").trim(), locationId: newLocationId,
       gstEnabled: gstEnabled ? 1 : 0
     });
 
-    // 7. Bump the (possibly new) supplier's due, only if Credit.
-    if ((paymentMethod || "Credit") === "Credit") bumpDue.run(totals.total, supplierId);
+    // 7. Bump the (possibly new) supplier's due, only if Credit — never for a challan.
+    if (!isChallan && (paymentMethod || "Credit") === "Credit") bumpDue.run(totals.total, supplierId);
   });
 
   try {
@@ -419,7 +467,7 @@ router.put("/:id", (req, res) => {
     throw err;
   }
 
-  logAction(req, "purchase.edit", `${p.purchase_no}`);
+  logAction(req, isChallan ? "purchase_challan.edit" : "purchase.edit", `${p.purchase_no}`);
   const updated = db.prepare("SELECT * FROM purchases WHERE id = ?").get(p.id);
   const savedItems = db.prepare("SELECT * FROM purchase_items WHERE purchase_id = ?").all(p.id);
   res.json({ ...withStatus(updated), items: savedItems });

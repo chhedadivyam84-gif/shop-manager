@@ -178,7 +178,7 @@ router.get("/:id", (req, res) => {
 router.post("/", (req, res) => {
   const { customerId, items: rawItems, discountType, discountValue, advance,
           paymentMethod, paperSize, transport, loading, roundOff, deliveryMan,
-          vehicleNumber, deliveryAddress, remarks, taxType: taxTypeOverride, locationId } = req.body;
+          vehicleNumber, deliveryAddress, remarks, taxType: taxTypeOverride, locationId, date } = req.body;
   const docType = req.body.docType === "challan" ? "challan" : "invoice";
   const isChallan = docType === "challan";
   const location = resolveLocationId(locationId);
@@ -280,7 +280,10 @@ router.post("/", (req, res) => {
     : computeTotals({ items, discountType, discountValue, advance, taxType, transport, loading, roundOff, gstOnCharges, gstEnabled });
   const id = uid(isChallan ? "DC" : "INV");
   const challanNo = nextDocNo(docType);
-  const date = todayStr();
+  // Same optional-backdate pattern as purchases.js/quotations.js — falls
+  // back to today whenever the client doesn't send a valid YYYY-MM-DD date,
+  // so every existing caller (which never sends one) keeps today's date.
+  const invoiceDate = (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) ? date : todayStr();
 
   const insertInvoice = db.prepare(`
     INSERT INTO invoices (id, challan_no, doc_type, date, created_at, customer_id, subtotal, discount_type, discount_value,
@@ -300,7 +303,7 @@ router.post("/", (req, res) => {
 
   db.transaction(() => {
     insertInvoice.run({
-      id, challanNo, docType, date, createdAt: Date.now(), customerId: customerId || null,
+      id, challanNo, docType, date: invoiceDate, createdAt: Date.now(), customerId: customerId || null,
       subtotal: totals.subtotal, discountType: discountType === "flat" ? "flat" : "pct",
       discountValue: isChallan ? 0 : (Number(discountValue) || 0), discountAmount: totals.discountAmount,
       taxType, cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst,

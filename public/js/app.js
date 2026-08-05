@@ -364,6 +364,7 @@ async function initApp(){
     renderBrandFilter();
     renderInventoryList();
   });
+  document.getElementById("brand-filter-search").addEventListener("input", renderBrandFilter);
   document.getElementById("inv-add-btn").addEventListener("click", ()=>openAddProduct("inventory"));
   document.getElementById("inv-print-btn").addEventListener("click", printInventoryStock);
   document.querySelectorAll('[data-inv-stock-filter]').forEach(b=>{
@@ -1411,7 +1412,13 @@ async function completeSale(){
    INVENTORY
    ============================================================ */
 function renderBrandFilter(){
-  const brands = ["All", ...new Set(state.products.map(p=>p.brand).filter(Boolean))];
+  const allBrands = ["All", ...new Set(state.products.map(p=>p.brand).filter(Boolean))];
+  // With hundreds of brands, scrolling the chip row to find one is
+  // impractical — this box filters WHICH CHIPS show, separate from the
+  // main product search above it. "All" always stays visible so clearing
+  // the filter is always one tap away regardless of what's typed here.
+  const q = (document.getElementById("brand-filter-search").value||"").toLowerCase();
+  const brands = q ? allBrands.filter(b=>b==="All" || b.toLowerCase().includes(q)) : allBrands;
   document.getElementById("brand-filter").innerHTML = brands.map(b=>`
     <button class="chip ${state.invBrandFilter===b?'selected':''}" data-brand="${escapeHtml(b)}">${escapeHtml(b)}</button>
   `).join("");

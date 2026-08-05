@@ -354,7 +354,16 @@ async function initApp(){
   document.getElementById("complete-sale-btn").addEventListener("click", completeSale);
   document.getElementById("preview-invoice-btn").addEventListener("click", ()=>openInvoicePreview(null));
 
-  document.getElementById("inv-search").addEventListener("input", renderInventoryList);
+  document.getElementById("inv-search").addEventListener("input", ()=>{
+    // A brand chip left selected from earlier browsing silently ANDs with
+    // the new search text — e.g. searching "VOX" while "Stone Ply" is still
+    // selected shows 0 results even though VOX products exist, with nothing
+    // on screen explaining why. Typing a search resets the brand filter so
+    // results always reflect what was actually typed.
+    state.invBrandFilter = "All";
+    renderBrandFilter();
+    renderInventoryList();
+  });
   document.getElementById("inv-add-btn").addEventListener("click", ()=>openAddProduct("inventory"));
   document.getElementById("inv-print-btn").addEventListener("click", printInventoryStock);
   document.querySelectorAll('[data-inv-stock-filter]').forEach(b=>{
@@ -1435,7 +1444,7 @@ function filteredInventoryList(){
   const q = (document.getElementById("inv-search").value||"").toLowerCase();
   let list = state.products;
   if(state.invBrandFilter!=="All") list = list.filter(p=>p.brand===state.invBrandFilter);
-  if(q) list = list.filter(p=>p.name.toLowerCase().includes(q) || (p.sku||"").toLowerCase().includes(q));
+  if(q) list = list.filter(p=>p.name.toLowerCase().includes(q) || (p.sku||"").toLowerCase().includes(q) || (p.brand||"").toLowerCase().includes(q));
   // Low/Out filters read the CURRENT location tab's quantity specifically —
   // a product low in Shop but fine in Warehouse only shows under the Shop tab.
   if(state.invStockFilter==="low") list = list.filter(p=>{ const s=productLocationStock(p,state.invLocationCode); return s>0 && s<5; });

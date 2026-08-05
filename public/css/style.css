@@ -405,6 +405,9 @@ table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #178a6e;color:#0
   #fs-invoice{display:block !important;position:static !important;background:#fff !important;max-width:none !important;margin:0 !important;}
   #fs-invoice > *{display:none !important;}
   #fs-invoice > .invoice-page{display:flex !important;}
+  #fs-stock-report{display:block !important;position:static !important;background:#fff !important;max-width:none !important;margin:0 !important;}
+  #fs-stock-report > *{display:none !important;}
+  #fs-stock-report > #stock-report-content{display:block !important;}
   .invoice-page{
     position:static;margin:0 !important;
     border:1px solid #000;border-radius:0 !important;box-shadow:none !important;

@@ -721,6 +721,20 @@
   <div class="sheet" id="sheet-transfer-stock"></div>
   <div class="sheet" id="sheet-factory-reset"></div>
 
+  <!-- ============ FULLSCREEN: STOCK REPORT PRINT ============
+       In-page print (not window.open) — a PWA installed to the home screen
+       often has nowhere for a new tab to go, so window.open("", "_blank")
+       could replace the app itself and leave the user stranded on a blank
+       page or bounced back to Home after printing. Rendering inside the
+       app's own DOM and calling window.print() directly avoids that. -->
+  <div class="fullscreen" id="fs-stock-report">
+    <div class="fs-bar">
+      <div class="fs-title">Stock Report</div>
+      <button class="fs-close" data-close-fs="fs-stock-report">&#10005;</button>
+    </div>
+    <div id="stock-report-content" style="background:#fff;color:#000;padding:16px;"></div>
+  </div>
+
   <!-- ============ FULLSCREEN: INVOICE PREVIEW ============ -->
   <div class="fullscreen" id="fs-invoice">
     <div class="fs-bar">

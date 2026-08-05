@@ -1481,23 +1481,22 @@ function printInventoryStock(){
     return `<tr><td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.brand||"")}</td><td>${escapeHtml(p.unit||"")}</td>
       <td class="num">${locStock}</td><td class="num">${p.stock}</td><td class="num">${priceLabel}</td></tr>`;
   }).join("");
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Stock Report</title>
+  document.getElementById("stock-report-content").innerHTML = `
     <style>
-      body{font-family:Arial,Helvetica,sans-serif;padding:20px;color:#000;}
-      h1{font-size:16px;margin:0 0 2px;} .sub{font-size:11px;color:#555;margin-bottom:14px;}
-      table{width:100%;border-collapse:collapse;font-size:11px;}
-      th,td{border:1px solid #000;padding:4px 6px;text-align:left;}
-      th{background:#eee;} .num{text-align:right;}
-    </style></head><body>
+      #stock-report-content{font-family:Arial,Helvetica,sans-serif;}
+      #stock-report-content h1{font-size:16px;margin:0 0 2px;}
+      #stock-report-content .sub{font-size:11px;color:#555;margin-bottom:14px;}
+      #stock-report-content table{width:100%;border-collapse:collapse;font-size:11px;}
+      #stock-report-content th,#stock-report-content td{border:1px solid #000;padding:4px 6px;text-align:left;}
+      #stock-report-content th{background:#eee;} #stock-report-content .num{text-align:right;}
+    </style>
     <h1>Stock Report</h1>
     <div class="sub">${locName ? locName+" · " : ""}${new Date().toLocaleDateString()} · ${list.length} product${list.length!==1?"s":""}</div>
     <table><thead><tr><th>Product</th><th>Brand</th><th>Unit</th><th class="num">${locName||"Location"} Stock</th><th class="num">Total Stock</th><th class="num">Price</th></tr></thead>
     <tbody>${rows || `<tr><td colspan="6">No products found.</td></tr>`}</tbody></table>
-    <script>window.onload=()=>window.print();</script>
-    </body></html>`;
-  const w = window.open("", "_blank");
-  w.document.write(html);
-  w.document.close();
+  `;
+  document.getElementById("fs-stock-report").classList.add("show");
+  window.print();
 }
 
 /* ============================================================

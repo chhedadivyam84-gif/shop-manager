@@ -275,6 +275,12 @@
           <button class="chip" data-report="Transfers">Transfers</button>
           <button class="chip" data-report="DailyMovement">Daily Movement</button>
         </div>
+        <!-- Only meaningful on the Challan report; shown/hidden by renderReport(). -->
+        <div class="chip-row" style="margin-top:10px;display:none;" id="challan-ack-filter">
+          <button class="chip selected" data-ack-filter="all">All Challans</button>
+          <button class="chip" data-ack-filter="pending">🟡 Pending Acknowledgement</button>
+          <button class="chip" data-ack-filter="received">🟢 Received Challans</button>
+        </div>
         <div class="card" id="report-body" style="margin-top:10px;"></div>
         <div style="display:flex;gap:8px;margin-top:12px;">
           <button class="btn btn-outline" id="export-csv-btn">Export Excel (.xlsx)</button>

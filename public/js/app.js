@@ -46,6 +46,7 @@ let state = {
   transport: 0, loading: 0, roundOff: true, docType: "invoice", challanShowRate: false, gstOnCharges: true, gstEnabled: true, deliveryMan: "",
   vehicleNumber: "", deliveryAddress: "", remarks: "",
   invBrandFilter: "All", reportType: "Sales", partyMode: "customer",
+  challanAckFilter: "all",
   // Which location a Bill/Challan sells from — "shop" is every invoice's
   // long-standing default; "warehouse" is opt-in per sale (requirement:
   // "sale to warehouse"). Stored as a location ID once locations load.
@@ -422,6 +423,14 @@ async function initApp(){
   });
   document.getElementById("export-csv-btn").addEventListener("click", ()=>{
     window.open("/api/reports/export?type="+encodeURIComponent(state.reportType), "_blank");
+  });
+  document.querySelectorAll('[data-ack-filter]').forEach(b=>{
+    b.addEventListener("click", ()=>{
+      state.challanAckFilter = b.dataset.ackFilter;
+      document.querySelectorAll('[data-ack-filter]').forEach(x=>x.classList.remove("selected"));
+      b.classList.add("selected");
+      renderReport();
+    });
   });
   document.getElementById("doc-number-search").addEventListener("keydown", async (e)=>{
     if(e.key !== "Enter") return;
@@ -3750,13 +3759,38 @@ function openInvoicePreview(existingInvoice){
 // Remove any edit/void/delete buttons left over from a previously-opened
 // document before deciding which ones this one needs — the set differs by
 // doc type and whether it's already voided.
-["inv-edit", "inv-void", "inv-delete", "inv-return", "inv-convert"].forEach(id => { const el = document.getElementById(id); if(el) el.remove(); });
+["inv-edit", "inv-void", "inv-delete", "inv-return", "inv-convert", "inv-ack"].forEach(id => { const el = document.getElementById(id); if(el) el.remove(); });
   if(existingInvoice && existingInvoice.id && !existingInvoice.voided){
     const actionsBar = document.querySelector(".inv-actions");
     const editBtn = document.createElement("button");
     editBtn.id = "inv-edit"; editBtn.textContent = "✎ Edit";
     editBtn.onclick = ()=>{ closeFullscreen("fs-invoice"); editExistingInvoice(existingInvoice); };
     actionsBar.appendChild(editBtn);
+
+    if(challan){
+      // Ticking off the signed Office Copy coming back from the customer.
+      const isReceived = existingInvoice.ack_status === "Received";
+      const ackBtn = document.createElement("button");
+      ackBtn.id = "inv-ack";
+      ackBtn.textContent = isReceived ? "🟢 Received — undo" : "🟡 Mark as Received";
+      ackBtn.onclick = async ()=>{
+        try{
+          if(isReceived){
+            if(!confirm(`Mark ${existingInvoice.challan_no} back as Pending acknowledgement?`)) return;
+            await api("POST", `/invoices/${existingInvoice.id}/acknowledge`, { received:false });
+            toast("Marked back as Pending.", "ok");
+          } else {
+            const who = prompt("Who signed the Office Copy? (optional — leave blank to just mark it received)") ;
+            if(who === null) return;   // cancelled
+            await api("POST", `/invoices/${existingInvoice.id}/acknowledge`, { received:true, receiverName: who });
+            toast("Challan marked as Received.", "ok");
+          }
+          closeFullscreen("fs-invoice");
+          if(state.reportType==="Challan") await renderReport();
+        }catch(err){ toast(err.message); }
+      };
+      actionsBar.appendChild(ackBtn);
+    }
 
     if(!challan){
       const returnBtn = document.createElement("button");
@@ -3930,6 +3964,9 @@ function renderInvoicePageContent(){
     ${deliveryAddr ? `<div><b>Delivery Address:</b> ${escapeHtml(deliveryAddr)}</div>` : ""}
     ${inv.remarks ? `<div><b>Remarks:</b> ${escapeHtml(inv.remarks)}</div>` : ""}
     ${challan ? `<div><b>Status:</b> ${inv.converted_invoice_id ? "Billed (Tax Invoice raised)" : "Pending — not yet billed"}</div>` : ""}
+    ${challan ? `<div><b>Acknowledgement:</b> ${inv.ack_status === "Received"
+      ? "Received" + (inv.ack_receiver_name ? " — signed by " + escapeHtml(inv.ack_receiver_name) : "")
+      : "Pending — signed copy not yet returned"}</div>` : ""}
     ${showRate ? `<div><b>Amount in Words:</b> ${Pricing.amountInWords(displayTotal)}</div>` : ""}
   </div>`;
 
@@ -4192,6 +4229,10 @@ function openWhatsApp(phone, text){
    ============================================================ */
 async function renderReport(){
   const body = document.getElementById("report-body");
+  // The acknowledgement filter only applies to challans — keep it out of the
+  // way on every other report rather than showing a control that does nothing.
+  const ackFilter = document.getElementById("challan-ack-filter");
+  if(ackFilter) ackFilter.style.display = state.reportType==="Challan" ? "flex" : "none";
   try{
     if(state.reportType==="Purchase") return renderPurchaseReport(body);
     if(state.reportType==="Challan") return renderChallanReport(body);
@@ -4252,15 +4293,27 @@ async function renderPurchaseReport(body){
 
 const CHALLAN_STATUS_PILL = { Pending: "warn", Billed: "ok" };
 async function renderChallanReport(body){
-  const rows = await api("GET","/reports/challans");
+  const all = await api("GET","/reports/challans");
+  // Acknowledgement is a sales-challan concept — a Purchase Challan is goods
+  // coming IN, there's no customer signature to chase — so filtering by it
+  // narrows to sales rows only rather than silently dropping purchase rows
+  // from an "All" view.
+  const f = state.challanAckFilter || "all";
+  const rows = f === "all" ? all : all.filter(r=>r.type==="Sales" && r.ackStatus===(f==="received"?"Received":"Pending"));
+  const emptyMsg = f==="all" ? "No challans recorded yet."
+    : f==="pending" ? "No challans are waiting for acknowledgement."
+    : "No acknowledged challans yet.";
   body.innerHTML = `<div style="font-weight:800;font-size:14px;">Challan Report</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every Delivery Challan (sales) and Purchase Challan (goods received), newest first — tap a row to open it</div>` +
     (rows.length ? rows.map(r=>`
       <div class="list-row" style="cursor:pointer;" ${r.type==="Sales"?`data-open-invoice="${r.id}"`:`data-open-purchase="${r.id}"`}><div>
         <div class="row-title">${escapeHtml(r.challan_no)} <span class="pill ${r.type==="Sales"?"ok":"warn"}" style="font-size:9.5px;">${r.type}</span></div>
         <div class="row-sub">${escapeHtml(r.date)} · ${escapeHtml(r.party_name||(r.type==="Sales"?"Walk-in":"Unknown Supplier"))}</div>
         <div class="row-sub">${r.item_count} item${r.item_count!==1?"s":""} · ${r.total_pieces} pcs${(r.transport||r.loading)?" · Transport+Loading "+fmt((r.transport||0)+(r.loading||0)):""}</div>
-      </div>${r.type==="Sales"?`<div class="row-right"><span class="pill ${CHALLAN_STATUS_PILL[r.status]||''}" style="font-size:9.5px;">${escapeHtml(r.status)}</span></div>`:""}</div>
-    `).join("") : `<div class="empty-hint">No challans recorded yet.</div>`);
+      </div>${r.type==="Sales"?`<div class="row-right" style="text-align:right;">
+        <div><span class="pill ${r.ackStatus==="Received"?"ok":"warn"}" style="font-size:9.5px;">${r.ackStatus==="Received"?"🟢 Received":"🟡 Pending"}</span></div>
+        <div style="margin-top:3px;"><span class="pill ${CHALLAN_STATUS_PILL[r.status]||''}" style="font-size:9px;">${escapeHtml(r.status)}</span></div>
+      </div>`:""}</div>
+    `).join("") : `<div class="empty-hint">${emptyMsg}</div>`);
   body.querySelectorAll("[data-open-invoice]").forEach(el=>{
     el.addEventListener("click", ()=>openExistingInvoice(el.dataset.openInvoice));
   });

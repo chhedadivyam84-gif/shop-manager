@@ -530,6 +530,42 @@ router.put("/:id", (req, res) => {
 });
 
 /**
+ * Marks a Delivery Challan's signed Office Copy as received back from the
+ * customer (or reverts it to Pending if it was ticked by mistake).
+ *
+ * Any logged-in staff member can do this, not owner-only: whoever takes the
+ * signed copy off the driver is the person standing there, and this records
+ * paperwork coming back — it moves no stock and no money.
+ */
+router.post("/:id/acknowledge", (req, res) => {
+  const inv = db.prepare("SELECT * FROM invoices WHERE id = ?").get(req.params.id);
+  if (!inv) return res.status(404).json({ error: "Challan not found." });
+  if (inv.doc_type !== "challan") return res.status(400).json({ error: "Only a Delivery Challan can be acknowledged." });
+  if (inv.voided) return res.status(400).json({ error: "This challan has been voided." });
+
+  // Explicit false reverts to Pending; anything else (including a bare
+  // {} body from a simple "mark received" tap) means received.
+  const received = req.body.received !== false;
+  const receiverName = (req.body.receiverName || "").trim();
+  const remarks = (req.body.remarks || "").trim();
+
+  db.prepare(`
+    UPDATE invoices SET ack_status = ?, ack_received_at = ?, ack_receiver_name = ?, ack_remarks = ?
+    WHERE id = ?
+  `).run(
+    received ? "Received" : "Pending",
+    received ? Date.now() : null,
+    received ? receiverName : "",
+    received ? remarks : "",
+    inv.id
+  );
+
+  logAction(req, received ? "challan.acknowledge" : "challan.acknowledge_undo",
+    `${inv.challan_no}${received && receiverName ? " — signed by " + receiverName : ""}`);
+  res.json(withStatus(db.prepare("SELECT * FROM invoices WHERE id = ?").get(inv.id)));
+});
+
+/**
  * Delivery Challan -> Tax Invoice: raises the real bill for goods that have
  * already left the shop. No stock moves here — the challan itself deducted
  * it at creation — this only creates a priced invoice record (same items,

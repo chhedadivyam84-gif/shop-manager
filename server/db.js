@@ -1119,6 +1119,16 @@ addColumn("purchases", "doc_type", "TEXT NOT NULL DEFAULT 'purchase'");
 // sets this on itself.
 addColumn("invoices", "converted_invoice_id", "TEXT REFERENCES invoices(id) ON DELETE SET NULL");
 
+// Delivery-challan acknowledgement: whether the signed Office Copy has come
+// back from the customer. Deliberately SEPARATE from converted_invoice_id
+// above — a challan can be signed-for but not yet billed, or billed but with
+// the signed copy still out with the driver. Only meaningful on
+// doc_type='challan'; a Tax Invoice never uses it.
+addColumn("invoices", "ack_status", "TEXT NOT NULL DEFAULT 'Pending'");
+addColumn("invoices", "ack_received_at", "INTEGER");
+addColumn("invoices", "ack_receiver_name", "TEXT DEFAULT ''");
+addColumn("invoices", "ack_remarks", "TEXT DEFAULT ''");
+
 // Where the data lives — the backup module needs the on-disk paths, and this
 // is the single place that knows them.
 db.dataDir = DATA_DIR;

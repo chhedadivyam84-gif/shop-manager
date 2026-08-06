@@ -329,12 +329,17 @@ router.get("/search-number", (req, res) => {
 router.get("/challans", (req, res) => {
   const salesRows = db.prepare(`
     SELECT i.id, i.challan_no, i.date, c.name AS party_name, i.transport, i.loading, i.converted_invoice_id,
+      i.ack_status, i.ack_received_at, i.ack_receiver_name,
       (SELECT COUNT(*) FROM invoice_items WHERE invoice_id = i.id) AS item_count,
       (SELECT COALESCE(SUM(pieces),0) FROM invoice_items WHERE invoice_id = i.id) AS total_pieces,
       i.created_at
     FROM invoices i LEFT JOIN customers c ON c.id = i.customer_id
     WHERE i.voided = 0 AND i.doc_type = 'challan'
-  `).all().map(r => ({ ...r, type: "Sales", status: r.converted_invoice_id ? "Billed" : "Pending" }));
+  `).all().map(r => ({
+    ...r, type: "Sales",
+    status: r.converted_invoice_id ? "Billed" : "Pending",
+    ackStatus: r.ack_status === "Received" ? "Received" : "Pending"
+  }));
   const purchaseRows = db.prepare(`
     SELECT p.id, p.purchase_no AS challan_no, p.date, s.name AS party_name, p.transport, p.loading,
       (SELECT COUNT(*) FROM purchase_items WHERE purchase_id = p.id) AS item_count,

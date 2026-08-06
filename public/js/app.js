@@ -3945,10 +3945,17 @@ function renderInvoicePageContent(){
   // Total) go blank instead of printing a misleading "0.00" when the rate
   // itself isn't shown. Transport/Additional Charges are real entered
   // rupee amounts independent of any item rate, so they still print.
+  //
+  // Transport is rendered only when there IS one, matching how Additional
+  // Charges already behaves: a "Without Rate" challan is meant to come out
+  // with every money box empty for staff to fill in by hand, and a printed
+  // "Transport ₹0.00" was the one figure still landing on the page. Hiding
+  // the row at zero (rather than blanking its value) keeps both print modes
+  // identical to each other, since it's absent from both.
   const totalsBox = `<div class="erp-totals-box">
     <div class="erp-tb-row"><span>Subtotal</span><span>${showRate ? fmtPaise(challan?challanSubtotal:inv.subtotal) : ""}</span></div>
     <div class="erp-tb-row"><span>Discount</span><span>${showRate ? (discountAmt>0?"-":"")+fmtPaise(discountAmt) : ""}</span></div>
-    <div class="erp-tb-row"><span>Transport</span><span>${fmtPaise(inv.transport)}</span></div>
+    ${inv.transport ? `<div class="erp-tb-row"><span>Transport</span><span>${fmtPaise(inv.transport)}</span></div>` : ""}
     ${inv.loading ? `<div class="erp-tb-row"><span>Additional Charges</span><span>${fmtPaise(inv.loading)}</span></div>` : ""}
     ${!gstEnabled ? "" : isIGST
       ? `<div class="erp-tb-row"><span>IGST ${effectiveRatePct}%</span><span>${fmtPaise(igst)}</span></div>`

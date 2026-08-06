@@ -241,6 +241,28 @@ async function handleKey(k){
     }
   }
 }
+// The on-screen pad is the natural input on a phone, but on the shop's PC
+// it's quicker to just type — so number keys and Backspace drive the exact
+// same handleKey() path (including the auto-submit at 4 digits).
+//
+// Registered ONCE at load rather than inside initLogin(), which re-runs on
+// every logout and would stack a duplicate listener each time — making one
+// keypress register as two digits after the second login.
+//
+// Gated on the login screen AND its PIN step both being visible: after a
+// successful login the login container is hidden but #login-step-pin keeps
+// display:block, so checking the step alone would keep swallowing digits
+// while the user types inside the app.
+document.addEventListener("keydown", (e)=>{
+  const loginEl = document.getElementById("login");
+  const pinStep = document.getElementById("login-step-pin");
+  if(!loginEl || !pinStep) return;
+  if(loginEl.style.display === "none" || pinStep.style.display !== "block") return;
+  if(e.metaKey || e.ctrlKey || e.altKey) return;
+  if(/^[0-9]$/.test(e.key)){ e.preventDefault(); handleKey(e.key); }
+  else if(e.key === "Backspace"){ e.preventDefault(); handleKey("⌫"); }
+});
+
 async function showLogin(){
   document.getElementById("app").style.display="none";
   document.getElementById("login").style.display="flex";

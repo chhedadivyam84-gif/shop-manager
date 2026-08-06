@@ -3650,7 +3650,15 @@ function applyPageSizeStyle(){
   // theoretical content height means real content that measures as exactly
   // fitting on screen still has room to spare once it hits a real printer,
   // instead of spilling one line onto a second page.
-  const safetyBuffer = isA4 ? 5 : 4;
+  //
+  // These were 4mm/5mm, which left an A5 page rendering at exactly 200mm
+  // against 204mm of theoretical printable area. That ~4mm of slack is
+  // thinner than the non-printable edge most inkjet/laser trays actually
+  // have (typically 4-6mm), and thinner still once Chrome's own header/
+  // footer band is on — so a perfectly normal one-item invoice tipped onto
+  // a second sheet. 14mm leaves room for the printer's hardware margin AND
+  // a header/footer, while the page still visually fills the sheet.
+  const safetyBuffer = 14;
   const contentH = pageH - margin * 2 - safetyBuffer;
   // min-height fills the whole sheet, Tally-style, even with just one item —
   // the table's flex-grow (see .erp-table-wrap) is what actually stretches

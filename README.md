@@ -182,46 +182,65 @@ reboots.
 ## Hosting online (access from outside the shop's WiFi)
 
 Running it only on the shop PC (above) is the most reliable option day to
-day — no internet dependency, nothing to pay for. If you also want to
-check sales/dues from home or another location, you can deploy the exact
-same app to [Fly.io](https://fly.io), which supports a real persistent
-disk (needed so `shop.db` survives restarts — many free hosts wipe their
-filesystem on every deploy, which would silently lose invoices).
+day — no internet dependency, nothing to pay for. If you also want to check
+sales and dues from home, deploy the same app to [Render](https://render.com)
+with [Supabase](https://supabase.com) holding the backups.
 
-1. Create a free Fly.io account and install `flyctl`:
-   `curl -L https://fly.io/install.sh | sh` (or see fly.io/docs for
-   Windows/Mac).
-2. From this project folder, run `fly auth login`, then
-   `fly launch --no-deploy` — it'll detect the `Dockerfile` and ask for an
-   app name and region (pick one close to the shop, e.g. Mumbai/`bom`).
-3. Open the `fly.toml` it generated and make sure it has this volume
-   mount and service block (the repo's `fly.toml` already has them —
-   just copy the `app` name fly assigned into it, or use the repo's file
-   directly):
-   ```
-   [[mounts]]
-     source = "shop_data"
-     destination = "/app/data"
+**Supabase is not optional here.** Render's free tier wipes its filesystem on
+every deploy and restart, so `data/shop.db` would not survive. The app
+handles this: it uploads a snapshot every 15 minutes while running, and on
+boot — if the database file is missing and Supabase is configured — it
+downloads the newest snapshot before opening the database.
 
-   [http_service]
-     internal_port = 3000
-     force_https = true
-   ```
-4. Create the volume once: `fly volumes create shop_data --size 1 --region bom`
-   (1GB is enormous for this app's data — invoices are tiny).
-5. Deploy: `fly deploy`
-6. Visit the `https://<your-app>.fly.dev` URL it gives you, log in with
-   the shop PIN, and set it up exactly like the local version (Settings →
-   business name, GSTIN, state, and change the PIN).
+1. Push this project to a **private** GitHub repo. (`.gitignore` already
+   keeps `data/*.db`, `data/session-secret.txt` and `data/.env` out.)
+2. In Supabase: create a project, then **Storage → New bucket** named
+   `shop-backups`, left **Private**. From **Project Settings → API** copy the
+   *Project URL* and the *service_role* key (the `anon` key cannot write).
+3. In Render: **New → Web Service**, connect the repo, then set
+   - Runtime **Node**
+   - Build Command `npm ci --omit=dev`
+   - Start Command `node --no-warnings server/index.js`
+4. Add these environment variables:
 
-Costs roughly $2-5/month for the smallest always-on machine + volume.
-Redeploy any future code changes with `fly deploy` from this folder.
+   | Key | Value |
+   |---|---|
+   | `SUPABASE_URL` | your Project URL |
+   | `SUPABASE_KEY` | your service_role key |
+   | `SUPABASE_BUCKET` | `shop-backups` |
+   | `NODE_VERSION` | `24` |
 
-**Security note:** the app is protected only by each staff member's 4-6
-digit PIN (5 wrong attempts locks out for 15 minutes). That's fine on a
-private shop WiFi, but once it's on the public internet anyone who finds
-the URL can try to guess it. Use 6-digit PINs (Settings → Manage Staff)
-and don't share the `.fly.dev` URL publicly.
+   `NODE_VERSION` matters: the app uses Node's built-in `node:sqlite`, which
+   needs Node 23.4 or newer to run without an extra flag.
+5. Deploy, open the URL, log in as **Owner / PIN 1234**, and change the PIN
+   straight away.
+6. Confirm it worked: the deploy log should show a `[backup] startup
+   snapshot … + cloud` line, and the file should appear in the Supabase
+   bucket.
+
+**Careful:** a redeploy restores from the last snapshot, so anything entered
+in the previous 15 minutes can be lost. Before pushing code, run
+Settings → Backup → *Run backup now*, and avoid deploying while staff are
+billing.
+
+**Security note:** the app is protected only by each staff member's 4-6 digit
+PIN (5 wrong attempts locks that IP out for 15 minutes). That's fine on a
+private shop WiFi, but once it's on the public internet anyone who finds the
+URL can try to guess it. Use 6-digit PINs (Settings → Manage Staff) and don't
+share the URL publicly.
+
+## Subscription
+
+*Applies only if your copy was supplied with a subscription — if there is no
+Subscription section in Settings, this doesn't apply to you.*
+
+Paste the licence key you were given into **Settings → Subscription** and
+press Activate. A gold banner appears 14 days before the term ends.
+
+If it expires the app becomes **read-only**: you can still log in, look up
+and print past invoices, and download a full backup from Settings → Backup —
+but new invoices, purchases and payments are blocked until a renewal key is
+entered. Your records are never deleted or held back.
 
 ## Project layout
 

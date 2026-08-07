@@ -24,10 +24,24 @@ function chronoWithBalance() {
 }
 
 router.get("/", (req, res) => {
-  const { from, to } = req.query;
+  const { from, to, q } = req.query;
   let rows = chronoWithBalance();
-  if (from) rows = rows.filter(r => r.date >= from);
-  if (to) rows = rows.filter(r => r.date <= to);
+  const search = String(q || "").trim().toLowerCase();
+  if (search) {
+    // A search is for finding an entry whatever day it landed on ("who did
+    // I pay for wages, sometime last month?"), so it deliberately REPLACES
+    // the from/to range instead of narrowing within it — otherwise the
+    // common case of searching while the range is still on "Today" would
+    // return nothing and look broken.
+    rows = rows.filter(r =>
+      (r.party || "").toLowerCase().includes(search) ||
+      (r.category || "").toLowerCase().includes(search) ||
+      (r.remarks || "").toLowerCase().includes(search)
+    );
+  } else {
+    if (from) rows = rows.filter(r => r.date >= from);
+    if (to) rows = rows.filter(r => r.date <= to);
+  }
   // Newest-first for display, matching every other list in the app — the
   // running balance on each row was already computed in true chronological
   // order above, so reversing here doesn't touch that.
@@ -65,10 +79,22 @@ router.get("/summary", (req, res) => {
 });
 
 router.get("/export", (req, res) => {
-  const { from, to } = req.query;
+  const { from, to, q } = req.query;
   let rows = chronoWithBalance();
-  if (from) rows = rows.filter(r => r.date >= from);
-  if (to) rows = rows.filter(r => r.date <= to);
+  // Mirrors the list route exactly, so the spreadsheet always contains the
+  // rows the user is actually looking at — exporting mid-search used to
+  // hand back the whole date range instead of the search results.
+  const search = String(q || "").trim().toLowerCase();
+  if (search) {
+    rows = rows.filter(r =>
+      (r.party || "").toLowerCase().includes(search) ||
+      (r.category || "").toLowerCase().includes(search) ||
+      (r.remarks || "").toLowerCase().includes(search)
+    );
+  } else {
+    if (from) rows = rows.filter(r => r.date >= from);
+    if (to) rows = rows.filter(r => r.date <= to);
+  }
 
   const out = [["Date", "Type", "Party", "Category", "Remarks", "Cash In", "Cash Out", "Running Balance"]];
   rows.forEach(r => {
@@ -77,7 +103,9 @@ router.get("/export", (req, res) => {
       r.type === "in" ? r.amount : "", r.type === "out" ? r.amount : "", r.runningBalance
     ]);
   });
-  const filename = `cash-book-${(from || "all")}-to-${(to || "date")}`;
+  const filename = search
+    ? `cash-book-search-${search.replace(/[^a-z0-9]+/gi, "-").slice(0, 30)}`
+    : `cash-book-${(from || "all")}-to-${(to || "date")}`;
   const buf = buildXlsx(out, filename);
   res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   res.setHeader("Content-Disposition", `attachment; filename="${filename}.xlsx"`);

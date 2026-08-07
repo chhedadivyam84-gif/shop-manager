@@ -291,6 +291,14 @@
       <div class="screen" id="screen-cashbook">
         <div class="card" id="cashbook-summary" style="margin-top:0;"></div>
 
+        <!-- Searching looks across EVERY date, not just the range below —
+             see the note rendered into #cashbook-summary while a search is
+             active. -->
+        <div class="searchbar" style="margin-top:10px;">
+          <span>&#128269;</span>
+          <input type="text" id="cb-search" placeholder="Search party, category or remarks — any date">
+        </div>
+
         <div class="charge-grid" style="margin-top:10px;">
           <label class="dim"><span>From</span><input type="date" id="cb-filter-from"></label>
           <label class="dim"><span>To</span><input type="date" id="cb-filter-to"></label>

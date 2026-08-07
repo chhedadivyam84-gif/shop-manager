@@ -52,7 +52,7 @@ let state = {
   // "sale to warehouse"). Stored as a location ID once locations load.
   billingLocationId: null,
   paperSize: "A5", editingInvoiceId: null, docNo: null,
-  cbFrom: "", cbTo: "", cbEntries: [],
+  cbFrom: "", cbTo: "", cbEntries: [], cbSearch: "",
   bbFrom: "", bbTo: "", bbEntries: [], bankAccounts: [], bbAccountId: null,
   inqStatus: "All", inquiries: [], staffNames: [],
   // Purchase Entry (Phase 1) — a standalone cart, separate from state.cart
@@ -461,17 +461,34 @@ async function initApp(){
 
   document.getElementById("cb-add-in").addEventListener("click", ()=>openCashEntry("in"));
   document.getElementById("cb-add-out").addEventListener("click", ()=>openCashEntry("out"));
-  document.getElementById("cb-filter-from").addEventListener("change", (e)=>{ state.cbFrom = e.target.value; renderCashBook(); });
-  document.getElementById("cb-filter-to").addEventListener("change", (e)=>{ state.cbTo = e.target.value; renderCashBook(); });
+  document.getElementById("cb-search").addEventListener("input", (e)=>{
+    state.cbSearch = e.target.value;
+    renderCashBook();
+  });
+  // Touching a date control means the user wants a date view again, so an
+  // old search term is cleared rather than silently overriding the range
+  // they just picked.
+  const clearCbSearch = ()=>{
+    state.cbSearch = "";
+    const el = document.getElementById("cb-search");
+    if(el) el.value = "";
+  };
+  document.getElementById("cb-filter-from").addEventListener("change", (e)=>{ clearCbSearch(); state.cbFrom = e.target.value; renderCashBook(); });
+  document.getElementById("cb-filter-to").addEventListener("change", (e)=>{ clearCbSearch(); state.cbTo = e.target.value; renderCashBook(); });
   document.getElementById("cb-filter-today").addEventListener("click", ()=>{
+    clearCbSearch();
     const t = todayISO(); state.cbFrom = t; state.cbTo = t; renderCashBook();
   });
   document.getElementById("cb-filter-clear").addEventListener("click", ()=>{
+    clearCbSearch();
     state.cbFrom = ""; state.cbTo = ""; renderCashBook();
   });
   document.getElementById("cb-print-btn").addEventListener("click", printCashBook);
   document.getElementById("cb-export-btn").addEventListener("click", ()=>{
-    const q = cashBookQuery();
+    // While searching, export what's on screen (the matches) rather than the
+    // date range sitting unused behind the search.
+    const search = (state.cbSearch||"").trim();
+    const q = search ? "q=" + encodeURIComponent(search) : cashBookQuery();
     window.open("/api/cashbook/export" + (q?"?"+q:""), "_blank");
   });
 
@@ -4599,9 +4616,22 @@ async function renderCashBook(){
   const toEl = document.getElementById("cb-filter-to");
   if(fromEl) fromEl.value = state.cbFrom;
   if(toEl) toEl.value = state.cbTo;
+  const searchEl = document.getElementById("cb-search");
+  if(searchEl && searchEl.value !== (state.cbSearch||"")) searchEl.value = state.cbSearch||"";
 
-  const q = cashBookQuery();
+  const search = (state.cbSearch||"").trim();
   try{
+    if(search){
+      // Searching spans every date, so the usual Opening/Closing balance card
+      // (which only means something for a contiguous date range) is replaced
+      // by a plain tally of what actually matched.
+      const entries = await api("GET", "/cashbook?q=" + encodeURIComponent(search));
+      state.cbEntries = entries;
+      renderCashBookSearchSummary(entries, search);
+      renderCashBookList(entries, true);
+      return;
+    }
+    const q = cashBookQuery();
     const [summary, entries] = await Promise.all([
       api("GET", "/cashbook/summary" + (q?"?"+q:"")),
       api("GET", "/cashbook" + (q?"?"+q:""))
@@ -4610,6 +4640,19 @@ async function renderCashBook(){
     renderCashBookSummary(summary);
     renderCashBookList(entries);
   }catch(e){ toast(e.message); }
+}
+function renderCashBookSearchSummary(entries, search){
+  const totalIn = entries.filter(e=>e.type==="in").reduce((s,e)=>s+e.amount,0);
+  const totalOut = entries.filter(e=>e.type==="out").reduce((s,e)=>s+e.amount,0);
+  const row = (label, value, cls) =>
+    `<div class="inv-flex" style="margin-bottom:4px;${cls||""}"><span class="muted">${label}</span><span>${value}</span></div>`;
+  document.getElementById("cashbook-summary").innerHTML = `
+    <div style="font-weight:800;font-size:14px;margin-bottom:2px;">${entries.length} match${entries.length!==1?"es":""} for "${escapeHtml(search)}"</div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:6px;">Across all dates — the date filter below is ignored while searching.</div>
+    ${row("Matched Cash In", "+"+fmt(totalIn), "color:var(--ok);")}
+    ${row("Matched Cash Out", "-"+fmt(totalOut), "color:var(--danger);")}
+    <div class="inv-flex" style="font-weight:800;border-top:1px solid var(--border);padding-top:6px;font-size:15px;"><span>Net</span><span>${fmt(totalIn-totalOut)}</span></div>
+  `;
 }
 function renderCashBookSummary(s){
   const row = (label, value, cls) =>
@@ -4622,7 +4665,7 @@ function renderCashBookSummary(s){
     <div class="inv-flex" style="font-weight:800;border-top:1px solid var(--border);padding-top:6px;font-size:15px;"><span>Closing Balance</span><span>${fmt(s.closingBalance)}</span></div>
   `;
 }
-function renderCashBookList(entries){
+function renderCashBookList(entries, searching){
   document.getElementById("cashbook-list").innerHTML = entries.length ? entries.map(e=>`
     <div class="list-row" data-cb-entry="${e.id}" style="cursor:pointer;">
       <div>
@@ -4632,7 +4675,7 @@ function renderCashBookList(entries){
       </div>
       <div class="row-right row-title" style="color:${e.type==="in"?"var(--ok)":"var(--danger)"};">${e.type==="in"?"+":"-"}${fmt(e.amount)}</div>
     </div>
-  `).join("") : `<div class="empty-hint">No cash entries in this range yet.</div>`;
+  `).join("") : `<div class="empty-hint">${searching ? "No cash entries match that search." : "No cash entries in this range yet."}</div>`;
   document.querySelectorAll("[data-cb-entry]").forEach(el=>{
     el.addEventListener("click", ()=>{
       const entry = state.cbEntries.find(e=>e.id===el.dataset.cbEntry);

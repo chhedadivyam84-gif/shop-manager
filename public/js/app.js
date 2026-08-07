@@ -280,6 +280,7 @@ async function initApp(){
   state.settings = await api("GET","/settings");
   document.title = state.settings.business_name + " — Shop Manager";
   document.getElementById("avatar-btn").textContent = initials(state.settings.business_name);
+  await refreshLicenseBanner();
 
   if(appInited){ await renderAll(); return; }
   appInited = true;
@@ -3368,6 +3369,7 @@ function openSettings(){
       <label class="field-label">Shop State (for CGST/SGST vs IGST)</label>
       <select id="st-state"><option value="">Select state</option>${INDIAN_STATES.map(s=>`<option value="${s}" ${cfg.state===s?"selected":""}>${s}</option>`).join("")}</select>
       <label class="field-label">UPI ID</label><input type="text" id="st-upi" value="${escapeHtml(cfg.upi_id||"")}">
+      <div id="st-license-block"></div>
       <button class="btn btn-primary" id="st-save" style="margin-top:16px;">Save Settings</button>
 
       <div class="section-title">Staff Access</div>
@@ -3483,6 +3485,8 @@ function openSettings(){
     closeAllSheets();
     await showLogin();
   });
+  const licBlock = sheet.querySelector("#st-license-block");
+  if(licBlock){ licBlock.innerHTML = licenseSettingsHtml(); wireLicenseSettings(); }
   showSheet("sheet-settings");
 }
 
@@ -3679,6 +3683,64 @@ function closeAllSheets(){
   document.querySelectorAll(".sheet").forEach(s=>s.classList.remove("show"));
 }
 function closeFullscreen(id){ document.getElementById(id).classList.remove("show"); }
+
+/* ============================================================
+   SUBSCRIPTION
+   On an unlicensed build (no vendor public key compiled in) every
+   one of these is a no-op, so nothing changes for a shop running
+   its own copy.
+   ============================================================ */
+async function refreshLicenseBanner(){
+  try{ state.license = await api("GET","/license"); }
+  catch(e){ return; }
+  const st = state.license;
+  let bar = document.getElementById("license-bar");
+  if(!st || !st.enforced || st.status === "active"){ if(bar) bar.remove(); return; }
+  if(!bar){
+    bar = document.createElement("div");
+    bar.id = "license-bar";
+    bar.style.cssText = "padding:10px 16px;font-size:12px;font-weight:700;text-align:center;cursor:pointer;";
+    document.getElementById("app").prepend(bar);
+    bar.addEventListener("click", ()=>openSettings());
+  }
+  const bad = st.expired;
+  bar.style.background = bad ? "var(--danger)" : "var(--gold)";
+  bar.style.color = bad ? "#fff" : "var(--navy)";
+  bar.textContent = bad
+    ? `${st.message} Read-only — tap to enter a renewal key.`
+    : `${st.message} Tap to renew.`;
+}
+function licenseSettingsHtml(){
+  const st = state.license;
+  if(!st || !st.enforced) return "";      // unlicensed build — hide entirely
+  const colour = st.expired ? "var(--danger)" : (st.status==="expiring" ? "var(--gold)" : "var(--ok)");
+  return `
+    <div class="section-title" style="margin-top:18px;">Subscription</div>
+    <div class="card" style="border-left:3px solid ${colour};">
+      <div style="font-size:12px;font-weight:700;">${escapeHtml(st.message||"")}</div>
+      ${st.licensedTo ? `<div class="muted" style="font-size:11px;margin-top:2px;">Licensed to ${escapeHtml(st.licensedTo)}</div>` : ""}
+      <label class="field-label" style="margin-top:10px;">Licence key</label>
+      <input type="text" id="st-license" placeholder="Paste the key you were sent">
+      <button class="btn btn-primary" id="st-license-save" style="margin-top:10px;">Activate</button>
+    </div>`;
+}
+function wireLicenseSettings(){
+  const btn = document.getElementById("st-license-save");
+  if(!btn) return;
+  btn.addEventListener("click", async ()=>{
+    const key = document.getElementById("st-license").value.trim();
+    if(!key){ toast("Paste the licence key first."); return; }
+    btn.disabled = true;
+    try{
+      state.license = await api("POST","/license",{ key });
+      await refreshLicenseBanner();
+      closeAllSheets();
+      toast(state.license.message, "ok");
+      await renderAll();
+    }catch(err){ toast(err.message); }
+    finally{ btn.disabled = false; }
+  });
+}
 
 /* ============================================================
    INVOICE PREVIEW

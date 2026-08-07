@@ -72,7 +72,43 @@ app.use(session({
   }
 }));
 
+/* ------------------------------------------------------------
+   SUBSCRIPTION GATE
+   Once a licence has expired the app goes READ-ONLY rather than
+   locking the shop out: they can still log in, look up and print
+   old invoices, and download a full backup. Only the actions that
+   create or change records are refused.
+
+   That's deliberate. Their invoices are records they're legally
+   required to keep, and a shop that cannot reach its own books is
+   a support call and a refund, not a renewal. Blocking new billing
+   is enough to make renewing the obvious choice.
+
+   Reads (GET/HEAD) always pass. So do the few writes needed to get
+   BACK to working: logging in, and saving a new licence key.
+   ------------------------------------------------------------ */
+const license = require("./license");
+const LICENCE_EXEMPT = [
+  "/api/auth",      // must be able to log in to see the renew screen
+  "/api/license",   // entering the new key
+  "/api/backup"     // taking their data with them
+];
+app.use("/api", (req, res, next) => {
+  if (!license.enabled()) return next();
+  if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return next();
+  if (LICENCE_EXEMPT.some(p => req.originalUrl.startsWith(p))) return next();
+
+  const row = db.prepare("SELECT license_key FROM settings WHERE id = 1").get();
+  const st = license.state(row && row.license_key);
+  if (!st.expired) return next();
+  return res.status(403).json({
+    error: `${st.message} The app is read-only until it's renewed — you can still view, print and back up your records.`,
+    licenseExpired: true
+  });
+});
+
 app.use("/api/auth", require("./routes/auth"));
+app.use("/api/license", requireAuth, require("./routes/license"));
 app.use("/api/settings", requireAuth, require("./routes/settings"));
 app.use("/api/products", requireAuth, require("./routes/products"));
 app.use("/api/customers", requireAuth, require("./routes/customers"));

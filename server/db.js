@@ -1128,6 +1128,10 @@ addColumn("invoices", "converted_invoice_id", "TEXT REFERENCES invoices(id) ON D
 // hardcoded into the print templates, which meant every shop running this
 // app printed one particular shop's contact details. Blank by default —
 // the letterhead simply omits whichever of the two isn't filled in.
+// Subscription licence key (see server/license.js). Blank until one is
+// entered; harmless on builds where licensing is switched off.
+addColumn("settings", "license_key", "TEXT DEFAULT ''");
+
 addColumn("settings", "email", "TEXT DEFAULT ''");
 addColumn("settings", "website", "TEXT DEFAULT ''");
 

@@ -779,7 +779,10 @@ if (addedPurchaseDate) {
       unit_label='Pc', rate=?, amount=?, grand_total=? WHERE id=?
   `);
   legacyRows.forEach(r => {
-    const date = new Date(r.created_at).toISOString().slice(0, 10);
+    // Local date, not toISOString() (UTC) — see todayStr() in util.js. Inlined
+    // rather than imported because util.js requires this file.
+    const d = new Date(r.created_at);
+    const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
     const amount = round2(r.qty * r.cost_price);
     backfill.run(date, r.qty, r.cost_price, amount, amount, r.id);
   });
@@ -1134,6 +1137,15 @@ addColumn("settings", "license_key", "TEXT DEFAULT ''");
 
 addColumn("settings", "email", "TEXT DEFAULT ''");
 addColumn("settings", "website", "TEXT DEFAULT ''");
+
+// Printed look of the Estimate/Tax Invoice and the Delivery Challan, chosen
+// independently so a shop can print a formal Tally-style invoice while its
+// challans stay plain. 'classic' is the layout this app always printed, so an
+// existing shop's documents are unchanged until someone picks another theme.
+// Values: classic | tally | navy | minimal (see PRINT_THEMES in app.js —
+// an unknown value falls back to classic rather than printing unstyled).
+addColumn("settings", "invoice_theme", "TEXT NOT NULL DEFAULT 'classic'");
+addColumn("settings", "challan_theme", "TEXT NOT NULL DEFAULT 'classic'");
 
 addColumn("invoices", "ack_status", "TEXT NOT NULL DEFAULT 'Pending'");
 addColumn("invoices", "ack_received_at", "INTEGER");

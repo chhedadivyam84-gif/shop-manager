@@ -2690,7 +2690,7 @@ function getSelectedBankAccountId(sheet, prefix){
 /** `editEntry` is a ledger entry (type:"payment") to edit in place, or omitted for a new payment. */
 function openRecordPayment(customer, editEntry){
   const sheet = document.getElementById("sheet-record-payment");
-  const today = new Date().toISOString().slice(0,10);
+  const today = isoDate(new Date());
   const e = editEntry;
   sheet.innerHTML = `
     <div class="sheet-handle"></div>
@@ -2942,7 +2942,7 @@ async function openSupplierDetail(supplierId){
 /** `editEntry` is a ledger entry (type:"payment") to edit in place, or omitted for a new payment. */
 function openRecordPurchasePayment(supplier, editEntry){
   const sheet = document.getElementById("sheet-record-purchase-payment");
-  const today = new Date().toISOString().slice(0,10);
+  const today = isoDate(new Date());
   const e = editEntry;
   sheet.innerHTML = `
     <div class="sheet-handle"></div>
@@ -3408,6 +3408,17 @@ function openSettings(){
       <button class="btn btn-outline" id="st-run-backup" style="margin-top:8px;">Back Up Now</button>
       <p class="muted" style="font-size:11px;margin-top:8px;">Your whole shop lives in one file. Automatic snapshots are kept on this PC daily. Use <strong>Download Backup</strong> to keep a copy on your phone or a USB drive — that's your safety net if this PC is ever lost.</p>
 
+      <div class="section-title">Printed Document Theme</div>
+      <p class="muted" style="font-size:11px;margin-bottom:10px;">How your Invoice and Delivery Challan look when printed. Set separately, so a formal Tally-style invoice can go out alongside a plain challan.</p>
+      <label class="field-label">Invoice / Estimate</label>
+      <select id="st-invoice-theme">${PRINT_THEMES.map(t=>`<option value="${t.id}" ${printThemeFor(false)===t.id?"selected":""}>${t.name}</option>`).join("")}</select>
+      <div class="muted" id="st-invoice-theme-desc" style="font-size:11px;margin-top:4px;"></div>
+      <label class="field-label" style="margin-top:12px;">Delivery Challan</label>
+      <select id="st-challan-theme">${PRINT_THEMES.map(t=>`<option value="${t.id}" ${printThemeFor(true)===t.id?"selected":""}>${t.name}</option>`).join("")}</select>
+      <div class="muted" id="st-challan-theme-desc" style="font-size:11px;margin-top:4px;"></div>
+      <button class="btn btn-primary" id="st-save-themes" style="margin-top:14px;">Save Theme</button>
+      <p class="muted" style="font-size:11px;margin-top:8px;">Open any bill and tap Print to see it. Nothing about the figures changes — only the look.</p>
+
       <div class="section-title">Printing</div>
       <div class="card" id="print-server-status"><div class="empty-hint">Checking printer…</div></div>
       <button class="btn btn-outline" id="st-recheck-print" style="margin-top:10px;">Recheck Printer</button>
@@ -3452,6 +3463,36 @@ function openSettings(){
       toast("Settings saved.", "ok");
     }catch(err){ toast(err.message); }
   });
+  // Print themes save on their own button rather than the business-details
+  // "Save Settings" far above them — the PUT merges, so sending just these two
+  // leaves every other setting untouched.
+  const invThemeSel = sheet.querySelector("#st-invoice-theme");
+  const chThemeSel = sheet.querySelector("#st-challan-theme");
+  if(invThemeSel && chThemeSel){
+    const describe = ()=>{
+      const d = id => (PRINT_THEMES.find(t=>t.id===id)||{}).desc || "";
+      sheet.querySelector("#st-invoice-theme-desc").textContent = d(invThemeSel.value);
+      sheet.querySelector("#st-challan-theme-desc").textContent = d(chThemeSel.value);
+    };
+    describe();
+    invThemeSel.addEventListener("change", describe);
+    chThemeSel.addEventListener("change", describe);
+    sheet.querySelector("#st-save-themes").addEventListener("click", async ()=>{
+      try{
+        state.settings = await api("PUT","/settings", {
+          invoiceTheme: invThemeSel.value,
+          challanTheme: chThemeSel.value
+        });
+        // Re-render any open preview so the change is visible immediately
+        // instead of only on the next bill opened.
+        if(lastPreviewInvoice && document.getElementById("fs-invoice").classList.contains("show")){
+          renderInvoicePageContent();
+        }
+        toast("Print theme saved.", "ok");
+      }catch(err){ toast(err.message); }
+    });
+  }
+
   const manageStaffBtn = sheet.querySelector("#st-manage-staff");
   if(manageStaffBtn) manageStaffBtn.addEventListener("click", openStaffManage);
   const auditLogBtn = sheet.querySelector("#st-audit-log");
@@ -3824,7 +3865,7 @@ function openInvoicePreview(existingInvoice){
   } else {
     const t = computeTotals();
     lastPreviewInvoice = {
-      challan_no: "(unsaved preview)", date: new Date().toISOString().slice(0,10),
+      challan_no: "(unsaved preview)", date: isoDate(new Date()),
       doc_type: state.docType,
       customer_id: state.selectedCustomerId,
       // Shape matches a row from the API so one template renders both an
@@ -4004,13 +4045,44 @@ async function openExistingInvoice(invoiceId){
     openInvoicePreview(inv);
   }catch(e){ toast(e.message); }
 }
+/* Printed-document themes. Classic carries NO class — it is the layout in
+   style.css that this app has always printed, so a shop that never touches
+   the setting sees no change at all. The others are additive colour/border
+   overrides (.theme-tally / .theme-navy / .theme-minimal). */
+const PRINT_THEMES = [
+  { id:"classic", name:"Classic",      desc:"The standard layout — black rules, teal item grid." },
+  { id:"tally",   name:"Tally Style",  desc:"Everything ruled in black, double lines, grey table head." },
+  { id:"navy",    name:"Navy & Gold",  desc:"Matches your Quotation template — navy header, gold accents." },
+  { id:"minimal", name:"Minimal",      desc:"Hairline rules, no boxes, lots of white space. Uses less ink." }
+];
+const THEME_IDS = PRINT_THEMES.map(t=>t.id);
+
+/** Which theme a document prints in. Invoice and Challan are set separately,
+ *  so a shop can print formal Tally-style invoices while challans stay plain.
+ *  An unknown stored value falls back to classic rather than printing with no
+ *  theme rules at all. */
+function printThemeFor(challan){
+  const cfg = state.settings || {};
+  const t = challan ? cfg.challan_theme : cfg.invoice_theme;
+  return THEME_IDS.includes(t) ? t : "classic";
+}
+
+function applyPrintTheme(el, challan){
+  THEME_IDS.forEach(id => el.classList.remove("theme-"+id));
+  const t = printThemeFor(challan);
+  if(t !== "classic") el.classList.add("theme-"+t);
+  return t;
+}
+
 function renderInvoicePageContent(){
   const inv = lastPreviewInvoice; if(!inv) return;
   const cfg = state.settings;
   const cust = state.customers.find(c=>c.id===inv.customer_id);
   const isA4 = state.paperSize==="A4";
   const challan = inv.doc_type === "challan";
-  document.getElementById("invoice-page-content").classList.toggle("size-a5", !isA4);
+  const pageEl = document.getElementById("invoice-page-content");
+  pageEl.classList.toggle("size-a5", !isA4);
+  applyPrintTheme(pageEl, challan);
 
   // A challan's item table and totals box keep EXACTLY the same layout
   // whether "Show Rate" is on or off — only the Rate/Amount cell CONTENTS
@@ -4196,7 +4268,12 @@ async function buildInvoicePdf(){
          @media print rules entirely — reset the screen-only rounded-corner
          card look here too so the downloaded PDF frames like a printed
          sheet, not a floating app card. */
-      #invoice-page-content{border-radius:0 !important;box-shadow:none !important;border:1.5px solid #333 !important;}
+      #invoice-page-content{border-radius:0 !important;box-shadow:none !important;border:${
+        // Minimal's whole point is no boxes — a hard outer frame here would
+        // contradict it in the PDF while the browser-print path showed none.
+        printThemeFor(lastPreviewInvoice && lastPreviewInvoice.doc_type === "challan") === "minimal"
+          ? "none" : "1.5px solid #333"
+      } !important;}
       /* #fs-invoice's 460px max-width and .size-a5's 360px max-width are
          both screen-preview caps (keep the on-screen card phone-width and
          centred) — harmless on screen, but this capture is later stretched
@@ -4370,7 +4447,7 @@ function openWhatsApp(phone, text){
    what is owed, right now — so a date range can't narrow them into anything
    meaningful. They get no date bar rather than a control that silently does
    nothing (or worse, looks like it worked). */
-const REPORT_IGNORES_DATE = new Set(["Stock", "Customer", "LocationStock"]);
+const REPORT_IGNORES_DATE = new Set(["Stock", "Customer", "LocationStock", "BalanceSheet"]);
 
 /** Local-date YYYY-MM-DD — deliberately not toISOString(), which is UTC and
  *  in India rolls "today" back a day before 5:30am. Matches the server's
@@ -4471,6 +4548,7 @@ async function renderReport(){
     if(state.reportType==="LocationStock") return renderLocationStockReport(body);
     if(state.reportType==="Transfers") return renderTransfersReport(body);
     if(state.reportType==="DailyMovement") return renderDailyMovementReport(body);
+    if(state.reportType==="BalanceSheet") return renderBalanceSheetReport(body);
 
     let title="", subtitle="", rows=[];
     if(state.reportType==="Sales"){
@@ -4607,6 +4685,69 @@ async function renderLocationStockReport(body){
       </div><div class="row-right row-title">Total: ${r.total}</div></div>
     `).join("") : `<div class="empty-hint">No products yet.</div>`);
 }
+/**
+ * Balance Sheet — what the shop owns against what it owes.
+ *
+ * Deliberately shows Net Worth rather than a textbook "Assets = Liabilities +
+ * Capital": this app has no capital account or expense ledger, so a balancing
+ * figure would have to be invented. Every number below is one the data really
+ * supports. Also always AS OF NOW — stock and party dues are running balances
+ * with no dated ledger behind them, so a past-date version can't be honest.
+ */
+async function renderBalanceSheetReport(body){
+  const d = await api("GET","/reports/balance-sheet");
+  const row = (label, value, opts={}) => `
+    <div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;${opts.border?"border-top:1px solid var(--border);":""}${opts.bold?"font-weight:800;":""}">
+      <span${opts.dim?' class="muted"':""}>${escapeHtml(label)}</span><span>${fmt(value)}</span>
+    </div>`;
+
+  const a = d.assets, l = d.liabilities;
+  const negative = d.netWorth < 0;
+
+  body.innerHTML = `
+    <div style="font-weight:800;font-size:14px;">Balance Sheet</div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:12px;">Financial position as of ${escapeHtml(d.asOf)}</div>
+
+    <div style="font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-top:4px;">Assets — what you own</div>
+    ${row("Cash in Hand", a.cashInHand)}
+    ${a.bankAccounts.length
+      ? a.bankAccounts.map(b=>row("Bank — "+b.name, b.balance, {dim:true})).join("")
+      : row("Bank", a.bankBalance, {dim:true})}
+    ${row("Closing Stock (at cost)", a.closingStock)}
+    ${row("Customer Receivables", a.receivables)}
+    ${a.supplierAdvances ? row("Advances paid to Suppliers", a.supplierAdvances) : ""}
+    ${row("Total Assets", a.total, {bold:true, border:true})}
+
+    <div style="font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-top:16px;">Liabilities — what you owe</div>
+    ${row("Supplier Payables", l.payables)}
+    ${l.customerAdvances ? row("Advances received from Customers", l.customerAdvances) : ""}
+    ${row("Total Liabilities", l.total, {bold:true, border:true})}
+
+    <div style="margin-top:16px;padding:12px;border-radius:10px;background:var(--bg-outer);display:flex;justify-content:space-between;align-items:center;gap:10px;">
+      <span style="font-weight:800;font-size:13px;">Net Worth</span>
+      <span style="font-weight:800;font-size:17px;color:${negative?"var(--danger)":"var(--ok)"};">${fmt(d.netWorth)}</span>
+    </div>
+    <div class="muted" style="font-size:11px;margin-top:8px;line-height:1.5;">
+      Net Worth = Total Assets &minus; Total Liabilities.
+      ${negative ? "It is negative, meaning current liabilities exceed the assets recorded here." : ""}
+    </div>
+
+    ${d.stock.itemsWithoutCost ? `
+      <div style="margin-top:12px;padding:10px;border-radius:9px;background:var(--warn-bg);color:var(--warn-text);font-size:11.5px;line-height:1.5;">
+        <b>Closing Stock is understated.</b> ${d.stock.itemsWithoutCost} item${d.stock.itemsWithoutCost>1?"s":""}
+        (${d.stock.unitsWithoutCost} unit${d.stock.unitsWithoutCost>1?"s":""}) ${d.stock.itemsWithoutCost>1?"have":"has"}
+        no purchase cost on file and ${d.stock.itemsWithoutCost>1?"are":"is"} counted at zero.
+        Record a purchase for ${d.stock.itemsWithoutCost>1?"them":"it"}, or set a cost, to value your stock properly.
+      </div>` : ""}
+
+    <div class="muted" style="font-size:11px;margin-top:12px;line-height:1.5;">
+      This is a statement of financial position, not a double-entry balance sheet —
+      the app has no capital account, so it reports Net Worth rather than forcing
+      Assets to equal Liabilities plus Capital. Figures are as of today; stock and
+      party dues are running balances, so a past-date version isn't possible.
+    </div>`;
+}
+
 async function renderTransfersReport(body){
   const rows = await api("GET","/transfers"+reportRangeQS());
   body.innerHTML = `<div style="font-weight:800;font-size:14px;">Transfer History</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Stock moved between locations, newest first</div>` +

@@ -306,6 +306,64 @@ table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #178a6e;color:#0
 .erp-sign-row span{flex:1;border-top:1px solid #000;padding-top:3px;font-size:9px;text-align:center;line-height:1.3;}
 .erp-stamp-box{border:1px dashed #999 !important;min-height:20px;display:flex;align-items:center;justify-content:center;color:#999 !important;}
 
+/* ============================================================
+   PRINTED DOCUMENT THEMES
+   ------------------------------------------------------------
+   Everything above is the CLASSIC theme and carries no theme
+   class, so a shop that never picks a theme prints exactly what
+   it always printed. Each block below only overrides COLOUR and
+   BORDER — never the flex/sizing rules, which are load-bearing:
+   .erp-table-wrap's flex and .invoice-page's min-height are what
+   fill the page to one full sheet (see fillTableToPageHeight in
+   app.js). Changing those here would reintroduce the item-list
+   overlap bug.
+
+   Plain hex only, never oklch() — html2canvas 1.4.1 rasterises
+   this exact markup for "Download PDF" and throws on oklch.
+   ============================================================ */
+
+/* --- TALLY: everything ruled in black, the look accountants expect --- */
+.invoice-page.theme-tally .erp-banner{border-bottom:3px double #000;font-size:14px;}
+.invoice-page.theme-tally .erp-header{border-bottom:1px solid #000;}
+.invoice-page.theme-tally .erp-table-wrap{border-color:#000;}
+.invoice-page.theme-tally table.erp-table th{background:#f0f0f0;border-color:#000;color:#000;}
+.invoice-page.theme-tally table.erp-table td{border-color:#000;color:#000;}
+.invoice-page.theme-tally table.erp-table tfoot td{border-top:1.5px solid #000;}
+.invoice-page.theme-tally .erp-tb-grand{border-top:3px double #000;}
+.invoice-page.theme-tally .erp-biz-name{letter-spacing:.04em;}
+
+/* --- NAVY & GOLD: matches the branded Quotation template --- */
+.invoice-page.theme-navy .erp-banner{background:#12224b;color:#fff;border-bottom:2px solid #c9962e;padding:5px 0;margin-bottom:0;}
+.invoice-page.theme-navy .erp-header{border-bottom:2px solid #c9962e;}
+.invoice-page.theme-navy .erp-biz-name{color:#12224b;}
+.invoice-page.theme-navy .erp-parties{border-color:#12224b;}
+.invoice-page.theme-navy .erp-party-box{border-right-color:#12224b;}
+.invoice-page.theme-navy .erp-box-label{color:#c9962e;}
+.invoice-page.theme-navy .erp-table-wrap{border-color:#12224b;}
+.invoice-page.theme-navy table.erp-table th{background:#12224b;color:#fff;border-color:#12224b;}
+.invoice-page.theme-navy table.erp-table td{border-color:#c9c9d4;color:#1a1a2e;}
+.invoice-page.theme-navy table.erp-table tfoot td{border-top:1.5px solid #12224b;background:#f4f5f8;}
+.invoice-page.theme-navy .erp-bottom,
+.invoice-page.theme-navy .erp-sign-row{border-color:#12224b;}
+.invoice-page.theme-navy .erp-bottom-left{border-right-color:#12224b;}
+.invoice-page.theme-navy .erp-tb-row{border-bottom-color:#d8d8e0;}
+.invoice-page.theme-navy .erp-tb-grand{background:#12224b;color:#fff;border-top:2px solid #c9962e;}
+
+/* --- MINIMAL: hairline rules only, no boxes, plenty of white space --- */
+.invoice-page.theme-minimal .erp-banner{border-bottom:none;color:#555;font-size:11px;letter-spacing:.22em;font-weight:700;}
+.invoice-page.theme-minimal .erp-header{border-bottom:1px solid #e2e2e2;padding-bottom:8px;margin-bottom:8px;}
+.invoice-page.theme-minimal .erp-parties{border:none;border-bottom:1px solid #e2e2e2;padding-bottom:4px;}
+.invoice-page.theme-minimal .erp-party-box{border-right:none;padding-left:0;}
+.invoice-page.theme-minimal .erp-table-wrap{border:none;}
+.invoice-page.theme-minimal table.erp-table th{border:none;border-bottom:1px solid #999;color:#555;background:none;}
+.invoice-page.theme-minimal table.erp-table td{border:none;border-bottom:1px solid #eee;color:#222;}
+.invoice-page.theme-minimal table.erp-table tfoot td{border-top:1px solid #999;border-bottom:none;}
+.invoice-page.theme-minimal .erp-bottom{border:none;border-top:1px solid #e2e2e2;}
+.invoice-page.theme-minimal .erp-bottom-left{border-right:none;padding-left:0;}
+.invoice-page.theme-minimal .erp-tb-row{border-bottom:none;}
+.invoice-page.theme-minimal .erp-tb-grand{border-top:1px solid #999;}
+.invoice-page.theme-minimal .erp-sign-row{border:none;}
+
 .erp-terms{border:1px solid #000;border-top:none;padding:3px 8px;font-size:8.5px;line-height:1.3;text-align:center;}
 .erp-terms strong{font-weight:800;}
 
@@ -418,6 +476,10 @@ table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #178a6e;color:#0
      no business applying to print, where it was leaving an unused gap on
      the right instead of the content using the full physical A5 width. */
   .invoice-page.size-a5{max-width:none !important;margin-left:0 !important;margin-right:0 !important;}
+  /* Minimal deliberately has no boxes, so the outer page frame above would
+     contradict it — the one theme that drops it. Kept in sync with the
+     equivalent override on the html2canvas PDF path in app.js. */
+  .invoice-page.theme-minimal{border:none !important;}
 }
 
 /* ============================================================

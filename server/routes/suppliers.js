@@ -1,6 +1,6 @@
 const express = require("express");
 const db = require("../db");
-const { uid, logAction, round2, todayStr } = require("../util");
+const { uid, logAction, round2, todayStr, localDate } = require("../util");
 const { requireRole } = require("../auth");
 const { saveAttachment } = require("../attachments");
 const { postPaymentToLedger, voidLinkedLedgerEntry } = require("../bankLink");
@@ -53,7 +53,7 @@ function buildSupplierDetail(id) {
       referenceNo: p.reference_no, bankName: p.bank_name, upiId: p.upi_id, bankAccountId: p.bank_account_id,
       attachmentPath: p.attachment_path, attachmentName: p.attachment_name,
       againstInvoiceNo: p.stock_in_id ? (invoiceNoById[p.stock_in_id] || null) : null,
-      date: p.payment_date || new Date(p.created_at).toISOString().slice(0, 10), at: p.created_at
+      date: p.payment_date || localDate(p.created_at), at: p.created_at
     })),
     // Payable raises the due like a purchase would; Advance lowers it like a
     // payment would — the sign is baked into `amount` here so the ledger's

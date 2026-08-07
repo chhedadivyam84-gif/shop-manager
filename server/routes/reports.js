@@ -1,6 +1,6 @@
 const express = require("express");
 const db = require("../db");
-const { todayStr, round2 } = require("../util");
+const { todayStr, localDate, round2 } = require("../util");
 const { buildXlsx } = require("../xlsx");
 
 const router = express.Router();
@@ -124,7 +124,7 @@ router.get("/dashboard", (req, res) => {
   for (let i = 6; i >= 0; i--) {
     const d = new Date();
     d.setDate(d.getDate() - i);
-    const key = d.toISOString().slice(0, 10);
+    const key = localDate(d);
     const total = db.prepare("SELECT COALESCE(SUM(total),0) AS t FROM invoices WHERE date = ? AND voided = 0 AND doc_type = 'invoice'").get(key).t;
     days.push({ label: d.toLocaleDateString("en-IN", { weekday: "short" }), date: key, total });
   }
@@ -244,14 +244,14 @@ router.get("/daily-movement", (req, res) => {
     const end = range.to ? new Date(range.to + "T00:00:00Z") : new Date();
     const start = range.from ? new Date(range.from + "T00:00:00Z") : new Date(end.getTime() - 13 * 86400000);
     for (let t = start.getTime(); t <= end.getTime(); t += 86400000) {
-      dayKeys.push(new Date(t).toISOString().slice(0, 10));
+      dayKeys.push(localDate(t));
     }
     if (dayKeys.length > MAX_DAYS) dayKeys.splice(0, dayKeys.length - MAX_DAYS);
   } else {
     for (let i = 13; i >= 0; i--) {
       const d = new Date();
       d.setDate(d.getDate() - i);
-      dayKeys.push(d.toISOString().slice(0, 10));
+      dayKeys.push(localDate(d));
     }
   }
 
@@ -719,6 +719,88 @@ router.get("/profit-by-invoice", (req, res) => {
   });
 });
 
+/**
+ * BALANCE SHEET (Statement of Financial Position)
+ *
+ * What the shop OWNS against what it OWES, and the difference — Net Worth.
+ *
+ * This is deliberately NOT a double-entry balance sheet. There is no capital
+ * account, no chart of accounts and no expense ledger in this app, so
+ * "Assets = Liabilities + Capital" cannot be made to balance without inventing
+ * a capital figure. Presenting a fabricated one would look authoritative and
+ * be wrong, so the statement stops at Net Worth = Assets − Liabilities, which
+ * every number here genuinely supports.
+ *
+ * AS OF NOW, not as of a chosen date: stock levels and party dues are stored
+ * as RUNNING BALANCES, not a dated ledger, so there is no honest way to rewind
+ * them to a past date. A date picker here would silently mix today's stock
+ * with an old cash position.
+ *
+ * Stock is valued at the latest PURCHASE cost per piece. A product never
+ * purchased through this app has no cost on file and is counted at zero —
+ * `stock.itemsWithoutCost` reports how many, because a large number there
+ * means the stock figure (and therefore Net Worth) is understated.
+ */
+function computeBalanceSheet() {
+  const cashInHand = round2(db.prepare(`
+    SELECT COALESCE(SUM(CASE WHEN type = 'in' THEN amount ELSE -amount END), 0) AS net
+    FROM cash_entries WHERE voided = 0
+  `).get().net);
+
+  const bankAccounts = db.prepare("SELECT * FROM bank_accounts WHERE active = 1 ORDER BY name").all().map(a => {
+    const net = db.prepare(`
+      SELECT COALESCE(SUM(CASE WHEN type = 'in' THEN amount ELSE -amount END), 0) AS net
+      FROM bank_entries WHERE bank_account_id = ? AND voided = 0
+    `).get(a.id).net;
+    return { id: a.id, name: a.name, balance: round2(a.opening_balance + net) };
+  });
+  const bankBalance = round2(bankAccounts.reduce((s, a) => s + a.balance, 0));
+
+  // Stock at cost, from the authoritative per-size quantity (products.stock is
+  // just a cached sum of these — see syncProductStock in routes/products.js).
+  const sizes = db.prepare(`
+    SELECT ps.product_id, ps.stock, p.name
+    FROM product_sizes ps JOIN products p ON p.id = ps.product_id
+    WHERE ps.stock > 0
+  `).all();
+  const costCache = new Map();
+  let closingStock = 0, itemsWithoutCost = 0, itemsWithCost = 0, unitsWithoutCost = 0;
+  for (const s of sizes) {
+    if (!costCache.has(s.product_id)) costCache.set(s.product_id, getLatestCost(s.product_id));
+    const c = costCache.get(s.product_id);
+    if (c && c.costPrice > 0) { closingStock += c.costPrice * s.stock; itemsWithCost++; }
+    else { itemsWithoutCost++; unitsWithoutCost += s.stock; }
+  }
+  closingStock = round2(closingStock);
+
+  // A customer's `due` can go negative when they've paid in advance — that is
+  // money the shop OWES, not an asset, so the two directions are split rather
+  // than netted into one misleading figure. Same, mirrored, for suppliers.
+  const custRows = db.prepare("SELECT due FROM customers").all();
+  const receivables = round2(custRows.filter(c => c.due > 0).reduce((s, c) => s + c.due, 0));
+  const customerAdvances = round2(Math.abs(custRows.filter(c => c.due < 0).reduce((s, c) => s + c.due, 0)));
+
+  const suppRows = db.prepare("SELECT due FROM suppliers").all();
+  const payables = round2(suppRows.filter(s => s.due > 0).reduce((s, x) => s + x.due, 0));
+  const supplierAdvances = round2(Math.abs(suppRows.filter(s => s.due < 0).reduce((s, x) => s + x.due, 0)));
+
+  const assetsTotal = round2(cashInHand + bankBalance + closingStock + receivables + supplierAdvances);
+  const liabilitiesTotal = round2(payables + customerAdvances);
+
+  return {
+    asOf: todayStr(),
+    assets: {
+      cashInHand, bankBalance, bankAccounts, closingStock, receivables, supplierAdvances,
+      total: assetsTotal
+    },
+    liabilities: { payables, customerAdvances, total: liabilitiesTotal },
+    netWorth: round2(assetsTotal - liabilitiesTotal),
+    stock: { itemsWithCost, itemsWithoutCost, unitsWithoutCost }
+  };
+}
+
+router.get("/balance-sheet", (req, res) => res.json(computeBalanceSheet()));
+
 router.get("/export", (req, res) => {
   const type = req.query.type || "Sales";
   // Same range the on-screen report used, so a download can never quietly
@@ -810,6 +892,26 @@ router.get("/export", (req, res) => {
     filename = "supplier-report";
     rows = [["Supplier", "Phone", "Outstanding Due"]];
     db.prepare("SELECT * FROM suppliers ORDER BY name").all().forEach(s => rows.push([s.name, s.phone, s.due]));
+  } else if (type === "BalanceSheet") {
+    // Same function the screen reads, so the file can never drift from it.
+    filename = "balance-sheet";
+    const bs = computeBalanceSheet();
+    rows = [["Balance Sheet — as of " + bs.asOf], [], ["ASSETS", ""]];
+    rows.push(["Cash in Hand", bs.assets.cashInHand]);
+    bs.assets.bankAccounts.forEach(a => rows.push(["Bank — " + a.name, a.balance]));
+    rows.push(["Closing Stock (at cost)", bs.assets.closingStock]);
+    rows.push(["Customer Receivables", bs.assets.receivables]);
+    if (bs.assets.supplierAdvances) rows.push(["Advances to Suppliers", bs.assets.supplierAdvances]);
+    rows.push(["Total Assets", bs.assets.total], []);
+    rows.push(["LIABILITIES", ""]);
+    rows.push(["Supplier Payables", bs.liabilities.payables]);
+    if (bs.liabilities.customerAdvances) rows.push(["Advances from Customers", bs.liabilities.customerAdvances]);
+    rows.push(["Total Liabilities", bs.liabilities.total], []);
+    rows.push(["NET WORTH", bs.netWorth]);
+    if (bs.stock.itemsWithoutCost) {
+      rows.push([], ["Note: " + bs.stock.itemsWithoutCost + " stock item(s) totalling "
+        + bs.stock.unitsWithoutCost + " unit(s) have no purchase cost on file and are valued at zero."]);
+    }
   } else if (type === "SalePayments") {
     filename = "sale-payments-report";
     rows = [["Date", "Customer", "Against Invoice", "Amount", "Mode", "Reference No", "Remarks"]];

@@ -15,17 +15,27 @@ router.get("/", (req, res) => {
   res.json(publicSettings());
 });
 
+// Printed-document themes. Validated against this list rather than stored as
+// free text: an unrecognised value would reach the print CSS as a class that
+// matches nothing, silently printing an unstyled document.
+const PRINT_THEMES = ["classic", "tally", "navy", "minimal"];
+const cleanTheme = (v, fallback) => (PRINT_THEMES.includes(v) ? v : fallback);
+
 router.put("/", requireRole("owner"), (req, res) => {
-  const { businessName, tagline, address, phones, gstin, state, upiId, email, website } = req.body;
+  const { businessName, tagline, address, phones, gstin, state, upiId, email, website,
+          invoiceTheme, challanTheme } = req.body;
   const current = db.prepare("SELECT * FROM settings WHERE id = 1").get();
 
   db.prepare(`
-    UPDATE settings SET business_name=?, tagline=?, address=?, phones=?, gstin=?, state=?, upi_id=?, email=?, website=? WHERE id=1
+    UPDATE settings SET business_name=?, tagline=?, address=?, phones=?, gstin=?, state=?, upi_id=?, email=?, website=?,
+      invoice_theme=?, challan_theme=? WHERE id=1
   `).run(
     (businessName || current.business_name).trim(), (tagline ?? current.tagline),
     (address ?? current.address), (phones ?? current.phones), (gstin ?? current.gstin),
     (state ?? current.state), (upiId ?? current.upi_id),
-    (email ?? current.email), (website ?? current.website)
+    (email ?? current.email), (website ?? current.website),
+    invoiceTheme === undefined ? (current.invoice_theme || "classic") : cleanTheme(invoiceTheme, current.invoice_theme || "classic"),
+    challanTheme === undefined ? (current.challan_theme || "classic") : cleanTheme(challanTheme, current.challan_theme || "classic")
   );
 
   logAction(req, "settings.update", "");

@@ -37,13 +37,35 @@ function chronoWithBalance(accountId) {
   });
 }
 
+/**
+ * Free-text search over the fields staff actually recall an entry by.
+ * Beyond the Cash Book's party/category/remarks this also covers the
+ * bank-only identifiers — Transaction Type, Payment Mode and above all
+ * Reference No., since "find that cheque number" is the single most common
+ * reason to go digging through a bank ledger.
+ *
+ * Like the Cash Book, a search REPLACES the from/to range rather than
+ * narrowing inside it: the point is to find an entry whatever day it landed
+ * on. It stays scoped to the SELECTED ACCOUNT though — the running balance
+ * column is per-account, so mixing accounts into one list would produce a
+ * balance sequence that means nothing.
+ */
+function matchesSearch(r, search) {
+  return [r.party, r.category, r.txn_type, r.remarks, r.payment_mode, r.reference_no]
+    .some(v => String(v || "").toLowerCase().includes(search));
+}
+function applyFilters(rows, { from, to, q }) {
+  const search = String(q || "").trim().toLowerCase();
+  if (search) return rows.filter(r => matchesSearch(r, search));
+  if (from) rows = rows.filter(r => r.date >= from);
+  if (to) rows = rows.filter(r => r.date <= to);
+  return rows;
+}
+
 router.get("/", (req, res) => {
   const accountId = req.query.accountId || defaultAccountId();
   if (!accountId) return res.json([]);
-  const { from, to } = req.query;
-  let rows = chronoWithBalance(accountId);
-  if (from) rows = rows.filter(r => r.date >= from);
-  if (to) rows = rows.filter(r => r.date <= to);
+  const rows = applyFilters(chronoWithBalance(accountId), req.query);
   res.json(rows.reverse());
 });
 
@@ -76,10 +98,10 @@ router.get("/summary", (req, res) => {
 router.get("/export", (req, res) => {
   const accountId = req.query.accountId || defaultAccountId();
   const account = accountId ? db.prepare("SELECT * FROM bank_accounts WHERE id = ?").get(accountId) : null;
-  const { from, to } = req.query;
-  let rows = accountId ? chronoWithBalance(accountId) : [];
-  if (from) rows = rows.filter(r => r.date >= from);
-  if (to) rows = rows.filter(r => r.date <= to);
+  const { from, to, q } = req.query;
+  // Same filter path as the list route, so the spreadsheet always holds the
+  // rows on screen rather than the date range sitting unused behind a search.
+  const rows = applyFilters(accountId ? chronoWithBalance(accountId) : [], req.query);
 
   const out = [["Date", "Type", "Transaction Type", "Party", "Payment Mode", "Reference No.", "Remarks", "Bank In", "Bank Out", "Running Balance"]];
   rows.forEach(r => {
@@ -89,7 +111,11 @@ router.get("/export", (req, res) => {
       r.type === "in" ? r.amount : "", r.type === "out" ? r.amount : "", r.runningBalance
     ]);
   });
-  const filename = `bank-book-${(account ? account.name.replace(/\W+/g, "-") : "all")}-${(from || "all")}-to-${(to || "date")}`;
+  const accountPart = account ? account.name.replace(/\W+/g, "-") : "all";
+  const searchTerm = String(q || "").trim();
+  const filename = searchTerm
+    ? `bank-book-${accountPart}-search-${searchTerm.replace(/[^a-z0-9]+/gi, "-").slice(0, 30)}`
+    : `bank-book-${accountPart}-${(from || "all")}-to-${(to || "date")}`;
   const buf = buildXlsx(out, filename);
   res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   res.setHeader("Content-Disposition", `attachment; filename="${filename}.xlsx"`);

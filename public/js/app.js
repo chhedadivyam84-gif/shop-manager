@@ -53,7 +53,7 @@ let state = {
   billingLocationId: null,
   paperSize: "A5", editingInvoiceId: null, docNo: null,
   cbFrom: "", cbTo: "", cbEntries: [], cbSearch: "",
-  bbFrom: "", bbTo: "", bbEntries: [], bankAccounts: [], bbAccountId: null,
+  bbFrom: "", bbTo: "", bbEntries: [], bankAccounts: [], bbAccountId: null, bbSearch: "",
   inqStatus: "All", inquiries: [], staffNames: [],
   // Purchase Entry (Phase 1) — a standalone cart, separate from state.cart
   // (Billing's sales cart), since a purchase invoice's line shape (per-line
@@ -495,17 +495,38 @@ async function initApp(){
   document.getElementById("bb-back-link").addEventListener("click", (e)=>{ e.preventDefault(); switchTab("home"); });
   document.getElementById("bb-manage-accounts-link").addEventListener("click", (e)=>{ e.preventDefault(); openManageBankAccounts(); });
   document.getElementById("bb-add-entry").addEventListener("click", ()=>openBankEntry());
-  document.getElementById("bb-filter-from").addEventListener("change", (e)=>{ state.bbFrom = e.target.value; renderBankBook(); });
-  document.getElementById("bb-filter-to").addEventListener("change", (e)=>{ state.bbTo = e.target.value; renderBankBook(); });
+  document.getElementById("bb-search").addEventListener("input", (e)=>{
+    state.bbSearch = e.target.value;
+    renderBankBook();
+  });
+  // Picking a date means the user wants a date view back, so an old search
+  // term is cleared rather than silently overriding the range they just set.
+  // Switching ACCOUNT deliberately keeps the term — re-running the same
+  // search against the other account is exactly what you want when hunting
+  // a cheque you can't remember the account for.
+  const clearBbSearch = ()=>{
+    state.bbSearch = "";
+    const el = document.getElementById("bb-search");
+    if(el) el.value = "";
+  };
+  document.getElementById("bb-filter-from").addEventListener("change", (e)=>{ clearBbSearch(); state.bbFrom = e.target.value; renderBankBook(); });
+  document.getElementById("bb-filter-to").addEventListener("change", (e)=>{ clearBbSearch(); state.bbTo = e.target.value; renderBankBook(); });
   document.getElementById("bb-filter-today").addEventListener("click", ()=>{
+    clearBbSearch();
     const t = todayISO(); state.bbFrom = t; state.bbTo = t; renderBankBook();
   });
   document.getElementById("bb-filter-clear").addEventListener("click", ()=>{
+    clearBbSearch();
     state.bbFrom = ""; state.bbTo = ""; renderBankBook();
   });
   document.getElementById("bb-print-btn").addEventListener("click", printBankBook);
   document.getElementById("bb-export-btn").addEventListener("click", ()=>{
-    const q = bankBookQuery();
+    // While searching, export the matches on screen rather than the date
+    // range sitting unused behind the search.
+    const search = (state.bbSearch||"").trim();
+    const q = search
+      ? "accountId=" + encodeURIComponent(state.bbAccountId||"") + "&q=" + encodeURIComponent(search)
+      : bankBookQuery();
     window.open("/api/bankbook/export" + (q?"?"+q:""), "_blank");
   });
 
@@ -4806,8 +4827,22 @@ async function renderBankBook(){
     return;
   }
 
-  const q = bankBookQuery();
+  const searchEl = document.getElementById("bb-search");
+  if(searchEl && searchEl.value !== (state.bbSearch||"")) searchEl.value = state.bbSearch||"";
+  const search = (state.bbSearch||"").trim();
+
   try{
+    if(search){
+      // Matches span arbitrary dates, so the per-range Opening/Closing card
+      // is swapped for a tally of what actually matched (same approach as
+      // the Cash Book).
+      const entries = await api("GET", "/bankbook?accountId=" + encodeURIComponent(state.bbAccountId) + "&q=" + encodeURIComponent(search));
+      state.bbEntries = entries;
+      renderBankBookSearchSummary(entries, search);
+      renderBankBookList(entries, true);
+      return;
+    }
+    const q = bankBookQuery();
     const [summary, entries] = await Promise.all([
       api("GET", "/bankbook/summary" + (q?"?"+q:"")),
       api("GET", "/bankbook" + (q?"?"+q:""))
@@ -4816,6 +4851,20 @@ async function renderBankBook(){
     renderBankBookSummary(summary);
     renderBankBookList(entries);
   }catch(e){ toast(e.message); }
+}
+function renderBankBookSearchSummary(entries, search){
+  const account = (state.bankAccounts||[]).find(a=>a.id===state.bbAccountId);
+  const totalIn = entries.filter(e=>e.type==="in").reduce((s,e)=>s+e.amount,0);
+  const totalOut = entries.filter(e=>e.type==="out").reduce((s,e)=>s+e.amount,0);
+  const row = (label, value, cls) =>
+    `<div class="inv-flex" style="margin-bottom:4px;${cls||""}"><span class="muted">${label}</span><span>${value}</span></div>`;
+  document.getElementById("bankbook-summary").innerHTML = `
+    <div style="font-weight:800;font-size:14px;margin-bottom:2px;">${entries.length} match${entries.length!==1?"es":""} for "${escapeHtml(search)}"</div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:6px;">${account?escapeHtml(account.name)+" — ":""}across all dates. The date filter below is ignored while searching.</div>
+    ${row("Matched Bank In", "+"+fmt(totalIn), "color:var(--ok);")}
+    ${row("Matched Bank Out", "-"+fmt(totalOut), "color:var(--danger);")}
+    <div class="inv-flex" style="font-weight:800;border-top:1px solid var(--border);padding-top:6px;font-size:15px;"><span>Net</span><span>${fmt(totalIn-totalOut)}</span></div>
+  `;
 }
 function renderBankBookSummary(s){
   const account = (state.bankAccounts||[]).find(a=>a.id===state.bbAccountId);
@@ -4834,7 +4883,7 @@ function renderBankBookSummary(s){
  *  a Deposit/Withdrawal/Transfer, can't be edited or voided from here (the
  *  backend rejects it) — those rows render without a click handler and with
  *  a small note instead, matching what the API will actually let you do. */
-function renderBankBookList(entries){
+function renderBankBookList(entries, searching){
   document.getElementById("bankbook-list").innerHTML = entries.length ? entries.map(e=>{
     const editable = !e.source_type && !e.link_id;
     const title = e.party || e.txn_type || e.category || (e.type==="in"?"Bank In":"Bank Out");
@@ -4853,7 +4902,7 @@ function renderBankBookList(entries){
       <div class="row-right row-title" style="color:${e.type==="in"?"var(--ok)":"var(--danger)"};">${e.type==="in"?"+":"-"}${fmt(e.amount)}</div>
     </div>
   `;
-  }).join("") : `<div class="empty-hint">No bank entries in this range yet.</div>`;
+  }).join("") : `<div class="empty-hint">${searching ? "No bank entries match that search in this account." : "No bank entries in this range yet."}</div>`;
   document.querySelectorAll("[data-bb-entry]").forEach(el=>{
     el.addEventListener("click", ()=>{
       const entry = state.bbEntries.find(e=>e.id===el.dataset.bbEntry);

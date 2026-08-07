@@ -11,7 +11,21 @@ const syncProductStockStmt = db.prepare(
 
 router.get("/", (req, res) => {
   const { sizeId, locationId } = req.query;
-  let rows = db.prepare("SELECT * FROM stock_transfers ORDER BY created_at DESC LIMIT 200").all();
+  // Optional inclusive YYYY-MM-DD range, so the Transfers report can be
+  // narrowed to a period like every other report. stock_transfers stores only
+  // an epoch created_at, hence the date() conversion. Omitted (or malformed)
+  // dates mean no bound, which keeps every existing caller unchanged.
+  const day = v => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || "")) ? String(v) : null);
+  const from = day(req.query.from), to = day(req.query.to);
+  const where = (from ? " AND date(created_at/1000,'unixepoch') >= ?" : "")
+              + (to ? " AND date(created_at/1000,'unixepoch') <= ?" : "");
+  const params = [];
+  if (from) params.push(from);
+  if (to) params.push(to);
+
+  let rows = db.prepare(
+    `SELECT * FROM stock_transfers WHERE 1 = 1${where} ORDER BY created_at DESC LIMIT 200`
+  ).all(...params);
   if (sizeId) rows = rows.filter(t => String(t.size_id) === String(sizeId));
   if (locationId) rows = rows.filter(t => t.from_location_id === locationId || t.to_location_id === locationId);
   res.json(rows);

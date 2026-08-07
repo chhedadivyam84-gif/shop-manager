@@ -85,13 +85,14 @@ becomes both the server and the device you use it on.
 
 1. Install Termux from **F-Droid** (f-droid.org/packages/com.termux) —
    not the Play Store version, which is outdated and no longer updated.
-2. Open Termux and paste this one line:
+2. Copy this Shop Manager folder onto the phone, then in Termux run:
    ```
-   curl -sL https://raw.githubusercontent.com/chhedadivyam84-gif/divyam/claude/shop-management-app-1v3h7x/termux-setup.sh | bash
+   cd <path-to-the-folder> && bash termux-setup.sh
    ```
-   This installs Node.js and git, downloads Shop Manager, installs its
-   dependencies, and starts it — all in one step. The first run takes a
-   few minutes (mostly the `pkg update`/`upgrade` step).
+   This installs Node.js, installs the app’s dependencies from this
+   folder, and starts it — all in one step. The first run takes a few
+   minutes (mostly the `pkg update`/`upgrade` step).
+
 3. On that same phone, open a browser and go to `http://localhost:3000`.
    Log in as **Owner** with PIN **1234**, then change it from Settings →
    Manage Staff right away.

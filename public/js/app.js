@@ -46,6 +46,10 @@ let state = {
   transport: 0, loading: 0, roundOff: true, docType: "invoice", challanShowRate: false, gstOnCharges: true, gstEnabled: true, deliveryMan: "",
   vehicleNumber: "", deliveryAddress: "", remarks: "",
   invBrandFilter: "All", reportType: "Sales", partyMode: "customer",
+  // Reports date range. Empty = All Time, which is the default so a report
+  // shows full history until a period is picked. repPeriod remembers which
+  // preset chip is lit ("" once a custom From/To or month is typed).
+  repFrom: "", repTo: "", repPeriod: "all",
   challanAckFilter: "all",
   // Which location a Bill/Challan sells from — "shop" is every invoice's
   // long-standing default; "warehouse" is opt-in per sale (requirement:
@@ -423,8 +427,30 @@ async function initApp(){
     });
   });
   document.getElementById("export-csv-btn").addEventListener("click", ()=>{
-    window.open("/api/reports/export?type="+encodeURIComponent(state.reportType), "_blank");
+    // Carries the same range as the screen, so the file always matches the table.
+    window.open("/api/reports/export?type="+encodeURIComponent(state.reportType)+reportRangeQS(true), "_blank");
   });
+
+  document.querySelectorAll('[data-period]').forEach(b=>{
+    b.addEventListener("click", ()=>{ applyReportPeriod(b.dataset.period); });
+  });
+  const repMonth = document.getElementById("rep-month");
+  if(repMonth) repMonth.addEventListener("change", ()=>{
+    if(!repMonth.value) return;                       // cleared, not chosen
+    const [y, m] = repMonth.value.split("-").map(Number);
+    setReportRange(repMonth.value+"-01", isoDate(new Date(Date.UTC(y, m, 0))), null);
+  });
+  ["rep-from","rep-to"].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el) el.addEventListener("change", ()=>{
+      // Typing a custom date leaves no preset chip selected, and clears the
+      // month picker — the two would otherwise contradict each other on screen.
+      setReportRange(document.getElementById("rep-from").value,
+                     document.getElementById("rep-to").value, null);
+    });
+  });
+  const repClear = document.getElementById("rep-clear-range");
+  if(repClear) repClear.addEventListener("click", ()=>{ applyReportPeriod("all"); });
   document.querySelectorAll('[data-ack-filter]').forEach(b=>{
     b.addEventListener("click", ()=>{
       state.challanAckFilter = b.dataset.ackFilter;
@@ -4339,8 +4365,91 @@ function openWhatsApp(phone, text){
 /* ============================================================
    REPORTS
    ============================================================ */
+/* ---------- Reports date range ----------
+   Stock and dues reports are point-in-time balances — what is on the shelf,
+   what is owed, right now — so a date range can't narrow them into anything
+   meaningful. They get no date bar rather than a control that silently does
+   nothing (or worse, looks like it worked). */
+const REPORT_IGNORES_DATE = new Set(["Stock", "Customer", "LocationStock"]);
+
+/** Local-date YYYY-MM-DD — deliberately not toISOString(), which is UTC and
+ *  in India rolls "today" back a day before 5:30am. Matches the server's
+ *  todayStr(). */
+function isoDate(d){
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+
+/** `?from=..&to=..` for a bare path, or `&from=..` when the URL already has a
+ *  query (export, party-product). Empty string when showing all time. */
+function reportRangeQS(hasQuery){
+  const p = [];
+  if(state.repFrom) p.push("from="+encodeURIComponent(state.repFrom));
+  if(state.repTo) p.push("to="+encodeURIComponent(state.repTo));
+  if(!p.length) return "";
+  return (hasQuery ? "&" : "?") + p.join("&");
+}
+
+function setReportRange(from, to, period){
+  state.repFrom = from || "";
+  state.repTo = to || "";
+  // No period means a hand-typed range: no preset chip should stay lit.
+  state.repPeriod = period || "";
+  syncReportDateBar();
+  renderReport();
+}
+
+function applyReportPeriod(period){
+  const today = new Date();
+  const daysAgo = n => { const x = new Date(); x.setDate(x.getDate()-n); return x; };
+  let from = "", to = "";
+  if(period==="today"){ from = to = isoDate(today); }
+  else if(period==="yesterday"){ from = to = isoDate(daysAgo(1)); }
+  else if(period==="7"){ from = isoDate(daysAgo(6)); to = isoDate(today); }   // inclusive of today
+  else if(period==="30"){ from = isoDate(daysAgo(29)); to = isoDate(today); }
+  else if(period==="thismonth"){ from = isoDate(new Date(today.getFullYear(), today.getMonth(), 1)); to = isoDate(today); }
+  else if(period==="lastmonth"){
+    from = isoDate(new Date(today.getFullYear(), today.getMonth()-1, 1));
+    to   = isoDate(new Date(today.getFullYear(), today.getMonth(), 0)); // day 0 = last of previous month
+  }
+  setReportRange(from, to, period);
+}
+
+/** True when the range is exactly one whole calendar month, so the month
+ *  picker can show it without contradicting a From/To that means something
+ *  else. */
+function isWholeMonth(from, to){
+  if(!from || !to || !from.endsWith("-01")) return false;
+  const [y, m] = from.split("-").map(Number);
+  return to === isoDate(new Date(y, m, 0));
+}
+
+function describeReportRange(){
+  if(!state.repFrom && !state.repTo) return "Showing all dates.";
+  const pretty = s => s ? new Date(s+"T00:00:00").toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"}) : "";
+  if(state.repFrom && state.repTo){
+    return state.repFrom===state.repTo
+      ? `Showing ${pretty(state.repFrom)} only.`
+      : `Showing ${pretty(state.repFrom)} to ${pretty(state.repTo)}.`;
+  }
+  return state.repFrom ? `Showing ${pretty(state.repFrom)} onwards.` : `Showing up to ${pretty(state.repTo)}.`;
+}
+
+function syncReportDateBar(){
+  document.querySelectorAll('[data-period]').forEach(x=>
+    x.classList.toggle("selected", x.dataset.period===state.repPeriod));
+  const f = document.getElementById("rep-from"), t = document.getElementById("rep-to"), m = document.getElementById("rep-month");
+  if(f) f.value = state.repFrom;
+  if(t) t.value = state.repTo;
+  if(m) m.value = isWholeMonth(state.repFrom, state.repTo) ? state.repFrom.slice(0,7) : "";
+  const label = document.getElementById("rep-range-label");
+  if(label) label.textContent = describeReportRange();
+}
+
 async function renderReport(){
   const body = document.getElementById("report-body");
+  const dateBar = document.getElementById("report-date-bar");
+  if(dateBar) dateBar.style.display = REPORT_IGNORES_DATE.has(state.reportType) ? "none" : "block";
+  syncReportDateBar();
   // The acknowledgement filter only applies to challans — keep it out of the
   // way on every other report rather than showing a control that does nothing.
   const ackFilter = document.getElementById("challan-ack-filter");
@@ -4366,17 +4475,18 @@ async function renderReport(){
     let title="", subtitle="", rows=[];
     if(state.reportType==="Sales"){
       title = "Sales by Payment Method"; subtitle="Total invoice value";
-      rows = await api("GET","/reports/sales-by-payment");
+      rows = await api("GET","/reports/sales-by-payment"+reportRangeQS());
     } else if(state.reportType==="GST"){
-      title="GST Collected"; subtitle="CGST + SGST + IGST across all invoices";
-      const g = await api("GET","/reports/gst");
+      title="GST Collected";
+      subtitle = "CGST + SGST + IGST across " + (state.repFrom||state.repTo ? "invoices in the selected period" : "all invoices");
+      const g = await api("GET","/reports/gst"+reportRangeQS());
       rows = [{label:"CGST", value:g.cgst}, {label:"SGST", value:g.sgst}, {label:"IGST", value:g.igst}].filter(r=>r.value>0);
     } else if(state.reportType==="Stock"){
       title="Stock by Brand"; subtitle="Units currently on hand";
       rows = await api("GET","/reports/stock-by-brand");
     } else if(state.reportType==="Brand"){
       title="Sales by Brand"; subtitle="Revenue from priced invoices, by product brand";
-      rows = await api("GET","/reports/brand-wise");
+      rows = await api("GET","/reports/brand-wise"+reportRangeQS());
     } else {
       title="Customer Outstanding"; subtitle="Dues by customer";
       rows = await api("GET","/reports/customer-dues");
@@ -4392,7 +4502,7 @@ async function renderReport(){
 }
 
 async function renderPurchaseReport(body){
-  const rows = await api("GET","/reports/purchases");
+  const rows = await api("GET","/reports/purchases"+reportRangeQS());
   body.innerHTML = `<div style="font-weight:800;font-size:14px;">Purchase Report</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every stock-in recorded, newest first</div>` +
     (rows.length ? rows.map(r=>`
       <div class="list-row"><div>
@@ -4405,7 +4515,7 @@ async function renderPurchaseReport(body){
 
 const CHALLAN_STATUS_PILL = { Pending: "warn", Billed: "ok" };
 async function renderChallanReport(body){
-  const all = await api("GET","/reports/challans");
+  const all = await api("GET","/reports/challans"+reportRangeQS());
   // Acknowledgement is a sales-challan concept — a Purchase Challan is goods
   // coming IN, there's no customer signature to chase — so filtering by it
   // narrows to sales rows only rather than silently dropping purchase rows
@@ -4434,7 +4544,7 @@ async function renderChallanReport(body){
   });
 }
 async function renderOrdersReport(body){
-  const rows = await api("GET","/reports/orders");
+  const rows = await api("GET","/reports/orders"+reportRangeQS());
   body.innerHTML = `<div style="font-weight:800;font-size:14px;">Orders Report</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every Purchase Order and Sales Order, newest first — tap a row to open it</div>` +
     (rows.length ? rows.map(r=>`
       <div class="list-row" style="cursor:pointer;" ${r.type==="Sales"?`data-open-so="${r.id}"`:`data-open-po="${r.id}"`}><div>
@@ -4450,7 +4560,7 @@ async function renderOrdersReport(body){
   });
 }
 async function renderTaxInvoiceReport(body){
-  const rows = await api("GET","/reports/tax-invoices");
+  const rows = await api("GET","/reports/tax-invoices"+reportRangeQS());
   body.innerHTML = `<div style="font-weight:800;font-size:14px;">Tax Invoice Report</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every Tax Invoice issued, newest first — tap a row to open it</div>` +
     (rows.length ? rows.map(r=>`
       <div class="list-row" style="cursor:pointer;" data-open-invoice="${r.id}"><div>
@@ -4464,7 +4574,7 @@ async function renderTaxInvoiceReport(body){
   });
 }
 async function renderPurchaseBillReport(body){
-  const rows = await api("GET","/reports/purchase-bills");
+  const rows = await api("GET","/reports/purchase-bills"+reportRangeQS());
   body.innerHTML = `<div style="font-weight:800;font-size:14px;">Purchase Bill Report</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every purchase bill recorded, newest first — tap a row to open it</div>` +
     (rows.length ? rows.map(r=>`
       <div class="list-row" ${r.source==="purchase"?`style="cursor:pointer;" data-open-purchase="${r.id}"`:""}><div>
@@ -4477,7 +4587,7 @@ async function renderPurchaseBillReport(body){
   });
 }
 async function renderSalesmanReport(body){
-  const rows = await api("GET","/reports/salesman-wise");
+  const rows = await api("GET","/reports/salesman-wise"+reportRangeQS());
   const max = Math.max(1, ...rows.map(r=>r.value));
   body.innerHTML = `<div style="font-weight:800;font-size:14px;">Salesman-wise Sales</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Tax Invoice revenue by salesperson</div>` +
     (rows.length ? rows.map(r=>`
@@ -4498,7 +4608,7 @@ async function renderLocationStockReport(body){
     `).join("") : `<div class="empty-hint">No products yet.</div>`);
 }
 async function renderTransfersReport(body){
-  const rows = await api("GET","/transfers");
+  const rows = await api("GET","/transfers"+reportRangeQS());
   body.innerHTML = `<div style="font-weight:800;font-size:14px;">Transfer History</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Stock moved between locations, newest first</div>` +
     (rows.length ? rows.map(r=>{
       const fromName = (state.locations.find(l=>l.id===r.from_location_id)||{}).name || "?";
@@ -4510,7 +4620,7 @@ async function renderTransfersReport(body){
     }).join("") : `<div class="empty-hint">No transfers recorded yet.</div>`);
 }
 async function renderDailyMovementReport(body){
-  const days = await api("GET","/reports/daily-movement");
+  const days = await api("GET","/reports/daily-movement"+reportRangeQS());
   const max = Math.max(1, ...days.map(d=>Math.max(d.purchasesIn, d.salesOut)));
   body.innerHTML = `<div style="font-weight:800;font-size:14px;">Daily Movement</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Purchases in vs. sales out, last 14 days (pieces)</div>` +
     days.map(d=>`
@@ -4528,7 +4638,7 @@ async function renderDailyMovementReport(body){
       </div>`).join("");
 }
 async function renderPartyReport(body){
-  const rows = await api("GET","/reports/party-wise");
+  const rows = await api("GET","/reports/party-wise"+reportRangeQS());
   body.innerHTML = `<div style="font-weight:800;font-size:14px;">Party-wise Report</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Total business per customer</div>` +
     (rows.length ? rows.map(r=>`
       <div class="list-row"><div>
@@ -4540,7 +4650,7 @@ async function renderPartyReport(body){
 
 async function renderPartyProductReport(body){
   const kind = state.partyProductType || "sales";
-  const rows = await api("GET", `/reports/party-product?type=${kind}`);
+  const rows = await api("GET", `/reports/party-product?type=${kind}`+reportRangeQS(true));
   body.innerHTML = `
     <div style="font-weight:800;font-size:14px;">Party-wise Product Report</div>
     <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every product ${kind==="sales"?"sold to each customer":"bought from each supplier"}</div>
@@ -4566,7 +4676,7 @@ async function renderPartyProductReport(body){
   }));
 }
 async function renderSupplierReport(body){
-  const rows = await api("GET","/reports/supplier-wise");
+  const rows = await api("GET","/reports/supplier-wise"+reportRangeQS());
   body.innerHTML = `<div style="font-weight:800;font-size:14px;">Supplier Report</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Total purchases and outstanding due per supplier</div>` +
     (rows.length ? rows.map(r=>`
       <div class="list-row"><div>
@@ -4577,7 +4687,7 @@ async function renderSupplierReport(body){
 }
 
 async function renderSalePaymentsReport(body){
-  const rows = await api("GET","/reports/sale-payments");
+  const rows = await api("GET","/reports/sale-payments"+reportRangeQS());
   body.innerHTML = `<div style="font-weight:800;font-size:14px;">Sale Payments (Receipts)</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Payments received from customers, newest first</div>` +
     (rows.length ? rows.map(r=>`
       <div class="list-row"><div>
@@ -4605,7 +4715,7 @@ async function renderSalePaymentsReport(body){
 }
 
 async function renderPurchasePaymentsReport(body){
-  const rows = await api("GET","/reports/purchase-payments");
+  const rows = await api("GET","/reports/purchase-payments"+reportRangeQS());
   body.innerHTML = `<div style="font-weight:800;font-size:14px;">Purchase Payments</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Payments made to suppliers, newest first</div>` +
     (rows.length ? rows.map(r=>`
       <div class="list-row"><div>
@@ -4633,7 +4743,7 @@ async function renderPurchasePaymentsReport(body){
 }
 
 async function renderProfitReport(body){
-  const d = await api("GET","/reports/profit");
+  const d = await api("GET","/reports/profit"+reportRangeQS());
   const missingCost = d.rows.some(r=>!r.hasCost && r.pieces>0);
   // GST is deliberately excluded from every profit figure below — it's tax
   // collected and remitted, not margin — but shown alongside each amount so
@@ -4667,7 +4777,7 @@ async function renderProfitReport(body){
 }
 
 async function renderProfitByInvoiceReport(body){
-  const d = await api("GET","/reports/profit-by-invoice");
+  const d = await api("GET","/reports/profit-by-invoice"+reportRangeQS());
   body.innerHTML = `
     <div style="font-weight:800;font-size:14px;">Profit per Invoice</div>
     <div class="muted" style="font-size:11.5px;margin-bottom:10px;">Total profit for each sale, Sales Amount minus Purchase Amount excl. GST</div>

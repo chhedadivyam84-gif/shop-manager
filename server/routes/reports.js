@@ -35,6 +35,48 @@ function getLatestCost(productId) {
   return { costPrice, gstRate: fromPurchase.gst_rate };
 }
 
+/**
+ * Optional date range for the transaction reports, from ?from=&to= (both
+ * inclusive YYYY-MM-DD). Either side may be omitted for an open-ended range;
+ * omitting both means ALL TIME, which stays the default so a report keeps
+ * showing full history until a period is actually picked.
+ *
+ * Anything that isn't a well-formed date is ignored rather than rejected —
+ * a junk value must never silently narrow a report to nothing, which would
+ * read as "no sales that month" instead of "bad input".
+ *
+ * Returns SQL fragments rather than letting each route hand-roll a WHERE,
+ * because the date column differs per table (i.date, purchase_date,
+ * payment_date, ...) and getting it wrong filters on the wrong thing while
+ * still looking plausible.
+ *
+ * NOTE: only for period reports. Stock and dues are point-in-time balances —
+ * "what is on the shelf / owed right now" — so a date range there would
+ * produce a number that looks meaningful and isn't. Those routes take no
+ * range, and the UI hides the date bar for them.
+ */
+function dateRange(req) {
+  const clean = v => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || "")) ? String(v) : null);
+  const from = clean(req.query.from);
+  const to = clean(req.query.to);
+  return {
+    from, to,
+    active: !!(from || to),
+    /** ` AND <col> >= ? AND <col> <= ?` for whichever bounds were supplied.
+     *  `col` may be any SQL expression, e.g. date(created_at/1000,'unixepoch'). */
+    sql(col) {
+      return (from ? ` AND ${col} >= ?` : "") + (to ? ` AND ${col} <= ?` : "");
+    },
+    /** Params matching sql(), in the same order. Call once per sql() use. */
+    params() {
+      const p = [];
+      if (from) p.push(from);
+      if (to) p.push(to);
+      return p;
+    }
+  };
+}
+
 router.get("/dashboard", (req, res) => {
   const today = todayStr();
   // Sales figures count priced tax invoices only — a delivery challan carries no
@@ -113,18 +155,21 @@ router.get("/dashboard", (req, res) => {
 });
 
 router.get("/sales-by-payment", (req, res) => {
+  const range = dateRange(req);
   const rows = db.prepare(`
     SELECT payment_method AS label, COALESCE(SUM(total),0) AS value
-    FROM invoices WHERE voided = 0 AND doc_type = 'invoice' GROUP BY payment_method
-  `).all();
+    FROM invoices WHERE voided = 0 AND doc_type = 'invoice'${range.sql("date")}
+    GROUP BY payment_method
+  `).all(...range.params());
   res.json(rows);
 });
 
 router.get("/gst", (req, res) => {
+  const range = dateRange(req);
   const row = db.prepare(`
     SELECT COALESCE(SUM(cgst),0) AS cgst, COALESCE(SUM(sgst),0) AS sgst, COALESCE(SUM(igst),0) AS igst
-    FROM invoices WHERE voided = 0 AND doc_type = 'invoice'
-  `).get();
+    FROM invoices WHERE voided = 0 AND doc_type = 'invoice'${range.sql("date")}
+  `).get(...range.params());
   res.json(row);
 });
 
@@ -184,11 +229,35 @@ router.get("/daily-movement", (req, res) => {
     SELECT COALESCE(SUM(quantity),0) AS q FROM stock_transfers WHERE date(created_at/1000, 'unixepoch') = ?
   `);
 
+  // Without a range this stays the last 14 days. With one, it walks that
+  // period instead — one row per day, so the caller sees every day including
+  // the empty ones rather than a list with gaps.
+  //
+  // Capped at 370 rows: this runs four queries PER DAY, so an "all time"
+  // range on a shop with years of history would otherwise fire thousands of
+  // queries to render a table nobody can read. Past the cap the most recent
+  // 370 days of the range are returned.
+  const MAX_DAYS = 370;
+  const range = dateRange(req);
+  const dayKeys = [];
+  if (range.active) {
+    const end = range.to ? new Date(range.to + "T00:00:00Z") : new Date();
+    const start = range.from ? new Date(range.from + "T00:00:00Z") : new Date(end.getTime() - 13 * 86400000);
+    for (let t = start.getTime(); t <= end.getTime(); t += 86400000) {
+      dayKeys.push(new Date(t).toISOString().slice(0, 10));
+    }
+    if (dayKeys.length > MAX_DAYS) dayKeys.splice(0, dayKeys.length - MAX_DAYS);
+  } else {
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      dayKeys.push(d.toISOString().slice(0, 10));
+    }
+  }
+
   const days = [];
-  for (let i = 13; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    const key = d.toISOString().slice(0, 10);
+  for (const key of dayKeys) {
+    const d = new Date(key + "T00:00:00Z");
     const purchasesIn = round2(purchaseInStmt.get(key).q + stockInStmt.get(key).q);
     const salesOut = round2(salesOutStmt.get(key).q);
     const transferred = round2(transferStmt.get(key).q);
@@ -200,35 +269,41 @@ router.get("/daily-movement", (req, res) => {
   res.json(days);
 });
 
-/** Every supplier's total purchases — mirrors party-wise for the payable side. */
+/** Every supplier's total purchases — mirrors party-wise for the payable side.
+ *  The range narrows the purchases counted, not the supplier list: a supplier
+ *  with nothing in the period still shows, at zero, so their outstanding `due`
+ *  stays visible rather than the party vanishing from the report. */
 router.get("/supplier-wise", (req, res) => {
+  const range = dateRange(req);
   const rows = db.prepare(`
     SELECT s.id, s.name AS label, s.due,
       COALESCE(SUM(si.grand_total),0) AS value, COUNT(si.id) AS purchases
     FROM suppliers s
-    LEFT JOIN stock_ins si ON si.supplier_id = s.id
+    LEFT JOIN stock_ins si ON si.supplier_id = s.id${range.sql("si.purchase_date")}
     GROUP BY s.id ORDER BY value DESC
-  `).all();
+  `).all(...range.params());
   res.json(rows);
 });
 
 /** Every Sale Payment (money received from customers) — the Receipt history. */
 router.get("/sale-payments", (req, res) => {
+  const range = dateRange(req);
   const rows = db.prepare(`
     SELECT p.*, c.name AS customer_name FROM payments p
     JOIN customers c ON c.id = p.customer_id
-    WHERE p.voided = 0 ORDER BY p.created_at DESC
-  `).all();
+    WHERE p.voided = 0${range.sql("p.payment_date")} ORDER BY p.created_at DESC
+  `).all(...range.params());
   res.json(rows);
 });
 
 /** Every Purchase Payment (money paid to suppliers) — the Payment history. */
 router.get("/purchase-payments", (req, res) => {
+  const range = dateRange(req);
   const rows = db.prepare(`
     SELECT pp.*, s.name AS supplier_name FROM purchase_payments pp
     JOIN suppliers s ON s.id = pp.supplier_id
-    WHERE pp.voided = 0 ORDER BY pp.created_at DESC
-  `).all();
+    WHERE pp.voided = 0${range.sql("pp.payment_date")} ORDER BY pp.created_at DESC
+  `).all(...range.params());
   res.json(rows);
 });
 
@@ -240,10 +315,11 @@ router.get("/purchase-payments", (req, res) => {
  * report — same merge this app already does for a supplier's ledger.
  */
 router.get("/purchases", (req, res) => {
+  const range = dateRange(req);
   const stockInRows = db.prepare(`
     SELECT id, product_name, size_label, purchase_date, invoice_no, supplier, qty, billed_qty, mode, grand_total, created_at
-    FROM stock_ins
-  `).all();
+    FROM stock_ins WHERE 1 = 1${range.sql("purchase_date")}
+  `).all(...range.params());
 
   const purchaseLineRows = db.prepare(`
     SELECT pi.id, pi.name AS product_name, pi.size_label, p.date AS purchase_date, p.supplier_invoice_no AS invoice_no,
@@ -251,8 +327,8 @@ router.get("/purchases", (req, res) => {
     FROM purchase_items pi
     JOIN purchases p ON p.id = pi.purchase_id
     LEFT JOIN suppliers s ON s.id = p.supplier_id
-    WHERE p.voided = 0
-  `).all().map(r => {
+    WHERE p.voided = 0${range.sql("p.date")}
+  `).all(...range.params()).map(r => {
     const taxable = round2(r.qty * r.rate - r.discount_amount);
     return { ...r, grand_total: round2(taxable + taxable * (r.gst_rate / 100)) };
   });
@@ -327,6 +403,7 @@ router.get("/search-number", (req, res) => {
 });
 
 router.get("/challans", (req, res) => {
+  const range = dateRange(req);
   const salesRows = db.prepare(`
     SELECT i.id, i.challan_no, i.date, c.name AS party_name, i.transport, i.loading, i.converted_invoice_id,
       i.ack_status, i.ack_received_at, i.ack_receiver_name,
@@ -334,8 +411,8 @@ router.get("/challans", (req, res) => {
       (SELECT COALESCE(SUM(pieces),0) FROM invoice_items WHERE invoice_id = i.id) AS total_pieces,
       i.created_at
     FROM invoices i LEFT JOIN customers c ON c.id = i.customer_id
-    WHERE i.voided = 0 AND i.doc_type = 'challan'
-  `).all().map(r => ({
+    WHERE i.voided = 0 AND i.doc_type = 'challan'${range.sql("i.date")}
+  `).all(...range.params()).map(r => ({
     ...r, type: "Sales",
     status: r.converted_invoice_id ? "Billed" : "Pending",
     ackStatus: r.ack_status === "Received" ? "Received" : "Pending"
@@ -346,8 +423,8 @@ router.get("/challans", (req, res) => {
       (SELECT COALESCE(SUM(pieces),0) FROM purchase_items WHERE purchase_id = p.id) AS total_pieces,
       p.created_at
     FROM purchases p LEFT JOIN suppliers s ON s.id = p.supplier_id
-    WHERE p.voided = 0 AND p.doc_type = 'challan'
-  `).all().map(r => ({ ...r, type: "Purchase" }));
+    WHERE p.voided = 0 AND p.doc_type = 'challan'${range.sql("p.date")}
+  `).all(...range.params()).map(r => ({ ...r, type: "Purchase" }));
   const rows = [...salesRows, ...purchaseRows].sort((a, b) => b.created_at - a.created_at);
   res.json(rows);
 });
@@ -357,14 +434,17 @@ router.get("/challans", (req, res) => {
  *  distinguished by `type`. Each keeps its own creation/edit flow and
  *  status lifecycle; this is a read-only combined view. */
 router.get("/orders", (req, res) => {
+  const range = dateRange(req);
   const poRows = db.prepare(`
     SELECT po.id, po.po_no AS order_no, po.date, s.name AS party_name, po.total, po.status, po.created_at
     FROM purchase_orders po LEFT JOIN suppliers s ON s.id = po.supplier_id
-  `).all().map(r => ({ ...r, type: "Purchase" }));
+    WHERE 1 = 1${range.sql("po.date")}
+  `).all(...range.params()).map(r => ({ ...r, type: "Purchase" }));
   const soRows = db.prepare(`
     SELECT so.id, so.so_no AS order_no, so.date, c.name AS party_name, so.total, so.status, so.created_at
     FROM sales_orders so LEFT JOIN customers c ON c.id = so.customer_id
-  `).all().map(r => ({ ...r, type: "Sales" }));
+    WHERE 1 = 1${range.sql("so.date")}
+  `).all(...range.params()).map(r => ({ ...r, type: "Sales" }));
   const rows = [...poRows, ...soRows].sort((a, b) => b.created_at - a.created_at);
   res.json(rows);
 });
@@ -372,12 +452,13 @@ router.get("/orders", (req, res) => {
 /** Every Tax Invoice, newest first — the Tax Invoice Report (one row per
  *  document, unlike /profit's per-line breakdown). */
 router.get("/tax-invoices", (req, res) => {
+  const range = dateRange(req);
   const rows = db.prepare(`
     SELECT i.id, i.challan_no, i.date, c.name AS customer_name, i.payment_method, i.total, i.balance_due
     FROM invoices i LEFT JOIN customers c ON c.id = i.customer_id
-    WHERE i.voided = 0 AND i.doc_type = 'invoice'
+    WHERE i.voided = 0 AND i.doc_type = 'invoice'${range.sql("i.date")}
     ORDER BY i.created_at DESC
-  `).all();
+  `).all(...range.params());
   res.json(rows);
 });
 
@@ -386,16 +467,17 @@ router.get("/tax-invoices", (req, res) => {
  *  one bill) with the newer multi-line purchases (grouped by purchase_no),
  *  same merge /purchases already does at the line level. */
 router.get("/purchase-bills", (req, res) => {
+  const range = dateRange(req);
   const stockInRows = db.prepare(`
     SELECT id, invoice_no AS bill_no, purchase_date AS date, supplier AS supplier_name, grand_total, created_at, 1 AS item_count
-    FROM stock_ins
-  `).all().map(r => ({ ...r, source: "stock_in" }));
+    FROM stock_ins WHERE 1 = 1${range.sql("purchase_date")}
+  `).all(...range.params()).map(r => ({ ...r, source: "stock_in" }));
   const purchaseRows = db.prepare(`
     SELECT p.id, p.purchase_no AS bill_no, p.date, s.name AS supplier_name, p.total AS grand_total, p.created_at,
       (SELECT COUNT(*) FROM purchase_items WHERE purchase_id = p.id) AS item_count
     FROM purchases p LEFT JOIN suppliers s ON s.id = p.supplier_id
-    WHERE p.voided = 0
-  `).all().map(r => ({ ...r, source: "purchase" }));
+    WHERE p.voided = 0${range.sql("p.date")}
+  `).all(...range.params()).map(r => ({ ...r, source: "purchase" }));
   const rows = [...stockInRows, ...purchaseRows].sort((a, b) => b.created_at - a.created_at);
   res.json(rows);
 });
@@ -404,38 +486,44 @@ router.get("/purchase-bills", (req, res) => {
  *  field entered on Billing) — invoices with none recorded fall under
  *  "Unassigned" rather than being silently dropped. */
 router.get("/salesman-wise", (req, res) => {
+  const range = dateRange(req);
   const rows = db.prepare(`
     SELECT COALESCE(NULLIF(TRIM(delivery_man),''), 'Unassigned') AS label,
       COALESCE(SUM(total),0) AS value, COUNT(*) AS invoices
-    FROM invoices WHERE voided = 0 AND doc_type = 'invoice'
+    FROM invoices WHERE voided = 0 AND doc_type = 'invoice'${range.sql("date")}
     GROUP BY label ORDER BY value DESC
-  `).all();
+  `).all(...range.params());
   res.json(rows);
 });
 
 /** Sales grouped by brand — revenue and units, not just stock on hand. */
 router.get("/brand-wise", (req, res) => {
+  const range = dateRange(req);
   const rows = db.prepare(`
     SELECT COALESCE(NULLIF(p.brand,''),'(No brand)') AS label,
       SUM(ii.qty*ii.rate) AS value, SUM(ii.pieces) AS pieces, COUNT(DISTINCT ii.invoice_id) AS invoices
     FROM invoice_items ii
     JOIN invoices i ON i.id = ii.invoice_id
     LEFT JOIN products p ON p.id = ii.product_id
-    WHERE i.voided = 0 AND i.doc_type = 'invoice'
+    WHERE i.voided = 0 AND i.doc_type = 'invoice'${range.sql("i.date")}
     GROUP BY label ORDER BY value DESC
-  `).all();
+  `).all(...range.params());
   res.json(rows);
 });
 
-/** Every customer's total business — full list, not just the dashboard's top 4. */
+/** Every customer's total business — full list, not just the dashboard's top 4.
+ *  Range goes on the JOIN, not a WHERE, so a customer with no sales in the
+ *  period still appears at zero with their `due` intact — dropping them would
+ *  hide money still owed. */
 router.get("/party-wise", (req, res) => {
+  const range = dateRange(req);
   const rows = db.prepare(`
     SELECT c.id, c.name AS label, c.type, c.due,
       COALESCE(SUM(i.total),0) AS value, COUNT(i.id) AS invoices
     FROM customers c
-    LEFT JOIN invoices i ON i.customer_id = c.id AND i.voided = 0 AND i.doc_type = 'invoice'
+    LEFT JOIN invoices i ON i.customer_id = c.id AND i.voided = 0 AND i.doc_type = 'invoice'${range.sql("i.date")}
     GROUP BY c.id ORDER BY value DESC
-  `).all();
+  `).all(...range.params());
   res.json(rows);
 });
 
@@ -450,6 +538,7 @@ router.get("/party-wise", (req, res) => {
  */
 router.get("/party-product", (req, res) => {
   const type = req.query.type === "purchases" ? "purchases" : "sales";
+  const range = dateRange(req);
 
   if (type === "sales") {
     const rows = db.prepare(`
@@ -459,9 +548,9 @@ router.get("/party-product", (req, res) => {
       FROM invoice_items ii
       JOIN invoices i ON i.id = ii.invoice_id
       LEFT JOIN customers c ON c.id = i.customer_id
-      WHERE i.voided = 0 AND i.doc_type = 'invoice'
+      WHERE i.voided = 0 AND i.doc_type = 'invoice'${range.sql("i.date")}
       GROUP BY COALESCE(c.id, ''), ii.name
-    `).all();
+    `).all(...range.params());
     return res.json(groupByParty(rows));
   }
 
@@ -469,7 +558,8 @@ router.get("/party-product", (req, res) => {
     SELECT COALESCE(s.id, '') AS partyId, COALESCE(s.name, 'Unknown Supplier') AS party,
       si.product_name AS product, '' AS unit, si.qty AS qty, si.qty * si.cost_price AS amount
     FROM stock_ins si LEFT JOIN suppliers s ON s.id = si.supplier_id
-  `).all();
+    WHERE 1 = 1${range.sql("si.purchase_date")}
+  `).all(...range.params());
   const fromPurchaseItems = db.prepare(`
     SELECT COALESCE(s.id, '') AS partyId, COALESCE(s.name, 'Unknown Supplier') AS party,
       pi.name AS product, pi.unit_label AS unit, pi.pieces AS qty,
@@ -477,8 +567,8 @@ router.get("/party-product", (req, res) => {
     FROM purchase_items pi
     JOIN purchases p ON p.id = pi.purchase_id
     LEFT JOIN suppliers s ON s.id = p.supplier_id
-    WHERE p.voided = 0
-  `).all();
+    WHERE p.voided = 0${range.sql("p.date")}
+  `).all(...range.params());
 
   const merged = new Map();
   [...fromStockIns, ...fromPurchaseItems].forEach(r => {
@@ -521,13 +611,14 @@ function groupByParty(rows) {
  * rather than silently guessing a number.
  */
 router.get("/profit", (req, res) => {
+  const range = dateRange(req);
   const items = db.prepare(`
     SELECT ii.product_id, ii.name, ii.pieces, ii.qty, ii.rate, ii.gst_rate AS sales_gst_rate,
       ii.qty*ii.rate AS sales_amount, i.date, i.challan_no
     FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
-    WHERE i.voided = 0 AND i.doc_type = 'invoice'
+    WHERE i.voided = 0 AND i.doc_type = 'invoice'${range.sql("i.date")}
     ORDER BY i.created_at DESC
-  `).all();
+  `).all(...range.params());
 
   const totals = { purchaseAmount: 0, purchaseGst: 0, salesAmount: 0, salesGst: 0 };
   const rows = items.map(it => {
@@ -573,12 +664,13 @@ router.get("/profit", (req, res) => {
 // per-line is too granular for and the plain sales report has no cost data
 // to answer at all.
 router.get("/profit-by-invoice", (req, res) => {
+  const range = dateRange(req);
   const invoices = db.prepare(`
     SELECT i.id, i.challan_no, i.date, i.created_at, i.customer_id, c.name AS customer_name
     FROM invoices i LEFT JOIN customers c ON c.id = i.customer_id
-    WHERE i.voided = 0 AND i.doc_type = 'invoice'
+    WHERE i.voided = 0 AND i.doc_type = 'invoice'${range.sql("i.date")}
     ORDER BY i.created_at DESC
-  `).all();
+  `).all(...range.params());
 
   const itemsStmt = db.prepare(`
     SELECT product_id, pieces, qty, rate, gst_rate AS sales_gst_rate, qty*rate AS sales_amount
@@ -629,6 +721,9 @@ router.get("/profit-by-invoice", (req, res) => {
 
 router.get("/export", (req, res) => {
   const type = req.query.type || "Sales";
+  // Same range the on-screen report used, so a download can never quietly
+  // contain a different set of rows than the table it came from.
+  const range = dateRange(req);
   let rows = [];
   let filename = "report";
 
@@ -637,8 +732,9 @@ router.get("/export", (req, res) => {
     rows = [["Challan No", "Date", "Customer", "Payment", "Total"]];
     const invoices = db.prepare(`
       SELECT i.*, c.name AS customer_name FROM invoices i
-      LEFT JOIN customers c ON c.id = i.customer_id WHERE i.voided = 0 AND i.doc_type = 'invoice' ORDER BY i.created_at DESC
-    `).all();
+      LEFT JOIN customers c ON c.id = i.customer_id
+      WHERE i.voided = 0 AND i.doc_type = 'invoice'${range.sql("i.date")} ORDER BY i.created_at DESC
+    `).all(...range.params());
     invoices.forEach(inv => rows.push([inv.challan_no, inv.date, inv.customer_name || "Walk-in", inv.payment_method, inv.total]));
   } else if (type === "Stock") {
     filename = "stock-report";
@@ -651,8 +747,9 @@ router.get("/export", (req, res) => {
   } else if (type === "Purchase") {
     filename = "purchase-report";
     rows = [["Date", "Invoice No", "Supplier", "Product", "Size", "Qty", "Rate", "GST%", "Transport", "Grand Total"]];
-    db.prepare("SELECT * FROM stock_ins ORDER BY created_at DESC").all().forEach(r =>
-      rows.push([r.purchase_date, r.invoice_no, r.supplier, r.product_name, r.size_label, r.qty, r.rate, r.gst_rate, r.transport, r.grand_total]));
+    db.prepare(`SELECT * FROM stock_ins WHERE 1 = 1${range.sql("purchase_date")} ORDER BY created_at DESC`)
+      .all(...range.params()).forEach(r =>
+        rows.push([r.purchase_date, r.invoice_no, r.supplier, r.product_name, r.size_label, r.qty, r.rate, r.gst_rate, r.transport, r.grand_total]));
   } else if (type === "Challan") {
     filename = "challan-report";
     rows = [["Challan No", "Date", "Customer", "Items", "Total Pieces", "Transport", "Loading"]];
@@ -661,27 +758,28 @@ router.get("/export", (req, res) => {
         (SELECT COUNT(*) FROM invoice_items WHERE invoice_id = i.id) AS item_count,
         (SELECT COALESCE(SUM(pieces),0) FROM invoice_items WHERE invoice_id = i.id) AS total_pieces
       FROM invoices i LEFT JOIN customers c ON c.id = i.customer_id
-      WHERE i.voided = 0 AND i.doc_type = 'challan' ORDER BY i.created_at DESC
-    `).all().forEach(r => rows.push([r.challan_no, r.date, r.customer_name || "Walk-in", r.item_count, r.total_pieces, r.transport, r.loading]));
+      WHERE i.voided = 0 AND i.doc_type = 'challan'${range.sql("i.date")} ORDER BY i.created_at DESC
+    `).all(...range.params()).forEach(r => rows.push([r.challan_no, r.date, r.customer_name || "Walk-in", r.item_count, r.total_pieces, r.transport, r.loading]));
   } else if (type === "TaxInvoice") {
     filename = "tax-invoice-report";
     rows = [["Estimate No", "Date", "Customer", "Payment Method", "Total", "Balance Due"]];
     db.prepare(`
       SELECT i.challan_no, i.date, c.name AS customer_name, i.payment_method, i.total, i.balance_due
       FROM invoices i LEFT JOIN customers c ON c.id = i.customer_id
-      WHERE i.voided = 0 AND i.doc_type = 'invoice' ORDER BY i.created_at DESC
-    `).all().forEach(r => rows.push([r.challan_no, r.date, r.customer_name || "Walk-in", r.payment_method, r.total, r.balance_due]));
+      WHERE i.voided = 0 AND i.doc_type = 'invoice'${range.sql("i.date")} ORDER BY i.created_at DESC
+    `).all(...range.params()).forEach(r => rows.push([r.challan_no, r.date, r.customer_name || "Walk-in", r.payment_method, r.total, r.balance_due]));
   } else if (type === "PurchaseBill") {
     filename = "purchase-bill-report";
     rows = [["Bill No", "Date", "Supplier", "Items", "Grand Total"]];
     const stockInRows = db.prepare(`
-      SELECT invoice_no AS bill_no, purchase_date AS date, supplier AS supplier_name, grand_total, created_at, 1 AS item_count FROM stock_ins
-    `).all();
+      SELECT invoice_no AS bill_no, purchase_date AS date, supplier AS supplier_name, grand_total, created_at, 1 AS item_count
+      FROM stock_ins WHERE 1 = 1${range.sql("purchase_date")}
+    `).all(...range.params());
     const purchaseRows = db.prepare(`
       SELECT p.purchase_no AS bill_no, p.date, s.name AS supplier_name, p.total AS grand_total, p.created_at,
         (SELECT COUNT(*) FROM purchase_items WHERE purchase_id = p.id) AS item_count
-      FROM purchases p LEFT JOIN suppliers s ON s.id = p.supplier_id WHERE p.voided = 0
-    `).all();
+      FROM purchases p LEFT JOIN suppliers s ON s.id = p.supplier_id WHERE p.voided = 0${range.sql("p.date")}
+    `).all(...range.params());
     [...stockInRows, ...purchaseRows].sort((a, b) => b.created_at - a.created_at)
       .forEach(r => rows.push([r.bill_no || "", r.date || "", r.supplier_name || "Unknown Supplier", r.item_count, r.grand_total]));
   } else if (type === "Salesman") {
@@ -689,8 +787,8 @@ router.get("/export", (req, res) => {
     rows = [["Salesperson", "Total Sales", "Invoices"]];
     db.prepare(`
       SELECT COALESCE(NULLIF(TRIM(delivery_man),''), 'Unassigned') AS label, COALESCE(SUM(total),0) AS value, COUNT(*) AS invoices
-      FROM invoices WHERE voided = 0 AND doc_type = 'invoice' GROUP BY label ORDER BY value DESC
-    `).all().forEach(r => rows.push([r.label, round2(r.value), r.invoices]));
+      FROM invoices WHERE voided = 0 AND doc_type = 'invoice'${range.sql("date")} GROUP BY label ORDER BY value DESC
+    `).all(...range.params()).forEach(r => rows.push([r.label, round2(r.value), r.invoices]));
   } else if (type === "Brand") {
     filename = "brand-wise-report";
     rows = [["Brand", "Revenue", "Pieces Sold", "Invoices"]];
@@ -698,16 +796,16 @@ router.get("/export", (req, res) => {
       SELECT COALESCE(NULLIF(p.brand,''),'(No brand)') AS brand, SUM(ii.qty*ii.rate) AS revenue,
         SUM(ii.pieces) AS pieces, COUNT(DISTINCT ii.invoice_id) AS invoices
       FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id LEFT JOIN products p ON p.id = ii.product_id
-      WHERE i.voided = 0 AND i.doc_type = 'invoice' GROUP BY brand ORDER BY revenue DESC
-    `).all().forEach(r => rows.push([r.brand, round2(r.revenue), r.pieces, r.invoices]));
+      WHERE i.voided = 0 AND i.doc_type = 'invoice'${range.sql("i.date")} GROUP BY brand ORDER BY revenue DESC
+    `).all(...range.params()).forEach(r => rows.push([r.brand, round2(r.revenue), r.pieces, r.invoices]));
   } else if (type === "Party") {
     filename = "party-wise-report";
     rows = [["Customer", "Type", "Total Business", "Invoices", "Outstanding Due"]];
     db.prepare(`
       SELECT c.name, c.type, c.due, COALESCE(SUM(i.total),0) AS total, COUNT(i.id) AS invoices
-      FROM customers c LEFT JOIN invoices i ON i.customer_id = c.id AND i.voided = 0 AND i.doc_type = 'invoice'
+      FROM customers c LEFT JOIN invoices i ON i.customer_id = c.id AND i.voided = 0 AND i.doc_type = 'invoice'${range.sql("i.date")}
       GROUP BY c.id ORDER BY total DESC
-    `).all().forEach(r => rows.push([r.name, r.type, round2(r.total), r.invoices, r.due]));
+    `).all(...range.params()).forEach(r => rows.push([r.name, r.type, round2(r.total), r.invoices, r.due]));
   } else if (type === "Supplier") {
     filename = "supplier-report";
     rows = [["Supplier", "Phone", "Outstanding Due"]];
@@ -719,8 +817,8 @@ router.get("/export", (req, res) => {
       SELECT p.*, c.name AS customer_name, i.challan_no FROM payments p
       JOIN customers c ON c.id = p.customer_id
       LEFT JOIN invoices i ON i.id = p.invoice_id
-      WHERE p.voided = 0 ORDER BY p.created_at DESC
-    `).all().forEach(p => rows.push([p.payment_date, p.customer_name, p.challan_no || "", p.amount, p.method, p.reference_no, p.note]));
+      WHERE p.voided = 0${range.sql("p.payment_date")} ORDER BY p.created_at DESC
+    `).all(...range.params()).forEach(p => rows.push([p.payment_date, p.customer_name, p.challan_no || "", p.amount, p.method, p.reference_no, p.note]));
   } else if (type === "PurchasePayments") {
     filename = "purchase-payments-report";
     rows = [["Date", "Supplier", "Against Purchase Invoice", "Amount", "Mode", "Reference No", "Remarks"]];
@@ -728,16 +826,16 @@ router.get("/export", (req, res) => {
       SELECT pp.*, s.name AS supplier_name, si.invoice_no FROM purchase_payments pp
       JOIN suppliers s ON s.id = pp.supplier_id
       LEFT JOIN stock_ins si ON si.id = pp.stock_in_id
-      WHERE pp.voided = 0 ORDER BY pp.created_at DESC
-    `).all().forEach(p => rows.push([p.payment_date, p.supplier_name, p.invoice_no || "", p.amount, p.method, p.reference_no, p.note]));
+      WHERE pp.voided = 0${range.sql("pp.payment_date")} ORDER BY pp.created_at DESC
+    `).all(...range.params()).forEach(p => rows.push([p.payment_date, p.supplier_name, p.invoice_no || "", p.amount, p.method, p.reference_no, p.note]));
   } else if (type === "Profit") {
     filename = "profit-report";
     rows = [["Date", "Challan No", "Product", "Qty Sold", "Revenue", "Cost", "Profit"]];
     const items = db.prepare(`
       SELECT ii.product_id, ii.name, ii.pieces, ii.qty*ii.rate AS revenue, i.date, i.challan_no
       FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
-      WHERE i.voided = 0 AND i.doc_type = 'invoice' ORDER BY i.created_at DESC
-    `).all();
+      WHERE i.voided = 0 AND i.doc_type = 'invoice'${range.sql("i.date")} ORDER BY i.created_at DESC
+    `).all(...range.params());
     items.forEach(it => {
       const c = it.product_id ? getLatestCost(it.product_id) : null;
       const cost = round2((c ? c.costPrice : 0) * (it.pieces || 0));
@@ -746,9 +844,15 @@ router.get("/export", (req, res) => {
   } else {
     filename = "gst-report";
     rows = [["Challan No", "Date", "Tax Type", "CGST", "SGST", "IGST"]];
-    db.prepare("SELECT * FROM invoices WHERE voided = 0 AND doc_type = 'invoice' ORDER BY created_at DESC").all()
+    db.prepare(`SELECT * FROM invoices WHERE voided = 0 AND doc_type = 'invoice'${range.sql("date")} ORDER BY created_at DESC`)
+      .all(...range.params())
       .forEach(inv => rows.push([inv.challan_no, inv.date, inv.tax_type, round2(inv.cgst), round2(inv.sgst), round2(inv.igst)]));
   }
+
+  // Stamp the period into the filename so two downloads of the same report
+  // for different months don't land in Downloads as "sales-report (1).xlsx"
+  // with no way to tell them apart.
+  if (range.active) filename += `-${range.from || "start"}_to_${range.to || "today"}`;
 
   // A real .xlsx (not CSV renamed) — see server/xlsx.js for why this is
   // hand-built rather than an npm dependency.

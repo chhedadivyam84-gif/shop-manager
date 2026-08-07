@@ -275,6 +275,32 @@
           <button class="chip" data-report="Transfers">Transfers</button>
           <button class="chip" data-report="DailyMovement">Daily Movement</button>
         </div>
+        <!-- Period filter. Hidden by renderReport() on the stock/dues reports,
+             which are point-in-time balances a date range can't meaningfully
+             narrow. Defaults to All Time so reports keep their full history
+             until a period is actually chosen. -->
+        <div id="report-date-bar" style="margin-top:10px;">
+          <div class="chip-row" style="margin-top:0;" id="report-period-chips">
+            <button class="chip selected" data-period="all">All Time</button>
+            <button class="chip" data-period="today">Today</button>
+            <button class="chip" data-period="yesterday">Yesterday</button>
+            <button class="chip" data-period="7">Last 7 Days</button>
+            <button class="chip" data-period="30">Last 30 Days</button>
+            <button class="chip" data-period="thismonth">This Month</button>
+            <button class="chip" data-period="lastmonth">Last Month</button>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-top:8px;">
+            <label class="dim" style="flex:1;min-width:120px;"><span>Month</span>
+              <input type="month" id="rep-month"></label>
+            <label class="dim" style="flex:1;min-width:120px;"><span>From</span>
+              <input type="date" id="rep-from"></label>
+            <label class="dim" style="flex:1;min-width:120px;"><span>To</span>
+              <input type="date" id="rep-to"></label>
+            <button class="btn btn-outline" id="rep-clear-range" style="flex:0 0 auto;">Clear</button>
+          </div>
+          <div class="muted" id="rep-range-label" style="font-size:11.5px;margin-top:6px;"></div>
+        </div>
+
         <!-- Only meaningful on the Challan report; shown/hidden by renderReport(). -->
         <div class="chip-row" style="margin-top:10px;display:none;" id="challan-ack-filter">
           <button class="chip selected" data-ack-filter="all">All Challans</button>

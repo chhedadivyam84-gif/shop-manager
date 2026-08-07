@@ -16,15 +16,16 @@ router.get("/", (req, res) => {
 });
 
 router.put("/", requireRole("owner"), (req, res) => {
-  const { businessName, tagline, address, phones, gstin, state, upiId } = req.body;
+  const { businessName, tagline, address, phones, gstin, state, upiId, email, website } = req.body;
   const current = db.prepare("SELECT * FROM settings WHERE id = 1").get();
 
   db.prepare(`
-    UPDATE settings SET business_name=?, tagline=?, address=?, phones=?, gstin=?, state=?, upi_id=? WHERE id=1
+    UPDATE settings SET business_name=?, tagline=?, address=?, phones=?, gstin=?, state=?, upi_id=?, email=?, website=? WHERE id=1
   `).run(
     (businessName || current.business_name).trim(), (tagline ?? current.tagline),
     (address ?? current.address), (phones ?? current.phones), (gstin ?? current.gstin),
-    (state ?? current.state), (upiId ?? current.upi_id)
+    (state ?? current.state), (upiId ?? current.upi_id),
+    (email ?? current.email), (website ?? current.website)
   );
 
   logAction(req, "settings.update", "");

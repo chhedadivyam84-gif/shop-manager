@@ -1124,6 +1124,13 @@ addColumn("invoices", "converted_invoice_id", "TEXT REFERENCES invoices(id) ON D
 // above — a challan can be signed-for but not yet billed, or billed but with
 // the signed copy still out with the driver. Only meaningful on
 // doc_type='challan'; a Tax Invoice never uses it.
+// Email/website printed in the document letterhead. These used to be
+// hardcoded into the print templates, which meant every shop running this
+// app printed one particular shop's contact details. Blank by default —
+// the letterhead simply omits whichever of the two isn't filled in.
+addColumn("settings", "email", "TEXT DEFAULT ''");
+addColumn("settings", "website", "TEXT DEFAULT ''");
+
 addColumn("invoices", "ack_status", "TEXT NOT NULL DEFAULT 'Pending'");
 addColumn("invoices", "ack_received_at", "INTEGER");
 addColumn("invoices", "ack_receiver_name", "TEXT DEFAULT ''");

@@ -88,7 +88,8 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
   const contactBits = [
     settings.gstin ? `GSTIN: ${settings.gstin}` : "",
     settings.phones ? `Ph: ${settings.phones}` : "",
-    "Email: swagatply@gmail.com", "Website: www.swagatply.com"
+    settings.email ? `Email: ${settings.email}` : "",
+    settings.website ? `Website: ${settings.website}` : ""
   ].filter(Boolean).join("   |   ");
   doc.setFont("helvetica", "bold"); doc.setFontSize(fs(7));
   doc.text(contactBits, PAGE_W / 2, y, { align: "center" }); y += fs(3.5);

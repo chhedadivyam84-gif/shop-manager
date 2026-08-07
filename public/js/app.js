@@ -3363,6 +3363,8 @@ function openSettings(){
       <label class="field-label">Address</label><input type="text" id="st-address" value="${escapeHtml(cfg.address||"")}">
       <label class="field-label">Phone(s)</label><input type="text" id="st-phones" value="${escapeHtml(cfg.phones||"")}">
       <label class="field-label">GSTIN</label><input type="text" id="st-gstin" value="${escapeHtml(cfg.gstin||"")}">
+      <label class="field-label">Email <span class="muted" style="font-weight:400;">— optional, printed on documents</span></label><input type="email" id="st-email" value="${escapeHtml(cfg.email||"")}" placeholder="e.g. shop@gmail.com">
+      <label class="field-label">Website <span class="muted" style="font-weight:400;">— optional, printed on documents</span></label><input type="text" id="st-website" value="${escapeHtml(cfg.website||"")}" placeholder="e.g. www.myshop.com">
       <label class="field-label">Shop State (for CGST/SGST vs IGST)</label>
       <select id="st-state"><option value="">Select state</option>${INDIAN_STATES.map(s=>`<option value="${s}" ${cfg.state===s?"selected":""}>${s}</option>`).join("")}</select>
       <label class="field-label">UPI ID</label><input type="text" id="st-upi" value="${escapeHtml(cfg.upi_id||"")}">
@@ -3413,7 +3415,9 @@ function openSettings(){
         phones: document.getElementById("st-phones").value.trim(),
         gstin: document.getElementById("st-gstin").value.trim(),
         state: document.getElementById("st-state").value,
-        upiId: document.getElementById("st-upi").value.trim()
+        upiId: document.getElementById("st-upi").value.trim(),
+        email: document.getElementById("st-email").value.trim(),
+        website: document.getElementById("st-website").value.trim()
       });
       document.getElementById("avatar-btn").textContent = initials(state.settings.business_name);
       closeAllSheets();
@@ -4025,7 +4029,8 @@ function renderInvoicePageContent(){
       <div class="erp-contact-line">${[
         cfg.gstin ? `GSTIN: ${escapeHtml(cfg.gstin)}` : "",
         cfg.phones ? `Ph: ${escapeHtml(cfg.phones)}` : "",
-        "Email: swagatply@gmail.com", "Website: www.swagatply.com"
+        cfg.email ? `Email: ${escapeHtml(cfg.email)}` : "",
+        cfg.website ? `Website: ${escapeHtml(cfg.website)}` : ""
       ].filter(Boolean).join("  |  ")}</div>
     </div>
 
@@ -7331,7 +7336,8 @@ function printQuotation(q){
     <div class="q2-contact-line">${[
       cfg.phones ? `Ph: ${escapeHtml(cfg.phones)}` : "",
       cfg.gstin ? `GSTIN: ${escapeHtml(cfg.gstin)}` : "",
-      "Email: swagatply@gmail.com", "Website: www.swagatply.com"
+      cfg.email ? `Email: ${escapeHtml(cfg.email)}` : "",
+        cfg.website ? `Website: ${escapeHtml(cfg.website)}` : ""
     ].filter(Boolean).join("  |  ")}</div>
 
     <div class="q2-boxes">

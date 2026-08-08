@@ -14,6 +14,29 @@ try {
   console.warn("Could not load data/.env:", err.message);
 }
 
+/* ============================================================
+   SHOP TIMEZONE — must be set before anything creates a Date.
+   ------------------------------------------------------------
+   Every stored `date` column is the shop's calendar date, taken
+   from the server's local timezone (see todayStr() in util.js).
+   A cloud host runs its containers in UTC, so without this the
+   server's "local" time IS UTC: in India (UTC+5:30) every bill,
+   cash entry and payment made between midnight and 5:30am gets
+   stamped with YESTERDAY's date, and at a month boundary lands
+   in the previous GST period. That is not theoretical — it was
+   exactly what this deployment was doing.
+
+   Defaults to India because that is who this app is for; set
+   the TZ environment variable to override (e.g. TZ=Asia/Dubai)
+   without touching code. Set here rather than only as a hosting
+   env var so a shop that forgets to configure it is still right.
+   ============================================================ */
+// Only ASSIGN when defaulting. Re-assigning process.env.TZ to the value it
+// already holds still invalidates Node's timezone cache, and on some platforms
+// it then re-resolves to the SYSTEM zone instead of the string — which would
+// silently ignore an operator's explicit TZ. Leaving it untouched avoids that.
+if (!process.env.TZ) process.env.TZ = "Asia/Kolkata";
+
 start().catch(err => {
   console.error("Fatal startup error:", err);
   process.exit(1);

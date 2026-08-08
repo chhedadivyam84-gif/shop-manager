@@ -741,6 +741,137 @@ router.get("/profit-by-invoice", (req, res) => {
  * `stock.itemsWithoutCost` reports how many, because a large number there
  * means the stock figure (and therefore Net Worth) is understated.
  */
+/* ============================================================
+   PROFIT & LOSS  /  BALANCE SHEET
+   ------------------------------------------------------------
+   Expense and income categories. A cash/bank row is only ever
+   income or expense if it is NOT linked to a customer/supplier
+   payment: collecting a debtor is turning a receivable into
+   cash, and paying a creditor is settling a payable — neither
+   is profit or loss, and counting them would roughly double
+   both sides of the P&L. Linked rows carry a non-empty
+   source_type (see server/bankLink.js), which is how they are
+   excluded below.
+   ============================================================ */
+const EXPENSE_CATEGORIES = [
+  "Freight & Transport", "Salary", "Rent", "Electricity",
+  "Office Expenses", "Printing & Stationery", "Bank Charges", "Miscellaneous"
+];
+const INCOME_CATEGORIES = ["Other Income", "Interest Received", "Discount Received"];
+
+/**
+ * Cash + bank rows that represent real income/expense.
+ *
+ * Two kinds of row are excluded, and both matter:
+ *  - source_type set — a customer/supplier payment. Collecting a debtor turns
+ *    a receivable into cash; paying a creditor settles a payable. Neither is
+ *    profit or loss.
+ *  - link_id set — one leg of a Deposit / Withdrawal / cash-to-bank Transfer.
+ *    Moving the shop's own money between its own drawer and its own bank is
+ *    not earning or spending it. Counting both legs would add the same rupees
+ *    to income AND expenses, inflating the P&L from both ends at once.
+ */
+function ledgerMovements(range, direction) {
+  const where = `voided = 0 AND type = ? AND COALESCE(source_type,'') = '' AND COALESCE(link_id,'') = ''`;
+  const cash = db.prepare(
+    `SELECT date, amount, COALESCE(category,'') AS category, COALESCE(party,'') AS party, COALESCE(remarks,'') AS remarks
+     FROM cash_entries WHERE ${where}${range.sql("date")}`
+  ).all(direction, ...range.params());
+  const bank = db.prepare(
+    `SELECT date, amount, COALESCE(category,'') AS category, COALESCE(party,'') AS party, COALESCE(remarks,'') AS remarks
+     FROM bank_entries WHERE ${where}${range.sql("date")}`
+  ).all(direction, ...range.params());
+  return [...cash, ...bank];
+}
+
+/**
+ * Profit & Loss for a period.
+ *
+ * Cost of goods sold uses the SAME per-line latest-purchase-cost method as
+ * /profit, so the two screens can never disagree. The textbook alternative
+ * (opening stock + purchases − closing stock) needs dated stock snapshots
+ * this app does not keep, so it would have to be guessed.
+ */
+function computePnl(range) {
+  const inv = db.prepare(`
+    SELECT COALESCE(SUM(subtotal - discount_amount),0) AS net_sales,
+           COALESCE(SUM(transport + loading),0) AS charges,
+           COUNT(*) AS bills
+    FROM invoices WHERE voided = 0 AND doc_type = 'invoice'${range.sql("date")}
+  `).get(...range.params());
+
+  const soldItems = db.prepare(`
+    SELECT ii.product_id, ii.pieces
+    FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
+    WHERE i.voided = 0 AND i.doc_type = 'invoice'${range.sql("i.date")}
+  `).all(...range.params());
+  const costCache = new Map();
+  let cogs = 0, itemsWithoutCost = 0;
+  for (const it of soldItems) {
+    if (!it.product_id) { itemsWithoutCost++; continue; }
+    if (!costCache.has(it.product_id)) costCache.set(it.product_id, getLatestCost(it.product_id));
+    const c = costCache.get(it.product_id);
+    if (c && c.costPrice > 0) cogs += c.costPrice * (it.pieces || 0);
+    else itemsWithoutCost++;
+  }
+  cogs = round2(cogs);
+
+  const bucket = (rows, known) => {
+    const out = {};
+    known.forEach(k => { out[k] = 0; });
+    out.Uncategorised = 0;
+    rows.forEach(r => {
+      const k = known.includes(r.category) ? r.category : "Uncategorised";
+      out[k] = round2(out[k] + r.amount);
+    });
+    return out;
+  };
+  const expenseRows = ledgerMovements(range, "out");
+  const incomeRows = ledgerMovements(range, "in");
+  const expenses = bucket(expenseRows, EXPENSE_CATEGORIES);
+  const otherIncome = bucket(incomeRows, INCOME_CATEGORIES);
+
+  const salesRevenue = round2(inv.net_sales);
+  const chargesRecovered = round2(inv.charges);
+  const grossProfit = round2(salesRevenue - cogs);
+  const operatingExpenses = round2(Object.values(expenses).reduce((s, v) => s + v, 0));
+  const otherIncomeTotal = round2(Object.values(otherIncome).reduce((s, v) => s + v, 0));
+  const totalIncome = round2(salesRevenue + chargesRecovered + otherIncomeTotal);
+  const totalExpenses = round2(cogs + operatingExpenses);
+
+  return {
+    range: { from: range.from, to: range.to },
+    income: { salesRevenue, chargesRecovered, otherIncome, otherIncomeTotal, total: totalIncome },
+    expenses: { costOfGoodsSold: cogs, operating: expenses, operatingTotal: operatingExpenses, total: totalExpenses },
+    grossProfit,
+    netProfit: round2(totalIncome - totalExpenses),
+    bills: inv.bills,
+    // Surfaced, not hidden: a sale of a product with no purchase cost on file
+    // contributes revenue but no cost, which overstates profit.
+    itemsWithoutCost
+  };
+}
+
+router.get("/pnl", (req, res) => res.json(computePnl(dateRange(req))));
+
+/** Output GST (collected on sales) vs input GST (paid on purchases). Whichever
+ *  side is larger decides whether GST sits on the asset or liability side. */
+function gstPosition() {
+  const out = db.prepare(`
+    SELECT COALESCE(SUM(cgst+sgst+igst),0) AS t FROM invoices WHERE voided = 0 AND doc_type = 'invoice'
+  `).get().t;
+  const inStock = db.prepare("SELECT COALESCE(SUM(gst_amount),0) AS t FROM stock_ins").get().t;
+  const inPurch = db.prepare(`
+    SELECT COALESCE(SUM(cgst+sgst+igst),0) AS t FROM purchases WHERE voided = 0
+  `).get().t;
+  const output = round2(out), input = round2(inStock + inPurch);
+  return {
+    output, input,
+    payable: output > input ? round2(output - input) : 0,
+    credit: input > output ? round2(input - output) : 0
+  };
+}
+
 function computeBalanceSheet() {
   const cashInHand = round2(db.prepare(`
     SELECT COALESCE(SUM(CASE WHEN type = 'in' THEN amount ELSE -amount END), 0) AS net
@@ -784,17 +915,79 @@ function computeBalanceSheet() {
   const payables = round2(suppRows.filter(s => s.due > 0).reduce((s, x) => s + x.due, 0));
   const supplierAdvances = round2(Math.abs(suppRows.filter(s => s.due < 0).reduce((s, x) => s + x.due, 0)));
 
-  const assetsTotal = round2(cashInHand + bankBalance + closingStock + receivables + supplierAdvances);
-  const liabilitiesTotal = round2(payables + customerAdvances);
+  // ---- one-time-entry masters (see server/routes/accounting.js) ----
+  const faRows = db.prepare("SELECT cost, accumulated_depreciation FROM fixed_assets WHERE active = 1").all();
+  const fixedAssets = round2(faRows.reduce((s, r) => s + (r.cost - r.accumulated_depreciation), 0));
+  const securityDeposits = round2(
+    db.prepare("SELECT COALESCE(SUM(amount),0) AS t FROM deposits WHERE active = 1").get().t
+  );
+  const loanRows = db.prepare("SELECT kind, outstanding FROM loans WHERE active = 1").all();
+  const bankLoans = round2(loanRows.filter(r => r.kind === "bank").reduce((s, r) => s + r.outstanding, 0));
+  const otherLiabilities = round2(loanRows.filter(r => r.kind !== "bank").reduce((s, r) => s + r.outstanding, 0));
+  const outstandingRows = db.prepare(
+    "SELECT category, amount FROM outstanding_liabilities WHERE settled = 0"
+  ).all();
+  const outstandingExpenses = round2(outstandingRows.reduce((s, r) => s + r.amount, 0));
+  const outstandingByCategory = {};
+  outstandingRows.forEach(r => {
+    const k = r.category || "Other";
+    outstandingByCategory[k] = round2((outstandingByCategory[k] || 0) + r.amount);
+  });
+
+  const gst = gstPosition();
+
+  const capRows = db.prepare("SELECT kind, amount FROM capital_entries WHERE voided = 0").all();
+  const capSum = k => round2(capRows.filter(r => r.kind === k).reduce((s, r) => s + r.amount, 0));
+  const openingCapital = capSum("opening");
+  const capitalIntroduced = capSum("introduced");
+  const drawings = capSum("drawings");
+
+  // Retained profit since inception — an unbounded range, because the Balance
+  // Sheet's capital is cumulative, not "this period's" profit.
+  const allTime = { from: null, to: null, active: false, sql: () => "", params: () => [] };
+  const pnl = computePnl(allTime);
+  const closingCapital = round2(openingCapital + capitalIntroduced - drawings + pnl.netProfit);
+
+  const assetsTotalFull = round2(
+    cashInHand + bankBalance + closingStock + receivables + supplierAdvances
+    + fixedAssets + securityDeposits + gst.credit
+  );
+  const liabilitiesTotalFull = round2(
+    payables + customerAdvances + bankLoans + otherLiabilities + outstandingExpenses + gst.payable
+  );
+
+  // The equation is NOT forced. Whatever fails to reconcile is reported as a
+  // Difference so the owner can see how much is still unrecorded — a plug
+  // figure that makes it "balance" would hide exactly the thing worth knowing.
+  const difference = round2(assetsTotalFull - (liabilitiesTotalFull + closingCapital));
 
   return {
     asOf: todayStr(),
     assets: {
       cashInHand, bankBalance, bankAccounts, closingStock, receivables, supplierAdvances,
-      total: assetsTotal
+      fixedAssets, securityDeposits, gstInputCredit: gst.credit,
+      total: assetsTotalFull
     },
-    liabilities: { payables, customerAdvances, total: liabilitiesTotal },
-    netWorth: round2(assetsTotal - liabilitiesTotal),
+    liabilities: {
+      payables, customerAdvances, bankLoans, otherLiabilities,
+      outstandingExpenses, outstandingByCategory, gstPayable: gst.payable,
+      total: liabilitiesTotalFull
+    },
+    capital: {
+      opening: openingCapital, introduced: capitalIntroduced, drawings,
+      retainedProfit: pnl.netProfit, closing: closingCapital
+    },
+    gst,
+    balanceCheck: {
+      totalAssets: assetsTotalFull,
+      totalLiabilities: liabilitiesTotalFull,
+      totalCapital: closingCapital,
+      liabilitiesPlusCapital: round2(liabilitiesTotalFull + closingCapital),
+      difference,
+      balanced: Math.abs(difference) < 1
+    },
+    // Kept for the simpler "what do I own minus what I owe" read.
+    netWorth: round2(assetsTotalFull - liabilitiesTotalFull),
     stock: { itemsWithCost, itemsWithoutCost, unitsWithoutCost }
   };
 }

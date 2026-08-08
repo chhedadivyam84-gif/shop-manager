@@ -138,6 +138,7 @@ app.use("/api/customers", requireAuth, require("./routes/customers"));
 app.use("/api/suppliers", requireAuth, require("./routes/suppliers"));
 app.use("/api/invoices", requireAuth, require("./routes/invoices"));
 app.use("/api/reports", requireAuth, require("./routes/reports"));
+app.use("/api/accounting", requireAuth, require("./routes/accounting"));
 app.use("/api/cashbook", requireAuth, require("./routes/cashbook"));
 app.use("/api/bankbook", requireAuth, require("./routes/bankbook"));
 app.use("/api/bank-accounts", requireAuth, require("./routes/bankAccounts"));

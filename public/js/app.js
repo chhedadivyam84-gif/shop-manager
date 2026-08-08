@@ -1904,8 +1904,22 @@ async function loadStockInHistory(productId){
         <div class="row-title">+${r.qty} pcs received${r.supplier?" from "+escapeHtml(r.supplier):""}</div>
         <div class="row-sub">${dt.toLocaleDateString("en-IN")}${r.invoice_no?" · Inv# "+escapeHtml(r.invoice_no):""}${r.purchase_date?" · "+escapeHtml(r.purchase_date):""}</div>
         <div class="row-sub">${sizeBit}${qtyBit}${r.rate?" @ "+fmt(r.rate):""} · Grand Total ${fmt(r.grand_total||r.cost_price*r.qty)}</div>
-      </div></div>`;
+      </div>${isOwner() && r.source==="stock_in" ? `<div class="row-right">
+        <a href="#" data-edit-stockin="${r.id}" style="font-size:12px;font-weight:700;">Edit</a>
+      </div>` : ""}</div>`;
     }).join("") : `<div class="empty-hint">No purchases recorded yet.</div>`;
+
+    // Owner-only: correcting a mistyped quantity or cost changes stock and a
+    // supplier's due, so it sits behind the same gate as deleting one.
+    area.querySelectorAll("[data-edit-stockin]").forEach(a=>{
+      a.addEventListener("click", async ev=>{
+        ev.preventDefault();
+        const row = rows.find(r=>String(r.id)===a.getAttribute("data-edit-stockin"));
+        const product = state.products.find(x=>x.id===productId);
+        if(!row || !product){ toast("Couldn't open that entry."); return; }
+        openOpeningStock(product, row);
+      });
+    });
   }catch(e){ if(area.isConnected) area.innerHTML = `<div class="empty-hint">Couldn't load purchase history.</div>`; }
 }
 
@@ -2198,24 +2212,41 @@ function openStockIn(p, editingSi){
  * the product's normal selling mode, since an opening balance doesn't need
  * area/length billing math, only a starting count and its cost.
  */
-function openOpeningStock(p){
+function openOpeningStock(p, existing){
   const sheet = document.getElementById("sheet-opening-stock");
   const warehouseLoc = state.locations.find(l=>l.code==="warehouse");
-  const ctx = {
-    sizeId: p.sizes.length===1 ? p.sizes[0].id : null,
-    locationId: warehouseLoc && warehouseLoc.id,
-    date: todayISO(), qty: "", cost: ""
-  };
+  // Passing `existing` (a stock_ins row) turns this into a correction of that
+  // entry instead of a new one — same fields, so a mistyped opening balance is
+  // fixed where it was entered rather than deleted and re-keyed.
+  const editing = !!existing;
+  const ctx = editing
+    ? {
+        sizeId: existing.size_id,
+        locationId: existing.location_id || (warehouseLoc && warehouseLoc.id),
+        date: existing.purchase_date || todayISO(),
+        qty: String(existing.qty),
+        cost: String(existing.rate)
+      }
+    : {
+        sizeId: p.sizes.length===1 ? p.sizes[0].id : null,
+        locationId: warehouseLoc && warehouseLoc.id,
+        date: todayISO(), qty: "", cost: ""
+      };
 
   function render(){
     const total = round2((parseFloat(ctx.qty)||0) * (parseFloat(ctx.cost)||0));
     sheet.innerHTML = `
       <div class="sheet-handle"></div>
       <button class="sheet-close" data-sheetclose>✕</button>
-      <div class="sheet-title">Opening Stock Balance</div>
+      <div class="sheet-title">${editing ? "Edit Opening Stock" : "Opening Stock Balance"}</div>
       <div class="muted" style="font-size:12px;margin-bottom:10px;">${escapeHtml(p.name)}</div>
+      ${editing ? `<div class="muted" style="font-size:11.5px;margin-bottom:10px;line-height:1.5;">
+        Correcting the entry of ${escapeHtml(existing.purchase_date||"")} — currently
+        ${existing.qty} @ ${fmt(existing.rate)}. Stock is adjusted by the difference,
+        so anything already sold from it stays sold.
+      </div>` : ""}
 
-      ${p.sizes.length>1 ? `
+      ${p.sizes.length>1 && !editing ? `
       <label class="field-label">Size / Variant</label>
       <div class="chip-row" id="os-size-chips">
         ${p.sizes.map(s=>`<button class="chip ${s.id===ctx.sizeId?'selected':''}" data-os-size="${s.id}">${escapeHtml(s.label)}</button>`).join("")}
@@ -2239,7 +2270,10 @@ function openOpeningStock(p){
         <div class="inv-flex" style="font-weight:800;"><span>Total Opening Value</span><span>${fmt(total)}</span></div>
       </div>
 
-      <button class="btn btn-primary" id="os-save" style="margin-top:16px;width:100%;">Save Opening Stock</button>
+      <button class="btn btn-primary" id="os-save" style="margin-top:16px;width:100%;">${editing ? "Save Correction" : "Save Opening Stock"}</button>
+      ${editing ? `<div style="margin-top:12px;text-align:center;">
+        <a href="#" id="os-delete" class="btn-danger-link">Delete this entry instead</a>
+      </div>` : ""}
     `;
     sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
     sheet.querySelectorAll("[data-os-size]").forEach(b=>b.addEventListener("click", ()=>{
@@ -2252,6 +2286,18 @@ function openOpeningStock(p){
     sheet.querySelector("#os-qty").addEventListener("input", e=>{ ctx.qty = e.target.value; renderTotalOnly(); });
     sheet.querySelector("#os-cost").addEventListener("input", e=>{ ctx.cost = e.target.value; renderTotalOnly(); });
     sheet.querySelector("#os-save").addEventListener("click", save);
+    const delLink = sheet.querySelector("#os-delete");
+    if(delLink) delLink.addEventListener("click", async ev=>{
+      ev.preventDefault();
+      if(!confirm("Delete this stock entry? The quantity it added will be taken back out of stock.")) return;
+      try{
+        await api("DELETE", `/stock-ins/${existing.id}`);
+        await loadProducts();
+        closeAllSheets();
+        renderInventoryList();
+        toast("Entry deleted.", "ok");
+      }catch(err){ toast(err.message); }
+    });
   }
   // Recompute just the total on every keystroke without a full re-render —
   // a full render() would steal focus from the input mid-type.
@@ -2269,14 +2315,27 @@ function openOpeningStock(p){
     const btn = sheet.querySelector("#os-save");
     btn.disabled = true;
     try{
-      await api("POST", `/products/${p.id}/stock-in`, {
-        purchaseDate: ctx.date, sizeId: ctx.sizeId, locationId: ctx.locationId,
-        mode: "UNIT", pieces: qty, rate: cost, gst: 0
-      });
+      if(editing){
+        // The existing full-edit route, not a second one: it already reverses
+        // the old stock/due impact and refuses if the goods have since moved
+        // on. Only the fields this sheet shows are sent — everything else
+        // (supplier, GST rate, transport, billing geometry) defaults to what
+        // the record already holds, so a plain Record Stock In edited here
+        // doesn't silently lose its supplier or have its GST zeroed.
+        await api("PUT", `/products/${p.id}/stock-in/${existing.id}`, {
+          purchaseDate: ctx.date, sizeId: ctx.sizeId, locationId: ctx.locationId,
+          pieces: qty, rate: cost
+        });
+      } else {
+        await api("POST", `/products/${p.id}/stock-in`, {
+          purchaseDate: ctx.date, sizeId: ctx.sizeId, locationId: ctx.locationId,
+          mode: "UNIT", pieces: qty, rate: cost, gst: 0
+        });
+      }
       await loadProducts();
       closeAllSheets();
       renderInventoryList();
-      toast("Opening stock saved.", "ok");
+      toast(editing ? "Entry corrected." : "Opening stock saved.", "ok");
     }catch(err){ toast(err.message); }
     finally{ btn.disabled = false; }
   }
@@ -3398,6 +3457,10 @@ function openSettings(){
       <div id="st-license-block"></div>
       <button class="btn btn-primary" id="st-save" style="margin-top:16px;">Save Settings</button>
 
+      <div class="section-title">Opening Balances &amp; Assets</div>
+      <p class="muted" style="font-size:11px;margin-bottom:10px;">Capital, fixed assets, loans and deposits — the figures the app can't work out from your sales and purchases. Enter them once; they feed the Balance Sheet from then on.</p>
+      <button class="btn btn-outline" id="st-accounting">Set Opening Balances</button>
+
       <div class="section-title">Staff Access</div>
       <button class="btn btn-outline" id="st-manage-staff">Manage Staff &amp; PINs</button>
       <button class="btn btn-outline" id="st-audit-log" style="margin-top:8px;">Activity Log</button>
@@ -3492,6 +3555,9 @@ function openSettings(){
       }catch(err){ toast(err.message); }
     });
   }
+
+  const acctBtn = sheet.querySelector("#st-accounting");
+  if(acctBtn) acctBtn.addEventListener("click", openAccountingSheet);
 
   const manageStaffBtn = sheet.querySelector("#st-manage-staff");
   if(manageStaffBtn) manageStaffBtn.addEventListener("click", openStaffManage);
@@ -3625,6 +3691,157 @@ async function renderNumberingStatus(){
 /* ============================================================
    SHEET: Manage Staff (owner only)
    ============================================================ */
+/**
+ * Opening Balances & Assets — the one-time figures the app cannot derive from
+ * trading activity. Deliberately a single sheet with every section visible at
+ * once: this is filled in during one sitting when the shop starts using the
+ * Balance Sheet, not returned to daily, so wizard steps or tabs would only add
+ * clicks to a job done once.
+ */
+async function openAccountingSheet(){
+  const sheet = document.getElementById("sheet-accounting");
+  const money = v => fmt(Number(v)||0);
+
+  async function load(){
+    const [cap, fa, loans, dep, out] = await Promise.all([
+      api("GET","/accounting/capital"),
+      api("GET","/accounting/fixed-assets"),
+      api("GET","/accounting/loans"),
+      api("GET","/accounting/deposits"),
+      api("GET","/accounting/outstanding")
+    ]);
+    const kindLabel = { opening:"Opening Capital", introduced:"Capital Introduced", drawings:"Drawings" };
+    const listRow = (title, sub, amount, delAttr) => `
+      <div class="list-row"><div>
+        <div class="row-title">${escapeHtml(title)}</div>
+        ${sub ? `<div class="row-sub">${escapeHtml(sub)}</div>` : ""}
+      </div><div class="row-right">
+        <div class="row-title">${money(amount)}</div>
+        <a href="#" ${delAttr} style="font-size:11px;font-weight:700;color:var(--danger);">Remove</a>
+      </div></div>`;
+
+    sheet.innerHTML = `
+      <div class="sheet-handle"></div>
+      <button class="sheet-close" data-sheetclose>✕</button>
+      <div class="sheet-title">Opening Balances &amp; Assets</div>
+      <p class="muted" style="font-size:11.5px;line-height:1.5;">Enter these once. They feed the Balance Sheet and shrink its Difference line towards zero.</p>
+
+      <div class="section-title">Capital</div>
+      <div class="card">${cap.rows.length ? cap.rows.map(r=>
+        listRow(kindLabel[r.kind]||r.kind, r.date+(r.remarks?" · "+r.remarks:""), r.amount, `data-del-cap="${r.id}"`)
+      ).join("") : `<div class="empty-hint">No capital entered yet.</div>`}</div>
+      <div class="charge-grid" style="margin-top:8px;">
+        <label class="dim"><span>Type</span>
+          <select id="ac-cap-kind" style="text-align:left;">
+            <option value="opening">Opening Capital</option>
+            <option value="introduced">Capital Introduced</option>
+            <option value="drawings">Drawings</option>
+          </select></label>
+        <label class="dim"><span>Amount</span><input type="number" min="0" step="0.01" id="ac-cap-amt"></label>
+        <label class="dim"><span>Date</span><input type="date" id="ac-cap-date"></label>
+      </div>
+      <button class="btn btn-outline" id="ac-cap-add" style="margin-top:8px;">Add Capital Entry</button>
+
+      <div class="section-title">Fixed Assets</div>
+      <div class="card">${fa.rows.length ? fa.rows.map(r=>
+        listRow(r.name, [r.category, r.purchase_date, r.accumulated_depreciation?("dep. "+money(r.accumulated_depreciation)):""].filter(Boolean).join(" · "), r.net_value, `data-del-fa="${r.id}"`)
+      ).join("") : `<div class="empty-hint">No fixed assets entered yet.</div>`}</div>
+      <div class="charge-grid" style="margin-top:8px;">
+        <label class="dim" style="grid-column:1/-1;"><span>Asset name</span><input type="text" id="ac-fa-name" style="text-align:left;" placeholder="Shop computer"></label>
+        <label class="dim"><span>Category</span>
+          <select id="ac-fa-cat" style="text-align:left;">
+            <option>Furniture</option><option>Computer</option><option>Vehicle</option><option>Machinery</option><option>Other</option>
+          </select></label>
+        <label class="dim"><span>Cost</span><input type="number" min="0" step="0.01" id="ac-fa-cost"></label>
+        <label class="dim"><span>Depreciation so far</span><input type="number" min="0" step="0.01" id="ac-fa-dep"></label>
+      </div>
+      <button class="btn btn-outline" id="ac-fa-add" style="margin-top:8px;">Add Fixed Asset</button>
+
+      <div class="section-title">Loans</div>
+      <div class="card">${loans.rows.length ? loans.rows.map(r=>
+        listRow(r.lender, (r.kind==="bank"?"Bank loan":"Other liability")+(r.interest_rate?" · "+r.interest_rate+"%":""), r.outstanding, `data-del-loan="${r.id}"`)
+      ).join("") : `<div class="empty-hint">No loans entered yet.</div>`}</div>
+      <div class="charge-grid" style="margin-top:8px;">
+        <label class="dim" style="grid-column:1/-1;"><span>Lender</span><input type="text" id="ac-loan-lender" style="text-align:left;" placeholder="HDFC Bank"></label>
+        <label class="dim"><span>Type</span>
+          <select id="ac-loan-kind" style="text-align:left;"><option value="bank">Bank loan</option><option value="other">Other liability</option></select></label>
+        <label class="dim"><span>Still owed</span><input type="number" min="0" step="0.01" id="ac-loan-out"></label>
+      </div>
+      <button class="btn btn-outline" id="ac-loan-add" style="margin-top:8px;">Add Loan</button>
+
+      <div class="section-title">Security Deposits</div>
+      <div class="card">${dep.rows.length ? dep.rows.map(r=>
+        listRow(r.held_by, r.purpose, r.amount, `data-del-dep="${r.id}"`)
+      ).join("") : `<div class="empty-hint">No deposits entered yet.</div>`}</div>
+      <div class="charge-grid" style="margin-top:8px;">
+        <label class="dim" style="grid-column:1/-1;"><span>Held by</span><input type="text" id="ac-dep-by" style="text-align:left;" placeholder="Shop landlord"></label>
+        <label class="dim" style="grid-column:1/-1;"><span>Purpose</span><input type="text" id="ac-dep-purpose" style="text-align:left;" placeholder="Rent deposit"></label>
+        <label class="dim"><span>Amount</span><input type="number" min="0" step="0.01" id="ac-dep-amt"></label>
+      </div>
+      <button class="btn btn-outline" id="ac-dep-add" style="margin-top:8px;">Add Deposit</button>
+
+      <div class="section-title">Outstanding Expenses</div>
+      <p class="muted" style="font-size:11px;margin-bottom:8px;">Bills you owe but haven't paid — salaries due, pending electricity, GST payable.</p>
+      <div class="card">${out.rows.length ? out.rows.map(r=>
+        listRow(r.label, [r.category, r.due_date?("due "+r.due_date):""].filter(Boolean).join(" · "), r.amount, `data-settle-out="${r.id}"`)
+      ).join("") : `<div class="empty-hint">Nothing outstanding.</div>`}</div>
+      <div class="charge-grid" style="margin-top:8px;">
+        <label class="dim" style="grid-column:1/-1;"><span>What is owed</span><input type="text" id="ac-out-label" style="text-align:left;" placeholder="August salaries"></label>
+        <label class="dim"><span>Category</span>
+          <select id="ac-out-cat" style="text-align:left;">
+            <option>Salary Payable</option><option>GST Payable</option><option>Expense Payable</option><option>Other</option>
+          </select></label>
+        <label class="dim"><span>Amount</span><input type="number" min="0" step="0.01" id="ac-out-amt"></label>
+      </div>
+      <button class="btn btn-outline" id="ac-out-add" style="margin-top:8px;">Add Outstanding</button>
+      <div style="height:20px;"></div>
+    `;
+
+    const val = id => document.getElementById(id).value;
+    const num = id => parseFloat(val(id));
+    const post = async (path, bodyObj, emptyMsg, guard) => {
+      if(guard && guard()){ toast(emptyMsg); return; }
+      try{ await api("POST", path, bodyObj); toast("Saved.", "ok"); await load(); }
+      catch(e){ toast(e.message); }
+    };
+
+    sheet.querySelector("#ac-cap-add").addEventListener("click", ()=>post("/accounting/capital",
+      { kind: val("ac-cap-kind"), amount: num("ac-cap-amt"), date: val("ac-cap-date") },
+      "Enter an amount.", ()=>!(num("ac-cap-amt")>0)));
+    sheet.querySelector("#ac-fa-add").addEventListener("click", ()=>post("/accounting/fixed-assets",
+      { name: val("ac-fa-name"), category: val("ac-fa-cat"), cost: num("ac-fa-cost"), accumulatedDepreciation: num("ac-fa-dep")||0 },
+      "Enter an asset name and cost.", ()=>!val("ac-fa-name").trim() || !(num("ac-fa-cost")>0)));
+    sheet.querySelector("#ac-loan-add").addEventListener("click", ()=>post("/accounting/loans",
+      { lender: val("ac-loan-lender"), kind: val("ac-loan-kind"), principal: num("ac-loan-out"), outstanding: num("ac-loan-out") },
+      "Enter the lender and amount still owed.", ()=>!val("ac-loan-lender").trim() || !(num("ac-loan-out")>0)));
+    sheet.querySelector("#ac-dep-add").addEventListener("click", ()=>post("/accounting/deposits",
+      { heldBy: val("ac-dep-by"), purpose: val("ac-dep-purpose"), amount: num("ac-dep-amt") },
+      "Enter who holds it and how much.", ()=>!val("ac-dep-by").trim() || !(num("ac-dep-amt")>0)));
+    sheet.querySelector("#ac-out-add").addEventListener("click", ()=>post("/accounting/outstanding",
+      { label: val("ac-out-label"), category: val("ac-out-cat"), amount: num("ac-out-amt") },
+      "Enter what is owed and how much.", ()=>!val("ac-out-label").trim() || !(num("ac-out-amt")>0)));
+
+    const wireRemove = (attr, path, verb) => sheet.querySelectorAll("["+attr+"]").forEach(el=>{
+      el.addEventListener("click", async ev=>{
+        ev.preventDefault();
+        try{
+          if(verb === "settle") await api("POST", path+"/"+el.getAttribute(attr)+"/settle", {});
+          else await api("DELETE", path+"/"+el.getAttribute(attr));
+          toast("Removed.", "ok"); await load();
+        }catch(e){ toast(e.message); }
+      });
+    });
+    wireRemove("data-del-cap", "/accounting/capital");
+    wireRemove("data-del-fa", "/accounting/fixed-assets");
+    wireRemove("data-del-loan", "/accounting/loans");
+    wireRemove("data-del-dep", "/accounting/deposits");
+    wireRemove("data-settle-out", "/accounting/outstanding", "settle");
+  }
+
+  await load();
+  showSheet("sheet-accounting");
+}
+
 async function openStaffManage(){
   const staff = await api("GET", "/staff");
   const sheet = document.getElementById("sheet-staff");
@@ -4549,6 +4766,7 @@ async function renderReport(){
     if(state.reportType==="Transfers") return renderTransfersReport(body);
     if(state.reportType==="DailyMovement") return renderDailyMovementReport(body);
     if(state.reportType==="BalanceSheet") return renderBalanceSheetReport(body);
+    if(state.reportType==="ProfitLoss") return renderPnlReport(body);
 
     let title="", subtitle="", rows=[];
     if(state.reportType==="Sales"){
@@ -4701,50 +4919,129 @@ async function renderBalanceSheetReport(body){
       <span${opts.dim?' class="muted"':""}>${escapeHtml(label)}</span><span>${fmt(value)}</span>
     </div>`;
 
-  const a = d.assets, l = d.liabilities;
-  const negative = d.netWorth < 0;
+  const a = d.assets, l = d.liabilities, c = d.capital, bc = d.balanceCheck;
+  const head = t => `<div style="font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-top:16px;">${t}</div>`;
 
   body.innerHTML = `
     <div style="font-weight:800;font-size:14px;">Balance Sheet</div>
     <div class="muted" style="font-size:11.5px;margin-bottom:12px;">Financial position as of ${escapeHtml(d.asOf)}</div>
 
-    <div style="font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-top:4px;">Assets — what you own</div>
+    ${head("Assets — what you own")}
     ${row("Cash in Hand", a.cashInHand)}
     ${a.bankAccounts.length
       ? a.bankAccounts.map(b=>row("Bank — "+b.name, b.balance, {dim:true})).join("")
       : row("Bank", a.bankBalance, {dim:true})}
     ${row("Closing Stock (at cost)", a.closingStock)}
     ${row("Customer Receivables", a.receivables)}
+    ${a.fixedAssets ? row("Fixed Assets (net of depreciation)", a.fixedAssets) : ""}
+    ${a.securityDeposits ? row("Security Deposits", a.securityDeposits) : ""}
+    ${a.gstInputCredit ? row("GST Input Credit", a.gstInputCredit) : ""}
     ${a.supplierAdvances ? row("Advances paid to Suppliers", a.supplierAdvances) : ""}
     ${row("Total Assets", a.total, {bold:true, border:true})}
 
-    <div style="font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-top:16px;">Liabilities — what you owe</div>
+    ${head("Liabilities — what you owe")}
     ${row("Supplier Payables", l.payables)}
+    ${l.bankLoans ? row("Bank Loans", l.bankLoans) : ""}
+    ${l.otherLiabilities ? row("Other Liabilities", l.otherLiabilities) : ""}
+    ${Object.entries(l.outstandingByCategory||{}).map(([k,v])=>row(k, v, {dim:true})).join("")}
+    ${l.gstPayable ? row("GST Payable", l.gstPayable) : ""}
     ${l.customerAdvances ? row("Advances received from Customers", l.customerAdvances) : ""}
     ${row("Total Liabilities", l.total, {bold:true, border:true})}
 
-    <div style="margin-top:16px;padding:12px;border-radius:10px;background:var(--bg-outer);display:flex;justify-content:space-between;align-items:center;gap:10px;">
+    ${head("Capital")}
+    ${row("Opening Capital", c.opening)}
+    ${c.introduced ? row("Add: Capital Introduced", c.introduced) : ""}
+    ${c.drawings ? row("Less: Drawings", -c.drawings) : ""}
+    ${row("Add: Retained Profit", c.retainedProfit, {dim:true})}
+    ${row("Closing Capital", c.closing, {bold:true, border:true})}
+
+    ${head("Balance check")}
+    ${row("Total Assets", bc.totalAssets)}
+    ${row("Total Liabilities + Capital", bc.liabilitiesPlusCapital)}
+    <div style="margin-top:10px;padding:12px;border-radius:10px;background:${bc.balanced?"var(--ok-bg)":"var(--warn-bg)"};color:${bc.balanced?"var(--ok)":"var(--warn-text)"};">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+        <span style="font-weight:800;font-size:13px;">${bc.balanced ? "Balanced" : "Difference (Suspense)"}</span>
+        <span style="font-weight:800;font-size:17px;">${bc.balanced ? "✓" : fmt(bc.difference)}</span>
+      </div>
+      ${bc.balanced ? "" : `<div style="font-size:11.5px;margin-top:6px;line-height:1.5;">
+        Assets do not yet equal Liabilities + Capital. This gap is money the app
+        cannot see — usually Opening Capital, fixed assets, loans or deposits not
+        entered yet. Enter them under Settings → Opening Balances and this shrinks
+        towards zero. It is shown rather than hidden on purpose: a sheet forced to
+        balance would conceal exactly this.
+      </div>`}
+    </div>
+
+    <div style="margin-top:14px;padding:12px;border-radius:10px;background:var(--bg-outer);display:flex;justify-content:space-between;align-items:center;gap:10px;">
       <span style="font-weight:800;font-size:13px;">Net Worth</span>
-      <span style="font-weight:800;font-size:17px;color:${negative?"var(--danger)":"var(--ok)"};">${fmt(d.netWorth)}</span>
+      <span style="font-weight:800;font-size:17px;color:${d.netWorth<0?"var(--danger)":"var(--ok)"};">${fmt(d.netWorth)}</span>
     </div>
-    <div class="muted" style="font-size:11px;margin-top:8px;line-height:1.5;">
-      Net Worth = Total Assets &minus; Total Liabilities.
-      ${negative ? "It is negative, meaning current liabilities exceed the assets recorded here." : ""}
-    </div>
+    <div class="muted" style="font-size:11px;margin-top:8px;">Total Assets &minus; Total Liabilities.</div>
 
     ${d.stock.itemsWithoutCost ? `
       <div style="margin-top:12px;padding:10px;border-radius:9px;background:var(--warn-bg);color:var(--warn-text);font-size:11.5px;line-height:1.5;">
         <b>Closing Stock is understated.</b> ${d.stock.itemsWithoutCost} item${d.stock.itemsWithoutCost>1?"s":""}
         (${d.stock.unitsWithoutCost} unit${d.stock.unitsWithoutCost>1?"s":""}) ${d.stock.itemsWithoutCost>1?"have":"has"}
         no purchase cost on file and ${d.stock.itemsWithoutCost>1?"are":"is"} counted at zero.
-        Record a purchase for ${d.stock.itemsWithoutCost>1?"them":"it"}, or set a cost, to value your stock properly.
       </div>` : ""}
 
     <div class="muted" style="font-size:11px;margin-top:12px;line-height:1.5;">
-      This is a statement of financial position, not a double-entry balance sheet —
-      the app has no capital account, so it reports Net Worth rather than forcing
-      Assets to equal Liabilities plus Capital. Figures are as of today; stock and
-      party dues are running balances, so a past-date version isn't possible.
+      Figures are as of today. Stock and party dues are running balances, so a
+      past-dated Balance Sheet cannot be produced accurately.
+    </div>`;
+}
+
+/**
+ * Profit & Loss. Honest about its two weak points rather than presenting a
+ * confident number: sales of products with no purchase cost on file overstate
+ * profit, and uncategorised cash/bank movements can't be attributed properly.
+ */
+async function renderPnlReport(body){
+  const p = await api("GET","/reports/pnl"+reportRangeQS());
+  const row = (label, value, opts={}) => `
+    <div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;${opts.border?"border-top:1px solid var(--border);":""}${opts.bold?"font-weight:800;":""}">
+      <span${opts.dim?' class="muted"':""}>${escapeHtml(label)}</span><span>${fmt(value)}</span>
+    </div>`;
+  const head = t => `<div style="font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-top:16px;">${t}</div>`;
+  const lines = obj => Object.entries(obj).filter(([,v])=>v>0).map(([k,v])=>row(k, v, {dim:true})).join("");
+
+  body.innerHTML = `
+    <div style="font-weight:800;font-size:14px;">Profit &amp; Loss</div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:12px;">${p.bills} tax invoice${p.bills===1?"":"s"} in this period</div>
+
+    ${head("Income")}
+    ${row("Sales Revenue (net of discount)", p.income.salesRevenue)}
+    ${p.income.chargesRecovered ? row("Transport / Loading recovered", p.income.chargesRecovered) : ""}
+    ${lines(p.income.otherIncome)}
+    ${row("Total Income", p.income.total, {bold:true, border:true})}
+
+    ${head("Expenses")}
+    ${row("Cost of Goods Sold", p.expenses.costOfGoodsSold)}
+    ${lines(p.expenses.operating)}
+    ${row("Total Expenses", p.expenses.total, {bold:true, border:true})}
+
+    <div style="margin-top:16px;display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <div style="padding:12px;border-radius:10px;background:var(--bg-outer);">
+        <div class="muted" style="font-size:11px;">Gross Profit</div>
+        <div style="font-weight:800;font-size:16px;">${fmt(p.grossProfit)}</div>
+      </div>
+      <div style="padding:12px;border-radius:10px;background:var(--bg-outer);">
+        <div class="muted" style="font-size:11px;">Net Profit</div>
+        <div style="font-weight:800;font-size:16px;color:${p.netProfit<0?"var(--danger)":"var(--ok)"};">${fmt(p.netProfit)}</div>
+      </div>
+    </div>
+
+    ${p.itemsWithoutCost ? `
+      <div style="margin-top:12px;padding:10px;border-radius:9px;background:var(--warn-bg);color:var(--warn-text);font-size:11.5px;line-height:1.5;">
+        <b>Profit is overstated.</b> ${p.itemsWithoutCost} sold line${p.itemsWithoutCost>1?"s have":" has"} no
+        purchase cost on file, so ${p.itemsWithoutCost>1?"they add":"it adds"} revenue with no matching cost.
+        Record purchases for those products to get a true margin.
+      </div>` : ""}
+
+    <div class="muted" style="font-size:11px;margin-top:12px;line-height:1.5;">
+      Customer and supplier payments are excluded — collecting a debt or paying a
+      creditor moves money without earning or spending it. Cost of Goods Sold uses
+      each product's latest purchase cost, the same basis as the Profit report.
     </div>`;
 }
 

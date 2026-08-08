@@ -923,6 +923,104 @@ for (const t of ["payments", "purchase_payments"]) {
 addColumn("customers", "active", "INTEGER NOT NULL DEFAULT 1");
 addColumn("suppliers", "active", "INTEGER NOT NULL DEFAULT 1");
 
+/* ============================================================
+   ACCOUNTING — the parts a shop cannot derive from its own
+   sales/purchase/cash/bank activity.
+   ------------------------------------------------------------
+   Everything here is ONE-TIME ENTRY by design. The owner sets
+   opening capital, fixed assets, loans and deposits once, and
+   the statements pick them up from then on; nothing here has to
+   be touched during a normal trading day. That is a deliberate
+   constraint — a shop that has to remember daily bookkeeping
+   discipline stops doing it within a fortnight, and the reports
+   quietly rot.
+
+   Because of that, the balance equation is NOT forced. Assets,
+   Liabilities and Capital are each reported from what is
+   genuinely recorded, and whatever fails to reconcile is shown
+   as an explicit Difference (Suspense) line. A silently balanced
+   sheet built on a plug figure is worse than an honest gap: the
+   gap tells the owner what still needs entering.
+   ============================================================ */
+db.exec(`
+-- Owner's capital: the opening figure, later injections, and drawings.
+-- Kept as a movement LIST rather than one editable number so the history is
+-- auditable — "why did capital change in November" has an answer.
+CREATE TABLE IF NOT EXISTS capital_entries (
+  id TEXT PRIMARY KEY,
+  date TEXT NOT NULL,
+  kind TEXT NOT NULL,              -- 'opening' | 'introduced' | 'drawings'
+  amount REAL NOT NULL,            -- always positive; the kind column carries the sign
+  remarks TEXT DEFAULT '',
+  voided INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+
+-- Fixed assets (furniture, computer, vehicle, machinery). Depreciation is
+-- stored as an accumulated figure the owner can update, rather than computed
+-- on a schedule — Indian small shops set it once a year with their CA, and a
+-- monthly auto-depreciation nobody reviews would silently drift.
+CREATE TABLE IF NOT EXISTS fixed_assets (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  category TEXT DEFAULT '',        -- Furniture | Computer | Vehicle | Machinery | Other
+  purchase_date TEXT DEFAULT '',
+  cost REAL NOT NULL DEFAULT 0,
+  accumulated_depreciation REAL NOT NULL DEFAULT 0,
+  remarks TEXT DEFAULT '',
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL
+);
+
+-- Bank loans and any other standing liability (hand loan, hire purchase).
+-- The outstanding column is what is still owed and is what the Balance Sheet
+-- reads; principal is kept only so the owner can see how far through they are.
+CREATE TABLE IF NOT EXISTS loans (
+  id TEXT PRIMARY KEY,
+  lender TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'bank',   -- 'bank' | 'other'
+  principal REAL NOT NULL DEFAULT 0,
+  outstanding REAL NOT NULL DEFAULT 0,
+  interest_rate REAL NOT NULL DEFAULT 0,
+  start_date TEXT DEFAULT '',
+  remarks TEXT DEFAULT '',
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL
+);
+
+-- Security deposits PAID by the shop (shop rent deposit, electricity board,
+-- supplier security) — an asset: money the shop expects back.
+CREATE TABLE IF NOT EXISTS deposits (
+  id TEXT PRIMARY KEY,
+  held_by TEXT NOT NULL,           -- landlord / board / supplier name
+  purpose TEXT DEFAULT '',
+  amount REAL NOT NULL DEFAULT 0,
+  paid_date TEXT DEFAULT '',
+  remarks TEXT DEFAULT '',
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL
+);
+
+-- Accrued/outstanding liabilities the shop owes but has not paid yet
+-- (salary payable, unpaid electricity bill, pending GST). Settled by marking
+-- them paid rather than deleting, so last year's statement still shows them.
+CREATE TABLE IF NOT EXISTS outstanding_liabilities (
+  id TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  category TEXT DEFAULT '',        -- Salary Payable | GST Payable | Expense Payable | Other
+  amount REAL NOT NULL DEFAULT 0,
+  due_date TEXT DEFAULT '',
+  settled INTEGER NOT NULL DEFAULT 0,
+  settled_date TEXT DEFAULT '',
+  remarks TEXT DEFAULT '',
+  created_at INTEGER NOT NULL
+);
+`);
+
+// Financial year start month (1-12). April = the Indian standard, and the
+// default, but configurable for a shop that closes on a different cycle.
+addColumn("settings", "fy_start_month", "INTEGER NOT NULL DEFAULT 4");
+
 // Multi-location inventory. A scalable Location model — not hardcoded to
 // Shop/Warehouse — so a third, fourth, etc. location can be added later with
 // zero schema changes. `code` is a stable machine key ("shop", "warehouse")

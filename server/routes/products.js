@@ -311,7 +311,13 @@ router.get("/:id/stock-in", (req, res) => {
   const p = db.prepare("SELECT * FROM products WHERE id = ?").get(req.params.id);
   if (!p) return res.status(404).json({ error: "Product not found." });
 
-  const stockInRows = db.prepare("SELECT * FROM stock_ins WHERE product_id = ?").all(p.id);
+  // `source` distinguishes the two feeds, which have separate id spaces —
+  // stock_ins uses a text uid, purchase_items an integer. Only stock_in rows
+  // are editable through PUT /:id/stock-in/:siId; a purchase_item belongs to a
+  // multi-line Purchase Bill and has to be edited there, so the client needs
+  // to be able to tell them apart rather than guessing from the id's shape.
+  const stockInRows = db.prepare("SELECT * FROM stock_ins WHERE product_id = ?").all(p.id)
+    .map(r => ({ ...r, source: "stock_in" }));
   const purchaseLineRows = db.prepare(`
     SELECT pi.id, pi.size_label, pi.mode, pi.pieces AS qty, pi.qty AS billed_qty, pi.rate, pi.discount_amount, pi.gst_rate,
       p.date AS purchase_date, p.supplier_invoice_no AS invoice_no, p.created_at, s.name AS supplier
@@ -394,20 +400,41 @@ router.put("/:id/stock-in/:siId", requireRole("owner"), (req, res) => {
   const invalid = Pricing.validateLine(line, p.name);
   if (invalid) return res.status(400).json({ error: invalid });
 
+  // Pure math, so it can be computed before the guard needs the new piece count.
+  const calc = Pricing.computeLine(line);
+  // Correcting a figure in place (same size, same location) only physically
+  // requires that a REDUCTION fits. Reversing the whole old quantity first and
+  // demanding it all still be there refused perfectly safe edits — raising a
+  // mistyped 4 to 6 was rejected merely because some pieces had been
+  // transferred, even though that edit only ADDS stock. Moving the entry to a
+  // different size or location genuinely does need the original quantity back,
+  // so that path keeps the strict check.
+  const sameTarget = size.id === si.size_id && newLocationId === oldLocationId;
+
   const runEdit = db.transaction(() => {
-    // 1. Reverse the OLD stock impact at the OLD location — guarded, same
-    //    reasoning as purchases.js: refuse if that would drive it negative.
-    const atOldLocation = inventory.getStock(si.size_id, oldLocationId);
-    if (atOldLocation < si.qty) {
-      throw { status: 400, error: `Can't edit this purchase — ${p.name} stock has already been used elsewhere (only ${atOldLocation} left at that location, this purchase added ${si.qty}).` };
+    // 1. Stock: guard, then move by the smallest correct amount.
+    if (sameTarget) {
+      const delta = calc.pieces - si.qty;
+      if (delta < 0) {
+        const available = inventory.getStock(si.size_id, oldLocationId);
+        if (available < -delta) {
+          throw { status: 400, error: `Can't reduce this entry to ${calc.pieces} — only ${available} of ${p.name} is left at that location, so ${-delta} can't be taken back. Some of it has already been sold or transferred.` };
+        }
+      }
+      if (delta !== 0) inventory.addStock(si.size_id, oldLocationId, delta);
+    } else {
+      const atOldLocation = inventory.getStock(si.size_id, oldLocationId);
+      if (atOldLocation < si.qty) {
+        throw { status: 400, error: `Can't move this purchase — ${p.name} stock has already been used elsewhere (only ${atOldLocation} left at that location, this purchase added ${si.qty}).` };
+      }
+      inventory.addStock(si.size_id, oldLocationId, -si.qty);
+      inventory.addStock(size.id, newLocationId, calc.pieces);
     }
-    inventory.addStock(si.size_id, oldLocationId, -si.qty);
 
     // 2. Reverse the OLD supplier's due.
     if (si.supplier_id) db.prepare("UPDATE suppliers SET due = MAX(0, due - ?) WHERE id = ?").run(si.grand_total, si.supplier_id);
 
     // 3. Recompute, identical math to POST /:id/stock-in.
-    const calc = Pricing.computeLine(line);
     const gstRate = gst !== undefined && gst !== "" ? Number(gst) : si.gst_rate;
     const gstAmount = round2(calc.amount * (gstRate / 100));
     const transportAmt = transport !== undefined ? round2(Math.max(0, Number(transport) || 0)) : si.transport;
@@ -420,8 +447,7 @@ router.put("/:id/stock-in/:siId", requireRole("owner"), (req, res) => {
     const costPrice = calc.pieces > 0 ? round2((calc.amount + transportAmt) / calc.pieces) : 0;
     const supplierName = supplierRow ? supplierRow.name : (supplier !== undefined ? String(supplier || "").trim() : si.supplier);
 
-    // 4. Apply the NEW stock (at the NEW location) and update the row.
-    inventory.addStock(size.id, newLocationId, calc.pieces);
+    // 4. Write the corrected row (stock itself was already moved in step 1).
     db.prepare(`
       UPDATE stock_ins SET size_id=?, purchase_date=?, invoice_no=?, supplier=?, supplier_id=?,
         mode=?, length_ft=?, width_val=?, thickness_in=?, size_label=?, qty=?, per_piece=?, billed_qty=?,

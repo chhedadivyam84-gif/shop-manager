@@ -345,6 +345,8 @@ async function initApp(){
   document.getElementById("advance-input").addEventListener("input", (e)=>{
     state.advance = parseFloat(e.target.value)||0; renderTotals();
   });
+  const billDateEl = document.getElementById("billing-date");
+  if(billDateEl) billDateEl.addEventListener("change", syncBillingDateWarning);
   document.getElementById("transport-input").addEventListener("input", (e)=>{
     state.transport = Math.max(0, parseFloat(e.target.value)||0); renderTotals();
   });
@@ -832,6 +834,7 @@ function escapeHtml(s){
    BILLING
    ============================================================ */
 async function renderBilling(){
+  syncBillingDateWarning();
   renderBillingCustomers();
   renderBillingLocationChips();
   renderBillingProducts();
@@ -1118,6 +1121,7 @@ function renderEditModeBanner(){
     const set = (id, val) => { const inp=document.getElementById(id); if(inp) inp.value = val; };
     set("advance-input", 0); set("discount-value", 0); set("transport-input", 0); set("loading-input", 0);
     set("delivery-man-input", ""); set("vehicle-number-input", ""); set("delivery-address-input", ""); set("remarks-input", "");
+    set("billing-date", isoDate(new Date()));
     setGstEnabled(true);
     renderEditModeBanner();
     renderBilling();
@@ -1167,6 +1171,10 @@ async function editExistingInvoice(inv){
   // selected on the Billing screen — falls back to Shop for a document saved
   // before this picker existed.
   state.billingLocationId = inv.location_id || (state.locations.find(l=>l.code==="shop")||{}).id;
+  // Show the date this document actually carries, not today — otherwise
+  // saving an edit would silently re-stamp a backdated bill to today.
+  const dateEl = document.getElementById("billing-date");
+  if(dateEl) dateEl.value = inv.date || isoDate(new Date());
 
   closeAllSheets();
   closeFullscreen("fs-invoice");
@@ -1473,7 +1481,11 @@ async function completeSale(){
       // omitted (undefined) falls back to the customer's Customer Master
       // default server-side, same as before this override existed.
       taxType: state.taxTypeOverride || undefined,
-      locationId: state.billingLocationId
+      locationId: state.billingLocationId,
+      // Whatever the Date field shows. The server ignores anything that isn't
+      // a valid YYYY-MM-DD, so a cleared or half-typed box can never produce a
+      // document with no date.
+      date: (document.getElementById("billing-date") || {}).value || undefined
     };
     const invoice = editingId
       ? await api("PUT", `/invoices/${editingId}`, payload)
@@ -4659,6 +4671,33 @@ function openWhatsApp(phone, text){
 /* ============================================================
    REPORTS
    ============================================================ */
+/**
+ * Keeps the Billing screen honest about its date. The field defaults to today
+ * and the chosen date survives a save (so a stack of old paper bills can be
+ * entered in one go) — which means the only thing stopping the next real sale
+ * being backdated by accident is that the screen says so, loudly.
+ */
+function syncBillingDateWarning(){
+  const input = document.getElementById("billing-date");
+  const warn = document.getElementById("billing-date-warning");
+  if(!input || !warn) return;
+  if(!input.value) input.value = isoDate(new Date());
+  const today = isoDate(new Date());
+  if(input.value === today){ warn.style.display = "none"; warn.innerHTML = ""; return; }
+  const pretty = new Date(input.value+"T00:00:00").toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"});
+  warn.style.display = "block";
+  warn.innerHTML = `<div style="margin-top:8px;padding:9px 11px;border-radius:9px;background:var(--warn-bg);color:var(--warn-text);font-size:11.5px;font-weight:700;display:flex;justify-content:space-between;align-items:center;gap:8px;">
+    <span>Dated ${escapeHtml(pretty)}, not today.</span>
+    <a href="#" id="billing-date-today" style="color:var(--warn-text);font-weight:800;white-space:nowrap;">Use today</a>
+  </div>`;
+  const link = document.getElementById("billing-date-today");
+  if(link) link.addEventListener("click", e=>{
+    e.preventDefault();
+    input.value = isoDate(new Date());
+    syncBillingDateWarning();
+  });
+}
+
 /* ---------- Reports date range ----------
    Stock and dues reports are point-in-time balances — what is on the shelf,
    what is owed, right now — so a date range can't narrow them into anything

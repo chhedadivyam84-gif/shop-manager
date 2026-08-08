@@ -366,9 +366,14 @@ router.put("/:id", (req, res) => {
 
   const { customerId, items: rawItems, discountType, discountValue, advance,
           paymentMethod, paperSize, transport, loading, roundOff, deliveryMan,
-          vehicleNumber, deliveryAddress, remarks, taxType: taxTypeOverride, locationId } = req.body;
+          vehicleNumber, deliveryAddress, remarks, taxType: taxTypeOverride, locationId, date } = req.body;
   const gstOnCharges = req.body.gstOnCharges !== false;
   const gstEnabled = req.body.gstEnabled !== false;
+  // Same optional-date rule as creating: a valid YYYY-MM-DD moves the
+  // document's date, anything else (including omitting it) keeps the date it
+  // already has. Never falls back to today — that would silently re-stamp a
+  // deliberately backdated bill just because someone fixed a typo in it.
+  const editedDate = (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) ? date : inv.date;
 
   if (!Array.isArray(rawItems) || !rawItems.length) {
     return res.status(400).json({ error: `Add at least one item to the ${isChallan ? "challan" : "invoice"}.` });
@@ -492,10 +497,10 @@ router.put("/:id", (req, res) => {
         gst_on_charges=@gstOnCharges, gst_enabled=@gstEnabled, round_off=@roundOffAmount, total=@total, advance=@advance,
         balance_due=@balanceDue, payment_method=@paymentMethod, paper_size=@paperSize,
         delivery_man=@deliveryMan, vehicle_number=@vehicleNumber, delivery_address=@deliveryAddress,
-        remarks=@remarks, location_id=@locationId
+        remarks=@remarks, location_id=@locationId, date=@date
       WHERE id=@id
     `).run({
-      id: inv.id, customerId: customerId || null,
+      id: inv.id, date: editedDate, customerId: customerId || null,
       subtotal: totals.subtotal, discountType: discountType === "flat" ? "flat" : "pct",
       discountValue: isChallan ? 0 : (Number(discountValue) || 0), discountAmount: totals.discountAmount,
       taxType, cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst,

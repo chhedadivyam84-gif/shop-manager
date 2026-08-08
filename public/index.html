@@ -104,7 +104,18 @@
           <span id="billing-number-display" style="font-weight:800;">—</span>
         </div>
 
-        <div class="section-title" style="margin-top:0;">Bill to</div>
+        <!-- Document date. Defaults to today, so a normal bill needs no thought;
+             changing it backdates the Tax Invoice or Delivery Challan being
+             made, which is what writing up yesterday's paper bills needs. -->
+        <div class="section-title" style="margin-top:0;">Date</div>
+        <input type="date" id="billing-date">
+        <!-- The chosen date is kept after saving, so a batch of old paper bills
+             can be entered without re-picking it each time. That makes it
+             possible to backdate the next REAL sale by forgetting, so a warning
+             shows whenever this isn't today. -->
+        <div id="billing-date-warning" style="display:none;"></div>
+
+        <div class="section-title">Bill to</div>
         <div class="searchbar" style="margin-top:0;">
           <span>&#128269;</span><input type="text" id="billing-customer-search" placeholder="Search customer by name or phone">
         </div>

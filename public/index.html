@@ -809,6 +809,9 @@
         <button class="fs-close" data-close-fs="fs-invoice">&#10005;</button>
       </div>
     </div>
+    <!-- Previous / Next bill stepper. Filled by renderInvoicePageContent() only
+         when the bill was opened from a list; empty otherwise. -->
+    <div id="invoice-bill-nav" style="margin:0 16px;"></div>
     <div class="chip-row" id="challan-rate-toggle-row" style="display:none;margin:0 16px 8px;">
       <button class="chip selected" data-challan-rate="true">Print With Rate</button>
       <button class="chip" data-challan-rate="false">Print Without Rate</button>

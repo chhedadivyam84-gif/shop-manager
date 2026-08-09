@@ -139,7 +139,13 @@ router.get("/:id", (req, res) => {
   const p = db.prepare("SELECT * FROM purchases WHERE id = ?").get(req.params.id);
   if (!p) return res.status(404).json({ error: "Purchase not found." });
   const items = db.prepare("SELECT * FROM purchase_items WHERE purchase_id = ?").all(p.id);
-  res.json({ ...withStatus(p), items });
+  // Supplier NAME, not just the id — the detail screen has to say who the bill
+  // is from, and every caller was otherwise re-fetching the supplier list to
+  // resolve one name.
+  const supplier = p.supplier_id
+    ? db.prepare("SELECT name FROM suppliers WHERE id = ?").get(p.supplier_id)
+    : null;
+  res.json({ ...withStatus(p), items, supplier_name: supplier ? supplier.name : "" });
 });
 
 router.post("/", (req, res) => {

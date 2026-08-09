@@ -4313,6 +4313,14 @@ function renderInvoicePageContent(){
   pageEl.classList.toggle("size-a5", !isA4);
   applyPrintTheme(pageEl, challan);
 
+  // Previous / Next stepper — outside .invoice-page so it is never captured
+  // by the PDF or the printer, which only take the page itself.
+  const navEl = document.getElementById("invoice-bill-nav");
+  if(navEl){
+    navEl.innerHTML = inv.id ? billNavHtml("invoice", inv.id) : "";
+    if(inv.id) wireBillNav(navEl, "invoice", inv.id, openExistingInvoice);
+  }
+
   // A challan's item table and totals box keep EXACTLY the same layout
   // whether "Show Rate" is on or off — only the Rate/Amount cell CONTENTS
   // (and the money values in the totals box below) go blank, never hidden
@@ -4671,6 +4679,78 @@ function openWhatsApp(phone, text){
 /* ============================================================
    REPORTS
    ============================================================ */
+/* ============================================================
+   PREVIOUS / NEXT BILL NAVIGATION
+   ------------------------------------------------------------
+   Checking bills one by one used to mean: open a bill, read it,
+   close it, find the next row, open that. This keeps the list's
+   ORDER in memory when a bill is opened, so the detail screen
+   can step straight to the neighbouring bill.
+
+   The order is whatever the list was showing — including its
+   date filter — rather than a fresh server sort. If the list is
+   filtered to August, Next walks August's bills and stops at
+   the end of them, which is what someone checking August
+   actually wants.
+
+   Held in memory only: reopening a bill from somewhere with no
+   list behind it (a supplier's ledger, a search result) simply
+   shows no arrows rather than stepping through an order the
+   user never chose.
+   ============================================================ */
+const billNav = { kind: null, rows: [] };
+
+/** Called by a list right before it opens a bill. `rows` must be in the order
+ *  shown on screen, each with { id, no, date, party, total }. */
+function setBillNav(kind, rows){
+  billNav.kind = kind;
+  billNav.rows = Array.isArray(rows) ? rows : [];
+}
+
+function billNavPosition(kind, id){
+  if(billNav.kind !== kind) return null;
+  const i = billNav.rows.findIndex(r => String(r.id) === String(id));
+  return i < 0 ? null : { index: i, total: billNav.rows.length,
+                          prev: billNav.rows[i-1] || null, next: billNav.rows[i+1] || null };
+}
+
+/** The bar itself. Returns "" when there's no list context, so a bill opened
+ *  from elsewhere is unchanged. */
+function billNavHtml(kind, id){
+  const pos = billNavPosition(kind, id);
+  if(!pos || pos.total < 2) return "";
+  const label = r => r ? escapeHtml(r.no || "—") : "";
+  const btn = (dir, r) => `
+    <button class="btn btn-outline" data-billnav="${dir}" ${r?"":"disabled"}
+      style="flex:1;min-width:0;padding:7px 8px;font-size:11.5px;line-height:1.3;${r?"":"opacity:.45;"}">
+      <div style="font-weight:800;">${dir==="prev"?"← Previous":"Next →"}</div>
+      <div class="muted" style="font-size:10.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${r?label(r):"—"}</div>
+    </button>`;
+  return `
+    <div class="card" style="margin-bottom:10px;padding:8px;">
+      <div style="display:flex;gap:8px;align-items:stretch;">
+        ${btn("prev", pos.prev)}
+        <div style="flex:0 0 auto;display:flex;flex-direction:column;justify-content:center;align-items:center;padding:0 6px;">
+          <div style="font-weight:800;font-size:12px;white-space:nowrap;">Bill ${pos.index+1} of ${pos.total}</div>
+          ${pos.prev||pos.next ? `<div class="muted" style="font-size:10px;">tap to step</div>` : ""}
+        </div>
+        ${btn("next", pos.next)}
+      </div>
+    </div>`;
+}
+
+/** Wires the two arrows inside `root` to reopen the neighbouring bill. */
+function wireBillNav(root, kind, id, open){
+  const pos = billNavPosition(kind, id);
+  if(!pos) return;
+  root.querySelectorAll("[data-billnav]").forEach(b=>{
+    b.addEventListener("click", ()=>{
+      const target = b.dataset.billnav === "prev" ? pos.prev : pos.next;
+      if(target) open(target.id);
+    });
+  });
+}
+
 /**
  * Keeps the Billing screen honest about its date. The field defaults to today
  * and the chosen date survives a save (so a stack of old paper bills can be
@@ -4871,11 +4951,23 @@ async function renderChallanReport(body){
         <div style="margin-top:3px;"><span class="pill ${CHALLAN_STATUS_PILL[r.status]||''}" style="font-size:9px;">${escapeHtml(r.status)}</span></div>
       </div>`:""}</div>
     `).join("") : `<div class="empty-hint">${emptyMsg}</div>`);
+  // This list mixes sales and purchase challans, which live on different
+  // screens. The navigation order is therefore built at click time from the
+  // rows of the SAME type, so Next never jumps between the two.
+  const navRows = type => rows.filter(r=>r.type===type).map(r=>({
+    id: r.id, no: r.challan_no, date: r.date, party: r.party_name, total: r.total
+  }));
   body.querySelectorAll("[data-open-invoice]").forEach(el=>{
-    el.addEventListener("click", ()=>openExistingInvoice(el.dataset.openInvoice));
+    el.addEventListener("click", ()=>{
+      setBillNav("invoice", navRows("Sales"));
+      openExistingInvoice(el.dataset.openInvoice);
+    });
   });
   body.querySelectorAll("[data-open-purchase]").forEach(el=>{
-    el.addEventListener("click", ()=>openPurchaseDetail(el.dataset.openPurchase));
+    el.addEventListener("click", ()=>{
+      setBillNav("purchase", navRows("Purchase"));
+      openPurchaseDetail(el.dataset.openPurchase);
+    });
   });
 }
 async function renderOrdersReport(body){
@@ -4904,6 +4996,9 @@ async function renderTaxInvoiceReport(body){
         ${r.balance_due>0?`<div class="row-sub" style="color:var(--danger);">Due ${fmt(r.balance_due)}</div>`:""}
       </div><div class="row-right row-title">${fmt(r.total)}</div></div>
     `).join("") : `<div class="empty-hint">No tax invoices issued yet.</div>`);
+  setBillNav("invoice", rows.map(r=>({
+    id: r.id, no: r.challan_no, date: r.date, party: r.customer_name, total: r.total
+  })));
   body.querySelectorAll("[data-open-invoice]").forEach(el=>{
     el.addEventListener("click", ()=>openExistingInvoice(el.dataset.openInvoice));
   });
@@ -4917,6 +5012,11 @@ async function renderPurchaseBillReport(body){
         <div class="row-sub">${escapeHtml(r.date||"")} · ${escapeHtml(r.supplier_name||"Unknown Supplier")} · ${r.item_count} item${r.item_count!==1?"s":""}</div>
       </div><div class="row-right row-title">${fmt(r.grand_total)}</div></div>
     `).join("") : `<div class="empty-hint">No purchase bills recorded yet.</div>`);
+  // Only rows that can actually be opened go into the navigation order —
+  // otherwise Next would land on a stock-in row that has no bill screen.
+  setBillNav("purchase", rows.filter(r=>r.source==="purchase").map(r=>({
+    id: r.id, no: r.bill_no, date: r.date, party: r.supplier_name, total: r.grand_total
+  })));
   body.querySelectorAll("[data-open-purchase]").forEach(el=>{
     el.addEventListener("click", ()=>openPurchaseDetail(el.dataset.openPurchase));
   });
@@ -6640,7 +6740,15 @@ async function openPurchaseDetail(purchaseId){
     <div class="sheet-handle"></div>
     <button class="sheet-close" data-sheetclose>✕</button>
     <div class="sheet-title">${escapeHtml(p.purchase_no)} ${challan?'<span class="pill">Purchase Challan</span>':''} ${p.voided?'<span class="pill danger">Voided</span>':`<span class="pill ${p.status==='Completed'?'ok':p.status==='Pending'?'warn':''}">${escapeHtml(p.status)}</span>`}</div>
-    <div class="muted" style="font-size:12px;margin-bottom:10px;">${p.date} · ${escapeHtml(p.supplier_invoice_no||"(no invoice no.)")}${challan?"":" · "+escapeHtml(p.purchase_type)+" · "+escapeHtml(p.payment_method)}</div>
+    ${billNavHtml("purchase", p.id)}
+    <!-- Bill no., date, supplier and total together, so stepping through bills
+         answers "which one am I looking at" without scrolling. -->
+    <div class="card" style="margin-bottom:8px;padding:9px 11px;">
+      <div class="inv-flex" style="margin-bottom:3px;"><span class="muted">Supplier</span><span style="font-weight:800;">${escapeHtml(p.supplier_name||"Unknown Supplier")}</span></div>
+      <div class="inv-flex" style="margin-bottom:3px;"><span class="muted">Date</span><span>${escapeHtml(p.date||"")}</span></div>
+      <div class="inv-flex"><span class="muted">Total</span><span style="font-weight:800;">${fmt(p.total)}</span></div>
+    </div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px;">${escapeHtml(p.supplier_invoice_no||"(no invoice no.)")}${challan?"":" · "+escapeHtml(p.purchase_type)+" · "+escapeHtml(p.payment_method)}</div>
     <div class="card">${p.items.map(it=>`
       <div class="list-row">
         <div><div class="row-title">${escapeHtml(it.name)}</div><div class="row-sub">${escapeHtml(it.size_label||"")} · ${it.pieces} ${escapeHtml(it.unit_label||"")}${challan?"":" × "+fmt(it.rate)+(it.discount_amount>0?" · disc. "+fmt(it.discount_amount):"")}</div></div>
@@ -6701,6 +6809,7 @@ async function openPurchaseDetail(purchaseId){
       }catch(err){ toast(err.message); }
     }
   });
+  wireBillNav(sheet, "purchase", p.id, openPurchaseDetail);
   showSheet("sheet-purchase-detail");
 }
 

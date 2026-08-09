@@ -835,6 +835,10 @@ function escapeHtml(s){
    ============================================================ */
 async function renderBilling(){
   syncBillingDateWarning();
+  // Refresh the saved-bill list behind the stepper, then draw it. Not awaited —
+  // the billing screen must not wait on it to become usable.
+  loadBillingNavRows().then(renderBillingBillNav);
+  renderBillingBillNav();
   renderBillingCustomers();
   renderBillingLocationChips();
   renderBillingProducts();
@@ -1116,19 +1120,63 @@ function invoiceFingerprint(){
 /** Previous / Next across saved Tax Invoices while one is open for editing,
  *  so a run of bills can be checked and corrected without going back to the
  *  list. Hidden while creating a new bill. */
+/** Saved bills, newest first, for the Billing screen's stepper. Refreshed each
+ *  time Billing opens — a bill saved a minute ago has to be reachable. */
+async function loadBillingNavRows(){
+  try{
+    const rows = await api("GET", "/reports/tax-invoices");
+    state.billingNavRows = rows.map(r=>({
+      id: r.id, no: r.challan_no, date: r.date, party: r.customer_name, total: r.total
+    }));
+  }catch(e){ state.billingNavRows = []; }
+}
+
 function renderBillingBillNav(){
   const el = document.getElementById("bill-nav-billing");
   if(!el) return;
   const id = state.editingInvoiceId;
-  el.innerHTML = id ? billNavHtml("invoice", id) : "";
-  if(!id) return;
-  wireBillNav(el, "invoice", id, async targetId => {
-    if(invoiceFingerprint() !== state.loadedInvoiceFingerprint &&
-       !confirm("This bill has unsaved changes. Leave them and open the next bill?")) return;
-    try{
-      const inv = await api("GET", `/invoices/${targetId}`);
-      await editExistingInvoice(inv);
-    }catch(e){ toast(e.message); }
+
+  // EDITING a saved bill: step to the neighbouring bill in the same edit form.
+  if(id){
+    el.innerHTML = billNavHtml("invoice", id);
+    wireBillNav(el, "invoice", id, async targetId => {
+      if(invoiceFingerprint() !== state.loadedInvoiceFingerprint &&
+         !confirm("This bill has unsaved changes. Leave them and open the next bill?")) return;
+      try{
+        const inv = await api("GET", `/invoices/${targetId}`);
+        await editExistingInvoice(inv);
+      }catch(e){ toast(e.message); }
+    });
+    return;
+  }
+
+  // CREATING a new bill: there is nothing after it, so Next is dead and
+  // Previous means "the last bill I saved". It opens READ-ONLY rather than in
+  // this form — loading a saved bill here would throw away the bill being
+  // typed. From that preview the same arrows walk further back.
+  const rows = state.billingNavRows || [];
+  if(!rows.length){ el.innerHTML = ""; return; }
+  const last = rows[0];
+  el.innerHTML = `
+    <div class="card" style="margin-bottom:10px;padding:8px;">
+      <div style="display:flex;gap:8px;align-items:stretch;">
+        <button class="btn btn-outline" id="billing-nav-prev" style="flex:1;min-width:0;padding:7px 8px;font-size:11.5px;line-height:1.3;">
+          <div style="font-weight:800;">← Previous Bill</div>
+          <div class="muted" style="font-size:10.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(last.no||"")}${last.party?" · "+escapeHtml(last.party):""}</div>
+        </button>
+        <div style="flex:0 0 auto;display:flex;flex-direction:column;justify-content:center;align-items:center;padding:0 6px;">
+          <div style="font-weight:800;font-size:12px;white-space:nowrap;">New Bill</div>
+          <div class="muted" style="font-size:10px;">${rows.length} saved</div>
+        </div>
+        <button class="btn btn-outline" disabled style="flex:1;min-width:0;padding:7px 8px;font-size:11.5px;line-height:1.3;opacity:.45;">
+          <div style="font-weight:800;">Next →</div>
+          <div class="muted" style="font-size:10.5px;">—</div>
+        </button>
+      </div>
+    </div>`;
+  el.querySelector("#billing-nav-prev").addEventListener("click", ()=>{
+    setBillNav("invoice", rows);
+    openExistingInvoice(last.id);   // preview only — the new bill stays intact
   });
 }
 

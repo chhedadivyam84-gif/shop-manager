@@ -95,6 +95,10 @@
       <!-- BILLING -->
       <div class="screen" id="screen-billing">
         <div id="edit-mode-banner" style="display:none;"></div>
+        <!-- Previous / Next stepper, shown only while an existing Tax Invoice
+             or Challan is open for editing — mirrors #pur-bill-nav on the
+             New Purchase screen. -->
+        <div id="bill-nav-billing"></div>
         <div class="doctype-toggle" id="doctype-toggle">
           <button class="doctype-btn selected" data-doctype="invoice">🧾 Tax Invoice<small>with prices &amp; GST</small></button>
           <button class="doctype-btn" data-doctype="challan">📦 Delivery Challan<small>items only, no prices</small></button>

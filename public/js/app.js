@@ -1100,7 +1100,40 @@ async function renderBillingNumber(){
 }
 
 /** Small dismissible banner shown atop Billing while an existing document is being edited. */
+/** Fingerprint of the parts of an open invoice a person actually edits — the
+ *  sales-side twin of purchaseFingerprint(), used for the same purpose: warn
+ *  before stepping away from a real correction, stay silent otherwise. */
+function invoiceFingerprint(){
+  return JSON.stringify([
+    state.selectedCustomerId, state.docType, state.paymentMethod, state.billingLocationId,
+    state.discountType, state.discountValue, state.advance,
+    state.transport, state.loading, state.gstEnabled, state.gstOnCharges,
+    (document.getElementById("billing-date")||{}).value || "",
+    state.cart.map(c=>[c.productId, c.sizeId, c.pieces, c.rate])
+  ]);
+}
+
+/** Previous / Next across saved Tax Invoices while one is open for editing,
+ *  so a run of bills can be checked and corrected without going back to the
+ *  list. Hidden while creating a new bill. */
+function renderBillingBillNav(){
+  const el = document.getElementById("bill-nav-billing");
+  if(!el) return;
+  const id = state.editingInvoiceId;
+  el.innerHTML = id ? billNavHtml("invoice", id) : "";
+  if(!id) return;
+  wireBillNav(el, "invoice", id, async targetId => {
+    if(invoiceFingerprint() !== state.loadedInvoiceFingerprint &&
+       !confirm("This bill has unsaved changes. Leave them and open the next bill?")) return;
+    try{
+      const inv = await api("GET", `/invoices/${targetId}`);
+      await editExistingInvoice(inv);
+    }catch(e){ toast(e.message); }
+  });
+}
+
 function renderEditModeBanner(){
+  renderBillingBillNav();
   const el = document.getElementById("edit-mode-banner");
   if(!el) return;
   if(!state.editingInvoiceId){ el.style.display = "none"; el.innerHTML = ""; return; }
@@ -1194,6 +1227,9 @@ async function editExistingInvoice(inv){
   const gstChargesToggle = document.getElementById("gst-on-charges-toggle");
   if(gstChargesToggle) gstChargesToggle.checked = state.gstOnCharges;
   setGstEnabled(state.gstEnabled);
+  // Baseline for the unsaved-changes check, taken once the form is fully
+  // populated — anything after this is a real edit by the user.
+  state.loadedInvoiceFingerprint = invoiceFingerprint();
   renderEditModeBanner();
   renderTotals();
   toast(`Editing ${inv.challan_no} — make your changes, then save.`, "ok");

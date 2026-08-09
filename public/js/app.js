@@ -6304,6 +6304,10 @@ function openInquiry(editEntry){
    PURCHASE ENTRY (Phase 1 — core multi-line invoice)
    ============================================================ */
 async function renderPurchaseScreen(){
+  // Refresh the saved-bill list behind the stepper, then draw it. Not awaited —
+  // the screen must not wait on it to become usable.
+  loadPurchaseNavRows().then(renderPurchaseBillNav);
+  renderPurchaseBillNav();
   if(!state.pur.date) state.pur.date = todayISO();
   const dateEl = document.getElementById("pur-date");
   if(dateEl && !dateEl.value) dateEl.value = state.pur.date;
@@ -6375,19 +6379,62 @@ function purchaseFingerprint(){
  *  so a run of bills can be checked and corrected without returning to the
  *  list each time. Hidden while creating a new purchase — there is no bill to
  *  be "previous" to. */
+/** Saved purchase bills, newest first, for the New Purchase stepper. Only rows
+ *  that have a bill screen are kept — a stock-in row can't be opened. */
+async function loadPurchaseNavRows(){
+  try{
+    const rows = await api("GET", "/reports/purchase-bills");
+    state.purchaseNavRows = rows.filter(r=>r.source==="purchase").map(r=>({
+      id: r.id, no: r.bill_no, date: r.date, party: r.supplier_name, total: r.grand_total
+    }));
+  }catch(e){ state.purchaseNavRows = []; }
+}
+
 function renderPurchaseBillNav(){
   const el = document.getElementById("pur-bill-nav");
   if(!el) return;
   const id = state.pur.editingPurchaseId;
-  el.innerHTML = id ? billNavHtml("purchase", id) : "";
-  if(!id) return;
-  wireBillNav(el, "purchase", id, async targetId => {
-    if(purchaseFingerprint() !== state.pur.loadedFingerprint &&
-       !confirm("This bill has unsaved changes. Leave them and open the next bill?")) return;
-    try{
-      const p = await api("GET", `/purchases/${targetId}`);
-      await editExistingPurchase(p);
-    }catch(e){ toast(e.message); }
+
+  // EDITING a saved bill: step to the neighbouring bill in the same edit form.
+  if(id){
+    el.innerHTML = billNavHtml("purchase", id);
+    wireBillNav(el, "purchase", id, async targetId => {
+      if(purchaseFingerprint() !== state.pur.loadedFingerprint &&
+         !confirm("This bill has unsaved changes. Leave them and open the next bill?")) return;
+      try{
+        const p = await api("GET", `/purchases/${targetId}`);
+        await editExistingPurchase(p);
+      }catch(e){ toast(e.message); }
+    });
+    return;
+  }
+
+  // CREATING a new purchase: Previous means "the last bill I saved", and it
+  // opens READ-ONLY — loading it into this form would throw away the purchase
+  // being typed. Mirrors the Create Invoice screen exactly.
+  const rows = state.purchaseNavRows || [];
+  if(!rows.length){ el.innerHTML = ""; return; }
+  const last = rows[0];
+  el.innerHTML = `
+    <div class="card" style="margin-bottom:10px;padding:8px;">
+      <div style="display:flex;gap:8px;align-items:stretch;">
+        <button class="btn btn-outline" id="pur-nav-prev" style="flex:1;min-width:0;padding:7px 8px;font-size:11.5px;line-height:1.3;">
+          <div style="font-weight:800;">← Previous Bill</div>
+          <div class="muted" style="font-size:10.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(last.no||"")}${last.party?" · "+escapeHtml(last.party):""}</div>
+        </button>
+        <div style="flex:0 0 auto;display:flex;flex-direction:column;justify-content:center;align-items:center;padding:0 6px;">
+          <div style="font-weight:800;font-size:12px;white-space:nowrap;">New Bill</div>
+          <div class="muted" style="font-size:10px;">${rows.length} saved</div>
+        </div>
+        <button class="btn btn-outline" disabled style="flex:1;min-width:0;padding:7px 8px;font-size:11.5px;line-height:1.3;opacity:.45;">
+          <div style="font-weight:800;">Next →</div>
+          <div class="muted" style="font-size:10.5px;">—</div>
+        </button>
+      </div>
+    </div>`;
+  el.querySelector("#pur-nav-prev").addEventListener("click", ()=>{
+    setBillNav("purchase", rows);
+    openPurchaseDetail(last.id);   // read-only sheet — the new purchase stays intact
   });
 }
 

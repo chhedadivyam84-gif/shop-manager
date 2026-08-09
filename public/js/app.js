@@ -6274,7 +6274,41 @@ function renderPurchaseLocationChips(){
 }
 /** Small dismissible banner shown atop New Purchase while an existing
  *  purchase is being edited — mirrors renderEditModeBanner() on Billing. */
+/** A fingerprint of the parts of an open purchase a person actually edits.
+ *  Compared against the snapshot taken when the bill was loaded, so stepping
+ *  to another bill can warn before throwing away a real correction — without
+ *  nagging when nothing has been touched. */
+function purchaseFingerprint(){
+  const p = state.pur;
+  return JSON.stringify([
+    p.supplierId, p.date, p.invoiceNo, p.paymentMethod, p.purchaseType, p.locationId,
+    p.transport, p.loading, p.otherCharges, p.gstEnabled,
+    p.cart.map(c=>[c.productId, c.sizeId, c.pieces, c.rate, c.discountValue])
+  ]);
+}
+
+/** Previous / Next across saved purchase bills while one is open for editing,
+ *  so a run of bills can be checked and corrected without returning to the
+ *  list each time. Hidden while creating a new purchase — there is no bill to
+ *  be "previous" to. */
+function renderPurchaseBillNav(){
+  const el = document.getElementById("pur-bill-nav");
+  if(!el) return;
+  const id = state.pur.editingPurchaseId;
+  el.innerHTML = id ? billNavHtml("purchase", id) : "";
+  if(!id) return;
+  wireBillNav(el, "purchase", id, async targetId => {
+    if(purchaseFingerprint() !== state.pur.loadedFingerprint &&
+       !confirm("This bill has unsaved changes. Leave them and open the next bill?")) return;
+    try{
+      const p = await api("GET", `/purchases/${targetId}`);
+      await editExistingPurchase(p);
+    }catch(e){ toast(e.message); }
+  });
+}
+
 function renderPurchaseEditBanner(){
+  renderPurchaseBillNav();
   const el = document.getElementById("pur-edit-mode-banner");
   if(!el) return;
   if(!state.pur.editingPurchaseId){ el.style.display = "none"; el.innerHTML = ""; return; }
@@ -6876,6 +6910,9 @@ async function editExistingPurchase(p){
   setPurGstEnabled(state.pur.gstEnabled);
   setPurDocType(state.pur.docType);
   renderPurchaseDueDateVisibility();
+  // Baseline for the unsaved-changes check, taken once the form is fully
+  // populated — anything after this is a real edit by the user.
+  state.pur.loadedFingerprint = purchaseFingerprint();
   renderPurchaseEditBanner();
   toast(`Editing ${p.purchase_no} — make your changes, then save.`, "ok");
 }

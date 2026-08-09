@@ -417,6 +417,10 @@
           <a href="#" id="pur-clear-link" class="muted" style="font-size:12px;font-weight:700;">Clear Form</a>
         </div>
         <div id="pur-edit-mode-banner" style="display:none;"></div>
+        <!-- Previous / Next stepper, shown only while an existing purchase is
+             open for editing — so saved bills can be checked and corrected one
+             after another without going back to the list. -->
+        <div id="pur-bill-nav"></div>
         <div class="doctype-toggle" id="pur-doctype-toggle">
           <button class="doctype-btn selected" data-pur-doctype="purchase">🧾 Purchase Entry<small>with prices &amp; GST</small></button>
           <button class="doctype-btn" data-pur-doctype="challan">📦 Purchase Challan<small>goods received, no prices</small></button>

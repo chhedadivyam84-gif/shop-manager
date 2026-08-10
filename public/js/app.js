@@ -345,6 +345,12 @@ async function initApp(){
   document.getElementById("advance-input").addEventListener("input", (e)=>{
     state.advance = parseFloat(e.target.value)||0; renderTotals();
   });
+  document.querySelectorAll("[data-bill-challan-rate]").forEach(b=>{
+    b.addEventListener("click", ()=>{
+      state.challanShowRate = b.dataset.billChallanRate === "true";
+      syncBillingChallanRateChips();
+    });
+  });
   const billDateEl = document.getElementById("billing-date");
   if(billDateEl) billDateEl.addEventListener("change", syncBillingDateWarning);
   document.getElementById("transport-input").addEventListener("input", (e)=>{
@@ -1042,6 +1048,14 @@ function setGstEnabled(on){
   if(gstChargesRow) gstChargesRow.style.display = (on && !isChallanMode()) ? "flex" : "none";
   renderTotals();
 }
+/** Keeps the Billing screen's With/Without Rate chips showing the current
+ *  choice. One piece of state (state.challanShowRate) drives both this and the
+ *  identical toggle in the print preview, so they can never disagree. */
+function syncBillingChallanRateChips(){
+  document.querySelectorAll("[data-bill-challan-rate]").forEach(b=>
+    b.classList.toggle("selected", (b.dataset.billChallanRate === "true") === !!state.challanShowRate));
+}
+
 function setDocType(type){
   state.docType = type === "challan" ? "challan" : "invoice";
   const challan = isChallanMode();
@@ -1058,6 +1072,11 @@ function setDocType(type){
   if(gstChargesRow) gstChargesRow.style.display = (challan || !state.gstEnabled) ? "none" : "flex";
   const note = document.getElementById("challan-note");
   if(note) note.style.display = challan ? "block" : "none";
+  const rateRow = document.getElementById("billing-challan-rate");
+  if(rateRow){
+    rateRow.style.display = challan ? "block" : "none";
+    syncBillingChallanRateChips();
+  }
   const itemsTitle = document.getElementById("items-title");
   if(itemsTitle) itemsTitle.textContent = challan ? "Challan items" : "Invoice items";
   const completeBtn = document.getElementById("complete-sale-btn");
@@ -1199,6 +1218,9 @@ function renderEditModeBanner(){
     state.cart = []; state.selectedCustomerId = null; state.taxTypeOverride = null; state.advance = 0; state.discountValue = 0;
     state.transport = 0; state.loading = 0; state.deliveryMan = "";
     state.vehicleNumber = ""; state.deliveryAddress = ""; state.remarks = ""; state.gstEnabled = true;
+    // A fresh bill always starts at "Without Rate" — the previous bill's
+    // print choice must not carry into an unrelated new challan.
+    state.challanShowRate = false;
     const set = (id, val) => { const inp=document.getElementById(id); if(inp) inp.value = val; };
     set("advance-input", 0); set("discount-value", 0); set("transport-input", 0); set("loading-input", 0);
     set("delivery-man-input", ""); set("vehicle-number-input", ""); set("delivery-address-input", ""); set("remarks-input", "");
@@ -1577,6 +1599,9 @@ async function completeSale(){
     state.cart = []; state.advance = 0; state.discountValue = 0; state.taxTypeOverride = null;
     state.transport = 0; state.loading = 0; state.deliveryMan = "";
     state.vehicleNumber = ""; state.deliveryAddress = ""; state.remarks = ""; state.gstEnabled = true;
+    // A fresh bill always starts at "Without Rate" — the previous bill's
+    // print choice must not carry into an unrelated new challan.
+    state.challanShowRate = false;
     state.editingInvoiceId = null;
     state.docNo = null;
     document.getElementById("advance-input").value = 0;
@@ -4217,13 +4242,18 @@ function openInvoicePreview(existingInvoice){
   const toggleRow = document.getElementById("challan-rate-toggle-row");
   if(toggleRow){
     toggleRow.style.display = challan ? "flex" : "none";
-    state.challanShowRate = false;
+    // REFLECTS the current choice rather than forcing it back to "without
+    // rate". The same toggle now also sits on the Billing screen, so a choice
+    // made before saving has to survive into the preview — resetting here
+    // would silently undo it the moment the challan opened. A fresh challan
+    // still starts at "Without Rate" (see setDocType and the post-save reset).
     toggleRow.querySelectorAll("[data-challan-rate]").forEach(b=>{
-      b.classList.toggle("selected", b.dataset.challanRate === "false");
+      b.classList.toggle("selected", (b.dataset.challanRate === "true") === !!state.challanShowRate);
       b.onclick = () => {
         state.challanShowRate = b.dataset.challanRate === "true";
         toggleRow.querySelectorAll("[data-challan-rate]").forEach(x=>
           x.classList.toggle("selected", x === b));
+        syncBillingChallanRateChips();
         renderInvoicePageContent();
       };
     });

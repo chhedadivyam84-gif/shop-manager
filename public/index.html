@@ -218,6 +218,20 @@
 
         <p class="muted" id="challan-note" style="display:none;font-size:12px;margin-top:14px;background:var(--bg-outer);border:1px solid var(--border);border-radius:9px;padding:10px 12px;">📦 <strong>Delivery Challan</strong> — no prices, GST or totals. Stock is still reduced because the goods are leaving the shop. You can raise a priced Tax Invoice for these items separately.</p>
 
+        <!-- Challan only: decide here whether the printed copy carries rates,
+             instead of having to save first and find the same toggle in the
+             preview. Purely a PRINT choice — the layout, paper size and the
+             stored document are identical either way; only the rate and
+             amount cells are left blank. -->
+        <div id="billing-challan-rate" style="display:none;margin-top:12px;">
+          <label class="field-label">Print this challan</label>
+          <div class="chip-row" style="margin-top:0;">
+            <button class="chip" data-bill-challan-rate="false">Without Rate</button>
+            <button class="chip" data-bill-challan-rate="true">With Rate</button>
+          </div>
+          <p class="muted" style="font-size:11px;margin-top:6px;">Same format and size either way — “Without Rate” just leaves the rate and amount columns blank to fill in by hand.</p>
+        </div>
+
         <div style="margin-top:16px;display:flex;flex-direction:column;gap:8px;">
           <button class="btn btn-primary" id="complete-sale-btn">Complete Sale &amp; Update Stock</button>
           <button class="btn btn-outline" id="preview-invoice-btn">Preview / Print Invoice</button>

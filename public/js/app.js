@@ -569,6 +569,7 @@ async function initApp(){
 
   document.getElementById("pq-back-link").addEventListener("click", (e)=>{ e.preventDefault(); switchTab("home"); });
   document.getElementById("pq-search-btn").addEventListener("click", ()=>runProductQuery());
+  document.getElementById("pq-print-btn").addEventListener("click", printProductQuery);
   document.getElementById("pq-q").addEventListener("keydown", (e)=>{ if(e.key==="Enter") runProductQuery(); });
   document.getElementById("pq-advanced-btn").addEventListener("click", ()=>{
     const adv = document.getElementById("pq-advanced");
@@ -9606,6 +9607,108 @@ async function runProductQuery(){
   results.querySelectorAll("[data-pq-pid]").forEach(tr => {
     tr.addEventListener("click", () => openPqDetail(tr.dataset.pqPid, Number(tr.dataset.pqSid)));
   });
+}
+
+/* The filters that produced what is on screen, in words. A printed stock sheet
+   that doesn't say what it was filtered by is worse than no sheet at all —
+   someone finds it on the counter a week later and can't tell whether it's the
+   whole shop or one brand in the warehouse. */
+function pqActiveFilters(){
+  const label = (id, name) => {
+    const el = document.getElementById(id);
+    if(!el || !el.value.trim()) return null;
+    const text = el.tagName === "SELECT" ? el.options[el.selectedIndex].text : el.value.trim();
+    return `${name}: ${text}`;
+  };
+  return [
+    label("pq-q", "Search"),
+    label("pq-name", "Name"),
+    label("pq-code", "Code/SKU"),
+    label("pq-barcode", "Barcode"),
+    label("pq-brand", "Brand"),
+    label("pq-category", "Category"),
+    label("pq-subcategory", "Sub-Category"),
+    label("pq-size", "Size"),
+    label("pq-location", "Location"),
+    label("pq-stockfilter", "Stock"),
+    label("pq-from", "Movement from"),
+    label("pq-to", "Movement to")
+  ].filter(Boolean);
+}
+
+function printProductQuery(){
+  const rows = state.pq.rows;
+  if(!rows.length){ toast("Nothing to print — no products matched."); return; }
+
+  const filters = pqActiveFilters();
+  const t = state.pq.totals;
+  const money = n => fmt(n).replace("₹", "");
+
+  document.getElementById("pq-report-content").innerHTML = `
+    <style>
+      /* Sixteen columns will not fit A4 portrait at a readable size, so the
+         sheet asks for landscape rather than shrinking to unreadable. */
+      @page{ size: A4 landscape; margin: 10mm; }
+      #pq-report-content{font-family:Arial,Helvetica,sans-serif;color:#000;}
+      #pq-report-content h1{font-size:16px;margin:0 0 2px;}
+      #pq-report-content .sub{font-size:10.5px;color:#333;margin-bottom:4px;}
+      #pq-report-content .filters{font-size:10.5px;color:#000;margin-bottom:10px;}
+      #pq-report-content .filters b{font-weight:700;}
+      #pq-report-content table{width:100%;border-collapse:collapse;font-size:9.5px;}
+      #pq-report-content th,#pq-report-content td{border:1px solid #000;padding:3px 4px;text-align:left;}
+      #pq-report-content th{background:#eee;}
+      #pq-report-content .num{text-align:right;}
+      #pq-report-content tfoot td{font-weight:700;background:#f2f2f2;}
+      /* Repeat the header on every sheet and never split a product across
+         two pages — a row cut in half is unreadable on paper. */
+      #pq-report-content thead{display:table-header-group;}
+      #pq-report-content tr{page-break-inside:avoid;}
+    </style>
+    <h1>Product Query</h1>
+    <div class="sub">${escapeHtml(state.settings && state.settings.business_name ? state.settings.business_name : "")}
+      · ${new Date().toLocaleString("en-IN")} · ${t.lines} line${t.lines!==1?"s":""}</div>
+    <div class="filters"><b>Filters:</b> ${
+      filters.length ? filters.map(f=>escapeHtml(f)).join(" &nbsp;|&nbsp; ") : "none — all products"}</div>
+    <table>
+      <thead><tr>
+        <th>Product</th><th>Code</th><th>Brand</th><th>Category</th><th>Size</th><th>Unit</th>
+        <th class="num">Opening</th><th class="num">In</th><th class="num">Out</th><th class="num">Closing</th>
+        <th class="num">Shop</th><th class="num">W/house</th>
+        <th class="num">Pur. Rate</th><th class="num">Sale Rate</th><th class="num">Stock Value</th>
+        <th>Last Purchase</th><th>Last Sale</th>
+      </tr></thead>
+      <tbody>
+        ${rows.map(r=>`<tr>
+          <td>${escapeHtml(r.productName)}</td>
+          <td>${escapeHtml(r.code||"")}</td>
+          <td>${escapeHtml(r.brand||"")}</td>
+          <td>${escapeHtml(r.category||"")}${r.subCategory?" / "+escapeHtml(r.subCategory):""}</td>
+          <td>${escapeHtml(r.sizeLabel||"")}</td>
+          <td>${escapeHtml(r.unit||"")}</td>
+          <td class="num">${r.openingStock}</td>
+          <td class="num">${r.stockIn}</td>
+          <td class="num">${r.stockOut}</td>
+          <td class="num">${r.closingStock}</td>
+          <td class="num">${r.shopStock}</td>
+          <td class="num">${r.warehouseStock}</td>
+          <td class="num">${money(r.purchaseRate)}</td>
+          <td class="num">${money(r.saleRate)}</td>
+          <td class="num">${money(r.stockValue)}</td>
+          <td>${escapeHtml(r.lastPurchaseDate||"—")}</td>
+          <td>${escapeHtml(r.lastSaleDate||"—")}</td>
+        </tr>`).join("")}
+      </tbody>
+      <tfoot><tr>
+        <td colspan="9">Total — ${t.lines} line${t.lines!==1?"s":""}</td>
+        <td class="num">${t.closingStock}</td>
+        <td colspan="4"></td>
+        <td class="num">${money(t.stockValue)}</td>
+        <td colspan="2"></td>
+      </tr></tfoot>
+    </table>`;
+
+  document.getElementById("fs-pq-report").classList.add("show");
+  window.print();
 }
 
 async function openPqDetail(productId, sizeId, tab){

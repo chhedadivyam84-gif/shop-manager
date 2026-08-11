@@ -25,7 +25,23 @@ function getLatestCost(productId) {
     ORDER BY p.created_at DESC LIMIT 1
   `).get(productId);
 
-  if (!fromStockIn && !fromPurchase) return null;
+  // Nothing was ever bought through the app — fall back to the cost typed on
+  // the product's size alongside its opening stock. This is what makes Closing
+  // Stock and Cost of Goods Sold real for a shop that entered its existing
+  // stock by hand instead of raising purchase bills for goods it already had.
+  // A genuine purchase always takes priority: it is the more recent, more
+  // specific fact.
+  if (!fromStockIn && !fromPurchase) {
+    const fromSize = db.prepare(`
+      SELECT MAX(ps.cost_price) AS cost, p.gst_rate
+      FROM product_sizes ps JOIN products p ON p.id = ps.product_id
+      WHERE ps.product_id = ? AND ps.cost_price > 0
+    `).get(productId);
+    if (fromSize && fromSize.cost > 0) {
+      return { costPrice: fromSize.cost, gstRate: fromSize.gst_rate || 0 };
+    }
+    return null;
+  }
   if (fromStockIn && (!fromPurchase || fromStockIn.created_at >= fromPurchase.created_at)) {
     return { costPrice: fromStockIn.cost_price, gstRate: fromStockIn.gst_rate };
   }
@@ -890,15 +906,23 @@ function computeBalanceSheet() {
   // Stock at cost, from the authoritative per-size quantity (products.stock is
   // just a cached sum of these — see syncProductStock in routes/products.js).
   const sizes = db.prepare(`
-    SELECT ps.product_id, ps.stock, p.name
+    SELECT ps.product_id, ps.stock, ps.cost_price, p.name
     FROM product_sizes ps JOIN products p ON p.id = ps.product_id
     WHERE ps.stock > 0
   `).all();
   const costCache = new Map();
   let closingStock = 0, itemsWithoutCost = 0, itemsWithCost = 0, unitsWithoutCost = 0;
   for (const s of sizes) {
-    if (!costCache.has(s.product_id)) costCache.set(s.product_id, getLatestCost(s.product_id));
-    const c = costCache.get(s.product_id);
+    // The size's OWN cost wins here. Two sizes of one product can be bought at
+    // very different rates (an 8x4 sheet against a 7x4), and this loop values
+    // each size's stock separately — using one product-wide figure would price
+    // the cheap variant at the dear one's rate. getLatestCost is the fallback
+    // for sizes with no cost of their own.
+    let c = s.cost_price > 0 ? { costPrice: s.cost_price } : null;
+    if (!c) {
+      if (!costCache.has(s.product_id)) costCache.set(s.product_id, getLatestCost(s.product_id));
+      c = costCache.get(s.product_id);
+    }
     if (c && c.costPrice > 0) { closingStock += c.costPrice * s.stock; itemsWithCost++; }
     else { itemsWithoutCost++; unitsWithoutCost += s.stock; }
   }

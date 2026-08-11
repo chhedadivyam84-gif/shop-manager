@@ -3342,8 +3342,8 @@ function openProductForm(context, product){
   // row in place (see PUT /products/:id) rather than delete-and-reinsert,
   // which would otherwise sever the link a past sale/purchase keeps to it.
   state.ctx.addProductSizes = product && product.sizes.length
-    ? product.sizes.map(s=>({id:s.id, label:s.label, price:s.price, stock:s.stock}))
-    : [{label:"", price:"", stock:0}];
+    ? product.sizes.map(s=>({id:s.id, label:s.label, price:s.price, stock:s.stock, cost:s.cost_price || 0}))
+    : [{label:"", price:"", stock:0, cost:0}];
   renderAddProductSheet(context);
   showSheet("sheet-add-product");
 }
@@ -3382,7 +3382,12 @@ function renderAddProductSheet(context){
     </div>
     <label class="field-label">Standard size <span class="muted" style="font-weight:400;">— pre-filled on every bill, still editable there</span></label>
     <div class="charge-grid" id="np-dims"></div>
-    <label class="field-label">Size / variant, stock &amp; price <span class="muted" style="font-weight:400;">— every size keeps its own stock count</span></label>
+    <label class="field-label">Size / variant, stock, cost &amp; price <span class="muted" style="font-weight:400;">— every size keeps its own stock count</span></label>
+    <div class="muted" style="font-size:11px;margin-bottom:6px;">
+      <b>Cost</b> is what you paid per unit. Fill it in for opening stock so Closing Stock,
+      Profit and the Balance Sheet are correct — without it those read as zero. A real purchase
+      entry always overrides this.
+    </div>
     <div id="np-sizes"></div>
     <a href="#" id="np-add-size" style="font-size:12px;font-weight:700;">+ Add another size</a>
     ${editing ? `<p class="muted" style="font-size:11px;margin-top:8px;">Correcting a miscount here is fine. For goods actually received, use “Record Stock In” so the purchase is kept in the history.</p>` : ""}
@@ -3393,12 +3398,14 @@ function renderAddProductSheet(context){
     document.getElementById("np-sizes").innerHTML = sizes.map((s,i)=>`
       <div style="display:flex;gap:6px;margin-bottom:6px;align-items:center;">
         <input type="text" placeholder="Label (e.g. 8x4 ft)" value="${escapeHtml(s.label)}" data-size-label="${i}" style="flex:1.4;">
-        <input type="number" placeholder="Stock" min="0" value="${s.stock ?? 0}" data-size-stock="${i}" style="width:64px;" title="Stock">
-        <input type="number" placeholder="Price" value="${s.price}" data-size-price="${i}" style="width:80px;" title="Price">
+        <input type="number" placeholder="Stock" min="0" value="${s.stock ?? 0}" data-size-stock="${i}" style="width:60px;" title="Stock quantity">
+        <input type="number" placeholder="Cost" min="0" step="any" value="${s.cost ?? 0}" data-size-cost="${i}" style="width:72px;" title="Purchase cost per unit — what you paid">
+        <input type="number" placeholder="Price" value="${s.price}" data-size-price="${i}" style="width:76px;" title="Selling price per unit">
         ${sizes.length>1?`<a href="#" data-size-remove="${i}" class="btn-danger-link">✕</a>`:""}
       </div>`).join("");
     document.querySelectorAll("[data-size-label]").forEach(inp=>inp.addEventListener("input", e=>sizes[e.target.dataset.sizeLabel].label=e.target.value));
     document.querySelectorAll("[data-size-stock]").forEach(inp=>inp.addEventListener("input", e=>sizes[e.target.dataset.sizeStock].stock=e.target.value));
+    document.querySelectorAll("[data-size-cost]").forEach(inp=>inp.addEventListener("input", e=>sizes[e.target.dataset.sizeCost].cost=e.target.value));
     document.querySelectorAll("[data-size-price]").forEach(inp=>inp.addEventListener("input", e=>sizes[e.target.dataset.sizePrice].price=e.target.value));
     document.querySelectorAll("[data-size-remove]").forEach(a=>a.addEventListener("click", e=>{ e.preventDefault(); sizes.splice(e.target.dataset.sizeRemove,1); renderSizes(); }));
   }
@@ -3433,7 +3440,7 @@ function renderAddProductSheet(context){
     sheet.querySelectorAll("[data-mode]").forEach(x=>x.classList.remove("selected"));
     b.classList.add("selected"); renderDims();
   }));
-  sheet.querySelector("#np-add-size").addEventListener("click", (e)=>{ e.preventDefault(); sizes.push({label:"",price:"",stock:0}); renderSizes(); });
+  sheet.querySelector("#np-add-size").addEventListener("click", (e)=>{ e.preventDefault(); sizes.push({label:"",price:"",stock:0,cost:0}); renderSizes(); });
   sheet.querySelector("#np-save").addEventListener("click", async ()=>{
     const name = document.getElementById("np-name").value.trim();
     if(!name){ toast("Enter a product name."); return; }

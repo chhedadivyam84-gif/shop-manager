@@ -1021,6 +1021,15 @@ CREATE TABLE IF NOT EXISTS outstanding_liabilities (
 // default, but configurable for a shop that closes on a different cycle.
 addColumn("settings", "fy_start_month", "INTEGER NOT NULL DEFAULT 4");
 
+// Purchase cost per size, entered directly on the product alongside its
+// opening stock. Until now a cost existed ONLY if the goods had been bought
+// through a Purchase or Record Stock In — so a shop that typed its opening
+// stock straight onto the product had no cost basis at all, which made
+// Closing Stock and Cost of Goods Sold read as zero and overstated profit.
+// This is the fallback: a real purchase always wins (see getLatestCost),
+// this is what's used when there is no purchase history.
+addColumn("product_sizes", "cost_price", "REAL NOT NULL DEFAULT 0");
+
 // Multi-location inventory. A scalable Location model — not hardcoded to
 // Shop/Warehouse — so a third, fourth, etc. location can be added later with
 // zero schema changes. `code` is a stable machine key ("shop", "warehouse")

@@ -20,7 +20,7 @@ function dim(v, fallback) {
 // purely additive, the per-location breakdown the Inventory screen's
 // Shop/Warehouse tabs need.
 function loadSizes(productId) {
-  const sizes = db.prepare("SELECT id, label, price, stock FROM product_sizes WHERE product_id = ? ORDER BY sort_order ASC, id ASC").all(productId);
+  const sizes = db.prepare("SELECT id, label, price, stock, cost_price FROM product_sizes WHERE product_id = ? ORDER BY sort_order ASC, id ASC").all(productId);
   sizes.forEach(s => { s.byLocation = inventory.getStockByLocation(s.id); });
   return sizes;
 }
@@ -47,6 +47,30 @@ function syncProductStock(productId) {
 function stockNum(v) {
   const n = Number(v);
   return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+/**
+ * Makes a stock figure typed on the Add/Edit Product screen into REAL,
+ * location-aware stock.
+ *
+ * Without this the number only ever landed in product_sizes.stock while
+ * size_location_stock stayed empty, which broke two things badly:
+ *   - Billing checks LOCATION stock, so a product showing "10 in stock"
+ *     could not be sold at all — "Not enough Shop stock".
+ *   - The first purchase for that size resynced the total from the location
+ *     ledger and silently overwrote the typed figure (an opening 10 became 5
+ *     after receiving 5).
+ *
+ * The difference is applied to SHOP — the same choice the one-time backfill in
+ * db.js makes — and only the difference, so a quantity sitting in Warehouse is
+ * never disturbed by someone correcting a count here.
+ */
+function applyTypedStock(sizeId, typedTotal) {
+  const current = inventory.getStockByLocation(sizeId)
+    .reduce((sum, l) => sum + (l.quantity || 0), 0);
+  const delta = stockNum(typedTotal) - current;
+  if (delta === 0) return;
+  inventory.addStock(sizeId, inventory.getLocationByCode("shop").id, delta);
 }
 
 router.get("/", (req, res) => {
@@ -80,7 +104,7 @@ router.post("/", (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insertSize = db.prepare(`
-    INSERT INTO product_sizes (product_id, label, price, stock, sort_order) VALUES (?, ?, ?, ?, ?)
+    INSERT INTO product_sizes (product_id, label, price, stock, sort_order, cost_price) VALUES (?, ?, ?, ?, ?, ?)
   `);
 
   db.transaction(() => {
@@ -91,7 +115,10 @@ router.post("/", (req, res) => {
       Pricing.normaliseMode(defaultMode), dim(lengthFt), dim(widthVal), dim(thicknessIn),
       Date.now()
     );
-    validSizes.forEach((s, i) => insertSize.run(id, String(s.label).trim(), parseFloat(s.price), stockNum(s.stock), i));
+    validSizes.forEach((s, i) => {
+      const info = insertSize.run(id, String(s.label).trim(), parseFloat(s.price), stockNum(s.stock), i, stockNum(s.cost));
+      applyTypedStock(Number(info.lastInsertRowid), s.stock);
+    });
   })();
 
   logAction(req, "product.create", name.trim());
@@ -124,8 +151,8 @@ router.put("/:id", (req, res) => {
   // or a sold invoice_items row references a size_id, and destroying/
   // recreating every row on each edit would silently null out that link
   // (ON DELETE SET NULL) even for a size the owner didn't touch.
-  const updateSize = db.prepare("UPDATE product_sizes SET label=?, price=?, stock=?, sort_order=? WHERE id=? AND product_id=?");
-  const insertSize = db.prepare("INSERT INTO product_sizes (product_id, label, price, stock, sort_order) VALUES (?, ?, ?, ?, ?)");
+  const updateSize = db.prepare("UPDATE product_sizes SET label=?, price=?, stock=?, sort_order=?, cost_price=? WHERE id=? AND product_id=?");
+  const insertSize = db.prepare("INSERT INTO product_sizes (product_id, label, price, stock, sort_order, cost_price) VALUES (?, ?, ?, ?, ?, ?)");
   const deleteSize = db.prepare("DELETE FROM product_sizes WHERE id = ? AND product_id = ?");
 
   db.transaction(() => {
@@ -144,10 +171,12 @@ router.put("/:id", (req, res) => {
       const keptIds = new Set();
       validSizes.forEach((s, i) => {
         if (s.id != null && existingIds.has(Number(s.id))) {
-          updateSize.run(String(s.label).trim(), parseFloat(s.price), stockNum(s.stock), i, Number(s.id), p.id);
+          updateSize.run(String(s.label).trim(), parseFloat(s.price), stockNum(s.stock), i, stockNum(s.cost), Number(s.id), p.id);
+          applyTypedStock(Number(s.id), s.stock);
           keptIds.add(Number(s.id));
         } else {
-          insertSize.run(p.id, String(s.label).trim(), parseFloat(s.price), stockNum(s.stock), i);
+          const info = insertSize.run(p.id, String(s.label).trim(), parseFloat(s.price), stockNum(s.stock), i, stockNum(s.cost));
+          applyTypedStock(Number(info.lastInsertRowid), s.stock);
         }
       });
       existingIds.forEach(id => { if (!keptIds.has(id)) deleteSize.run(id, p.id); });

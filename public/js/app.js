@@ -9646,17 +9646,26 @@ function printProductQuery(){
 
   document.getElementById("pq-report-content").innerHTML = `
     <style>
-      /* Sixteen columns will not fit A4 portrait at a readable size, so the
-         sheet asks for landscape rather than shrinking to unreadable. */
-      @page{ size: A4 landscape; margin: 10mm; }
+      /* The landscape @page rule lives in style.css as a NAMED page — see the
+         note there. It cannot be declared here; an @page written into
+         innerHTML is ignored by the print engine. */
       #pq-report-content{font-family:Arial,Helvetica,sans-serif;color:#000;}
-      #pq-report-content h1{font-size:16px;margin:0 0 2px;}
-      #pq-report-content .sub{font-size:10.5px;color:#333;margin-bottom:4px;}
-      #pq-report-content .filters{font-size:10.5px;color:#000;margin-bottom:10px;}
+      #pq-report-content h1{font-size:15px;margin:0 0 2px;}
+      #pq-report-content .sub{font-size:10px;color:#333;margin-bottom:3px;}
+      #pq-report-content .filters{font-size:10px;color:#000;margin-bottom:8px;}
       #pq-report-content .filters b{font-weight:700;}
-      #pq-report-content table{width:100%;border-collapse:collapse;font-size:9.5px;}
-      #pq-report-content th,#pq-report-content td{border:1px solid #000;padding:3px 4px;text-align:left;}
-      #pq-report-content th{background:#eee;}
+      /* table-layout:fixed is what actually makes this fit. With the default
+         auto layout the browser widens columns to suit the longest product
+         name and the last columns fall off the page; fixed honours the
+         colgroup below and wraps the text instead. */
+      #pq-report-content table{
+        width:100%; table-layout:fixed; border-collapse:collapse; font-size:8px;
+      }
+      #pq-report-content th,#pq-report-content td{
+        border:1px solid #000; padding:2px 3px; text-align:left;
+        overflow-wrap:break-word; word-break:break-word; vertical-align:top;
+      }
+      #pq-report-content th{background:#eee;font-size:7.5px;}
       #pq-report-content .num{text-align:right;}
       #pq-report-content tfoot td{font-weight:700;background:#f2f2f2;}
       /* Repeat the header on every sheet and never split a product across
@@ -9670,6 +9679,16 @@ function printProductQuery(){
     <div class="filters"><b>Filters:</b> ${
       filters.length ? filters.map(f=>escapeHtml(f)).join(" &nbsp;|&nbsp; ") : "none — all products"}</div>
     <table>
+      <!-- Widths sum to 100. Text columns get the room, quantity columns are
+           trimmed to what a five-digit figure needs. -->
+      <colgroup>
+        <col style="width:13%"><col style="width:5%"><col style="width:6%">
+        <col style="width:8%"><col style="width:7%"><col style="width:4%">
+        <col style="width:5%"><col style="width:4%"><col style="width:4%"><col style="width:5%">
+        <col style="width:5%"><col style="width:5%">
+        <col style="width:5.5%"><col style="width:5.5%"><col style="width:6%">
+        <col style="width:6%"><col style="width:6%">
+      </colgroup>
       <thead><tr>
         <th>Product</th><th>Code</th><th>Brand</th><th>Category</th><th>Size</th><th>Unit</th>
         <th class="num">Opening</th><th class="num">In</th><th class="num">Out</th><th class="num">Closing</th>

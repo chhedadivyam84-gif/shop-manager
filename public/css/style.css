@@ -469,6 +469,14 @@ table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #178a6e;color:#0
   #fs-pq-report{display:block !important;position:static !important;background:#fff !important;max-width:none !important;margin:0 !important;}
   #fs-pq-report > *{display:none !important;}
   #fs-pq-report > #pq-report-content{display:block !important;}
+  /* Product Query is the one sheet that must print landscape — 17 columns
+     clip off the right edge of a portrait page. It has to be a NAMED page
+     declared here rather than a bare @page inside the injected <style>:
+     a plain @page would flip every invoice to landscape too, and an @page
+     written into innerHTML is ignored by the print engine anyway, which is
+     why this printed portrait and lost every column after "Out". */
+  @page pqLandscape{ size: A4 landscape; margin: 8mm; }
+  #fs-pq-report{ page: pqLandscape; }
   .invoice-page{
     position:static;margin:0 !important;
     border:1px solid #000;border-radius:0 !important;box-shadow:none !important;

@@ -866,6 +866,57 @@
     <div id="stock-report-content" style="background:#fff;color:#000;padding:16px;"></div>
   </div>
 
+  <!-- ============ FULLSCREEN: PRINT ENGINE PREVIEW ============
+       Every report in the app previews and exports through this one screen.
+       The toolbar is inside .fs-bar, which print CSS hides, so the controls
+       can never end up on the paper. -->
+  <div class="fullscreen" id="fs-print-engine">
+    <div class="fs-bar pe-bar">
+      <div class="fs-title" id="pe-doc-title">Preview</div>
+      <div class="pe-controls">
+        <label>Paper
+          <select id="pe-paper"><option value="A4">A4</option><option value="A5">A5</option></select>
+        </label>
+        <label>Layout
+          <select id="pe-orient">
+            <option value="portrait">Portrait</option>
+            <option value="landscape">Landscape</option>
+          </select>
+        </label>
+        <label>Margins
+          <select id="pe-margin">
+            <option value="narrow">Narrow</option>
+            <option value="normal">Normal</option>
+            <option value="wide">Wide</option>
+          </select>
+        </label>
+        <label>Pages
+          <select id="pe-fit">
+            <option value="auto">Fit one page if readable</option>
+            <option value="multi">Always multiple pages</option>
+          </select>
+        </label>
+        <label class="pe-check"><input type="checkbox" id="pe-withrate" checked> With Rate</label>
+        <label class="pe-check"><input type="checkbox" id="pe-header" checked> Header</label>
+        <label class="pe-check"><input type="checkbox" id="pe-footer" checked> Footer</label>
+        <label class="pe-check"><input type="checkbox" id="pe-logo" checked> Logo</label>
+        <button class="btn btn-sm" id="pe-columns-btn">Columns</button>
+      </div>
+      <div class="pe-actions">
+        <button class="btn btn-sm btn-gold" id="pe-print">&#128424; Print</button>
+        <button class="btn btn-sm" id="pe-pdf">PDF</button>
+        <button class="btn btn-sm" id="pe-xlsx">Excel</button>
+        <button class="btn btn-sm" id="pe-csv">CSV</button>
+        <button class="fs-close" data-close-fs="fs-print-engine">&#10005;</button>
+      </div>
+    </div>
+    <div id="pe-colpick" class="pe-colpick" style="display:none;"></div>
+    <div id="pe-pagenote" class="pe-pagenote"></div>
+    <div id="pe-paper-wrap" class="pe-paper-wrap">
+      <div id="pe-content"></div>
+    </div>
+  </div>
+
   <!-- ============ FULLSCREEN: PRODUCT QUERY REPORT ============ -->
   <div class="fullscreen" id="fs-pq-report">
     <div class="fs-bar">
@@ -913,6 +964,7 @@
      so the browser's arithmetic and the stored invoice can never disagree.
      Must load before app.js, which uses window.Pricing at startup. -->
 <script src="/js/pricing.js"></script>
+<script src="/js/printEngine.js"></script>
 <script src="/js/app.js"></script>
 </body>
 </html>

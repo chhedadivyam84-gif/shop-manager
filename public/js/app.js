@@ -569,8 +569,9 @@ async function initApp(){
 
   document.getElementById("pq-back-link").addEventListener("click", (e)=>{ e.preventDefault(); switchTab("home"); });
   document.getElementById("pq-search-btn").addEventListener("click", ()=>runProductQuery());
-  document.getElementById("pq-print-btn").addEventListener("click", printProductQuery);
+  document.getElementById("pq-print-btn").addEventListener("click", ()=>openPrintPreview(productQueryDoc()));
   document.getElementById("pq-export-btn").addEventListener("click", exportProductQuery);
+  wirePrintEngine();
   document.getElementById("pq-q").addEventListener("keydown", (e)=>{ if(e.key==="Enter") runProductQuery(); });
   document.getElementById("pq-advanced-btn").addEventListener("click", ()=>{
     const adv = document.getElementById("pq-advanced");
@@ -9492,6 +9493,212 @@ function openTransferStock(p){
 }
 
 /* ============================================================
+   PRINT PREVIEW CONTROLLER
+   Drives the one preview screen every report shares. The engine in
+   printEngine.js knows how to draw a report; this knows how to let
+   someone choose the paper and press a button.
+   ============================================================ */
+
+/* Preferences live per DEVICE, not per shop. The counter PC prints A4
+   landscape on the laser printer; the phone in the warehouse prints A5.
+   Storing them server-side would make those two fight over one value —
+   and the settings route is owner-only, so staff could never save at all. */
+const PE_PREFS_KEY = "shopManager.printPrefs";
+window.__printPrefsSource = () => {
+  try{ return localStorage.getItem(PE_PREFS_KEY) || "{}"; }catch(e){ return "{}"; }
+};
+window.__printPrefsSave = (json) => {
+  try{ localStorage.setItem(PE_PREFS_KEY, json); }catch(e){ /* private mode — prints still work */ }
+};
+
+let peDoc = null, peOpts = null;
+
+function openPrintPreview(doc){
+  if(!doc || !doc.rows || !doc.rows.length){ toast("Nothing to print — no rows."); return; }
+  peDoc = doc;
+  peOpts = PrintEngine.loadPrefs(doc.id);
+  if(peOpts.landscape === null || peOpts.landscape === undefined) peOpts.landscape = !!doc.landscape;
+
+  document.getElementById("pe-doc-title").textContent = doc.title || "Preview";
+  document.getElementById("pe-paper").value    = peOpts.paper;
+  document.getElementById("pe-orient").value   = peOpts.landscape ? "landscape" : "portrait";
+  document.getElementById("pe-margin").value   = peOpts.margin;
+  document.getElementById("pe-fit").value      = peOpts.fit;
+  document.getElementById("pe-withrate").checked = peOpts.withRate;
+  document.getElementById("pe-header").checked   = peOpts.header;
+  document.getElementById("pe-footer").checked   = peOpts.footer;
+  document.getElementById("pe-logo").checked     = peOpts.logo;
+  // A report with no rate columns has nothing for the toggle to do.
+  const hasRate = doc.columns.some(c=>c.rate);
+  document.getElementById("pe-withrate").parentElement.style.display = hasRate ? "" : "none";
+
+  buildPeColumnPicker();
+  document.getElementById("pe-colpick").style.display = "none";
+  renderPrintPreview();
+  document.getElementById("fs-print-engine").classList.add("show");
+}
+
+function buildPeColumnPicker(){
+  const wrap = document.getElementById("pe-colpick");
+  wrap.innerHTML = peDoc.columns.map(c=>`
+    <label><input type="checkbox" data-pe-col="${escapeHtml(c.key)}"
+      ${peOpts.hidden.indexOf(c.key)===-1?"checked":""}> ${escapeHtml(c.label)}</label>`).join("");
+  wrap.querySelectorAll("[data-pe-col]").forEach(cb=>{
+    cb.addEventListener("change", ()=>{
+      const key = cb.dataset.peCol;
+      const i = peOpts.hidden.indexOf(key);
+      if(cb.checked){ if(i>-1) peOpts.hidden.splice(i,1); }
+      else if(i===-1){
+        // Never let someone hide every column and print an empty grid.
+        if(PrintEngine.visibleColumns(peDoc, peOpts).length <= 1){
+          cb.checked = true; toast("Keep at least one column."); return;
+        }
+        peOpts.hidden.push(key);
+      }
+      renderPrintPreview();
+    });
+  });
+}
+
+function readPeOpts(){
+  peOpts.paper     = document.getElementById("pe-paper").value;
+  peOpts.landscape = document.getElementById("pe-orient").value === "landscape";
+  peOpts.margin    = document.getElementById("pe-margin").value;
+  peOpts.fit       = document.getElementById("pe-fit").value;
+  peOpts.withRate  = document.getElementById("pe-withrate").checked;
+  peOpts.header    = document.getElementById("pe-header").checked;
+  peOpts.footer    = document.getElementById("pe-footer").checked;
+  peOpts.logo      = document.getElementById("pe-logo").checked;
+}
+
+function renderPrintPreview(){
+  readPeOpts();
+  const cfg = state.settings || {};
+  const out = PrintEngine.renderSheet(peDoc, peOpts, cfg);
+  const content = document.getElementById("pe-content");
+
+  // Show the sheet at true page size so the preview is the printout.
+  content.style.width = out.dims.innerW + "px";
+  content.style.padding = out.dims.marginMm + "mm";
+  content.innerHTML = out.html;
+
+  const box = document.getElementById("pe-scale");
+  const note = document.getElementById("pe-pagenote");
+  box.style.transform = ""; box.style.width = "";
+
+  const needed = box.getBoundingClientRect().height;
+  const pageH = out.dims.innerH;
+
+  if(peOpts.fit === "auto" && needed > pageH){
+    const scale = pageH / needed;
+    if(scale >= PrintEngine.MIN_SCALE){
+      box.style.transform = `scale(${scale})`;
+      box.style.width = (100/scale) + "%";
+      note.textContent = `Shrunk to ${Math.round(scale*100)}% to fit one page.`;
+    } else {
+      // "About", deliberately: this counts HTML page-boxes, and the PDF
+      // renderer packs rows at a slightly different density. Quoting an exact
+      // number the PDF then contradicts is worse than admitting the estimate.
+      const pages = Math.ceil(needed/pageH);
+      const perPage = Math.floor(peDoc.rows.length / pages);
+      note.textContent = `About ${pages} pages — too many lines to fit one sheet and stay readable `
+        + `(roughly ${perPage} lines per page). Narrow the filters, hide columns, or switch to A4 landscape.`;
+    }
+  } else if(peOpts.fit === "multi" && needed > pageH){
+    note.textContent = `${Math.ceil(needed/pageH)} pages.`;
+  } else {
+    note.textContent = "";
+  }
+  PrintEngine.savePrefs(peDoc.id, peOpts);
+}
+
+function peFilename(){
+  return (peDoc.title || "report").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
+}
+
+function peExportCsv(){
+  readPeOpts();
+  const csv = PrintEngine.toCsv(peDoc, peOpts);
+  // The first character is a UTF-8 byte-order mark (U+FEFF). Without it Excel
+  // opens the file as ANSI and mangles every ₹ and every Gujarati name in it.
+  // Note when testing: Blob.text() strips the BOM while decoding, so it only
+  // shows up if you read the blob as bytes.
+  const blob = new Blob(["﻿"+csv], {type:"text/csv;charset=utf-8;"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = peFilename() + ".csv";
+  document.body.appendChild(a); a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+
+function pePdf(){
+  readPeOpts();
+  try{
+    const pdf = PrintEngine.toPdf(peDoc, peOpts, state.settings||{});
+    pdf.save(peFilename() + ".pdf");
+  }catch(e){
+    toast("Couldn't build the PDF: " + (e.message||"error"));
+  }
+}
+
+async function peXlsx(){
+  readPeOpts();
+  const cols = PrintEngine.visibleColumns(peDoc, peOpts);
+  const rows = [cols.map(c=>c.label)];
+  peDoc.rows.forEach(r=>{
+    rows.push(cols.map(c=>{
+      if(c.rate && !peOpts.withRate) return "";
+      const v = typeof c.value === "function" ? c.value(r) : r[c.key];
+      // Numeric columns go in as numbers so Excel can sum them; everything
+      // else as text. A formatted "1,234.00" would arrive as unusable text.
+      if(c.type === "money" || c.type === "number") return v == null ? "" : Number(v);
+      return v == null ? "" : String(v);
+    }));
+  });
+  if(peDoc.totals){
+    rows.push([]);
+    rows.push(cols.map((c,i)=>{
+      if(i===0) return `Total — ${peDoc.rows.length} line${peDoc.rows.length!==1?"s":""}`;
+      if(c.rate && !peOpts.withRate) return "";
+      return (c.key in peDoc.totals) ? Number(peDoc.totals[c.key]) : "";
+    }));
+  }
+  if((peDoc.filters||[]).length){ rows.push([]); rows.push(["Filters", peDoc.filters.join("  |  ")]); }
+  rows.push(["Generated", new Date().toLocaleString("en-IN")]);
+
+  try{
+    const res = await fetch("/api/export/xlsx", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ rows, filename: peFilename(), sheetName: peDoc.title })
+    });
+    if(!res.ok){ toast("Excel export failed."); return; }
+    const blob = await res.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = peFilename() + ".xlsx";
+    document.body.appendChild(a); a.click();
+    setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  }catch(e){ toast("Excel export failed: " + (e.message||"error")); }
+}
+
+function wirePrintEngine(){
+  ["pe-paper","pe-orient","pe-margin","pe-fit"].forEach(id=>{
+    document.getElementById(id).addEventListener("change", renderPrintPreview);
+  });
+  ["pe-withrate","pe-header","pe-footer","pe-logo"].forEach(id=>{
+    document.getElementById(id).addEventListener("change", renderPrintPreview);
+  });
+  document.getElementById("pe-columns-btn").addEventListener("click", ()=>{
+    const el = document.getElementById("pe-colpick");
+    el.style.display = el.style.display === "none" ? "flex" : "none";
+  });
+  document.getElementById("pe-print").addEventListener("click", ()=>{ renderPrintPreview(); window.print(); });
+  document.getElementById("pe-pdf").addEventListener("click", pePdf);
+  document.getElementById("pe-xlsx").addEventListener("click", peXlsx);
+  document.getElementById("pe-csv").addEventListener("click", peExportCsv);
+}
+
+/* ============================================================
    PRODUCT QUERY
    One search box over every identifier a person might have in
    hand, and one click from a result to that product's complete
@@ -9560,6 +9767,44 @@ function exportProductQuery(){
   const qs = pqQueryString();
   const win = window.open("/api/product-query/export" + (qs ? "?"+qs : ""), "_blank");
   if(!win) toast("Couldn't start the download — allow pop-ups for this site.");
+}
+
+/* Product Query as a print-engine document. This is the whole of what a
+   report has to say about itself now — no CSS, no page maths, no export
+   code of its own. */
+function productQueryDoc(){
+  return {
+    id: "product-query",
+    title: "Product Query",
+    landscape: true,
+    filters: pqActiveFilters(),
+    columns: [
+      { key:"productName",   label:"Product",       width:13 },
+      { key:"code",          label:"Code",          width:5 },
+      { key:"barcode",       label:"Barcode",       width:6 },
+      { key:"brand",         label:"Brand",         width:6 },
+      { key:"category",      label:"Category",      width:7 },
+      { key:"subCategory",   label:"Sub-Category",  width:6 },
+      { key:"sizeLabel",     label:"Size",          width:7 },
+      { key:"unit",          label:"Unit",          width:4 },
+      { key:"openingStock",  label:"Opening",       width:5,   align:"right", type:"number" },
+      { key:"stockIn",       label:"In",            width:4,   align:"right", type:"number" },
+      { key:"stockOut",      label:"Out",           width:4,   align:"right", type:"number" },
+      { key:"closingStock",  label:"Closing",       width:5,   align:"right", type:"number" },
+      { key:"shopStock",     label:"Shop",          width:4.5, align:"right", type:"number" },
+      { key:"warehouseStock",label:"W/house",       width:4.5, align:"right", type:"number" },
+      { key:"purchaseRate",  label:"Pur. Rate",     width:5.5, align:"right", type:"money", rate:true },
+      { key:"saleRate",      label:"Sale Rate",     width:5.5, align:"right", type:"money", rate:true },
+      { key:"stockValue",    label:"Stock Value",   width:6,   align:"right", type:"money", rate:true },
+      { key:"lastPurchaseDate", label:"Last Purchase", width:6 },
+      { key:"lastSaleDate",     label:"Last Sale",     width:6 }
+    ],
+    rows: state.pq.rows,
+    totals: {
+      closingStock: state.pq.totals.closingStock,
+      stockValue: state.pq.totals.stockValue
+    }
+  };
 }
 
 async function runProductQuery(){

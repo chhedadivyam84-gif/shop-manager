@@ -140,6 +140,7 @@ app.use("/api/invoices", requireAuth, require("./routes/invoices"));
 app.use("/api/reports", requireAuth, require("./routes/reports"));
 app.use("/api/accounting", requireAuth, require("./routes/accounting"));
 app.use("/api/product-query", requireAuth, require("./routes/productQuery"));
+app.use("/api/export", requireAuth, require("./routes/export"));
 app.use("/api/cashbook", requireAuth, require("./routes/cashbook"));
 app.use("/api/bankbook", requireAuth, require("./routes/bankbook"));
 app.use("/api/bank-accounts", requireAuth, require("./routes/bankAccounts"));

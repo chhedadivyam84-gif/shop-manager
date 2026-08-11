@@ -1265,6 +1265,16 @@ addColumn("settings", "website", "TEXT DEFAULT ''");
 // an unknown value falls back to classic rather than printing unstyled).
 addColumn("settings", "invoice_theme", "TEXT NOT NULL DEFAULT 'classic'");
 addColumn("settings", "challan_theme", "TEXT NOT NULL DEFAULT 'classic'");
+// Letterhead logo, held as a data: URI rather than a file on disk — the app
+// has to survive Render wiping its filesystem on every deploy, and a logo
+// living in the database rides along with the ordinary backup instead of
+// needing a second restore path of its own.
+addColumn("settings", "logo_data", "TEXT DEFAULT ''");
+// Per-report print preferences (paper, orientation, margins, chosen columns,
+// with/without rate), as JSON keyed by report id. One column rather than a
+// dozen: the set of options will keep growing, and every new one would
+// otherwise be another migration.
+addColumn("settings", "print_prefs", "TEXT NOT NULL DEFAULT '{}'");
 
 addColumn("invoices", "ack_status", "TEXT NOT NULL DEFAULT 'Pending'");
 addColumn("invoices", "ack_received_at", "INTEGER");

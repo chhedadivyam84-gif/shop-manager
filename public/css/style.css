@@ -506,3 +506,30 @@ table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #178a6e;color:#0
   nav.bottom{ position:sticky; bottom:0; }
   .sheet{ border-radius:16px; }
 }
+
+/* ---------------------------------------------------------------- Product Query
+   The results grid is the widest table in the app (14 columns), so it scrolls
+   inside its own container rather than forcing the page to scroll sideways. */
+.pq-adv-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; }
+.pq-adv-grid label{ display:flex; flex-direction:column; font-size:11px; font-weight:700; color:#6b7280; gap:3px; }
+.pq-adv-grid input, .pq-adv-grid select{
+  padding:8px 9px; font-size:14px; font-weight:400; color:#111827;
+  border:1px solid #d5d9e0; border-radius:7px; background:#fff;
+}
+table.pq-table{ border-collapse:collapse; width:100%; font-size:12px; white-space:nowrap; }
+table.pq-table th{
+  background:#f4f6f9; text-align:left; padding:9px 10px; font-size:11px;
+  color:#4b5563; border-bottom:1px solid #e2e6ec; position:sticky; top:0;
+}
+table.pq-table td{ padding:9px 10px; border-bottom:1px solid #eef1f5; }
+table.pq-table tbody tr{ cursor:pointer; }
+table.pq-table tbody tr:hover{ background:#fbfaf5; }
+table.pq-table .num{ text-align:right; font-variant-numeric:tabular-nums; }
+table.pq-table .zero{ color:#9ca3af; }
+table.pq-table .neg{ color:#b91c1c; font-weight:700; }
+.pq-name{ font-weight:700; color:#111827; }
+.pq-sub{ font-size:10px; color:#6b7280; font-weight:400; }
+/* The ledger reuses the same table skin but is never clickable. */
+table.pq-table.pq-ledger tbody tr{ cursor:default; }
+table.pq-table.pq-ledger tbody tr:hover{ background:transparent; }
+table.pq-table tr.pq-open-row td{ background:#f9fafb; font-weight:700; }

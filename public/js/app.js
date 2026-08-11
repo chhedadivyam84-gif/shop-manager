@@ -566,6 +566,32 @@ async function initApp(){
   });
 
   document.getElementById("inq-back-link").addEventListener("click", (e)=>{ e.preventDefault(); switchTab("home"); });
+
+  document.getElementById("pq-back-link").addEventListener("click", (e)=>{ e.preventDefault(); switchTab("home"); });
+  document.getElementById("pq-search-btn").addEventListener("click", ()=>runProductQuery());
+  document.getElementById("pq-q").addEventListener("keydown", (e)=>{ if(e.key==="Enter") runProductQuery(); });
+  document.getElementById("pq-advanced-btn").addEventListener("click", ()=>{
+    const adv = document.getElementById("pq-advanced");
+    adv.style.display = adv.style.display === "none" ? "block" : "none";
+  });
+  document.getElementById("pq-clear-btn").addEventListener("click", ()=>{
+    ["pq-q","pq-name","pq-code","pq-barcode","pq-brand","pq-category","pq-subcategory",
+     "pq-size","pq-location","pq-stockfilter","pq-from","pq-to"]
+      .forEach(id=>{ const el=document.getElementById(id); if(el) el.value=""; });
+    runProductQuery();
+  });
+  // Changing any advanced filter re-runs immediately — the owner is narrowing a
+  // list, and making them find the Search button again after every pick is the
+  // fastest way to make a search screen feel slow.
+  ["pq-brand","pq-category","pq-subcategory","pq-location","pq-stockfilter","pq-from","pq-to"]
+    .forEach(id=>{
+      const el = document.getElementById(id);
+      if(el) el.addEventListener("change", ()=>runProductQuery());
+    });
+  ["pq-name","pq-code","pq-barcode","pq-size"].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el) el.addEventListener("keydown", (e)=>{ if(e.key==="Enter") runProductQuery(); });
+  });
   document.getElementById("inq-add-btn").addEventListener("click", ()=>openInquiry());
 
   document.getElementById("pur-back-link").addEventListener("click", (e)=>{ e.preventDefault(); switchTab("home"); });
@@ -749,7 +775,7 @@ async function switchTab(tab){
   document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));
   document.getElementById("screen-"+tab).classList.add("active");
   document.querySelectorAll("nav.bottom .tab").forEach(t=>t.classList.toggle("active", t.dataset.tab===tab));
-  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",quotation:"Quotation",so:"Sales Order"};
+  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",quotation:"Quotation",so:"Sales Order",pquery:"Product Query"};
   document.getElementById("hdr-sub").textContent = subMap[tab];
   document.getElementById("hdr-main").textContent = tab==="home" ? greeting() : subMap[tab];
   if(tab==="billing") await renderBilling();
@@ -763,6 +789,7 @@ async function switchTab(tab){
   if(tab==="po") await renderPoScreen();
   if(tab==="quotation") await renderQuotationScreen();
   if(tab==="so") await renderSoScreen();
+  if(tab==="pquery") await renderPqScreen();
 }
 
 async function renderAll(){
@@ -3376,6 +3403,8 @@ function renderAddProductSheet(context){
     <label class="field-label">Product Code <span class="muted" style="font-weight:400;">— printed on invoices, e.g. LV-888-CAA</span></label><input type="text" id="np-code" value="${v("code")}">
     <label class="field-label">Brand</label><input type="text" id="np-brand" value="${v("brand")}">
     <label class="field-label">Category</label><input type="text" id="np-category" value="${v("category")}" placeholder="Plywood, Laminate, MDF, Veneer…">
+    <label class="field-label">Sub-Category <span class="muted" style="font-weight:400;">— optional, for Product Query</span></label><input type="text" id="np-subcategory" value="${v("sub_category")}" placeholder="Commercial, Marine, Waterproof…">
+    <label class="field-label">Barcode <span class="muted" style="font-weight:400;">— optional, searchable in Product Query</span></label><input type="text" id="np-barcode" value="${v("barcode")}">
     <label class="field-label">Unit of measure</label>
     <div class="chip-row" id="np-unit-chips">
       ${UNIT_OPTIONS.map(u=>`<button class="chip ${u===curUnit?'selected':''}" data-unit="${u}">${u}</button>`).join("")}
@@ -3487,6 +3516,8 @@ function renderAddProductSheet(context){
       name, code: document.getElementById("np-code").value.trim(),
       brand: document.getElementById("np-brand").value.trim(),
       category: document.getElementById("np-category").value.trim(),
+      subCategory: document.getElementById("np-subcategory").value.trim(),
+      barcode: document.getElementById("np-barcode").value.trim(),
       unit, hsnCode: document.getElementById("np-hsn").value.trim(),
       gst: parseFloat(document.getElementById("np-gst").value)||18,
       godown: document.getElementById("np-godown").value.trim(),
@@ -9456,6 +9487,213 @@ function openTransferStock(p){
 
   render();
   showSheet("sheet-transfer-stock");
+}
+
+/* ============================================================
+   PRODUCT QUERY
+   One search box over every identifier a person might have in
+   hand, and one click from a result to that product's complete
+   movement history.
+   ============================================================ */
+state.pq = { rows: [], totals: null, loaded: false, filtersLoaded: false };
+
+function pqVal(id){ const el = document.getElementById(id); return el ? el.value.trim() : ""; }
+
+/* A quantity column: zero is greyed rather than shouted, and a negative
+   closing stock is red because it means something was billed that the shop
+   did not have. */
+function pqQty(n){
+  const v = Math.round((Number(n) || 0) * 1000) / 1000;
+  const cls = v < 0 ? "num neg" : (v === 0 ? "num zero" : "num");
+  return `<td class="${cls}">${v.toLocaleString("en-IN")}</td>`;
+}
+
+async function renderPqScreen(){
+  if(!state.pq.filtersLoaded){
+    try{
+      const f = await api("GET","/product-query/filters");
+      const fill = (id, list, allLabel) => {
+        const el = document.getElementById(id);
+        if(!el) return;
+        el.innerHTML = `<option value="">${allLabel}</option>` +
+          list.map(v => `<option value="${escapeHtml(String(v))}">${escapeHtml(String(v))}</option>`).join("");
+      };
+      fill("pq-brand", f.brands, "All brands");
+      fill("pq-category", f.categories, "All categories");
+      fill("pq-subcategory", f.subCategories, "All sub-categories");
+      const loc = document.getElementById("pq-location");
+      if(loc){
+        loc.innerHTML = `<option value="">Shop + Warehouse</option>` +
+          f.locations.map(l => `<option value="${escapeHtml(l.id)}">${escapeHtml(l.name)}</option>`).join("");
+      }
+      state.pq.filtersLoaded = true;
+    }catch(e){ /* the search still works without the dropdowns */ }
+  }
+  if(!state.pq.loaded) await runProductQuery();
+}
+
+async function runProductQuery(){
+  const results = document.getElementById("pq-results");
+  const summary = document.getElementById("pq-summary");
+  results.innerHTML = `<div class="muted" style="padding:16px;">Searching…</div>`;
+
+  const qs = new URLSearchParams();
+  const add = (k, v) => { if(v) qs.set(k, v); };
+  add("q", pqVal("pq-q"));
+  add("name", pqVal("pq-name"));
+  add("code", pqVal("pq-code"));
+  add("barcode", pqVal("pq-barcode"));
+  add("brand", pqVal("pq-brand"));
+  add("category", pqVal("pq-category"));
+  add("subCategory", pqVal("pq-subcategory"));
+  add("size", pqVal("pq-size"));
+  add("location", pqVal("pq-location"));
+  add("stockFilter", pqVal("pq-stockfilter"));
+  add("from", pqVal("pq-from"));
+  add("to", pqVal("pq-to"));
+
+  let data;
+  try{ data = await api("GET","/product-query?" + qs.toString()); }
+  catch(e){
+    results.innerHTML = `<div class="muted" style="padding:16px;color:#b91c1c;">Search failed: ${escapeHtml(e.message||"error")}</div>`;
+    return;
+  }
+  state.pq.rows = data.rows;
+  state.pq.totals = data.totals;
+  state.pq.loaded = true;
+
+  summary.innerHTML = data.rows.length
+    ? `<b>${data.totals.lines}</b> line(s) &nbsp;·&nbsp; closing stock <b>${data.totals.closingStock.toLocaleString("en-IN")}</b>` +
+      ` &nbsp;·&nbsp; stock value <b>${fmt(data.totals.stockValue)}</b>` +
+      (data.truncated ? ` &nbsp;·&nbsp; <span style="color:#b45309;">showing the first 500 — narrow the search</span>` : "")
+    : "";
+
+  if(!data.rows.length){
+    results.innerHTML = `<div class="muted" style="padding:20px;text-align:center;">No products matched.</div>`;
+    return;
+  }
+
+  results.innerHTML = `
+    <table class="pq-table">
+      <thead><tr>
+        <th>Product</th><th>Brand</th><th>Category</th><th>Size</th><th>Unit</th>
+        <th class="num">Opening</th><th class="num">In</th><th class="num">Out</th><th class="num">Closing</th>
+        <th class="num">Shop</th><th class="num">W/house</th>
+        <th class="num">Pur. Rate</th><th class="num">Sale Rate</th><th class="num">Stock Value</th>
+        <th>Last Purchase</th><th>Last Sale</th>
+      </tr></thead>
+      <tbody>
+        ${data.rows.map(r => `
+          <tr data-pq-pid="${escapeHtml(r.productId)}" data-pq-sid="${r.sizeId}">
+            <td><span class="pq-name">${escapeHtml(r.productName)}</span>${
+              r.code ? `<div class="pq-sub">${escapeHtml(r.code)}</div>` : ""}</td>
+            <td>${escapeHtml(r.brand||"")}</td>
+            <td>${escapeHtml(r.category||"")}${
+              r.subCategory ? `<div class="pq-sub">${escapeHtml(r.subCategory)}</div>` : ""}</td>
+            <td>${escapeHtml(r.sizeLabel||"")}</td>
+            <td>${escapeHtml(r.unit||"")}</td>
+            ${pqQty(r.openingStock)}${pqQty(r.stockIn)}${pqQty(r.stockOut)}${pqQty(r.closingStock)}
+            ${pqQty(r.shopStock)}${pqQty(r.warehouseStock)}
+            <td class="num">${fmt(r.purchaseRate)}</td>
+            <td class="num">${fmt(r.saleRate)}</td>
+            <td class="num">${fmt(r.stockValue)}</td>
+            <td>${escapeHtml(r.lastPurchaseDate||"—")}</td>
+            <td>${escapeHtml(r.lastSaleDate||"—")}</td>
+          </tr>`).join("")}
+      </tbody>
+    </table>`;
+
+  results.querySelectorAll("[data-pq-pid]").forEach(tr => {
+    tr.addEventListener("click", () => openPqDetail(tr.dataset.pqPid, Number(tr.dataset.pqSid)));
+  });
+}
+
+async function openPqDetail(productId, sizeId, tab){
+  const row = state.pq.rows.find(r => r.productId === productId && r.sizeId === sizeId);
+  const sheet = document.getElementById("sheet-pq-detail");
+  sheet.innerHTML = `<div class="sheet-head"><b>Loading…</b></div>`;
+  showSheet("sheet-pq-detail");
+
+  let led;
+  try{ led = await api("GET", `/product-query/ledger/${encodeURIComponent(productId)}?sizeId=${sizeId}`); }
+  catch(e){
+    sheet.innerHTML = `<div class="sheet-head"><b>Product Query</b>
+      <button class="btn btn-sm" data-close-sheet>Close</button></div>
+      <div style="padding:16px;color:#b91c1c;">Could not load history: ${escapeHtml(e.message||"error")}</div>`;
+    sheet.querySelector("[data-close-sheet]").addEventListener("click", closeAllSheets);
+    return;
+  }
+
+  const active = tab || "ledger";
+  const all = led.rows;
+  const shown = active === "purchases" ? all.filter(r => r.kind === "Purchase" || r.kind === "Stock In")
+              : active === "sales"     ? all.filter(r => r.kind === "Sale")
+              : all;
+
+  const stockPanel = `
+    <div class="pq-adv-grid" style="margin:12px 0;">
+      <div><div class="pq-sub">Shop</div><div style="font-size:20px;font-weight:800;">${(row?row.shopStock:0).toLocaleString("en-IN")}</div></div>
+      <div><div class="pq-sub">Warehouse</div><div style="font-size:20px;font-weight:800;">${(row?row.warehouseStock:0).toLocaleString("en-IN")}</div></div>
+      <div><div class="pq-sub">Total on hand</div><div style="font-size:20px;font-weight:800;">${(row?row.closingStock:led.closingBalance).toLocaleString("en-IN")}</div></div>
+      <div><div class="pq-sub">Stock value</div><div style="font-size:20px;font-weight:800;">${fmt(row?row.stockValue:0)}</div></div>
+      <div><div class="pq-sub">Purchase rate</div><div style="font-size:16px;font-weight:700;">${fmt(row?row.purchaseRate:0)}</div></div>
+      <div><div class="pq-sub">Sale rate</div><div style="font-size:16px;font-weight:700;">${fmt(row?row.saleRate:0)}</div></div>
+    </div>`;
+
+  const table = `
+    <table class="pq-table pq-ledger">
+      <thead><tr>
+        <th>Date</th><th>Type</th><th>Voucher</th><th>Party</th><th>Location</th>
+        <th class="num">In</th><th class="num">Out</th><th class="num">Rate</th>
+        <th class="num">Amount</th><th class="num">Balance</th>
+      </tr></thead>
+      <tbody>
+        ${active === "ledger" ? `<tr class="pq-open-row">
+          <td colspan="9">Opening Stock</td><td class="num">${led.openingBalance.toLocaleString("en-IN")}</td>
+        </tr>` : ""}
+        ${shown.length ? shown.map(r => `
+          <tr>
+            <td>${escapeHtml(r.date)}</td>
+            <td>${escapeHtml(r.kind)}</td>
+            <td>${escapeHtml(r.voucher||"—")}</td>
+            <td>${escapeHtml(r.party||"—")}</td>
+            <td>${escapeHtml(r.locationName||"—")}</td>
+            ${pqQty(r.qtyIn)}${pqQty(r.qtyOut)}
+            <td class="num">${fmt(r.rate)}</td>
+            <td class="num">${fmt(r.amount)}</td>
+            <td class="num">${r.balance.toLocaleString("en-IN")}</td>
+          </tr>`).join("")
+        : `<tr><td colspan="10" class="muted" style="padding:18px;text-align:center;">No entries.</td></tr>`}
+      </tbody>
+    </table>`;
+
+  sheet.innerHTML = `
+    <div class="sheet-head">
+      <div>
+        <b>${escapeHtml(led.product.name)}</b>
+        <div class="pq-sub">${escapeHtml(row ? row.sizeLabel : "")} ${
+          row && row.brand ? "· " + escapeHtml(row.brand) : ""}</div>
+      </div>
+      <button class="btn btn-sm" data-close-sheet>Close</button>
+    </div>
+    <div class="chip-row" style="margin:10px 0;">
+      <button class="chip ${active==="stock"?"selected":""}" data-pq-tab="stock">View Stock</button>
+      <button class="chip ${active==="purchases"?"selected":""}" data-pq-tab="purchases">View Purchases</button>
+      <button class="chip ${active==="sales"?"selected":""}" data-pq-tab="sales">View Sales</button>
+      <button class="chip ${active==="ledger"?"selected":""}" data-pq-tab="ledger">View Ledger</button>
+      <button class="chip" id="pq-open-product">View Product Details</button>
+    </div>
+    ${active === "stock" ? stockPanel : ""}
+    <div style="overflow-x:auto;">${active === "stock" ? "" : table}</div>`;
+
+  sheet.querySelector("[data-close-sheet]").addEventListener("click", closeAllSheets);
+  sheet.querySelectorAll("[data-pq-tab]").forEach(b => {
+    b.addEventListener("click", () => openPqDetail(productId, sizeId, b.dataset.pqTab));
+  });
+  sheet.querySelector("#pq-open-product").addEventListener("click", () => {
+    closeAllSheets();
+    openProductDetail(productId, "pquery");
+  });
 }
 
 })();

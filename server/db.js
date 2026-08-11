@@ -1036,6 +1036,12 @@ addColumn("product_sizes", "cost_price", "REAL NOT NULL DEFAULT 0");
 // a record of when the figure was true; it does not move stock.
 addColumn("products", "opening_stock_date", "TEXT DEFAULT ''");
 
+// Barcode and Sub-Category exist for the Product Query screen, which searches
+// on both. Added as plain optional text: a shop that never scans barcodes or
+// splits a category leaves them blank and nothing changes.
+addColumn("products", "barcode", "TEXT DEFAULT ''");
+addColumn("products", "sub_category", "TEXT DEFAULT ''");
+
 // Multi-location inventory. A scalable Location model — not hardcoded to
 // Shop/Warehouse — so a third, fourth, etc. location can be added later with
 // zero schema changes. `code` is a stable machine key ("shop", "warehouse")

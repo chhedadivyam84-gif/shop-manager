@@ -9674,20 +9674,28 @@ function printProductQuery(){
          name and the last columns fall off the page; fixed honours the
          colgroup below and wraps the text instead. */
       #pq-report-content table{
-        width:100%; table-layout:fixed; border-collapse:collapse; font-size:8px;
+        width:100%; table-layout:fixed; border-collapse:collapse; font-size:7.5px;
       }
       #pq-report-content th,#pq-report-content td{
-        border:1px solid #000; padding:2px 3px; text-align:left;
+        border:1px solid #000; padding:1.5px 3px; text-align:left;
         overflow-wrap:break-word; word-break:break-word; vertical-align:top;
       }
-      #pq-report-content th{background:#eee;font-size:7.5px;}
+      /* The shrink-to-one-page wrapper. Width is inflated by 1/scale so that
+         after scaling the content still spans the full page width instead of
+         leaving a band of white down the right. */
+      #pq-scale{transform-origin:top left;}
+      #pq-report-content th{background:#eee;font-size:7px;}
       #pq-report-content .num{text-align:right;}
       #pq-report-content tfoot td{font-weight:700;background:#f2f2f2;}
+      /* Rows are deliberately tight — every millimetre saved here is another
+         product that fits before the sheet spills onto a second page. */
+      #pq-report-content tbody td{line-height:1.15;}
       /* Repeat the header on every sheet and never split a product across
          two pages — a row cut in half is unreadable on paper. */
       #pq-report-content thead{display:table-header-group;}
       #pq-report-content tr{page-break-inside:avoid;}
     </style>
+    <div id="pq-scale">
     <h1>Product Query</h1>
     <div class="sub">${escapeHtml(state.settings && state.settings.business_name ? state.settings.business_name : "")}
       · ${new Date().toLocaleString("en-IN")} · ${t.lines} line${t.lines!==1?"s":""}</div>
@@ -9739,10 +9747,55 @@ function printProductQuery(){
         <td class="num">${money(t.stockValue)}</td>
         <td colspan="2"></td>
       </tr></tfoot>
-    </table>`;
+    </table>
+    </div>`;
 
   document.getElementById("fs-pq-report").classList.add("show");
+  fitPqReportToOnePage();
   window.print();
+}
+
+/* A4 landscape at 96dpi, less the 8mm margins declared on @page pqLandscape. */
+const PQ_PAGE_W = 1062, PQ_PAGE_H = 733;
+
+/* Shrink the sheet so the whole result lands on ONE page — but only down to a
+   floor. Past roughly 0.62 the type is too small to read at arm's length, and
+   a single unreadable page is worse than three readable ones, so beyond that
+   the sheet is left to flow normally and says how many pages to expect.
+   Nothing here can silently drop a row: it either scales or paginates. */
+function fitPqReportToOnePage(){
+  const MIN_SCALE = 0.62;
+  const content = document.getElementById("pq-report-content");
+  const box = content.querySelector("#pq-scale");
+  if(!box) return;
+
+  // Measure at true page width, since the on-screen width is not the paper's.
+  const prev = { w: content.style.width, pad: content.style.padding };
+  box.style.transform = ""; box.style.width = "";
+  content.style.width = PQ_PAGE_W + "px";
+  content.style.padding = "0";
+
+  const needed = box.getBoundingClientRect().height;
+  const scale = needed <= PQ_PAGE_H ? 1 : PQ_PAGE_H / needed;
+
+  const note = document.getElementById("pq-page-note");
+  if(scale >= MIN_SCALE){
+    if(scale < 1){
+      box.style.transform = `scale(${scale})`;
+      box.style.width = (100 / scale) + "%";
+    }
+    if(note) note.textContent = "";
+  } else {
+    // Too many rows to shrink honestly — print it across pages instead.
+    const pages = Math.ceil(needed / PQ_PAGE_H);
+    if(note){
+      note.textContent = `${pages} pages — too many lines to fit one page and stay readable. `
+        + `Narrow the search to about ${Math.floor(PQ_PAGE_H / (needed / state.pq.rows.length) / MIN_SCALE)} lines for a single sheet.`;
+    }
+  }
+
+  content.style.width = prev.w;
+  content.style.padding = prev.pad;
 }
 
 async function openPqDetail(productId, sizeId, tab){

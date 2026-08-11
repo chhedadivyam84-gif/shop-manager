@@ -870,6 +870,9 @@
   <div class="fullscreen" id="fs-pq-report">
     <div class="fs-bar">
       <div class="fs-title">Product Query Report</div>
+      <!-- Lives in the bar, which print CSS hides — a warning about page count
+           has no business appearing on the paper it is warning about. -->
+      <div id="pq-page-note" style="font-size:11px;color:#b45309;font-weight:700;flex:1;text-align:right;padding-right:10px;"></div>
       <button class="fs-close" data-close-fs="fs-pq-report">&#10005;</button>
     </div>
     <div id="pq-report-content" style="background:#fff;color:#000;padding:16px;"></div>

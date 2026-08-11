@@ -12,6 +12,7 @@
 // beside it, whatever the date filter.
 const express = require("express");
 const db = require("../db");
+const { buildXlsx } = require("../xlsx");
 
 const router = express.Router();
 
@@ -107,13 +108,15 @@ function movementUnion() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/product-query  — the search
+// The search itself. Both the screen and the Excel export go through this one
+// function so a filter can never mean one thing on screen and another in the
+// downloaded file.
 // ---------------------------------------------------------------------------
-router.get("/", (req, res) => {
+function queryRows(query) {
   const {
     q, name, code, barcode, brand, category, subCategory,
     size, location, from, to, stockFilter
-  } = req.query;
+  } = query;
 
   const where = [];
   const params = {};
@@ -187,12 +190,7 @@ router.get("/", (req, res) => {
     LIMIT 500
   `;
 
-  let rows;
-  try {
-    rows = db.prepare(sql).all(params);
-  } catch (e) {
-    return res.status(500).json({ error: "Query failed: " + e.message });
-  }
+  const rows = db.prepare(sql).all(params);
 
   const out = rows.map(r => {
     // Purchase Rate prefers what was actually last paid; the typed cost_price is
@@ -230,7 +228,7 @@ router.get("/", (req, res) => {
                  : stockFilter === "outStock" ? out.filter(r => r.closingStock <= 0)
                  : out;
 
-  res.json({
+  return {
     rows: filtered,
     totals: {
       lines: filtered.length,
@@ -238,7 +236,96 @@ router.get("/", (req, res) => {
       stockValue: Math.round(filtered.reduce((s, r) => s + r.stockValue, 0) * 100) / 100
     },
     truncated: rows.length >= 500
+  };
+}
+
+// A plain-English record of what produced this result set, so a saved file
+// still says what it covers a month later.
+const FILTER_LABELS = [
+  ["q", "Search"], ["name", "Name"], ["code", "Code/SKU"], ["barcode", "Barcode"],
+  ["brand", "Brand"], ["category", "Category"], ["subCategory", "Sub-Category"],
+  ["size", "Size"], ["location", "Location"], ["stockFilter", "Stock"],
+  ["from", "Movement from"], ["to", "Movement to"]
+];
+
+function describeFilters(query) {
+  const locName = id => (db.prepare("SELECT name FROM locations WHERE id = ?").get(id) || {}).name || id;
+  const pretty = { inStock: "In stock only", outStock: "Out of stock only" };
+  return FILTER_LABELS
+    .filter(([key]) => has(query[key]))
+    .map(([key, label]) => {
+      let v = String(query[key]).trim();
+      if (key === "location") v = locName(v);
+      if (key === "stockFilter") v = pretty[v] || v;
+      return `${label}: ${v}`;
+    });
+}
+
+router.get("/", (req, res) => {
+  try {
+    res.json(queryRows(req.query));
+  } catch (e) {
+    res.status(500).json({ error: "Query failed: " + e.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/product-query/export — the same result set as an .xlsx
+// ---------------------------------------------------------------------------
+router.get("/export", (req, res) => {
+  let result;
+  try {
+    result = queryRows(req.query);
+  } catch (e) {
+    return res.status(500).json({ error: "Query failed: " + e.message });
+  }
+
+  // Quantities and money go in as real numbers, not text, so the columns can
+  // be summed and sorted in Excel without cleaning them up first.
+  const sheet = [[
+    "Product", "Code", "Barcode", "Brand", "Category", "Sub-Category", "Size", "Unit",
+    "Opening Stock", "Stock In", "Stock Out", "Closing Stock",
+    "Shop Stock", "Warehouse Stock",
+    "Purchase Rate", "Sale Rate", "Stock Value",
+    "Last Purchase Date", "Last Sale Date"
+  ]];
+
+  result.rows.forEach(r => {
+    sheet.push([
+      r.productName, r.code || "", r.barcode || "", r.brand || "",
+      r.category || "", r.subCategory || "", r.sizeLabel || "", r.unit || "",
+      r.openingStock, r.stockIn, r.stockOut, r.closingStock,
+      r.shopStock, r.warehouseStock,
+      r.purchaseRate, r.saleRate, r.stockValue,
+      r.lastPurchaseDate || "", r.lastSaleDate || ""
+    ]);
   });
+
+  // Totals and provenance go BELOW the data, not above it: metadata rows at the
+  // top break Excel's own sort and filter, which is the first thing anyone does
+  // to a sheet like this.
+  sheet.push([]);
+  sheet.push([
+    `Total — ${result.totals.lines} line${result.totals.lines !== 1 ? "s" : ""}`,
+    "", "", "", "", "", "", "", "", "", "", result.totals.closingStock,
+    "", "", "", "", result.totals.stockValue, "", ""
+  ]);
+  sheet.push([]);
+
+  const filters = describeFilters(req.query);
+  sheet.push(["Filters", filters.length ? filters.join("  |  ") : "none — all products"]);
+  sheet.push(["Generated", new Date().toLocaleString("en-IN")]);
+  if (result.truncated) {
+    sheet.push(["Note", "Only the first 500 lines are included — narrow the search."]);
+  }
+
+  const slug = String(req.query.q || "").trim().replace(/[^a-z0-9]+/gi, "-").slice(0, 30);
+  const filename = slug ? `product-query-${slug}` : "product-query";
+
+  const buf = buildXlsx(sheet, "Product Query");
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}.xlsx"`);
+  res.send(buf);
 });
 
 // ---------------------------------------------------------------------------

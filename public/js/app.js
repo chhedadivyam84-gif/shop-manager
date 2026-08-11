@@ -570,6 +570,7 @@ async function initApp(){
   document.getElementById("pq-back-link").addEventListener("click", (e)=>{ e.preventDefault(); switchTab("home"); });
   document.getElementById("pq-search-btn").addEventListener("click", ()=>runProductQuery());
   document.getElementById("pq-print-btn").addEventListener("click", printProductQuery);
+  document.getElementById("pq-export-btn").addEventListener("click", exportProductQuery);
   document.getElementById("pq-q").addEventListener("keydown", (e)=>{ if(e.key==="Enter") runProductQuery(); });
   document.getElementById("pq-advanced-btn").addEventListener("click", ()=>{
     const adv = document.getElementById("pq-advanced");
@@ -9533,11 +9534,10 @@ async function renderPqScreen(){
   if(!state.pq.loaded) await runProductQuery();
 }
 
-async function runProductQuery(){
-  const results = document.getElementById("pq-results");
-  const summary = document.getElementById("pq-summary");
-  results.innerHTML = `<div class="muted" style="padding:16px;">Searching…</div>`;
-
+/* The current search + advanced filters as a query string. The screen, the
+   printed sheet and the Excel export all go through this, so the three can
+   never disagree about what "the current search" means. */
+function pqQueryString(){
   const qs = new URLSearchParams();
   const add = (k, v) => { if(v) qs.set(k, v); };
   add("q", pqVal("pq-q"));
@@ -9552,9 +9552,24 @@ async function runProductQuery(){
   add("stockFilter", pqVal("pq-stockfilter"));
   add("from", pqVal("pq-from"));
   add("to", pqVal("pq-to"));
+  return qs.toString();
+}
 
+function exportProductQuery(){
+  if(!state.pq.rows.length){ toast("Nothing to export — no products matched."); return; }
+  const qs = pqQueryString();
+  const win = window.open("/api/product-query/export" + (qs ? "?"+qs : ""), "_blank");
+  if(!win) toast("Couldn't start the download — allow pop-ups for this site.");
+}
+
+async function runProductQuery(){
+  const results = document.getElementById("pq-results");
+  const summary = document.getElementById("pq-summary");
+  results.innerHTML = `<div class="muted" style="padding:16px;">Searching…</div>`;
+
+  const qs = pqQueryString();
   let data;
-  try{ data = await api("GET","/product-query?" + qs.toString()); }
+  try{ data = await api("GET","/product-query" + (qs ? "?"+qs : "")); }
   catch(e){
     results.innerHTML = `<div class="muted" style="padding:16px;color:#b91c1c;">Search failed: ${escapeHtml(e.message||"error")}</div>`;
     return;

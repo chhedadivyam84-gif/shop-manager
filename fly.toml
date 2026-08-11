@@ -3,13 +3,14 @@
 # this one (or merge the [[mounts]] and [http_service] blocks in), then
 # adjust the `app` name below to whatever fly launch assigned you.
 
-app = "CHANGE-ME-shop-manager"
+app = "swagat-ply-shop"
 primary_region = "bom" # Mumbai — pick the fly region closest to the shop
 
 [build]
 
 [env]
   PORT = "3000"
+  TZ = "Asia/Kolkata"
 
 # Persistent disk so shop.db survives deploys and restarts.
 [[mounts]]
@@ -24,6 +25,10 @@ primary_region = "bom" # Mumbai — pick the fly region closest to the shop
   min_machines_running = 1
 
 [[vm]]
-  memory = "256mb"
+  # 512mb matches what the app already gets on Render. 256mb is cheaper and
+  # probably enough (the process sits around 80mb idle), but an out-of-memory
+  # kill lands at the billing counter mid-invoice, so this stays like-for-like
+  # until there's a reason to trim it.
+  memory = "512mb"
   cpu_kind = "shared"
   cpus = 1

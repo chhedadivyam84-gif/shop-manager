@@ -3342,8 +3342,15 @@ function openProductForm(context, product){
   // row in place (see PUT /products/:id) rather than delete-and-reinsert,
   // which would otherwise sever the link a past sale/purchase keeps to it.
   state.ctx.addProductSizes = product && product.sizes.length
-    ? product.sizes.map(s=>({id:s.id, label:s.label, price:s.price, stock:s.stock, cost:s.cost_price || 0}))
-    : [{label:"", price:"", stock:0, cost:0}];
+    ? product.sizes.map(s=>({
+        id:s.id, label:s.label, price:s.price, stock:s.stock, cost:s.cost_price || 0,
+        // Seeded from the LOCATION ledger, which is the real stock — not from
+        // the size's cached total, so the two boxes always add up to what the
+        // Inventory screen shows.
+        shopStock: (s.byLocation||[]).find(l=>l.code==="shop")?.quantity ?? 0,
+        warehouseStock: (s.byLocation||[]).find(l=>l.code==="warehouse")?.quantity ?? 0
+      }))
+    : [{label:"", price:"", stock:0, cost:0, shopStock:0, warehouseStock:0}];
   renderAddProductSheet(context);
   showSheet("sheet-add-product");
 }
@@ -3382,11 +3389,14 @@ function renderAddProductSheet(context){
     </div>
     <label class="field-label">Standard size <span class="muted" style="font-weight:400;">— pre-filled on every bill, still editable there</span></label>
     <div class="charge-grid" id="np-dims"></div>
-    <label class="field-label">Size / variant, stock, cost &amp; price <span class="muted" style="font-weight:400;">— every size keeps its own stock count</span></label>
+    <label class="field-label">Opening stock as on <span class="muted" style="font-weight:400;">— the day you counted</span></label>
+    <input type="date" id="np-opening-date" value="${escapeHtml((editing && editing.opening_stock_date) || todayISO())}">
+
+    <label class="field-label" style="margin-top:12px;">Size / variant, opening stock, cost &amp; price <span class="muted" style="font-weight:400;">— every size keeps its own count per location</span></label>
     <div class="muted" style="font-size:11px;margin-bottom:6px;">
-      <b>Cost</b> is what you paid per unit. Fill it in for opening stock so Closing Stock,
-      Profit and the Balance Sheet are correct — without it those read as zero. A real purchase
-      entry always overrides this.
+      Enter what is physically at <b>Shop</b> and at <b>Warehouse</b> — the Total adds up on its own.
+      <b>Cost</b> is what you paid per unit: fill it in so Closing Stock, Profit and the Balance Sheet
+      are correct, otherwise those read as zero. A real purchase entry always overrides the cost.
     </div>
     <div id="np-sizes"></div>
     <a href="#" id="np-add-size" style="font-size:12px;font-weight:700;">+ Add another size</a>
@@ -3394,19 +3404,47 @@ function renderAddProductSheet(context){
     <label class="field-label">Godown / Rack</label><input type="text" id="np-godown" placeholder="e.g. Godown A / R3" value="${v("godown")}">
     <button class="btn btn-primary" id="np-save" style="margin-top:16px;">${editing ? "Update Product" : "Save Product"}</button>
   `;
+  /** Shop + Warehouse for one size row. Kept as a function so the Total can be
+   *  recomputed on every keystroke without re-rendering (which would steal
+   *  focus mid-type). */
+  const sizeTotal = s => round2((parseFloat(s.shopStock)||0) + (parseFloat(s.warehouseStock)||0));
+
   function renderSizes(){
     document.getElementById("np-sizes").innerHTML = sizes.map((s,i)=>`
-      <div style="display:flex;gap:6px;margin-bottom:6px;align-items:center;">
-        <input type="text" placeholder="Label (e.g. 8x4 ft)" value="${escapeHtml(s.label)}" data-size-label="${i}" style="flex:1.4;">
-        <input type="number" placeholder="Stock" min="0" value="${s.stock ?? 0}" data-size-stock="${i}" style="width:60px;" title="Stock quantity">
-        <input type="number" placeholder="Cost" min="0" step="any" value="${s.cost ?? 0}" data-size-cost="${i}" style="width:72px;" title="Purchase cost per unit — what you paid">
-        <input type="number" placeholder="Price" value="${s.price}" data-size-price="${i}" style="width:76px;" title="Selling price per unit">
-        ${sizes.length>1?`<a href="#" data-size-remove="${i}" class="btn-danger-link">✕</a>`:""}
+      <div style="border:1px solid var(--border);border-radius:9px;padding:8px;margin-bottom:8px;">
+        <div style="display:flex;gap:6px;align-items:center;">
+          <input type="text" placeholder="Label (e.g. 8x4 ft)" value="${escapeHtml(s.label)}" data-size-label="${i}" style="flex:1.4;">
+          <input type="number" placeholder="Cost" min="0" step="any" value="${s.cost ?? 0}" data-size-cost="${i}" style="width:76px;" title="Purchase cost per unit — what you paid">
+          <input type="number" placeholder="Price" value="${s.price}" data-size-price="${i}" style="width:80px;" title="Selling price per unit">
+          ${sizes.length>1?`<a href="#" data-size-remove="${i}" class="btn-danger-link">✕</a>`:""}
+        </div>
+        <div style="display:flex;gap:8px;align-items:flex-end;margin-top:8px;">
+          <label class="dim" style="flex:1;"><span>Shop</span>
+            <input type="number" min="0" step="any" value="${s.shopStock ?? 0}" data-size-shop="${i}"></label>
+          <label class="dim" style="flex:1;"><span>Warehouse</span>
+            <input type="number" min="0" step="any" value="${s.warehouseStock ?? 0}" data-size-wh="${i}"></label>
+          <div style="flex:1;text-align:right;padding-bottom:8px;">
+            <div class="muted" style="font-size:10px;text-transform:uppercase;letter-spacing:.03em;">Total</div>
+            <div style="font-weight:800;font-size:14px;" data-size-total="${i}">${sizeTotal(s)}</div>
+          </div>
+        </div>
       </div>`).join("");
     document.querySelectorAll("[data-size-label]").forEach(inp=>inp.addEventListener("input", e=>sizes[e.target.dataset.sizeLabel].label=e.target.value));
-    document.querySelectorAll("[data-size-stock]").forEach(inp=>inp.addEventListener("input", e=>sizes[e.target.dataset.sizeStock].stock=e.target.value));
     document.querySelectorAll("[data-size-cost]").forEach(inp=>inp.addEventListener("input", e=>sizes[e.target.dataset.sizeCost].cost=e.target.value));
     document.querySelectorAll("[data-size-price]").forEach(inp=>inp.addEventListener("input", e=>sizes[e.target.dataset.sizePrice].price=e.target.value));
+    // Shop/Warehouse update the row's Total live. `stock` is kept as their sum
+    // so every existing caller reading a single total stays correct.
+    const bindQty = (attr, field) => document.querySelectorAll("["+attr+"]").forEach(inp=>{
+      inp.addEventListener("input", e=>{
+        const i = e.target.getAttribute(attr);
+        sizes[i][field] = e.target.value;
+        sizes[i].stock = sizeTotal(sizes[i]);
+        const cell = document.querySelector('[data-size-total="'+i+'"]');
+        if(cell) cell.textContent = sizes[i].stock;
+      });
+    });
+    bindQty("data-size-shop", "shopStock");
+    bindQty("data-size-wh", "warehouseStock");
     document.querySelectorAll("[data-size-remove]").forEach(a=>a.addEventListener("click", e=>{ e.preventDefault(); sizes.splice(e.target.dataset.sizeRemove,1); renderSizes(); }));
   }
   // Only the dimension boxes the chosen mode actually consumes are shown, and
@@ -3440,7 +3478,7 @@ function renderAddProductSheet(context){
     sheet.querySelectorAll("[data-mode]").forEach(x=>x.classList.remove("selected"));
     b.classList.add("selected"); renderDims();
   }));
-  sheet.querySelector("#np-add-size").addEventListener("click", (e)=>{ e.preventDefault(); sizes.push({label:"",price:"",stock:0,cost:0}); renderSizes(); });
+  sheet.querySelector("#np-add-size").addEventListener("click", (e)=>{ e.preventDefault(); sizes.push({label:"",price:"",stock:0,cost:0,shopStock:0,warehouseStock:0}); renderSizes(); });
   sheet.querySelector("#np-save").addEventListener("click", async ()=>{
     const name = document.getElementById("np-name").value.trim();
     if(!name){ toast("Enter a product name."); return; }
@@ -3454,6 +3492,7 @@ function renderAddProductSheet(context){
       godown: document.getElementById("np-godown").value.trim(),
       defaultMode: sheet.querySelector("[data-mode].selected").dataset.mode,
       lengthFt: val("np-len"), widthVal: val("np-wid"), thicknessIn: val("np-thk"),
+      openingStockDate: (document.getElementById("np-opening-date")||{}).value || "",
       sizes
     };
     const saveBtn = document.getElementById("np-save");

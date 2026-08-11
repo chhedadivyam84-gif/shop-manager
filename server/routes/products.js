@@ -43,6 +43,12 @@ function syncProductStock(productId) {
   db.prepare("UPDATE products SET stock = ? WHERE id = ?").run(total, productId);
 }
 
+/** A YYYY-MM-DD date, or "" for anything else — the opening-stock date is
+ *  documentation, so a malformed value is simply not recorded. */
+function openingDate(v) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(v || "")) ? String(v) : "";
+}
+
 /** Non-negative number, defaulting to 0 for blank/invalid input. */
 function stockNum(v) {
   const n = Number(v);
@@ -73,6 +79,36 @@ function applyTypedStock(sizeId, typedTotal) {
   inventory.addStock(sizeId, inventory.getLocationByCode("shop").id, delta);
 }
 
+/**
+ * Opening stock entered per location: Shop and Warehouse each get an exact
+ * quantity rather than one lump sum landing in Shop.
+ *
+ * Set to the figure typed, by applying the difference — addStock is the only
+ * write path, and going through it keeps product_sizes.stock resynced as the
+ * sum across locations (see syncSizeStockTotal). A location the caller did not
+ * mention is left exactly as it is, so a shop using only one of the two never
+ * has the other silently zeroed.
+ *
+ * Returns the resulting total so the caller can keep products.stock in step.
+ */
+function applyTypedLocationStock(sizeId, perLocation) {
+  const rows = inventory.getStockByLocation(sizeId);
+  for (const row of rows) {
+    const typed = perLocation[row.code];
+    if (typed === undefined || typed === null || typed === "") continue;
+    const delta = stockNum(typed) - (row.quantity || 0);
+    if (delta !== 0) inventory.addStock(sizeId, row.location_id, delta);
+  }
+  return inventory.getStockByLocation(sizeId)
+    .reduce((sum, l) => sum + (l.quantity || 0), 0);
+}
+
+/** True when the client sent per-location opening stock for this size. Keeps
+ *  older callers (and the duplicate/import paths) on the single-total route. */
+function hasLocationStock(s) {
+  return s && (s.shopStock !== undefined || s.warehouseStock !== undefined);
+}
+
 router.get("/", (req, res) => {
   const products = db.prepare("SELECT * FROM products ORDER BY name ASC").all();
   res.json(products.map(serialize));
@@ -80,7 +116,7 @@ router.get("/", (req, res) => {
 
 router.post("/", (req, res) => {
   const { name, brand, category, unit, gst, godown, rack, sizes,
-          defaultMode, lengthFt, widthVal, thicknessIn, hsnCode, code } = req.body;
+          defaultMode, lengthFt, widthVal, thicknessIn, hsnCode, code, openingStockDate } = req.body;
   if (!name || typeof name !== "string" || !name.trim()) {
     return res.status(400).json({ error: "Product name is required." });
   }
@@ -100,8 +136,8 @@ router.post("/", (req, res) => {
 
   const insertProduct = db.prepare(`
     INSERT INTO products (id, name, brand, category, sku, unit, hsn_code, code, gst_rate, stock, godown, rack,
-      default_mode, length_ft, width_val, thickness_in, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      default_mode, length_ft, width_val, thickness_in, created_at, opening_stock_date)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insertSize = db.prepare(`
     INSERT INTO product_sizes (product_id, label, price, stock, sort_order, cost_price) VALUES (?, ?, ?, ?, ?, ?)
@@ -113,12 +149,18 @@ router.post("/", (req, res) => {
       sku, (unit || "Piece").trim(), (hsnCode || "").trim(), (code || "").trim(), gstRate, openingTotal,
       (godown || "").trim(), (rack || "").trim(),
       Pricing.normaliseMode(defaultMode), dim(lengthFt), dim(widthVal), dim(thicknessIn),
-      Date.now()
+      Date.now(), openingDate(openingStockDate)
     );
     validSizes.forEach((s, i) => {
       const info = insertSize.run(id, String(s.label).trim(), parseFloat(s.price), stockNum(s.stock), i, stockNum(s.cost));
-      applyTypedStock(Number(info.lastInsertRowid), s.stock);
+      const sid150 = Number(info.lastInsertRowid);
+      if (hasLocationStock(s)) applyTypedLocationStock(sid150, { shop: s.shopStock, warehouse: s.warehouseStock });
+      else applyTypedStock(sid150, s.stock);
     });
+    // products.stock is derived from what actually landed per location, not
+    // from the total the client sent — with per-location entry the two can
+    // legitimately differ, and the locations are the truth.
+    syncProductStock(id);
   })();
 
   logAction(req, "product.create", name.trim());
@@ -130,7 +172,7 @@ router.put("/:id", (req, res) => {
   const p = db.prepare("SELECT * FROM products WHERE id = ?").get(req.params.id);
   if (!p) return res.status(404).json({ error: "Product not found." });
   const { name, brand, category, unit, gst, godown, rack, sizes,
-          defaultMode, lengthFt, widthVal, thicknessIn, hsnCode, code } = req.body;
+          defaultMode, lengthFt, widthVal, thicknessIn, hsnCode, code, openingStockDate } = req.body;
 
   // A product's price lives in its size rows, so an edit that supplies a `sizes`
   // array must leave at least one valid entry — otherwise the product becomes
@@ -145,7 +187,7 @@ router.put("/:id", (req, res) => {
 
   const update = db.prepare(`
     UPDATE products SET name=?, brand=?, category=?, unit=?, hsn_code=?, code=?, gst_rate=?, godown=?, rack=?,
-      default_mode=?, length_ft=?, width_val=?, thickness_in=? WHERE id=?
+      default_mode=?, length_ft=?, width_val=?, thickness_in=?, opening_stock_date=? WHERE id=?
   `);
   // Sizes are updated IN PLACE by id, not delete-all-and-reinsert: a stock-in
   // or a sold invoice_items row references a size_id, and destroying/
@@ -163,6 +205,12 @@ router.put("/:id", (req, res) => {
       (godown ?? p.godown), (rack ?? p.rack),
       defaultMode !== undefined ? Pricing.normaliseMode(defaultMode) : p.default_mode,
       dim(lengthFt, p.length_ft), dim(widthVal, p.width_val), dim(thicknessIn, p.thickness_in),
+      // A malformed date keeps whatever is already stored rather than clearing
+      // it — losing a good "stock as on" date to a typo would be worse than
+      // ignoring the typo. Clearing it deliberately means sending "".
+      openingStockDate === undefined
+        ? p.opening_stock_date
+        : (openingStockDate === "" ? "" : (openingDate(openingStockDate) || p.opening_stock_date)),
       p.id
     );
     if (Array.isArray(sizes)) {
@@ -172,11 +220,15 @@ router.put("/:id", (req, res) => {
       validSizes.forEach((s, i) => {
         if (s.id != null && existingIds.has(Number(s.id))) {
           updateSize.run(String(s.label).trim(), parseFloat(s.price), stockNum(s.stock), i, stockNum(s.cost), Number(s.id), p.id);
-          applyTypedStock(Number(s.id), s.stock);
+          const sid205 = Number(s.id);
+          if (hasLocationStock(s)) applyTypedLocationStock(sid205, { shop: s.shopStock, warehouse: s.warehouseStock });
+          else applyTypedStock(sid205, s.stock);
           keptIds.add(Number(s.id));
         } else {
           const info = insertSize.run(p.id, String(s.label).trim(), parseFloat(s.price), stockNum(s.stock), i, stockNum(s.cost));
-          applyTypedStock(Number(info.lastInsertRowid), s.stock);
+          const sid209 = Number(info.lastInsertRowid);
+          if (hasLocationStock(s)) applyTypedLocationStock(sid209, { shop: s.shopStock, warehouse: s.warehouseStock });
+          else applyTypedStock(sid209, s.stock);
         }
       });
       existingIds.forEach(id => { if (!keptIds.has(id)) deleteSize.run(id, p.id); });

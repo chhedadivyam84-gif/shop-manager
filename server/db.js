@@ -1030,6 +1030,12 @@ addColumn("settings", "fy_start_month", "INTEGER NOT NULL DEFAULT 4");
 // this is what's used when there is no purchase history.
 addColumn("product_sizes", "cost_price", "REAL NOT NULL DEFAULT 0");
 
+// The date the opening stock count was taken — "stock as on 11 Aug 2026".
+// One per product rather than per size: a shop counts a product's variants in
+// the same sitting, and asking for a date on every row would be noise. Purely
+// a record of when the figure was true; it does not move stock.
+addColumn("products", "opening_stock_date", "TEXT DEFAULT ''");
+
 // Multi-location inventory. A scalable Location model — not hardcoded to
 // Shop/Warehouse — so a third, fourth, etc. location can be added later with
 // zero schema changes. `code` is a stable machine key ("shop", "warehouse")

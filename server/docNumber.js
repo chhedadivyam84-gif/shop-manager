@@ -45,13 +45,24 @@ function format(cfg, n) {
   return `${cfg.prefix}${String(n).padStart(cfg.width, "0")}`;
 }
 
-/** Is this exact number already on a live document of this type? */
+/**
+ * Is this exact number already on a live document?
+ *
+ * Checked across the WHOLE column, deliberately NOT narrowed by reg.scope.
+ * Tax invoices and delivery challans are separate series but share one
+ * UNIQUE challan_no column, so "free within my own series" is not the same
+ * question as "free in the database". Scoping this was exactly the mistake
+ * that let an invoice be handed SP0000050 while a challan already held it —
+ * a number the INSERT would then reject.
+ *
+ * reg.scope still matters, but only for working out where a series has
+ * reached; see the seeding in db.js.
+ */
 function isTaken(docType, number, excludeId) {
   const reg = REGISTRY[docType];
   if (!reg) throw new Error(`Unknown document type "${docType}".`);
   const where = [`${reg.column} = ?`];
   const params = [number];
-  if (reg.scope) where.push(reg.scope);
   if (excludeId) { where.push("id <> ?"); params.push(excludeId); }
   return !!db.prepare(
     `SELECT 1 FROM ${reg.table} WHERE ${where.join(" AND ")} LIMIT 1`
@@ -75,8 +86,37 @@ function allocate(docType) {
     n += 1;
     value = format(cfg, n);
   }
-  db.prepare("UPDATE doc_numbering SET next_number = ? WHERE doc_type = ?").run(n + 1, docType);
+  advanceSharedCounters(docType, n);
   return value;
+}
+
+/**
+ * Move every series that would produce this same number past it.
+ *
+ * Two series sharing a column AND a prefix are numerically ONE series — with
+ * "SP" on both tax invoices and delivery challans, SP0000052 means the same
+ * row either way. Advancing only the requested one lets two allocations made
+ * before either is saved hand out the identical number, which the UNIQUE
+ * column then rejects.
+ *
+ * Give the challan series its own prefix in Settings and the two become
+ * genuinely independent; this loop then only ever touches the one counter.
+ */
+function advanceSharedCounters(docType, n) {
+  const reg = REGISTRY[docType];
+  const cfg = config(docType);
+  db.prepare("UPDATE doc_numbering SET next_number = ? WHERE doc_type = ?").run(n + 1, docType);
+
+  Object.keys(REGISTRY).forEach(other => {
+    if (other === docType) return;
+    const oReg = REGISTRY[other];
+    if (oReg.table !== reg.table || oReg.column !== reg.column) return;
+    const oCfg = config(other);
+    if (oCfg.prefix !== cfg.prefix || oCfg.width !== cfg.width) return;
+    if (oCfg.next_number <= n) {
+      db.prepare("UPDATE doc_numbering SET next_number = ? WHERE doc_type = ?").run(n + 1, other);
+    }
+  });
 }
 
 /**

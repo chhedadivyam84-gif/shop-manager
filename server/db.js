@@ -1098,11 +1098,20 @@ CREATE TABLE IF NOT EXISTS doc_numbering (
     return max + 1;
   };
 
+  // Seeded with the series this shop is ALREADY running, so switching the
+  // app over changes no numbering by itself. The owner edits these in
+  // Settings when they want a different scheme.
+  //
+  // Note invoice and challan both start on "SP": that is what the app has
+  // been issuing, and it is exactly why the two collide in the shared
+  // UNIQUE challan_no column. Giving the challan series its own prefix is
+  // the real fix, but it changes a live numbering series, so it is the
+  // owner's call rather than a silent migration.
   const defs = [
-    ["invoice",   "SALE-", 6, "invoices",   "challan_no",   "doc_type = 'invoice'"],
-    ["challan",   "DC-",   6, "invoices",   "challan_no",   "doc_type = 'challan'"],
-    ["quotation", "QUO-",  6, "quotations", "quotation_no", null],
-    ["purchase",  "PUR-",  6, "purchases",  "purchase_no",  null]
+    ["invoice",   "SP", 7, "invoices",   "challan_no",   "doc_type = 'invoice'"],
+    ["challan",   "SP", 7, "invoices",   "challan_no",   "doc_type = 'challan'"],
+    ["quotation", "SQ", 7, "quotations", "quotation_no", null],
+    ["purchase",  "PU", 7, "purchases",  "purchase_no",  null]
   ];
   defs.forEach(([type, prefix, width, table, column, scope]) => {
     seed.run(type, prefix, width, startFor(table, column, scope, prefix), Date.now());

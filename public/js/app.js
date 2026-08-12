@@ -77,6 +77,7 @@ let state = {
   quotation: {
     customerId: null, saleType: "Local", date: "", validUntil: "", terms: "", remarks: "",
     discountType: "pct", discountValue: 0, transport: 0, loading: 0, gstOnCharges: true, roundOff: true,
+    gstEnabled: true,
     cart: [], editingQuotationId: null, quotationNo: null
   },
   so: {
@@ -688,6 +689,15 @@ async function initApp(){
   document.getElementById("quotation-valid-until").addEventListener("change", (e)=>{ state.quotation.validUntil = e.target.value; });
   document.getElementById("quotation-terms").addEventListener("input", (e)=>{ state.quotation.terms = e.target.value; });
   document.getElementById("quotation-remarks").addEventListener("input", (e)=>{ state.quotation.remarks = e.target.value; });
+  document.querySelectorAll('[data-quo-gstenabled]').forEach(b=>{
+    b.addEventListener("click", ()=>{
+      state.quotation.gstEnabled = b.dataset.quoGstenabled === "true";
+      document.querySelectorAll('[data-quo-gstenabled]').forEach(x=>x.classList.remove("selected"));
+      b.classList.add("selected");
+      syncQuotationGstVisibility();
+      renderQuotationTotals();
+    });
+  });
   document.querySelectorAll('[data-quotation-type]').forEach(b=>{
     b.addEventListener("click", ()=>{
       state.quotation.saleType = b.dataset.quotationType;
@@ -8177,6 +8187,20 @@ function computeQuotationTotals(){
 
   return {subtotal, discountAmount, cgst, sgst, igst, transport, loading, roundOffAmount, total};
 }
+/* Non-GST quotation: Local/Interstate is a CGST-SGST-vs-IGST choice, which
+   means nothing once there is no tax at all — so it hides, exactly as the
+   billing screen hides its GST Type chips. computeTotals on the server does
+   the real work of skipping the tax. */
+function syncQuotationGstVisibility(){
+  const on = state.quotation.gstEnabled !== false;
+  const chips = document.getElementById("quotation-type-chips");
+  const label = document.getElementById("quotation-saletype-label");
+  if(chips) chips.style.display = on ? "" : "none";
+  if(label) label.style.display = on ? "" : "none";
+  document.querySelectorAll('[data-quo-gstenabled]').forEach(b=>
+    b.classList.toggle("selected", (b.dataset.quoGstenabled === "true") === on));
+}
+
 function renderQuotationTotals(){
   const t = computeQuotationTotals();
   const row = (label, value, cls) =>
@@ -8201,7 +8225,8 @@ function quotationPayload(){
     validUntil: state.quotation.validUntil, saleType: state.quotation.saleType,
     discountType: state.quotation.discountType, discountValue: state.quotation.discountValue,
     transport: state.quotation.transport, loading: state.quotation.loading,
-    gstOnCharges: state.quotation.gstOnCharges, roundOff: state.quotation.roundOff,
+    gstOnCharges: state.quotation.gstOnCharges, gstEnabled: state.quotation.gstEnabled,
+    roundOff: state.quotation.roundOff,
     terms: state.quotation.terms, remarks: state.quotation.remarks,
     items: state.quotation.cart.map(c=>({
       productId:c.productId, sizeId:c.sizeId, name:c.name, mode:c.mode,

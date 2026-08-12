@@ -23,7 +23,11 @@ function nextQuotationNo() {
 /** Same shape as invoices.js's computeTotals, minus advance/balance since a
  *  quotation is never paid against — just "loading" renamed nowhere, kept
  *  identical field-for-field so a converted Invoice's totals match exactly. */
-function computeTotals({ items, discountType, discountValue, taxType, transport, loading, roundOff, gstOnCharges }) {
+/* gstEnabled === false is a Non-GST quotation: no goods tax, no tax on
+   transport or loading, no CGST/SGST/IGST at all — not zeroed-out fields.
+   Mirrors invoices.js exactly so the quotation and the invoice it converts
+   into can never disagree about what tax was promised. */
+function computeTotals({ items, discountType, discountValue, taxType, transport, loading, roundOff, gstOnCharges, gstEnabled }) {
   const subtotal = round2(items.reduce((s, it) => s + it.amount, 0));
   let discountAmount = 0;
   if (discountType === "flat") discountAmount = Number(discountValue) || 0;
@@ -32,6 +36,7 @@ function computeTotals({ items, discountType, discountValue, taxType, transport,
 
   let goodsTax = 0;
   items.forEach(it => {
+    if (gstEnabled === false) return;
     const lineTotal = it.amount;
     const share = subtotal > 0 ? (lineTotal / subtotal) * discountAmount : 0;
     const taxable = Math.max(0, lineTotal - share);
@@ -43,12 +48,14 @@ function computeTotals({ items, discountType, discountValue, taxType, transport,
   const loadingAmt = round2(Math.max(0, Number(loading) || 0));
   const taxableGoods = round2(subtotal - discountAmount);
   const effectiveRate = taxableGoods > 0 ? goodsTax / taxableGoods : 0;
-  const ancillaryTax = gstOnCharges ? round2((transportAmt + loadingAmt) * effectiveRate) : 0;
+  const ancillaryTax = (gstEnabled !== false && gstOnCharges) ? round2((transportAmt + loadingAmt) * effectiveRate) : 0;
   const totalTax = round2(goodsTax + ancillaryTax);
 
   let cgst = 0, sgst = 0, igst = 0;
-  if (taxType === "IGST") igst = totalTax;
-  else { cgst = round2(totalTax / 2); sgst = round2(totalTax - cgst); }
+  if (gstEnabled !== false) {
+    if (taxType === "IGST") igst = totalTax;
+    else { cgst = round2(totalTax / 2); sgst = round2(totalTax - cgst); }
+  }
 
   const preRound = subtotal - discountAmount + transportAmt + loadingAmt + cgst + sgst + igst;
   const total = round2(roundOff ? Math.round(preRound) : preRound);
@@ -129,7 +136,7 @@ router.get("/:id", (req, res) => {
 router.post("/", (req, res) => {
   const {
     customerId, date, validUntil, saleType, discountType, discountValue,
-    transport, loading, roundOff, gstOnCharges, terms, remarks,
+    transport, loading, roundOff, gstOnCharges, gstEnabled, terms, remarks,
     items: rawItems, saveAsDraft
   } = req.body;
 
@@ -140,13 +147,15 @@ router.post("/", (req, res) => {
   const saleTypeVal = saleType === "Interstate" ? "Interstate" : "Local";
   const taxType = saleTypeVal === "Interstate" ? "IGST" : "CGST_SGST";
   const gstOnChargesVal = gstOnCharges === false ? 0 : 1;
+  const gstEnabledVal = gstEnabled === false ? 0 : 1;
 
   let items;
   try { items = buildItems(rawItems); }
   catch (err) { if (err && err.status) return res.status(err.status).json({ error: err.error }); throw err; }
 
   const totals = computeTotals({
-    items, discountType, discountValue, taxType, transport, loading, roundOff, gstOnCharges: gstOnChargesVal
+    items, discountType, discountValue, taxType, transport, loading, roundOff, gstOnCharges: gstOnChargesVal,
+    gstEnabled: gstEnabledVal === 1
   });
   const id = uid("SQ");
   const quotationNo = nextQuotationNo();
@@ -156,10 +165,10 @@ router.post("/", (req, res) => {
   const insertQ = db.prepare(`
     INSERT INTO quotations (id, quotation_no, date, created_at, customer_id, valid_until, sale_type, tax_type,
       subtotal, discount_type, discount_value, discount_amount, cgst, sgst, igst, transport, loading, round_off,
-      total, gst_on_charges, terms, remarks, status)
+      total, gst_on_charges, gst_enabled, terms, remarks, status)
     VALUES (@id, @quotationNo, @date, @createdAt, @customerId, @validUntil, @saleType, @taxType,
       @subtotal, @discountType, @discountValue, @discountAmount, @cgst, @sgst, @igst, @transport, @loading, @roundOffAmount,
-      @total, @gstOnCharges, @terms, @remarks, @status)
+      @total, @gstOnCharges, @gstEnabled, @terms, @remarks, @status)
   `);
   const insertItem = db.prepare(`
     INSERT INTO quotation_items
@@ -176,7 +185,7 @@ router.post("/", (req, res) => {
       discountValue: Math.max(0, Number(discountValue) || 0), discountAmount: totals.discountAmount,
       cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst,
       transport: totals.transport, loading: totals.loading, roundOffAmount: totals.roundOffAmount, total: totals.total,
-      gstOnCharges: gstOnChargesVal, terms: (terms || "").trim(), remarks: (remarks || "").trim(), status
+      gstOnCharges: gstOnChargesVal, gstEnabled: gstEnabledVal, terms: (terms || "").trim(), remarks: (remarks || "").trim(), status
     });
     items.forEach(it => insertItem.run(
       id, it.productId, it.sizeId, it.name, it.brand, it.category, it.mode,
@@ -198,7 +207,7 @@ router.put("/:id", (req, res) => {
 
   const {
     customerId, date, validUntil, saleType, discountType, discountValue,
-    transport, loading, roundOff, gstOnCharges, terms, remarks,
+    transport, loading, roundOff, gstOnCharges, gstEnabled, terms, remarks,
     items: rawItems, saveAsDraft
   } = req.body;
 
@@ -209,13 +218,15 @@ router.put("/:id", (req, res) => {
   const saleTypeVal = saleType === "Interstate" ? "Interstate" : "Local";
   const taxType = saleTypeVal === "Interstate" ? "IGST" : "CGST_SGST";
   const gstOnChargesVal = gstOnCharges === false ? 0 : 1;
+  const gstEnabledVal = gstEnabled === false ? 0 : 1;
 
   let items;
   try { items = buildItems(rawItems); }
   catch (err) { if (err && err.status) return res.status(err.status).json({ error: err.error }); throw err; }
 
   const totals = computeTotals({
-    items, discountType, discountValue, taxType, transport, loading, roundOff, gstOnCharges: gstOnChargesVal
+    items, discountType, discountValue, taxType, transport, loading, roundOff, gstOnCharges: gstOnChargesVal,
+    gstEnabled: gstEnabledVal === 1
   });
   const qDate = (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) ? date : q.date;
   const status = saveAsDraft ? "Draft" : (q.status === "Draft" ? "Sent" : q.status);
@@ -238,7 +249,7 @@ router.put("/:id", (req, res) => {
       UPDATE quotations SET customer_id=@customerId, date=@date, valid_until=@validUntil, sale_type=@saleType,
         tax_type=@taxType, subtotal=@subtotal, discount_type=@discountType, discount_value=@discountValue,
         discount_amount=@discountAmount, cgst=@cgst, sgst=@sgst, igst=@igst, transport=@transport, loading=@loading,
-        round_off=@roundOffAmount, total=@total, gst_on_charges=@gstOnCharges, terms=@terms, remarks=@remarks, status=@status
+        round_off=@roundOffAmount, total=@total, gst_on_charges=@gstOnCharges, gst_enabled=@gstEnabled, terms=@terms, remarks=@remarks, status=@status
       WHERE id=@id
     `).run({
       id: q.id, customerId: customerId || null, date: qDate, validUntil: (validUntil || "").trim(),
@@ -246,7 +257,7 @@ router.put("/:id", (req, res) => {
       discountType: discountType === "flat" ? "flat" : "pct", discountValue: Math.max(0, Number(discountValue) || 0),
       discountAmount: totals.discountAmount, cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst,
       transport: totals.transport, loading: totals.loading, roundOffAmount: totals.roundOffAmount, total: totals.total,
-      gstOnCharges: gstOnChargesVal, terms: (terms || "").trim(), remarks: (remarks || "").trim(), status
+      gstOnCharges: gstOnChargesVal, gstEnabled: gstEnabledVal, terms: (terms || "").trim(), remarks: (remarks || "").trim(), status
     });
   })();
 
@@ -303,11 +314,20 @@ router.post("/:id/convert", (req, res) => {
   const saleLocationName = inventory.getLocationById(saleLocation).name;
 
   // Stock check up front — refuse cleanly rather than partially deduct.
-  for (const it of qItems) {
-    if (!it.size_id) continue;
-    const atLocation = inventory.getStock(it.size_id, saleLocation);
-    if (atLocation < it.pieces) {
-      return res.status(400).json({ error: `Can't convert — only ${atLocation} left in ${saleLocationName} stock for ${it.name} (${it.size_label}), this quotation needs ${it.pieces}.` });
+  // Honours the same Allow Negative Stock setting the billing screen does:
+  // this used to be a second, harder rule of its own, so a shop that had
+  // deliberately switched negative stock ON still found conversions refused.
+  const allowNegative = (db.prepare("SELECT allow_negative_stock FROM settings WHERE id = 1").get() || {}).allow_negative_stock === 1;
+  if (!allowNegative) {
+    for (const it of qItems) {
+      if (!it.size_id) continue;
+      const atLocation = inventory.getStock(it.size_id, saleLocation);
+      if (atLocation < it.pieces) {
+        return res.status(400).json({
+          error: `Can't convert — only ${atLocation} left in ${saleLocationName} stock for ${it.name} (${it.size_label}), this quotation needs ${it.pieces}. `
+            + `An owner can allow this in Settings → Allow Negative Stock.`
+        });
+      }
     }
   }
 
@@ -338,16 +358,16 @@ router.post("/:id/convert", (req, res) => {
   db.transaction(() => {
     db.prepare(`
       INSERT INTO invoices (id, challan_no, doc_type, date, created_at, customer_id, subtotal, discount_type, discount_value,
-        discount_amount, tax_type, cgst, sgst, igst, transport, loading, gst_on_charges, round_off, total, advance, balance_due,
+        discount_amount, tax_type, cgst, sgst, igst, transport, loading, gst_on_charges, gst_enabled, round_off, total, advance, balance_due,
         payment_method, paper_size, delivery_man, vehicle_number, delivery_address, remarks, location_id)
       VALUES (@id, @challanNo, 'invoice', @date, @createdAt, @customerId, @subtotal, @discountType, @discountValue,
-        @discountAmount, @taxType, @cgst, @sgst, @igst, @transport, @loading, @gstOnCharges, @roundOffAmount, @total, @advance,
+        @discountAmount, @taxType, @cgst, @sgst, @igst, @transport, @loading, @gstOnCharges, @gstEnabled, @roundOffAmount, @total, @advance,
         @balanceDue, @paymentMethod, @paperSize, @deliveryMan, @vehicleNumber, @deliveryAddress, @remarks, @locationId)
     `).run({
       id: invoiceId, challanNo: nextDocNo(), date: todayStr(), createdAt: Date.now(), customerId: q.customer_id,
       subtotal: q.subtotal, discountType: q.discount_type, discountValue: q.discount_value, discountAmount: q.discount_amount,
       taxType: q.tax_type, cgst: q.cgst, sgst: q.sgst, igst: q.igst, transport: q.transport, loading: q.loading,
-      gstOnCharges: q.gst_on_charges, roundOffAmount: q.round_off, total: q.total, advance: advanceApplied, balanceDue,
+      gstOnCharges: q.gst_on_charges, gstEnabled: q.gst_enabled, roundOffAmount: q.round_off, total: q.total, advance: advanceApplied, balanceDue,
       paymentMethod: paymentMethod || "Cash", paperSize: paperSize === "A4" ? "A4" : "A5",
       deliveryMan: (deliveryMan || "").trim(), vehicleNumber: (vehicleNumber || "").trim(),
       deliveryAddress: (deliveryAddress || "").trim(), remarks: `Converted from ${q.quotation_no}`,

@@ -1046,6 +1046,13 @@ addColumn("products", "opening_stock_date", "TEXT DEFAULT ''");
 // Defaults to 1 so every existing product stays exactly as it is.
 addColumn("products", "active", "INTEGER NOT NULL DEFAULT 1");
 
+/* GST / Non-GST on every priced document, not just invoices and purchases.
+   A quotation for a non-GST customer that silently adds 18% is a quotation
+   the shop cannot honour. Defaults to 1 so every existing document keeps the
+   GST it was raised with. */
+["quotations", "sales_orders", "purchase_orders", "sales_returns", "purchase_returns"]
+  .forEach(t => addColumn(t, "gst_enabled", "INTEGER NOT NULL DEFAULT 1"));
+
 /* ============================================================
    AREAS — the GEOGRAPHIC place a bill belongs to.
 

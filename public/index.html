@@ -685,7 +685,12 @@
             <label class="dim"><span>Date</span><input type="date" id="quotation-date"></label>
             <label class="dim"><span>Valid Until</span><input type="date" id="quotation-valid-until"></label>
           </div>
-          <label class="field-label" style="margin-top:10px;">Sale Type</label>
+          <label class="field-label" style="margin-top:10px;">GST</label>
+          <div class="chip-row" id="quotation-gst-chips">
+            <button class="chip selected" data-quo-gstenabled="true">GST Quotation</button>
+            <button class="chip" data-quo-gstenabled="false">Non-GST Quotation</button>
+          </div>
+          <label class="field-label" style="margin-top:10px;" id="quotation-saletype-label">Sale Type</label>
           <div class="chip-row" id="quotation-type-chips">
             <button class="chip selected" data-quotation-type="Local">Local (CGST + SGST)</button>
             <button class="chip" data-quotation-type="Interstate">Interstate (IGST)</button>

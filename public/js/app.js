@@ -1190,6 +1190,9 @@ function setDocType(type){
   renderCart();
   renderTotals();
   renderBillingNumber();
+  // So the Previous/Next bar disappears the moment Delivery Challan is
+  // picked, and comes back on switching to Tax Invoice.
+  renderBillingBillNav();
 }
 /**
  * Shows the number THIS document will get before it's saved. Editing an
@@ -1250,6 +1253,12 @@ async function loadBillingNavRows(){
 function renderBillingBillNav(){
   const el = document.getElementById("bill-nav-billing");
   if(!el) return;
+
+  // Tax Invoice only. The rows this walks are invoices, so on a Delivery
+  // Challan the bar offered to step into a different document series
+  // entirely — it now stays out of the way there.
+  if(isChallanMode()){ el.innerHTML = ""; return; }
+
   const id = state.editingInvoiceId;
 
   // EDITING a saved bill: step to the neighbouring bill in the same edit form.

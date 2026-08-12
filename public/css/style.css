@@ -571,3 +571,29 @@ table.pq-table tr.pq-open-row td{ background:#f9fafb; font-weight:700; }
   }
   #fs-print-engine #pe-content{ box-shadow:none !important; margin:0 !important; width:auto !important; padding:0 !important; }
 }
+
+/* -------------------------------------------------- Product Query controls
+   .btn is width:100% app-wide (it was written for stacked mobile buttons).
+   Dropped into a flex row that makes each button demand the whole width and
+   squeeze its neighbour to nothing — which is what turned the result summary
+   into a one-word-per-line column. These rows opt out of that width instead
+   of every button everywhere changing. */
+.pq-searchbtns{ display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; }
+.pq-searchbtns .btn{ width:auto; flex:1 1 140px; max-width:260px; }
+
+.pq-actionbar{
+  display:flex; flex-wrap:wrap; gap:10px 14px;
+  align-items:center; justify-content:space-between; margin-top:10px;
+}
+/* Grows to fill the row but is allowed to wrap onto its own line on a phone
+   rather than shrinking to a sliver beside the buttons. */
+.pq-actionbar #pq-summary{ flex:1 1 240px; font-size:12px; line-height:1.55; min-width:0; }
+.pq-actionbar-btns{ display:flex; gap:8px; flex:0 0 auto; }
+.pq-actionbar-btns .btn{ width:auto; padding:9px 18px; white-space:nowrap; }
+
+@media (max-width:520px){
+  /* On a phone the buttons get the full row to themselves — a 18px-padded
+     pair side by side with the summary would wrap into the same mess. */
+  .pq-actionbar-btns{ width:100%; }
+  .pq-actionbar-btns .btn{ flex:1 1 0; }
+}

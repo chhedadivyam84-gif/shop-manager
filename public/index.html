@@ -437,9 +437,9 @@
         <div class="card" style="padding:12px;">
           <input id="pq-q" type="search" placeholder="Search name, code, barcode, brand, category, size…"
                  style="width:100%;padding:11px 12px;font-size:15px;border:1px solid #d5d9e0;border-radius:8px;">
-          <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
-            <button class="btn btn-gold" id="pq-search-btn" style="flex:1;min-width:120px;">Search</button>
-            <button class="btn" id="pq-advanced-btn" style="flex:1;min-width:120px;">Advanced &#9662;</button>
+          <div class="pq-searchbtns">
+            <button class="btn btn-gold" id="pq-search-btn">Search</button>
+            <button class="btn" id="pq-advanced-btn">Advanced &#9662;</button>
           </div>
 
           <div id="pq-advanced" style="display:none;margin-top:10px;border-top:1px solid #e6e9ee;padding-top:10px;">
@@ -464,10 +464,12 @@
           </div>
         </div>
 
-        <div style="display:flex;gap:8px;align-items:center;margin-top:10px;">
-          <div id="pq-summary" class="muted" style="font-size:12px;flex:1;"></div>
-          <button class="btn" id="pq-print-btn" style="white-space:nowrap;">&#128424; Print</button>
-          <button class="btn" id="pq-export-btn" style="white-space:nowrap;">&#128202; Excel</button>
+        <div class="pq-actionbar">
+          <div id="pq-summary" class="muted"></div>
+          <div class="pq-actionbar-btns">
+            <button class="btn" id="pq-print-btn">&#128424; Print</button>
+            <button class="btn" id="pq-export-btn">&#128202; Excel</button>
+          </div>
         </div>
         <div class="card" id="pq-results" style="padding:0;overflow-x:auto;"></div>
       </div>

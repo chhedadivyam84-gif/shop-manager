@@ -682,3 +682,51 @@ nav.bottom .tab span:last-child{
   .quick-actions{ grid-template-columns:repeat(7,1fr); }
   .qa-btn{ min-height:80px; font-size:12.5px; }
 }
+
+/* ---------------------------------------------- Print preview on touch
+   The desktop bar is one flex row: title, options, actions. On a phone that
+   row folded — .pe-controls got squeezed to 81px and stacked its four
+   selects into a 420px column, so the toolbar ate 59% of the screen and the
+   sheet being previewed was left 330px. This is a different layout, not a
+   squeezed version of the desktop one. */
+.pe-bar-top{ display:flex; align-items:center; gap:10px; width:100%; }
+.pe-bar-top .fs-title{ flex:1; min-width:0; }
+#pe-options-btn{ display:none; width:auto; white-space:nowrap; }
+
+@media (pointer: coarse), (max-width: 1024px){
+  .pe-bar{ padding:10px 12px; gap:8px; }
+  .pe-bar .fs-title{ flex:1; font-size:14px; }
+
+  /* Options fold away behind the button; the sheet gets the screen back. */
+  #pe-options-btn{ display:inline-block; }
+  .pe-bar .pe-controls{ display:none; width:100%; }
+  .pe-bar.pe-options-open .pe-controls{
+    display:grid; grid-template-columns:1fr 1fr; gap:8px 10px;
+    padding-top:8px; border-top:1px solid rgba(255,255,255,.18);
+  }
+  .pe-controls label{ width:100%; }
+  .pe-controls select{ width:100%; }
+  /* The four on/off switches share a row of their own, two up. */
+  .pe-controls label.pe-check{ justify-content:flex-start; }
+  #pe-columns-btn{ grid-column:1 / -1; width:100%; }
+
+  /* Print/PDF/Excel/CSV are why anyone opened this screen — they get a
+     full-width row of equal buttons instead of four 51px stubs. */
+  .pe-actions{ width:100%; gap:6px; }
+  .pe-actions .btn{ flex:1 1 0; min-width:0; padding:10px 4px; font-size:12px; }
+
+  /* Column picker scrolls rather than pushing the preview off-screen. */
+  .pe-colpick{ max-height:34vh; overflow-y:auto; gap:6px 12px; }
+  .pe-colpick label{ font-size:13px; min-height:34px; }
+
+  /* The paper is wider than a phone, so it scrolls inside its own frame —
+     but it must still get most of the screen, not a 330px strip. */
+  .pe-paper-wrap{ padding:10px; }
+}
+
+@media (pointer: coarse) and (max-width: 560px), (max-width: 560px){
+  /* Two selects per row is still readable at 375px; four checkboxes go
+     two-up beneath them. */
+  .pe-bar.pe-options-open .pe-controls{ grid-template-columns:1fr 1fr; }
+  .pe-actions .btn{ font-size:11.5px; padding:10px 2px; }
+}

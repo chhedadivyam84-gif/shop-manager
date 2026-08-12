@@ -874,7 +874,14 @@
        can never end up on the paper. -->
   <div class="fullscreen" id="fs-print-engine">
     <div class="fs-bar pe-bar">
-      <div class="fs-title" id="pe-doc-title">Preview</div>
+      <div class="pe-bar-top">
+        <div class="fs-title" id="pe-doc-title">Preview</div>
+        <!-- On a phone the options are folded away by default so the sheet
+             itself gets the screen; on a wide screen they are always open and
+             this button is hidden. -->
+        <button class="btn btn-sm" id="pe-options-btn">&#9881; Options</button>
+        <button class="fs-close" data-close-fs="fs-print-engine">&#10005;</button>
+      </div>
       <div class="pe-controls">
         <label>Paper
           <select id="pe-paper"><option value="A4">A4</option><option value="A5">A5</option></select>
@@ -909,7 +916,6 @@
         <button class="btn btn-sm" id="pe-pdf">PDF</button>
         <button class="btn btn-sm" id="pe-xlsx">Excel</button>
         <button class="btn btn-sm" id="pe-csv">CSV</button>
-        <button class="fs-close" data-close-fs="fs-print-engine">&#10005;</button>
       </div>
     </div>
     <div id="pe-colpick" class="pe-colpick" style="display:none;"></div>

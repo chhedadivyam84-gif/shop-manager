@@ -9837,6 +9837,11 @@ function wirePrintEngine(){
     const el = document.getElementById("pe-colpick");
     el.style.display = el.style.display === "none" ? "flex" : "none";
   });
+  // Touch only — on a wide screen the options are always visible and the
+  // button that toggles them is hidden by CSS.
+  document.getElementById("pe-options-btn").addEventListener("click", ()=>{
+    document.querySelector(".pe-bar").classList.toggle("pe-options-open");
+  });
   document.getElementById("pe-print").addEventListener("click", ()=>{ renderPrintPreview(); window.print(); });
   document.getElementById("pe-pdf").addEventListener("click", pePdf);
   document.getElementById("pe-xlsx").addEventListener("click", peXlsx);

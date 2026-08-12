@@ -9684,7 +9684,8 @@ function openPrintPreview(doc){
 
 function buildPeColumnPicker(){
   const wrap = document.getElementById("pe-colpick");
-  wrap.innerHTML = peDoc.columns.map(c=>`
+  wrap.innerHTML = `<div class="pe-colpick-title">Show columns</div>` +
+    peDoc.columns.map(c=>`
     <label><input type="checkbox" data-pe-col="${escapeHtml(c.key)}"
       ${peOpts.hidden.indexOf(c.key)===-1?"checked":""}> ${escapeHtml(c.label)}</label>`).join("");
   wrap.querySelectorAll("[data-pe-col]").forEach(cb=>{

@@ -548,14 +548,17 @@ table.pq-table tr.pq-open-row td{ background:#f9fafb; font-weight:700; }
 /* ---------------------------------------------------------- Print engine
    The preview toolbar. All of it lives inside .fs-bar, which the print
    block hides, so none of these controls can reach the paper. */
-.pe-bar{ flex-wrap:wrap; gap:8px; align-items:center; }
+.pe-bar{ flex-wrap:wrap; gap:10px 12px; align-items:center; }
+/* The report name takes its own line once the controls start wrapping —
+   otherwise it floats mid-bar with options folding around it. */
+.pe-bar .fs-title{ flex:0 0 100%; font-size:15px; }
 .pe-controls{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; flex:1; }
-.pe-controls label{ font-size:10px; font-weight:700; color:#6b7280; display:flex; flex-direction:column; gap:2px; }
+.pe-controls label{ font-size:10px; font-weight:700; color:rgba(255,255,255,.72); display:flex; flex-direction:column; gap:2px; }
 .pe-controls select{ font-size:12px; font-weight:400; color:#111827; padding:4px 6px; border:1px solid #d5d9e0; border-radius:6px; background:#fff; }
-.pe-controls label.pe-check{ flex-direction:row; align-items:center; gap:4px; font-size:11px; color:#374151; }
+.pe-controls label.pe-check{ flex-direction:row; align-items:center; gap:4px; font-size:11.5px; color:#fff; font-weight:600; }
 .pe-actions{ display:flex; gap:6px; align-items:center; }
-.pe-colpick{ background:#fff; border-bottom:1px solid #e2e6ec; padding:10px 14px; display:flex; flex-wrap:wrap; gap:10px; }
-.pe-colpick label{ font-size:12px; display:flex; align-items:center; gap:5px; }
+.pe-colpick{ background:#fff; color:#111827; border-bottom:1px solid #e2e6ec; padding:12px 14px; display:flex; flex-wrap:wrap; gap:8px 16px; }
+.pe-colpick label{ font-size:12.5px; color:#111827; font-weight:600; display:flex; align-items:center; gap:6px; white-space:nowrap; }
 .pe-pagenote{ font-size:11.5px; font-weight:700; color:#b45309; padding:6px 14px; background:#fffbeb; }
 .pe-pagenote:empty{ display:none; }
 /* The preview shows the sheet ON a page-shaped card against a grey desk, so
@@ -597,3 +600,14 @@ table.pq-table tr.pq-open-row td{ background:#f9fafb; font-weight:700; }
   .pq-actionbar-btns{ width:100%; }
   .pq-actionbar-btns .btn{ flex:1 1 0; }
 }
+
+/* The column picker sits on its own white panel INSIDE .fullscreen, which
+   sets color:#fff for the dark preview chrome around it. Without an explicit
+   colour every label here inherits white and lands white-on-white — the
+   checkboxes render, the names vanish. Anything else that puts a light
+   surface inside .fullscreen has to set its text colour too. */
+.pe-colpick-title{
+  flex:0 0 100%; font-size:11px; font-weight:800; color:#6b7280;
+  text-transform:uppercase; letter-spacing:.04em; margin-bottom:2px;
+}
+.pe-colpick label input{ accent-color:#1f2b4d; }

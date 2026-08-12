@@ -41,6 +41,28 @@ function checkSellableStock(piecesBySize, location) {
   return null;
 }
 
+/* The geographic area a bill belongs to — Kandivali, Borivali, Mira Road.
+   Nothing to do with resolveLocationId below, which is Shop vs Warehouse.
+
+   Falls back to the customer's own area so staff don't retype it on every
+   bill, but an explicit choice always wins: a Malad customer can take
+   delivery in Borivali, and that bill belongs to Borivali.
+
+   The chosen id is stored ON the invoice rather than read back through the
+   customer, so a customer who relocates next year cannot silently rewrite
+   which area last year's sales came from. */
+function resolveAreaId(requestedId, customerId) {
+  if (requestedId) {
+    const a = db.prepare("SELECT id FROM areas WHERE id = ?").get(requestedId);
+    if (a) return a.id;
+  }
+  if (customerId) {
+    const c = db.prepare("SELECT area_id FROM customers WHERE id = ?").get(customerId);
+    if (c && c.area_id) return c.area_id;
+  }
+  return null;
+}
+
 // A sale defaults to deducting Shop stock, but staff can pick Warehouse
 // instead per-document (requirement: "sale to warehouse") — mirrors
 // purchases.js's resolveLocationId, just defaulting to Shop instead of
@@ -207,7 +229,7 @@ router.get("/:id", (req, res) => {
 router.post("/", (req, res) => {
   const { customerId, items: rawItems, discountType, discountValue, advance,
           paymentMethod, paperSize, transport, loading, roundOff, deliveryMan,
-          vehicleNumber, deliveryAddress, remarks, taxType: taxTypeOverride, locationId, date } = req.body;
+          vehicleNumber, deliveryAddress, remarks, taxType: taxTypeOverride, locationId, areaId, date } = req.body;
   const docType = req.body.docType === "challan" ? "challan" : "invoice";
   const isChallan = docType === "challan";
   const location = resolveLocationId(locationId);
@@ -308,10 +330,10 @@ router.post("/", (req, res) => {
   const insertInvoice = db.prepare(`
     INSERT INTO invoices (id, challan_no, doc_type, date, created_at, customer_id, subtotal, discount_type, discount_value,
       discount_amount, tax_type, cgst, sgst, igst, transport, loading, gst_on_charges, gst_enabled, round_off, total, advance, balance_due,
-      payment_method, paper_size, delivery_man, vehicle_number, delivery_address, remarks, location_id)
+      payment_method, paper_size, delivery_man, vehicle_number, delivery_address, remarks, location_id, area_id)
     VALUES (@id, @challanNo, @docType, @date, @createdAt, @customerId, @subtotal, @discountType, @discountValue,
       @discountAmount, @taxType, @cgst, @sgst, @igst, @transport, @loading, @gstOnCharges, @gstEnabled, @roundOffAmount, @total, @advance,
-      @balanceDue, @paymentMethod, @paperSize, @deliveryMan, @vehicleNumber, @deliveryAddress, @remarks, @locationId)
+      @balanceDue, @paymentMethod, @paperSize, @deliveryMan, @vehicleNumber, @deliveryAddress, @remarks, @locationId, @areaId)
   `);
   const insertItem = db.prepare(`
     INSERT INTO invoice_items
@@ -338,7 +360,8 @@ router.post("/", (req, res) => {
       vehicleNumber: (vehicleNumber || "").trim(),
       deliveryAddress: (deliveryAddress || "").trim(),
       remarks: (remarks || "").trim(),
-      locationId: location
+      locationId: location,
+      areaId: resolveAreaId(areaId, customerId)
     });
     items.forEach(it => insertItem.run(
       id, it.productId, it.sizeId, it.name, it.code, it.brand, it.hsnCode, it.mode,
@@ -386,7 +409,7 @@ router.put("/:id", (req, res) => {
 
   const { customerId, items: rawItems, discountType, discountValue, advance,
           paymentMethod, paperSize, transport, loading, roundOff, deliveryMan,
-          vehicleNumber, deliveryAddress, remarks, taxType: taxTypeOverride, locationId, date } = req.body;
+          vehicleNumber, deliveryAddress, remarks, taxType: taxTypeOverride, locationId, areaId, date } = req.body;
   const gstOnCharges = req.body.gstOnCharges !== false;
   const gstEnabled = req.body.gstEnabled !== false;
   // Same optional-date rule as creating: a valid YYYY-MM-DD moves the
@@ -513,7 +536,7 @@ router.put("/:id", (req, res) => {
         gst_on_charges=@gstOnCharges, gst_enabled=@gstEnabled, round_off=@roundOffAmount, total=@total, advance=@advance,
         balance_due=@balanceDue, payment_method=@paymentMethod, paper_size=@paperSize,
         delivery_man=@deliveryMan, vehicle_number=@vehicleNumber, delivery_address=@deliveryAddress,
-        remarks=@remarks, location_id=@locationId, date=@date
+        remarks=@remarks, location_id=@locationId, area_id=@areaId, date=@date
       WHERE id=@id
     `).run({
       id: inv.id, date: editedDate, customerId: customerId || null,
@@ -528,7 +551,8 @@ router.put("/:id", (req, res) => {
       paperSize: paperSize === "A4" ? "A4" : "A5",
       deliveryMan: (deliveryMan || "").trim(), vehicleNumber: (vehicleNumber || "").trim(),
       deliveryAddress: (deliveryAddress || "").trim(), remarks: (remarks || "").trim(),
-      locationId: newLocation
+      locationId: newLocation,
+      areaId: resolveAreaId(areaId, customerId)
     });
 
     // 7. Bump the (possibly new) customer's due by the new balance.

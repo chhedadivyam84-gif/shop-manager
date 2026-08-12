@@ -7,6 +7,23 @@ const Pricing = require("../../public/js/pricing.js");
 
 const router = express.Router();
 
+/* The geographic area a purchase belongs to — Kandivali, Borivali, Mira Road.
+   Distinct from location_id below, which is the godown the goods land in.
+   Defaults to the supplier's own area so it isn't retyped on every bill, and
+   is frozen onto the purchase so a supplier moving next year cannot rewrite
+   which area last year's buying came from. Mirrors invoices.js. */
+function resolveAreaId(requestedId, supplierId) {
+  if (requestedId) {
+    const a = db.prepare("SELECT id FROM areas WHERE id = ?").get(requestedId);
+    if (a) return a.id;
+  }
+  if (supplierId) {
+    const s = db.prepare("SELECT area_id FROM suppliers WHERE id = ?").get(supplierId);
+    if (s && s.area_id) return s.area_id;
+  }
+  return null;
+}
+
 const syncProductStockStmt = db.prepare(
   "UPDATE products SET stock = (SELECT COALESCE(SUM(stock),0) FROM product_sizes WHERE product_id = products.id) WHERE id = ?"
 );
@@ -152,7 +169,7 @@ router.post("/", (req, res) => {
   const {
     supplierId, supplierInvoiceNo, date, purchaseType, paymentMethod, dueDate,
     vehicleNumber, transportName, lrNumber, remarks,
-    transport, loading, otherCharges, roundOff, locationId,
+    transport, loading, otherCharges, roundOff, locationId, areaId,
     items: rawItems
   } = req.body;
   const gstEnabled = req.body.gstEnabled !== false;
@@ -243,11 +260,11 @@ router.post("/", (req, res) => {
     INSERT INTO purchases (id, purchase_no, doc_type, date, created_at, supplier_id, supplier_invoice_no,
       purchase_type, tax_type, subtotal, discount_amount, cgst, sgst, igst, transport, loading,
       other_charges, round_off, total, payment_method, due_date, vehicle_number, transport_name,
-      lr_number, remarks, voided, location_id, gst_enabled)
+      lr_number, remarks, voided, location_id, area_id, gst_enabled)
     VALUES (@id, @purchaseNo, @docType, @date, @createdAt, @supplierId, @supplierInvoiceNo,
       @purchaseType, @taxType, @subtotal, @discountAmount, @cgst, @sgst, @igst, @transport, @loading,
       @otherCharges, @roundOffAmount, @total, @paymentMethod, @dueDate, @vehicleNumber, @transportName,
-      @lrNumber, @remarks, 0, @locationId, @gstEnabled)
+      @lrNumber, @remarks, 0, @locationId, @areaId, @gstEnabled)
   `);
   const insertItem = db.prepare(`
     INSERT INTO purchase_items
@@ -270,6 +287,7 @@ router.post("/", (req, res) => {
       paymentMethod: isChallan ? "—" : (paymentMethod || "Credit"), dueDate: (dueDate || "").trim(),
       vehicleNumber: (vehicleNumber || "").trim(), transportName: (transportName || "").trim(),
       lrNumber: (lrNumber || "").trim(), remarks: (remarks || "").trim(), locationId: targetLocationId,
+      areaId: resolveAreaId(areaId, supplierId),
       gstEnabled: gstEnabled ? 1 : 0
     });
 
@@ -316,7 +334,7 @@ router.put("/:id", (req, res) => {
   const {
     supplierId, supplierInvoiceNo, date, purchaseType, paymentMethod, dueDate,
     vehicleNumber, transportName, lrNumber, remarks,
-    transport, loading, otherCharges, roundOff, locationId,
+    transport, loading, otherCharges, roundOff, locationId, areaId,
     items: rawItems
   } = req.body;
   const gstEnabled = req.body.gstEnabled !== false;
@@ -449,7 +467,7 @@ router.put("/:id", (req, res) => {
         cgst=@cgst, sgst=@sgst, igst=@igst, transport=@transport, loading=@loading, other_charges=@otherCharges,
         round_off=@roundOffAmount, total=@total, payment_method=@paymentMethod, due_date=@dueDate,
         vehicle_number=@vehicleNumber, transport_name=@transportName, lr_number=@lrNumber, remarks=@remarks,
-        location_id=@locationId, gst_enabled=@gstEnabled
+        location_id=@locationId, area_id=@areaId, gst_enabled=@gstEnabled
       WHERE id=@id
     `).run({
       id: p.id, supplierId, supplierInvoiceNo: trimmedSupplierInvoiceNo, date: purchaseDate,
@@ -459,6 +477,7 @@ router.put("/:id", (req, res) => {
       paymentMethod: isChallan ? "—" : (paymentMethod || "Credit"), dueDate: (dueDate || "").trim(),
       vehicleNumber: (vehicleNumber || "").trim(), transportName: (transportName || "").trim(),
       lrNumber: (lrNumber || "").trim(), remarks: (remarks || "").trim(), locationId: newLocationId,
+      areaId: resolveAreaId(areaId, supplierId),
       gstEnabled: gstEnabled ? 1 : 0
     });
 

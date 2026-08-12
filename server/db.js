@@ -1045,6 +1045,71 @@ addColumn("products", "opening_stock_date", "TEXT DEFAULT ''");
 // as the only option a user had for "stop offering this".
 // Defaults to 1 so every existing product stays exactly as it is.
 addColumn("products", "active", "INTEGER NOT NULL DEFAULT 1");
+
+/* ============================================================
+   AREAS — the GEOGRAPHIC place a bill belongs to.
+
+   Deliberately NOT called "location". This app already has a locations
+   table meaning Shop and Warehouse, and invoices.location_id /
+   purchases.location_id already decide which godown stock moves in or out
+   of. Two different things sharing one word at a billing counter is how
+   staff pick the wrong one.
+
+     locations  = where the goods physically sit   (Shop / Warehouse)
+     areas      = which part of town the trade is  (Kandivali / Borivali)
+
+   Stored as one flat row per State + City + Area rather than three tables:
+   a shop deals with a few dozen areas in one or two cities, and three
+   joined tables would buy nothing but joins.
+   ============================================================ */
+db.exec(`
+CREATE TABLE IF NOT EXISTS areas (
+  id TEXT PRIMARY KEY,
+  state TEXT NOT NULL,
+  city TEXT NOT NULL,
+  area TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  UNIQUE(state, city, area)
+);
+CREATE INDEX IF NOT EXISTS idx_areas_state_city ON areas(state, city);
+`);
+
+/* A starter list so the dropdowns are usable on day one. INSERT OR IGNORE,
+   so re-running never duplicates and never overwrites an edit the owner
+   has made to one of these rows. */
+(function seedAreas() {
+  const seed = [
+    ["Maharashtra", "Mumbai", "Kandivali"],
+    ["Maharashtra", "Mumbai", "Borivali"],
+    ["Maharashtra", "Mumbai", "Malad"],
+    ["Maharashtra", "Mumbai", "Mira Road"],
+    ["Maharashtra", "Mumbai", "Goregaon East"],
+    ["Maharashtra", "Mumbai", "Goregaon West"],
+    ["Maharashtra", "Mumbai", "Local"]
+  ];
+  const ins = db.prepare(
+    "INSERT OR IGNORE INTO areas (id, state, city, area, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+  );
+  seed.forEach(([state, city, area], i) => {
+    ins.run("AREA_" + [state, city, area].join("_").toLowerCase().replace(/[^a-z0-9]+/g, "_"),
+      state, city, area, i, Date.now());
+  });
+})();
+
+/* The area a party normally trades from — used to pre-fill the bill so
+   nobody types it twice (and left editable per bill, because a customer can
+   take delivery somewhere else). */
+addColumn("customers", "area_id", "TEXT REFERENCES areas(id) ON DELETE SET NULL");
+addColumn("suppliers", "area_id", "TEXT REFERENCES areas(id) ON DELETE SET NULL");
+
+/* Frozen onto the document itself, not just read through the party: a
+   customer who moves from Malad to Borivali next year must not silently
+   rewrite which area last year's sales belonged to. */
+addColumn("invoices", "area_id", "TEXT REFERENCES areas(id) ON DELETE SET NULL");
+addColumn("purchases", "area_id", "TEXT REFERENCES areas(id) ON DELETE SET NULL");
+
 addColumn("products", "barcode", "TEXT DEFAULT ''");
 addColumn("products", "sub_category", "TEXT DEFAULT ''");
 

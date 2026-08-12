@@ -779,11 +779,18 @@ router.get("/profit-by-invoice", (req, res) => {
    source_type (see server/bankLink.js), which is how they are
    excluded below.
    ============================================================ */
-const EXPENSE_CATEGORIES = [
-  "Freight & Transport", "Salary", "Rent", "Electricity",
-  "Office Expenses", "Printing & Stationery", "Bank Charges", "Miscellaneous"
-];
-const INCOME_CATEGORIES = ["Other Income", "Interest Received", "Discount Received"];
+/* The category lists are a MASTER the owner maintains (txn_categories), not
+   a constant in this file. Adding "Staff Welfare" is a row, not a release.
+   Read fresh each time so a category added a minute ago appears on the next
+   Profit & Loss without a restart. The old hardcoded names are seeded into
+   that table, so nothing that already reported under them moves. */
+function categoryNames(kind) {
+  return db.prepare(
+    "SELECT name FROM txn_categories WHERE kind = ? AND active = 1 ORDER BY sort_order ASC, name ASC"
+  ).all(kind).map(r => r.name);
+}
+const expenseCategoryNames = () => categoryNames("expense");
+const incomeCategoryNames = () => categoryNames("income");
 
 /**
  * Cash + bank rows that represent real income/expense.
@@ -842,20 +849,28 @@ function computePnl(range) {
   }
   cogs = round2(cogs);
 
+  /* Match on a trimmed, case-folded name.
+     The category used to be typed free-hand and compared exactly, so
+     "salary", "Salary " and "Labour Charges" all fell into Uncategorised —
+     the money reached the total but never the line the owner was looking
+     for. Folding the case means an entry made before the dropdown existed
+     still lands where it belongs. */
   const bucket = (rows, known) => {
     const out = {};
-    known.forEach(k => { out[k] = 0; });
+    const byKey = new Map();
+    known.forEach(k => { out[k] = 0; byKey.set(k.trim().toLowerCase(), k); });
     out.Uncategorised = 0;
     rows.forEach(r => {
-      const k = known.includes(r.category) ? r.category : "Uncategorised";
+      const key = String(r.category || "").trim().toLowerCase();
+      const k = byKey.get(key) || "Uncategorised";
       out[k] = round2(out[k] + r.amount);
     });
     return out;
   };
   const expenseRows = ledgerMovements(range, "out");
   const incomeRows = ledgerMovements(range, "in");
-  const expenses = bucket(expenseRows, EXPENSE_CATEGORIES);
-  const otherIncome = bucket(incomeRows, INCOME_CATEGORIES);
+  const expenses = bucket(expenseRows, expenseCategoryNames());
+  const otherIncome = bucket(incomeRows, incomeCategoryNames());
 
   const salesRevenue = round2(inv.net_sales);
   const chargesRecovered = round2(inv.charges);

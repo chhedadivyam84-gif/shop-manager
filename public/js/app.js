@@ -812,7 +812,7 @@ async function switchTab(tab){
 }
 
 async function renderAll(){
-  await Promise.all([loadProducts(), loadCustomers(), loadSuppliers(), loadLocations(), loadBankAccounts(), loadStaffNames()]);
+  await Promise.all([loadProducts(), loadCustomers(), loadSuppliers(), loadLocations(), loadBankAccounts(), loadStaffNames(), loadCategories()]);
   await renderHome();
   const activeTab = document.querySelector("nav.bottom .tab.active");
   const tab = activeTab ? activeTab.dataset.tab : "home";
@@ -868,6 +868,26 @@ async function loadCustomers(){ state.customers = await api("GET","/customers");
 async function loadSuppliers(){ state.suppliers = await api("GET","/suppliers"); }
 async function loadLocations(){ state.locations = await api("GET","/locations"); }
 async function loadBankAccounts(){ state.bankAccounts = await api("GET","/bank-accounts"); }
+async function loadCategories(){
+  try{ state.categories = await api("GET","/categories"); }
+  catch(e){ state.categories = { income: [], expense: [] }; }
+}
+
+/* A dropdown, not a text box. The category decides which Profit & Loss line
+   the money lands on, and it used to be typed by hand and matched exactly —
+   so "salary" or "Labour Charges" quietly became Uncategorised and the owner
+   could not see what they spend on wages.
+   An older entry whose category is no longer in the list keeps its own value
+   as a selected option, so editing it does not silently reassign it. */
+function categorySelectHtml(id, kind, selected){
+  const list = ((state.categories||{})[kind] || []).map(c=>c.name);
+  const cur = (selected||"").trim();
+  if(cur && !list.some(n=>n.toLowerCase()===cur.toLowerCase())) list.unshift(cur);
+  return `<select id="${id}">
+    <option value="">— None —</option>
+    ${list.map(n=>`<option value="${escapeHtml(n)}" ${n.toLowerCase()===cur.toLowerCase()?"selected":""}>${escapeHtml(n)}</option>`).join("")}
+  </select>`;
+}
 // Public regardless of login flow (the login screen's own staffList variable
 // isn't guaranteed populated when boot() resumes an existing session without
 // ever showing the PIN screen), so the Inquiry Book's salesperson picker
@@ -5856,8 +5876,8 @@ function openCashEntry(type, editEntry){
     <input type="number" inputmode="decimal" step="any" min="0" id="cbe-amount" value="${editEntry ? editEntry.amount : ""}" placeholder="0">
     <label class="field-label">Party / Person <span class="muted" style="font-weight:400;">— optional</span></label>
     <input type="text" id="cbe-party" value="${editEntry ? escapeHtml(editEntry.party||"") : ""}" placeholder="e.g. Ramesh, Electricity Board">
-    <label class="field-label">Category <span class="muted" style="font-weight:400;">— optional</span></label>
-    <input type="text" id="cbe-category" value="${editEntry ? escapeHtml(editEntry.category||"") : ""}" placeholder="e.g. Wages, Electricity, Petty Cash">
+    <label class="field-label">Category <span class="muted" style="font-weight:400;">— decides the Profit &amp; Loss line</span></label>
+    ${categorySelectHtml("cbe-category", type === "in" ? "income" : "expense", editEntry ? editEntry.category : "")}
     <label class="field-label">Remarks <span class="muted" style="font-weight:400;">— optional</span></label>
     <input type="text" id="cbe-remarks" value="${editEntry ? escapeHtml(editEntry.remarks||"") : ""}" placeholder="e.g. Advance for June">
     <button class="btn btn-primary" id="cbe-save" style="margin-top:16px;">${editEntry ? "Update Entry" : "Save Entry"}</button>

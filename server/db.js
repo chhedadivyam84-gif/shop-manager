@@ -1053,6 +1053,60 @@ addColumn("products", "active", "INTEGER NOT NULL DEFAULT 1");
 ["quotations", "sales_orders", "purchase_orders", "sales_returns", "purchase_returns"]
   .forEach(t => addColumn(t, "gst_enabled", "INTEGER NOT NULL DEFAULT 1"));
 
+
+/* ============================================================
+   INCOME & EXPENSE CATEGORIES
+
+   These used to be two hardcoded arrays in reports.js matched against a
+   free-text box on the entry form. Anything that did not match EXACTLY —
+   "salary", "Salary ", "Labour Charges" — fell into "Uncategorised", so the
+   money reached the Profit & Loss total but never the line the owner was
+   looking for. A shop cannot see what it spends on labour if labour has no
+   line.
+
+   A table instead of a list means the owner can add "Staff Welfare" without
+   a developer, and the entry form can offer a dropdown so nothing has to be
+   spelled exactly right in the first place.
+
+   `kind` is 'income' or 'expense' — the same name can legitimately exist on
+   both sides (an "Office Rent" paid and an "Office Rent Received"), so the
+   uniqueness is per side.
+   ============================================================ */
+db.exec(`
+CREATE TABLE IF NOT EXISTS txn_categories (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('income','expense')),
+  name TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  UNIQUE(kind, name)
+);
+CREATE INDEX IF NOT EXISTS idx_txn_categories_kind ON txn_categories(kind, active);
+`);
+
+(function seedTxnCategories() {
+  const ins = db.prepare(
+    "INSERT OR IGNORE INTO txn_categories (id, kind, name, sort_order, created_at) VALUES (?, ?, ?, ?, ?)"
+  );
+  // The owner's own list, plus the ones the P&L already recognised so no
+  // existing entry loses the line it was reporting under.
+  const expense = [
+    "Salary", "Labour Charges", "Staff Welfare", "Office Rent", "Electricity",
+    "Transport", "Freight & Transport", "Repairs & Maintenance", "Stationery",
+    "Printing & Stationery", "Advertising", "Bank Charges", "Office Expenses",
+    "Rent", "Miscellaneous Expenses", "Miscellaneous"
+  ];
+  const income = [
+    "Office Rent Received", "Commission Received", "Interest Income",
+    "Interest Received", "Scrap Sale", "Discount Received",
+    "Miscellaneous Income", "Other Income"
+  ];
+  const now = Date.now();
+  expense.forEach((n, i) => ins.run("CAT_exp_" + n.toLowerCase().replace(/[^a-z0-9]+/g, "_"), "expense", n, i, now));
+  income.forEach((n, i) => ins.run("CAT_inc_" + n.toLowerCase().replace(/[^a-z0-9]+/g, "_"), "income", n, i, now));
+})();
+
 /* Per-document-type numbering: its own prefix, width and high-water counter.
    Each type gets its OWN series — which is also what stops tax invoices and
    delivery challans colliding in the single UNIQUE challan_no column they

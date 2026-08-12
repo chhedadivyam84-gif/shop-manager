@@ -730,3 +730,7 @@ nav.bottom .tab span:last-child{
   .pe-bar.pe-options-open .pe-controls{ grid-template-columns:1fr 1fr; }
   .pe-actions .btn{ font-size:11.5px; padding:10px 2px; }
 }
+
+/* Row-level actions on the Financial Year list. .btn is full-width on this
+   app, which would stack these one per line and bury the list. */
+.fy-mini{width:auto;padding:7px 12px;font-size:12px;}

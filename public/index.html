@@ -454,6 +454,7 @@
           <button class="qa-btn" id="acc-other-expenses"><span class="ic">&#128228;</span>Other Expenses</button>
           <button class="qa-btn" id="acc-bank-entry"><span class="ic">&#127974;</span>Bank Entry</button>
           <button class="qa-btn" id="acc-ledger"><span class="ic">&#128210;</span>Ledger</button>
+          <button class="qa-btn" id="acc-fyear" style="display:none;"><span class="ic">&#128197;</span>Financial Year</button>
         </div>
 
         <div class="section-title">This Month</div>
@@ -488,6 +489,41 @@
         <div class="card" id="ol-by-category"></div>
         <div class="section-title">Entries</div>
         <div class="card" id="ol-list"></div>
+      </div>
+
+      <!-- ============ FINANCIAL YEAR ============
+           Closing a year here does not move a single balance — stock, dues,
+           cash and bank already run on unbroken into 1 April. What it does is
+           record what the year closed at, and stop the year changing after it
+           has been filed. The screen says so plainly, because an owner who
+           expects a "carry forward" needs to know why nothing appeared to
+           happen. -->
+      <div class="screen" id="screen-fyear">
+        <a href="#" id="fy-back-link" class="muted" style="font-size:12px;font-weight:700;">&larr; Back to Accounts</a>
+        <div class="section-title" style="margin-top:10px;">Financial Year</div>
+
+        <div class="card" id="fy-current" style="padding:14px;"></div>
+
+        <div class="section-title">All Years</div>
+        <div class="card" id="fy-list"></div>
+
+        <p class="muted" style="font-size:11px;margin-top:10px;line-height:1.6;">
+          <strong>Closing a year does not move any balance.</strong> Stock, customer dues, supplier
+          dues, cash and bank continue into the new year exactly as they are — there is nothing to
+          carry forward. Closing records what the year finished at, so you can always see the
+          31&nbsp;March position again, and it locks the year so the figures you filed cannot change.
+          Bills, reports and exports for a closed year keep working as normal.
+        </p>
+      </div>
+
+      <!-- Closing preview. Shows exactly what will be recorded, before it is. -->
+      <div class="screen" id="screen-fyclose">
+        <a href="#" id="fyc-back-link" class="muted" style="font-size:12px;font-weight:700;">&larr; Back</a>
+        <div class="section-title" style="margin-top:10px;" id="fyc-title">Close Financial Year</div>
+        <div class="card" id="fyc-summary" style="padding:14px;"></div>
+        <div class="section-title">What will be recorded</div>
+        <div class="card" id="fyc-lines"></div>
+        <div id="fyc-actions" style="margin-top:14px;"></div>
       </div>
 
       <!-- PRODUCT QUERY -->

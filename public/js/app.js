@@ -795,7 +795,7 @@ async function switchTab(tab){
   document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));
   document.getElementById("screen-"+tab).classList.add("active");
   document.querySelectorAll("nav.bottom .tab").forEach(t=>t.classList.toggle("active", t.dataset.tab===tab));
-  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",quotation:"Quotation",so:"Sales Order",pquery:"Product Query",accounts:"Accounts",otherledger:(state.olKind==="income"?"Other Income":"Other Expenses")};
+  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",quotation:"Quotation",so:"Sales Order",pquery:"Product Query",accounts:"Accounts",otherledger:(state.olKind==="income"?"Other Income":"Other Expenses"),fyear:"Financial Year",fyclose:"Financial Year"};
   document.getElementById("hdr-sub").textContent = subMap[tab];
   document.getElementById("hdr-main").textContent = tab==="home" ? greeting() : subMap[tab];
   if(tab==="billing") await renderBilling();
@@ -812,6 +812,7 @@ async function switchTab(tab){
   if(tab==="pquery") await renderPqScreen();
   if(tab==="accounts") await renderAccountsScreen();
   if(tab==="otherledger") await renderOtherLedger();
+  if(tab==="fyear") await renderFyScreen();
 }
 
 async function renderAll(){
@@ -9749,6 +9750,9 @@ function olRangeQS(){
 }
 
 async function renderAccountsScreen(){
+  /* Closing a year is an owner decision, and the route is owner-only anyway —
+     showing staff a button that always fails would just be a dead end. */
+  document.getElementById("acc-fyear").style.display = isOwner() ? "" : "none";
   const thisMonth = `?from=${isoDate(new Date(new Date().getFullYear(), new Date().getMonth(), 1))}&to=${isoDate(new Date())}`;
   try{
     const [inc, exp, dash] = await Promise.all([
@@ -9802,9 +9806,247 @@ async function renderOtherLedger(){
     </div>`).join("") : `<div class="empty-hint">No entries in this period.</div>`;
 }
 
+/* ============================================================
+   FINANCIAL YEAR
+
+   Worth stating once, because the screen is built around it: this app keeps
+   running balances, not year-scoped postings. Stock, dues, cash and bank are
+   already continuous, and the Balance Sheet's capital already includes every
+   past year's profit. So closing a year moves nothing. It records the closing
+   position — the one thing the app could not otherwise show you again — and
+   it locks the year.
+   ============================================================ */
+
+const FY_SECTIONS = [
+  ["stock",     "Closing Stock"],
+  ["customer",  "Customer Balances"],
+  ["supplier",  "Supplier Balances"],
+  ["cash",      "Cash"],
+  ["bank",      "Bank"],
+  ["asset",     "Fixed Assets"],
+  ["deposit",   "Deposits"],
+  ["loan",      "Loans"],
+  ["liability", "Outstanding Liabilities"],
+  ["pnl",       "Profit & Loss for the Year"]
+];
+
+/** "01 Apr 2026" — the form used elsewhere in the app. */
+function fyDay(d){ return d ? new Date(d+"T00:00:00").toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"}) : ""; }
+
+function fyDateLong(ts){
+  if(!ts) return "";
+  const d = new Date(Number(ts));
+  return d.toLocaleDateString("en-IN", { day:"numeric", month:"short", year:"numeric" }) +
+         " " + d.toLocaleTimeString("en-IN", { hour:"2-digit", minute:"2-digit" });
+}
+
+async function renderFyScreen(){
+  const cur = document.getElementById("fy-current");
+  const list = document.getElementById("fy-list");
+  cur.innerHTML = `<div class="empty-hint">Loading…</div>`;
+  list.innerHTML = "";
+
+  let data;
+  try{ data = await api("GET", "/financial-years"); }
+  catch(e){ cur.innerHTML = `<div class="empty-hint">Could not load: ${escapeHtml(e.message||"")}</div>`; return; }
+
+  const today = isoDate(new Date());
+  const current = data.years.find(y => y.start_date <= today && y.end_date >= today);
+  cur.innerHTML = current ? `
+    <div class="row-sub" style="margin-bottom:4px;">Current financial year</div>
+    <div style="font-size:22px;font-weight:800;">${escapeHtml(current.label)}</div>
+    <div class="row-sub">${escapeHtml(fyDay(current.start_date))} to ${escapeHtml(fyDay(current.end_date))}</div>
+    ${current.status === "closed"
+      ? `<div class="row-sub" style="color:var(--red);margin-top:6px;font-weight:700;">This year is closed — entries are locked.</div>`
+      : `<div class="row-sub" style="margin-top:6px;">Open — entries dated in this year can be added and edited.</div>`}
+  ` : `<div class="empty-hint">No financial year covers today's date.</div>`;
+
+  list.innerHTML = data.years.map(y => {
+    const closed = y.status === "closed";
+    return `
+    <div class="list-row" style="align-items:flex-start;">
+      <div style="flex:1;min-width:0;">
+        <div class="row-title">${escapeHtml(y.label)}
+          <span style="font-size:11px;font-weight:700;color:${closed ? "var(--red)" : "var(--green,#1a7f37)"};">
+            · ${closed ? "Closed" : "Open"}</span></div>
+        <div class="row-sub">${escapeHtml(fyDay(y.start_date))} to ${escapeHtml(fyDay(y.end_date))}</div>
+        ${closed ? `<div class="row-sub">Closed ${escapeHtml(fyDateLong(y.closed_at))} by ${escapeHtml(y.closed_by||"Owner")} · ${y.snapshotLines} lines recorded</div>` : ""}
+        ${y.reopen_reason ? `<div class="row-sub" style="font-style:italic;">Re-opened once: ${escapeHtml(y.reopen_reason)}</div>` : ""}
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+          ${closed
+            ? `<button class="btn btn-outline fy-mini" data-fy-snapshot="${escapeHtml(y.id)}">View closing figures</button>
+               <button class="btn btn-outline fy-mini" data-fy-reopen="${escapeHtml(y.id)}" data-fy-label="${escapeHtml(y.label)}">Re-open</button>`
+            : `<button class="btn btn-outline fy-mini" data-fy-close="${escapeHtml(y.id)}">Close this year</button>`}
+        </div>
+      </div>
+    </div>`;
+  }).join("") || `<div class="empty-hint">No financial years yet.</div>`;
+}
+
+/** Renders a closing position — a live preview before closing, or the stored
+ *  snapshot of a year already closed. Same layout for both, because they are
+ *  the same figures; only the heading and the buttons differ. */
+function fyRenderPosition(p, opts){
+  document.getElementById("fyc-title").textContent = opts.title;
+  const t = p.totals || {};
+  const row = (label, value) =>
+    `<div style="display:flex;justify-content:space-between;gap:12px;padding:3px 0;">
+       <span class="row-sub">${escapeHtml(label)}</span><strong>${value}</strong></div>`;
+
+  document.getElementById("fyc-summary").innerHTML = `
+    <div style="font-size:18px;font-weight:800;margin-bottom:8px;">${escapeHtml(p.year.label)}
+      <span class="row-sub" style="font-weight:600;"> · ${escapeHtml(fyDay(p.year.start || p.year.start_date))} to ${escapeHtml(fyDay(p.year.end || p.year.end_date))}</span></div>
+    ${row("Closing stock value", fmt(t.stockValue||0) + ` <span class="row-sub">(${t.stockLines||0} items)</span>`)}
+    ${row("Customers owe the shop", fmt(t.receivables||0))}
+    ${row("Shop owes suppliers", fmt(t.payables||0))}
+    ${row("Cash in hand", fmt(t.cash||0))}
+    ${row("Bank balance", fmt(t.bank||0))}
+    ${row("Net profit for the year", fmt(t.netProfit||0))}
+    ${(p.notes||[]).length ? `<div class="row-sub" style="margin-top:10px;line-height:1.6;">${
+      p.notes.map(n=>"• "+escapeHtml(n)).join("<br>")}</div>` : ""}`;
+
+  const lines = p.lines || [];
+  document.getElementById("fyc-lines").innerHTML = FY_SECTIONS.map(([key, heading])=>{
+    const rows = lines.filter(l => l.section === key);
+    if(!rows.length) return "";
+
+    /* Customer and supplier balances run both ways, and netting them tells a
+       lie: a customer who has paid ₹4,200 in advance is money the shop OWES,
+       not a reduction in what it is owed. The Balance Sheet splits the two
+       directions for the same reason, so this heading does too. */
+    let headRight;
+    if(key === "pnl"){
+      headRight = "";
+    }else if(key === "customer" || key === "supplier"){
+      const owed = rows.filter(l=>l.amount > 0).reduce((s,l)=>s+l.amount, 0);
+      const adv  = Math.abs(rows.filter(l=>l.amount < 0).reduce((s,l)=>s+l.amount, 0));
+      headRight = `<div class="row-title">${fmt(owed)}</div>` +
+        (adv ? `<div class="row-sub">${fmt(adv)} paid in advance</div>` : "");
+    }else{
+      headRight = `<div class="row-title">${fmt(rows.reduce((s,l)=>s+(l.amount||0),0))}</div>`;
+    }
+
+    return `
+      <div class="list-row" style="background:var(--panel,#f6f7f9);">
+        <div class="row-title" style="font-size:12px;text-transform:uppercase;letter-spacing:.5px;">${escapeHtml(heading)}</div>
+        ${headRight ? `<div class="row-right">${headRight}</div>` : ""}
+      </div>` +
+      rows.map(l=>`
+      <div class="list-row">
+        <div style="min-width:0;"><div class="row-title">${escapeHtml(l.label)}</div>
+          ${l.detail ? `<div class="row-sub">${escapeHtml(l.detail)}</div>` : ""}</div>
+        <div class="row-right">
+          ${l.quantity != null ? `<div class="row-sub">${l.quantity}${key==="stock" ? (Math.abs(l.quantity)===1 ? " pc" : " pcs") : ""}</div>` : ""}
+          ${l.amount != null ? `<div class="row-title">${fmt(l.amount)}</div>` : ""}
+        </div>
+      </div>`).join("");
+  }).join("") || `<div class="empty-hint">Nothing to record for this year.</div>`;
+
+  document.getElementById("fyc-actions").innerHTML = opts.actionsHtml || "";
+}
+
+async function fyOpenClosePreview(fyId){
+  switchTab("fyclose");
+  document.getElementById("fyc-summary").innerHTML = `<div class="empty-hint">Working out the closing position…</div>`;
+  document.getElementById("fyc-lines").innerHTML = "";
+  document.getElementById("fyc-actions").innerHTML = "";
+  let p;
+  try{ p = await api("GET", `/financial-years/${encodeURIComponent(fyId)}/preview`); }
+  catch(e){ document.getElementById("fyc-summary").innerHTML = `<div class="empty-hint">Could not load: ${escapeHtml(e.message||"")}</div>`; return; }
+  fyRenderPosition(p, {
+    title: "Close " + p.year.label,
+    actionsHtml: `
+      <div class="card" style="padding:12px;border:1px solid var(--red);">
+        <div style="font-weight:800;margin-bottom:6px;">Before you close ${escapeHtml(p.year.label)}</div>
+        <div class="row-sub" style="line-height:1.7;">
+          The figures above are saved permanently as this year's closing position.<br>
+          The year is then <strong>locked</strong> — no bill, payment or entry dated inside it can be
+          added, edited, voided or deleted.<br>
+          Nothing is deleted, and nothing moves. Reports and prints for ${escapeHtml(p.year.label)} keep working.<br>
+          A backup runs first, automatically.<br>
+          You can re-open the year later if your accountant finds a correction.
+        </div>
+      </div>
+      <button class="btn btn-gold" id="fyc-confirm" style="margin-top:12px;">Record these figures and close ${escapeHtml(p.year.label)}</button>`
+  });
+  document.getElementById("fyc-confirm").addEventListener("click", ()=>fyDoClose(p.year.id, p.year.label));
+}
+
+async function fyDoClose(fyId, label){
+  if(!confirm(`Close financial year ${label}?\n\nThe closing figures are recorded and the year is locked. Nothing is deleted — you can re-open it later if a correction is needed.`)) return;
+  const btn = document.getElementById("fyc-confirm");
+  if(btn){ btn.disabled = true; btn.textContent = "Backing up and closing…"; }
+  let r;
+  try{
+    r = await api("POST", `/financial-years/${encodeURIComponent(fyId)}/close`, {});
+  }catch(e){
+    // The one failure worth a second question rather than a dead end: the
+    // backup could not be written. The owner decides.
+    if(/Backup before closing failed/i.test(e.message||"")){
+      if(confirm(e.message + "\n\nClose anyway, without a backup?")){
+        try{ r = await api("POST", `/financial-years/${encodeURIComponent(fyId)}/close`, { proceedWithoutBackup:true }); }
+        catch(e2){ toast(e2.message || "Could not close the year."); if(btn){btn.disabled=false;btn.textContent="Record these figures and close "+label;} return; }
+      }else{
+        if(btn){ btn.disabled=false; btn.textContent="Record these figures and close "+label; }
+        return;
+      }
+    }else{
+      toast(e.message || "Could not close the year.");
+      if(btn){ btn.disabled=false; btn.textContent="Record these figures and close "+label; }
+      return;
+    }
+  }
+  toast(`${label} closed. ${r.linesRecorded} lines recorded${r.nextYear ? ` · ${r.nextYear.label} is now open` : ""}.`);
+  switchTab("fyear");
+}
+
+async function fyViewSnapshot(fyId){
+  switchTab("fyclose");
+  document.getElementById("fyc-summary").innerHTML = `<div class="empty-hint">Loading…</div>`;
+  document.getElementById("fyc-lines").innerHTML = "";
+  document.getElementById("fyc-actions").innerHTML = "";
+  let s;
+  try{ s = await api("GET", `/financial-years/${encodeURIComponent(fyId)}/snapshot`); }
+  catch(e){ document.getElementById("fyc-summary").innerHTML = `<div class="empty-hint">Could not load: ${escapeHtml(e.message||"")}</div>`; return; }
+  s.notes = [
+    `Recorded when ${s.year.label} was closed on ${fyDateLong(s.year.closed_at)}.`,
+    "These figures are frozen. Today's stock and balances will have moved on since."
+  ];
+  fyRenderPosition(s, { title: s.year.label + " — Closing Figures" });
+}
+
+async function fyReopen(fyId, label){
+  const reason = prompt(
+    `Re-open financial year ${label}?\n\n` +
+    `The year will accept entries again. The closing figures already recorded stay as they are, ` +
+    `so you can compare. Give the reason — it is saved permanently against this year.`, "");
+  if(reason === null) return;
+  if(reason.trim().length < 5){ toast("Give a reason of at least 5 characters."); return; }
+  try{
+    await api("POST", `/financial-years/${encodeURIComponent(fyId)}/reopen`, { reason: reason.trim() });
+    toast(`${label} re-opened. Close it again once the corrections are entered.`);
+    renderFyScreen();
+  }catch(e){ toast(e.message || "Could not re-open the year."); }
+}
+
+function wireFinancialYear(){
+  document.getElementById("fy-back-link").addEventListener("click", e=>{ e.preventDefault(); switchTab("accounts"); });
+  document.getElementById("fyc-back-link").addEventListener("click", e=>{ e.preventDefault(); switchTab("fyear"); });
+  document.getElementById("fy-list").addEventListener("click", e=>{
+    const close = e.target.closest("[data-fy-close]");
+    if(close) return fyOpenClosePreview(close.dataset.fyClose);
+    const snap = e.target.closest("[data-fy-snapshot]");
+    if(snap) return fyViewSnapshot(snap.dataset.fySnapshot);
+    const reopen = e.target.closest("[data-fy-reopen]");
+    if(reopen) return fyReopen(reopen.dataset.fyReopen, reopen.dataset.fyLabel);
+  });
+}
+
 function wireAccounts(){
   document.getElementById("acc-back-link").addEventListener("click", e=>{ e.preventDefault(); switchTab("home"); });
   document.getElementById("ol-back-link").addEventListener("click", e=>{ e.preventDefault(); switchTab("accounts"); });
+  document.getElementById("acc-fyear").addEventListener("click", ()=>switchTab("fyear"));
+  wireFinancialYear();
 
   // These four open what already exists rather than duplicating it.
   document.getElementById("acc-receipts").addEventListener("click", openQuickPayment);

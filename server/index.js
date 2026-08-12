@@ -131,6 +131,12 @@ app.use("/api", (req, res, next) => {
 });
 
 app.use("/api/auth", require("./routes/auth"));
+
+/* A closed financial year stops accepting writes. Mounted after /api/auth so
+   signing in is never blocked, and before every data route so a bill, payment
+   or entry cannot be back-dated into a year already filed. Reads are
+   untouched — a closed year stays fully visible, printable and exportable. */
+app.use("/api", require("./fyLock").guard);
 app.use("/api/license", requireAuth, require("./routes/license"));
 app.use("/api/settings", requireAuth, require("./routes/settings"));
 app.use("/api/products", requireAuth, require("./routes/products"));
@@ -162,6 +168,7 @@ app.use("/api/backup", requireAuth, requireRole("owner"), require("./routes/back
 app.use("/api/print", requireAuth, require("./routes/print"));
 app.use("/api/attachments", requireAuth, require("./routes/attachments"));
 app.use("/api/reset", requireAuth, requireRole("owner"), require("./routes/reset"));
+app.use("/api/financial-years", requireAuth, requireRole("owner"), require("./routes/financialYears"));
 
 // Belt-and-braces cache busting on top of the no-cache header below: every
 // script/stylesheet URL in index.html gets a ?v=<boot time> query string,

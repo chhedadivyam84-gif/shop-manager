@@ -1374,3 +1374,10 @@ router.get("/export", (req, res) => {
 });
 
 module.exports = router;
+
+/* Shared with routes/financialYears.js, so a year-end snapshot records the
+   exact figures the P&L and Balance Sheet screens show — not a second
+   implementation that can drift away from them. */
+module.exports.computePnl = computePnl;
+module.exports.computeBalanceSheet = computeBalanceSheet;
+module.exports.dateRange = dateRange;

@@ -1054,6 +1054,79 @@ addColumn("products", "active", "INTEGER NOT NULL DEFAULT 1");
   .forEach(t => addColumn(t, "gst_enabled", "INTEGER NOT NULL DEFAULT 1"));
 
 
+
+/* ============================================================
+   FINANCIAL YEARS
+
+   This app derives balances from current state rather than posting into
+   periods, so closing a year does NOT move stock, debtors, creditors, cash
+   or bank anywhere — those already continue unbroken into the new year.
+   Nor does it post retained profit to capital: the Balance Sheet already
+   computes capital from an ALL-TIME profit figure regardless of the range
+   it is run over, so an extra capital row would be counted twice.
+
+   What closing a year does provide is the two things the app had no way to
+   do: a permanent record of what the year closed at, and a lock so nobody
+   edits a year that has been reported to the tax office.
+
+   A closed year can be re-opened by the owner with a reason, because real
+   books get adjusted in June for something dated March, and an app that
+   pretends otherwise just pushes people into working around it.
+   ============================================================ */
+db.exec(`
+CREATE TABLE IF NOT EXISTS financial_years (
+  id TEXT PRIMARY KEY,
+  label TEXT NOT NULL UNIQUE,          -- "2026-27"
+  start_date TEXT NOT NULL,            -- inclusive, "2026-04-01"
+  end_date TEXT NOT NULL,              -- inclusive, "2027-03-31"
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed')),
+  closed_at INTEGER,
+  closed_by TEXT,
+  reopened_at INTEGER,
+  reopened_by TEXT,
+  reopen_reason TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_financial_years_dates ON financial_years(start_date, end_date);
+
+-- One row per line of the closing position. Deliberately generic: the point
+-- is an auditable record of what each figure WAS on the closing date, not a
+-- source anything reads back to rebuild balances from.
+CREATE TABLE IF NOT EXISTS fy_snapshot (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  fy_id TEXT NOT NULL REFERENCES financial_years(id) ON DELETE CASCADE,
+  section TEXT NOT NULL,               -- stock | customer | supplier | cash | bank | asset | loan | deposit | liability | pnl
+  ref_id TEXT,                         -- the product size, customer, account… where there is one
+  label TEXT NOT NULL,
+  detail TEXT,                         -- size, location, brand — whatever identifies the line
+  quantity REAL,
+  amount REAL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_fy_snapshot_fy ON fy_snapshot(fy_id, section);
+`);
+
+/* The year the shop is in right now, created on demand from
+   settings.fy_start_month so nobody has to set one up before billing. */
+(function seedCurrentFinancialYear() {
+  const existing = db.prepare("SELECT COUNT(*) AS n FROM financial_years").get().n;
+  if (existing > 0) return;
+  const s = db.prepare("SELECT fy_start_month FROM settings WHERE id = 1").get();
+  const startMonth = (s && s.fy_start_month) || 4;
+  const now = new Date();
+  const startYear = now.getMonth() + 1 >= startMonth ? now.getFullYear() : now.getFullYear() - 1;
+  const pad = n => String(n).padStart(2, "0");
+  const start = `${startYear}-${pad(startMonth)}-01`;
+  const endD = new Date(startYear + 1, startMonth - 1, 0);
+  const end = `${endD.getFullYear()}-${pad(endD.getMonth() + 1)}-${pad(endD.getDate())}`;
+  const label = startMonth === 1
+    ? String(startYear)
+    : `${startYear}-${String((startYear + 1) % 100).padStart(2, "0")}`;
+  db.prepare(
+    "INSERT INTO financial_years (id, label, start_date, end_date, status, created_at) VALUES (?, ?, ?, ?, 'open', ?)"
+  ).run("FY_" + label.replace(/\W+/g, "_"), label, start, end, Date.now());
+})();
+
 /* ============================================================
    INCOME & EXPENSE CATEGORIES
 

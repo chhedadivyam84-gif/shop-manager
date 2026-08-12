@@ -169,8 +169,16 @@ main{flex:1;padding:14px 16px 90px;overflow-y:auto;}
 .searchbar input{border:none;outline:none;background:transparent;flex:1;font-size:13px;color:var(--text);}
 .gold-fab{width:36px;height:36px;border-radius:10px;background:var(--gold);border:none;font-size:18px;font-weight:800;color:var(--navy);flex-shrink:0;}
 
-input[type=text], input[type=number], input[type=tel], select, textarea{
+/* date, search, email and password were missing from this list, so every
+   date field in the app (purchase date, bill date, report From/To) rendered
+   as a bare 23px-tall browser default with no padding or border while the
+   text field beside it was a styled 38px box. Listing the types the app
+   actually uses fixes all of them at once. */
+input[type=text], input[type=number], input[type=tel], input[type=date],
+input[type=search], input[type=email], input[type=password], input[type=month],
+select, textarea{
   width:100%;border:1px solid var(--border);border-radius:10px;padding:9px 11px;font-size:13px;color:var(--text);background:var(--card);
+  min-height:38px;
 }
 label.field-label{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;display:block;margin:10px 0 5px;}
 
@@ -611,3 +619,66 @@ table.pq-table tr.pq-open-row td{ background:#f9fafb; font-weight:700; }
   text-transform:uppercase; letter-spacing:.04em; margin-bottom:2px;
 }
 .pe-colpick label input{ accent-color:#1f2b4d; }
+
+/* ============================================================
+   TOUCH LAYOUT — phones and tablets
+   Measured, not guessed: on a 375px screen the quick-action grid gave each
+   button 62-76px for labels like "Warehouse Stock", the Home tab was a 40px
+   target, and the +/- buttons in every product row were 30px. Apple and
+   Google both put the minimum comfortable target at ~44px.
+   ============================================================ */
+
+/* Bottom tabs share the bar equally and always clear the touch minimum.
+   Before this they sized to their own text, so Home was 40px and Customers
+   62px — an uneven row of undersized targets. */
+nav.bottom .tab{
+  flex:1 1 0; min-width:0; min-height:46px; justify-content:center; padding:4px 2px;
+}
+nav.bottom .tab span:last-child{
+  max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+
+/* Touch sizing applies to every touch device, not just phones. A tablet at
+   the counter has the same fingertip as a phone — scoping this to a narrow
+   width left tablets with 31px chips and 36px buttons. The width clause
+   catches emulators and small desktop windows that report a fine pointer. */
+@media (pointer: coarse), (max-width: 1024px){
+  /* Chips are the main filter control on every list screen. */
+  .chip{ padding:9px 14px; min-height:40px; display:inline-flex; align-items:center; }
+
+  /* The + on each product row is the most-tapped control in the app. */
+  .gold-fab{ width:42px; height:42px; font-size:19px; }
+
+  /* A 13px checkbox is smaller than a fingertip's contact patch. Enlarging
+     the box and the row makes "GST on transport" a setting rather than a
+     lottery. */
+  .check-row{ min-height:44px; font-size:13px; }
+  .check-row input[type=checkbox]{ width:20px; height:20px; flex-shrink:0; }
+
+  /* iOS zooms the page in when a focused field is under 16px and leaves it
+     zoomed — the commonest reason a mobile web app feels broken at the
+     billing counter. 16px costs nothing and stops the jump. */
+  input[type=text], input[type=number], input[type=tel], input[type=date],
+  input[type=search], input[type=email], input[type=password], select, textarea{
+    font-size:16px; min-height:44px;
+  }
+  .searchbar, .searchbar input{ font-size:16px; }
+  .searchbar{ min-height:44px; }
+  .btn{ min-height:44px; }
+}
+
+@media (max-width: 560px){
+  /* Four across, not five: at five each label had ~66px and "Purchase Order"
+     stacked three lines deep, which is what made the home screen look
+     cluttered. Four gives ~80px and most labels fit on two. */
+  .quick-actions{ grid-template-columns:repeat(4,1fr); gap:7px; }
+  .qa-btn{ font-size:11.5px; line-height:1.2; padding:10px 4px; gap:5px; min-height:78px; }
+  .qa-btn .ic{ width:30px; height:30px; font-size:15px; }
+}
+
+@media (min-width: 768px) and (max-width: 1199px){
+  /* A tablet has room for the whole action grid on one row instead of three
+     stacked rows of five. */
+  .quick-actions{ grid-template-columns:repeat(7,1fr); }
+  .qa-btn{ min-height:80px; font-size:12.5px; }
+}

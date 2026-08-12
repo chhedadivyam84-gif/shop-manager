@@ -1022,7 +1022,7 @@ function renderBillingProducts(){
     return `<div class="list-row" data-open-product="${p.id}" style="cursor:pointer;">
       <div class="swatch"></div>
       <div><div class="row-title">${escapeHtml(p.name)}</div><div class="row-sub">${escapeHtml(p.brand||"")} · ${priceLabel}</div><div class="row-sub">${stockLine}</div></div>
-      <div class="row-right">${out?'<span class="pill danger">Out of stock</span>':'<button class="gold-fab" data-quickadd="'+p.id+'" style="width:30px;height:30px;">+</button>'}</div>
+      <div class="row-right">${out?'<span class="pill danger">Out of stock</span>':'<button class="gold-fab" data-quickadd="'+p.id+'">+</button>'}</div>
     </div>`;
   }).join("") || `<div class="empty-hint">No matching products.</div>`;
 
@@ -6777,7 +6777,7 @@ function renderPurchaseProducts(){
     return `<div class="list-row" data-open-pur-product="${p.id}" style="cursor:pointer;">
       <div class="swatch"></div>
       <div><div class="row-title">${escapeHtml(p.name)}</div><div class="row-sub">${escapeHtml(p.brand||"")} · ${priceLabel} · ${p.stock} ${escapeHtml(p.unit||"")} in stock</div></div>
-      <div class="row-right"><button class="gold-fab" data-pur-quickadd="${p.id}" style="width:30px;height:30px;">+</button></div>
+      <div class="row-right"><button class="gold-fab" data-pur-quickadd="${p.id}">+</button></div>
     </div>`;
   }).join("") || `<div class="empty-hint">No matching products.</div>`;
 
@@ -7398,7 +7398,7 @@ function renderPoProducts(){
     return `<div class="list-row" data-open-po-product="${p.id}" style="cursor:pointer;">
       <div class="swatch"></div>
       <div><div class="row-title">${escapeHtml(p.name)}</div><div class="row-sub">${escapeHtml(p.brand||"")} · ${priceLabel}</div></div>
-      <div class="row-right"><button class="gold-fab" data-po-quickadd="${p.id}" style="width:30px;height:30px;">+</button></div>
+      <div class="row-right"><button class="gold-fab" data-po-quickadd="${p.id}">+</button></div>
     </div>`;
   }).join("") || `<div class="empty-hint">No matching products.</div>`;
 
@@ -7968,7 +7968,7 @@ function renderQuotationProducts(){
     return `<div class="list-row" data-open-quotation-product="${p.id}" style="cursor:pointer;">
       <div class="swatch"></div>
       <div><div class="row-title">${escapeHtml(p.name)}</div><div class="row-sub">${escapeHtml(p.brand||"")} · ${priceLabel}</div></div>
-      <div class="row-right"><button class="gold-fab" data-quotation-quickadd="${p.id}" style="width:30px;height:30px;">+</button></div>
+      <div class="row-right"><button class="gold-fab" data-quotation-quickadd="${p.id}">+</button></div>
     </div>`;
   }).join("") || `<div class="empty-hint">No matching products.</div>`;
 
@@ -8684,7 +8684,7 @@ function renderSoProducts(){
     return `<div class="list-row" data-open-so-product="${p.id}" style="cursor:pointer;">
       <div class="swatch"></div>
       <div><div class="row-title">${escapeHtml(p.name)}</div><div class="row-sub">${escapeHtml(p.brand||"")} · ${priceLabel}</div></div>
-      <div class="row-right"><button class="gold-fab" data-so-quickadd="${p.id}" style="width:30px;height:30px;">+</button></div>
+      <div class="row-right"><button class="gold-fab" data-so-quickadd="${p.id}">+</button></div>
     </div>`;
   }).join("") || `<div class="empty-hint">No matching products.</div>`;
 

@@ -443,6 +443,7 @@ async function initApp(){
     // Carries the same range as the screen, so the file always matches the table.
     window.open("/api/reports/export?type="+encodeURIComponent(state.reportType)+reportRangeQS(true), "_blank");
   });
+  document.getElementById("report-print-btn").addEventListener("click", openReportPreview);
 
   document.querySelectorAll('[data-period]').forEach(b=>{
     b.addEventListener("click", ()=>{ applyReportPeriod(b.dataset.period); });
@@ -9917,6 +9918,85 @@ function exportProductQuery(){
   const qs = pqQueryString();
   const win = window.open("/api/product-query/export" + (qs ? "?"+qs : ""), "_blank");
   if(!win) toast("Couldn't start the download — allow pop-ups for this site.");
+}
+
+/* Every report on the Reports screen, through the one print engine.
+
+   The rows come from /api/reports/data — the same builder the .xlsx download
+   uses — rather than being scraped off the screen. The reports render as
+   charts, statements and lists rather than a common table, so there is
+   nothing uniform to scrape; going back to the shared builder is also what
+   guarantees the printed sheet and the spreadsheet agree. */
+const REPORT_TITLES = {
+  Sales:"Sales Report", GST:"GST Report", Stock:"Stock Report", Customer:"Customer Report",
+  Purchase:"Purchase Report", Challan:"Delivery Challan Report", Orders:"Sales Orders",
+  TaxInvoice:"Tax Invoice Report", PurchaseBill:"Purchase Bill Report", Salesman:"Salesman Report",
+  Brand:"Brand-wise Stock", Party:"Party-wise Report", PartyProduct:"Party-wise Product",
+  Profit:"Profit Report", ProfitByInvoice:"Profit per Invoice", Supplier:"Supplier Report",
+  SalePayments:"Sale Payments", PurchasePayments:"Purchase Payments",
+  LocationStock:"Shop / Warehouse Stock", Transfers:"Stock Transfers",
+  DailyMovement:"Daily Movement", BalanceSheet:"Balance Sheet", ProfitLoss:"Profit & Loss"
+};
+
+async function openReportPreview(){
+  const note = document.getElementById("report-export-note");
+  note.textContent = "Preparing…";
+  let data;
+  try{
+    data = await api("GET", "/reports/data?type="+encodeURIComponent(state.reportType)+reportRangeQS(true));
+  }catch(err){
+    note.textContent = "";
+    toast("Couldn't prepare this report: " + (err.message||"error"));
+    return;
+  }
+  note.textContent = "";
+  if(!data.rows || !data.rows.length){
+    toast("This report has no rows for the selected period.");
+    return;
+  }
+
+  /* The builder returns plain arrays. Give each column a sane alignment and
+     type by looking at the data: a column whose every value is a number is
+     right-aligned, and one whose name reads like money is formatted as money. */
+  const moneyish = /amount|total|value|rate|profit|cost|due|cgst|sgst|igst|balance|debit|credit|paid/i;
+  const columns = data.columns.map((label, i) => {
+    const sample = data.rows.map(r=>r[i]).filter(v=>v!=="" && v!=null);
+    const allNumeric = sample.length>0 && sample.every(v=>typeof v==="number");
+    return {
+      key: "c"+i,
+      label: String(label),
+      width: i===0 ? 14 : 10,
+      align: allNumeric ? "right" : "left",
+      type: allNumeric ? (moneyish.test(String(label)) ? "money" : "number") : "text",
+      rate: moneyish.test(String(label))
+    };
+  });
+  const rows = data.rows.map(r=>{
+    const o={}; r.forEach((v,i)=>{ o["c"+i]=v; }); return o;
+  });
+
+  openPrintPreview({
+    id: "report-" + state.reportType,
+    title: REPORT_TITLES[state.reportType] || (state.reportType + " Report"),
+    landscape: columns.length > 6,
+    period: data.period,
+    filters: reportFilterLabels(),
+    columns, rows
+  });
+}
+
+/* What the sheet was produced under — the same idea as Product Query's
+   filter line, so a printout found later says what it covers. */
+function reportFilterLabels(){
+  const out = [];
+  const val = id => (document.getElementById(id)||{}).value || "";
+  if(val("rep-month")) out.push("Month: " + val("rep-month"));
+  if(val("rep-from")) out.push("From: " + val("rep-from"));
+  if(val("rep-to")) out.push("To: " + val("rep-to"));
+  const period = document.querySelector("#report-period-chips .chip.selected");
+  if(!out.length && period) out.push("Period: " + period.textContent.trim());
+  if(!out.length) out.push("All dates");
+  return out;
 }
 
 /* Product Query as a print-engine document. This is the whole of what a

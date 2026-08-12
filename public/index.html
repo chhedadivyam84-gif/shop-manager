@@ -340,9 +340,18 @@
           <button class="chip" data-ack-filter="received">🟢 Received Challans</button>
         </div>
         <div class="card" id="report-body" style="margin-top:10px;"></div>
-        <div style="display:flex;gap:8px;margin-top:12px;">
-          <button class="btn btn-outline" id="export-csv-btn">Export Excel (.xlsx)</button>
+        <div class="section-title">Print &amp; Export</div>
+        <div class="pq-actionbar">
+          <div id="report-export-note" class="muted"></div>
+          <div class="pq-actionbar-btns">
+            <button class="btn btn-gold" id="report-print-btn">&#128424; Print / Preview</button>
+            <button class="btn btn-outline" id="export-csv-btn">&#128202; Excel</button>
+          </div>
         </div>
+        <p class="muted" style="font-size:11px;margin-top:8px;">
+          Preview opens with paper size, portrait or landscape, which columns to show, and
+          Print / PDF / Excel / CSV — using the report and date range currently on screen.
+        </p>
       </div>
 
       <!-- CASH BOOK -->

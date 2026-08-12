@@ -1018,7 +1018,10 @@ function computeBalanceSheet() {
 
 router.get("/balance-sheet", (req, res) => res.json(computeBalanceSheet()));
 
-router.get("/export", (req, res) => {
+/* Row data for a report, as a header row followed by data rows.
+   The Excel download, the CSV, the PDF and the printed sheet all come from
+   here, so a report cannot say one thing on paper and another in a file. */
+function buildReportRows(req) {
   const type = req.query.type || "Sales";
   // Same range the on-screen report used, so a download can never quietly
   // contain a different set of rows than the table it came from.
@@ -1095,7 +1098,7 @@ router.get("/export", (req, res) => {
       SELECT COALESCE(NULLIF(p.brand,''),'(No brand)') AS brand, SUM(ii.qty*ii.rate) AS revenue,
         SUM(ii.pieces) AS pieces, COUNT(DISTINCT ii.invoice_id) AS invoices
       FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id LEFT JOIN products p ON p.id = ii.product_id
-      WHERE i.voided = 0 AND i.doc_type = 'invoice'${range.sql("i.date")} GROUP BY brand ORDER BY revenue DESC
+      WHERE i.voided = 0 AND i.doc_type = 'invoice'${range.sql("i.date")} GROUP BY COALESCE(NULLIF(p.brand,''),'(No brand)') ORDER BY revenue DESC
     `).all(...range.params()).forEach(r => rows.push([r.brand, round2(r.revenue), r.pieces, r.invoices]));
   } else if (type === "Party") {
     filename = "party-wise-report";
@@ -1160,24 +1163,142 @@ router.get("/export", (req, res) => {
       const cost = round2((c ? c.costPrice : 0) * (it.pieces || 0));
       rows.push([it.date, it.challan_no, it.name, it.pieces, round2(it.revenue), cost, round2(it.revenue - cost)]);
     });
-  } else {
+  } else if (type === "GST") {
     filename = "gst-report";
     rows = [["Challan No", "Date", "Tax Type", "CGST", "SGST", "IGST"]];
     db.prepare(`SELECT * FROM invoices WHERE voided = 0 AND doc_type = 'invoice'${range.sql("date")} ORDER BY created_at DESC`)
       .all(...range.params())
       .forEach(inv => rows.push([inv.challan_no, inv.date, inv.tax_type, round2(inv.cgst), round2(inv.sgst), round2(inv.igst)]));
   }
+  // ---- The eight report types that produced an empty download until now:
+  // they were on the Reports screen but had no branch here, so choosing one
+  // and pressing Export gave a spreadsheet containing nothing.
+  else if (type === "Orders") {
+    filename = "orders-report";
+    rows = [["Order No", "Date", "Customer", "Status", "Total"]];
+    db.prepare(`
+      SELECT so.*, c.name AS customer_name FROM sales_orders so
+      LEFT JOIN customers c ON c.id = so.customer_id
+      WHERE 1=1${range.sql("so.date")} ORDER BY so.created_at DESC
+    `).all(...range.params())
+      .forEach(o => rows.push([o.order_no, o.date, o.customer_name || "", o.status || "", round2(o.total)]));
+  } else if (type === "PartyProduct") {
+    filename = "party-wise-product";
+    rows = [["Customer", "Product", "Size", "Qty", "Amount"]];
+    db.prepare(`
+      SELECT c.name AS party, ii.name AS product, ii.size_label AS size,
+             SUM(ii.qty) AS qty, SUM(ii.qty * ii.rate) AS amount
+      FROM invoice_items ii
+      JOIN invoices i ON i.id = ii.invoice_id
+      LEFT JOIN customers c ON c.id = i.customer_id
+      WHERE i.voided = 0${range.sql("i.date")}
+      GROUP BY c.name, ii.name, ii.size_label
+      ORDER BY c.name, ii.name
+    `).all(...range.params())
+      .forEach(r => rows.push([r.party || "Walk-in", r.product, r.size || "", round2(r.qty), round2(r.amount)]));
+  } else if (type === "ProfitByInvoice") {
+    filename = "profit-per-invoice";
+    rows = [["Challan No", "Date", "Customer", "Sale Value", "Cost", "Profit"]];
+    db.prepare(`
+      SELECT i.challan_no, i.date, c.name AS customer_name, i.total,
+             (SELECT COALESCE(SUM(ii.qty * COALESCE(ps.cost_price,0)),0)
+                FROM invoice_items ii LEFT JOIN product_sizes ps ON ps.id = ii.size_id
+               WHERE ii.invoice_id = i.id) AS cost
+      FROM invoices i
+      LEFT JOIN customers c ON c.id = i.customer_id
+      WHERE i.voided = 0 AND i.doc_type = 'invoice'${range.sql("i.date")}
+      ORDER BY i.created_at DESC
+    `).all(...range.params())
+      .forEach(r => rows.push([r.challan_no, r.date, r.customer_name || "Walk-in",
+        round2(r.total), round2(r.cost), round2(r.total - r.cost)]));
+  } else if (type === "LocationStock") {
+    filename = "shop-warehouse-stock";
+    rows = [["Product", "Brand", "Size", "Unit", "Shop", "Warehouse", "Total"]];
+    db.prepare(`
+      SELECT p.name, p.brand, p.unit, ps.label AS size,
+        (SELECT COALESCE(SUM(quantity),0) FROM size_location_stock WHERE size_id = ps.id AND location_id = 'LOC_shop') AS shop,
+        (SELECT COALESCE(SUM(quantity),0) FROM size_location_stock WHERE size_id = ps.id AND location_id = 'LOC_warehouse') AS warehouse
+      FROM products p JOIN product_sizes ps ON ps.product_id = p.id
+      ORDER BY p.name, ps.sort_order
+    `).all()
+      .forEach(r => rows.push([r.name, r.brand || "", r.size || "", r.unit || "",
+        round2(r.shop), round2(r.warehouse), round2(r.shop + r.warehouse)]));
+  } else if (type === "Transfers") {
+    filename = "stock-transfers";
+    rows = [["Date", "Product", "Size", "From", "To", "Qty", "Staff"]];
+    db.prepare(`
+      SELECT st.*, lf.name AS from_name, lt.name AS to_name
+      FROM stock_transfers st
+      LEFT JOIN locations lf ON lf.id = st.from_location_id
+      LEFT JOIN locations lt ON lt.id = st.to_location_id
+      ORDER BY st.created_at DESC
+    `).all()
+      .forEach(t => rows.push([
+        new Date(t.created_at).toISOString().slice(0, 10),
+        t.product_name || "", t.size_label || "",
+        t.from_name || "", t.to_name || "", round2(t.quantity), t.staff_name || ""
+      ]));
+  } else if (type === "DailyMovement") {
+    filename = "daily-movement";
+    rows = [["Date", "Invoices", "Sales Value", "Purchases", "Purchase Value"]];
+    const sales = db.prepare(`
+      SELECT date, COUNT(*) AS n, COALESCE(SUM(total),0) AS v FROM invoices
+      WHERE voided = 0${range.sql("date")} GROUP BY date
+    `).all(...range.params());
+    const purch = db.prepare(`
+      SELECT date, COUNT(*) AS n, COALESCE(SUM(total),0) AS v FROM purchases
+      WHERE COALESCE(voided,0) = 0${range.sql("date")} GROUP BY date
+    `).all(...range.params());
+    const byDate = {};
+    sales.forEach(s => { byDate[s.date] = { sn: s.n, sv: s.v, pn: 0, pv: 0 }; });
+    purch.forEach(p => { byDate[p.date] = Object.assign({ sn: 0, sv: 0 }, byDate[p.date], { pn: p.n, pv: p.v }); });
+    Object.keys(byDate).sort().reverse()
+      .forEach(d => rows.push([d, byDate[d].sn, round2(byDate[d].sv), byDate[d].pn, round2(byDate[d].pv)]));
+  } else if (type === "ProfitLoss") {
+    filename = "profit-and-loss";
+    const pnl = computePnl(range);
+    rows = [["Section", "Particulars", "Amount"]];
+    rows.push(["Income", "Sales Revenue", round2(pnl.income.salesRevenue)]);
+    rows.push(["Income", "Transport & Loading Recovered", round2(pnl.income.chargesRecovered)]);
+    Object.entries(pnl.income.otherIncome || {}).forEach(([label, amt]) => rows.push(["Income", label, round2(amt)]));
+    rows.push(["Income", "Total Income", round2(pnl.income.total)]);
+    rows.push(["Expenses", "Cost of Goods Sold", round2(pnl.expenses.costOfGoodsSold)]);
+    Object.entries(pnl.expenses.operating || {}).forEach(([label, amt]) => rows.push(["Expenses", label, round2(amt)]));
+    rows.push(["Expenses", "Total Expenses", round2(pnl.expenses.total)]);
+    rows.push(["Result", "Gross Profit", round2(pnl.grossProfit)]);
+    rows.push(["Result", "Net Profit", round2(pnl.netProfit)]);
+  }
 
   // Stamp the period into the filename so two downloads of the same report
   // for different months don't land in Downloads as "sales-report (1).xlsx"
   // with no way to tell them apart.
   if (range.active) filename += `-${range.from || "start"}_to_${range.to || "today"}`;
+  return { type, rows, filename, range };
+}
 
-  // A real .xlsx (not CSV renamed) — see server/xlsx.js for why this is
-  // hand-built rather than an npm dependency.
-  const buf = buildXlsx(rows, filename);
+/* JSON for the print engine — the same rows the .xlsx download contains. */
+router.get("/data", (req, res) => {
+  try {
+    const out = buildReportRows(req);
+    res.json({
+      type: out.type,
+      filename: out.filename,
+      columns: out.rows[0] || [],
+      rows: out.rows.slice(1),
+      period: { from: out.range.from || "", to: out.range.to || "" }
+    });
+  } catch (e) {
+    res.status(500).json({ error: "Could not build this report: " + e.message });
+  }
+});
+
+router.get("/export", (req, res) => {
+  let out;
+  try { out = buildReportRows(req); }
+  catch (e) { return res.status(500).json({ error: "Could not build this report: " + e.message }); }
+  const buf = buildXlsx(out.rows, out.filename);
   res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-  res.setHeader("Content-Disposition", `attachment; filename="${filename}.xlsx"`);
+  res.setHeader("Content-Disposition", `attachment; filename="${out.filename}.xlsx"`);
   res.send(buf);
 });
 

@@ -1053,6 +1053,63 @@ addColumn("products", "active", "INTEGER NOT NULL DEFAULT 1");
 ["quotations", "sales_orders", "purchase_orders", "sales_returns", "purchase_returns"]
   .forEach(t => addColumn(t, "gst_enabled", "INTEGER NOT NULL DEFAULT 1"));
 
+/* Per-document-type numbering: its own prefix, width and high-water counter.
+   Each type gets its OWN series — which is also what stops tax invoices and
+   delivery challans colliding in the single UNIQUE challan_no column they
+   share.
+
+   next_number is a HIGH-WATER MARK, not "the biggest row that exists". That
+   is the whole point: deleting a bill frees its number for manual re-use
+   without dragging automatic numbering backwards onto it. */
+db.exec(`
+CREATE TABLE IF NOT EXISTS doc_numbering (
+  doc_type TEXT PRIMARY KEY,
+  prefix TEXT NOT NULL,
+  width INTEGER NOT NULL DEFAULT 6,
+  next_number INTEGER NOT NULL DEFAULT 1,
+  updated_at INTEGER NOT NULL
+);
+`);
+
+/* Seeded from the numbers already issued, so an existing shop keeps its
+   series running rather than restarting at 1 on top of live bills. Prefix
+   defaults follow the owner's requested scheme; both prefix and width are
+   editable, and changing them only affects numbers issued from then on. */
+(function seedDocNumbering() {
+  const seed = db.prepare(
+    "INSERT OR IGNORE INTO doc_numbering (doc_type, prefix, width, next_number, updated_at) VALUES (?, ?, ?, ?, ?)"
+  );
+  const highest = (table, column, scope) => {
+    // Only rows matching this type's own prefix count towards its counter.
+    const where = scope ? `WHERE ${scope}` : "";
+    const rows = db.prepare(`SELECT ${column} AS n FROM ${table} ${where}`).all();
+    return rows;
+  };
+  const startFor = (table, column, scope, prefix) => {
+    let max = 0;
+    try {
+      highest(table, column, scope).forEach(r => {
+        const v = String(r.n || "");
+        if (!v.startsWith(prefix)) return;
+        const digits = v.slice(prefix.length);
+        if (/^\d+$/.test(digits)) max = Math.max(max, parseInt(digits, 10));
+      });
+    } catch (e) { /* table not ready yet on a fresh install */ }
+    return max + 1;
+  };
+
+  const defs = [
+    ["invoice",   "SALE-", 6, "invoices",   "challan_no",   "doc_type = 'invoice'"],
+    ["challan",   "DC-",   6, "invoices",   "challan_no",   "doc_type = 'challan'"],
+    ["quotation", "QUO-",  6, "quotations", "quotation_no", null],
+    ["purchase",  "PUR-",  6, "purchases",  "purchase_no",  null]
+  ];
+  defs.forEach(([type, prefix, width, table, column, scope]) => {
+    seed.run(type, prefix, width, startFor(table, column, scope, prefix), Date.now());
+  });
+})();
+
+
 /* ============================================================
    AREAS — the GEOGRAPHIC place a bill belongs to.
 

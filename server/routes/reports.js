@@ -461,7 +461,17 @@ router.get("/orders", (req, res) => {
     FROM sales_orders so LEFT JOIN customers c ON c.id = so.customer_id
     WHERE 1 = 1${range.sql("so.date")}
   `).all(...range.params()).map(r => ({ ...r, type: "Sales" }));
-  const rows = [...poRows, ...soRows].sort((a, b) => b.created_at - a.created_at);
+  // Quotations belong here too. Until now a saved quotation was reachable
+  // ONLY by opening the customer it was raised for — so a walk-in quotation,
+  // or one whose customer you couldn't remember, was effectively lost even
+  // though the row was sitting in the database the whole time.
+  const quoRows = db.prepare(`
+    SELECT q.id, q.quotation_no AS order_no, q.date, c.name AS party_name, q.total, q.status, q.created_at
+    FROM quotations q LEFT JOIN customers c ON c.id = q.customer_id
+    WHERE 1 = 1${range.sql("q.date")}
+  `).all(...range.params()).map(r => ({ ...r, type: "Quotation" }));
+
+  const rows = [...poRows, ...soRows, ...quoRows].sort((a, b) => b.created_at - a.created_at);
   res.json(rows);
 });
 
@@ -1175,13 +1185,27 @@ function buildReportRows(req) {
   // and pressing Export gave a spreadsheet containing nothing.
   else if (type === "Orders") {
     filename = "orders-report";
-    rows = [["Order No", "Date", "Customer", "Status", "Total"]];
+    // The same three document types the on-screen Orders report shows, so a
+    // download can never be missing rows the screen just listed.
+    rows = [["Type", "No.", "Date", "Party", "Status", "Total"]];
+    const allOrders = [];
     db.prepare(`
-      SELECT so.*, c.name AS customer_name FROM sales_orders so
-      LEFT JOIN customers c ON c.id = so.customer_id
-      WHERE 1=1${range.sql("so.date")} ORDER BY so.created_at DESC
-    `).all(...range.params())
-      .forEach(o => rows.push([o.order_no, o.date, o.customer_name || "", o.status || "", round2(o.total)]));
+      SELECT q.quotation_no AS no, q.date, c.name AS party, q.status, q.total, q.created_at
+      FROM quotations q LEFT JOIN customers c ON c.id = q.customer_id
+      WHERE 1=1${range.sql("q.date")}
+    `).all(...range.params()).forEach(r => allOrders.push({ ...r, docType: "Quotation" }));
+    db.prepare(`
+      SELECT so.so_no AS no, so.date, c.name AS party, so.status, so.total, so.created_at
+      FROM sales_orders so LEFT JOIN customers c ON c.id = so.customer_id
+      WHERE 1=1${range.sql("so.date")}
+    `).all(...range.params()).forEach(r => allOrders.push({ ...r, docType: "Sales Order" }));
+    db.prepare(`
+      SELECT po.po_no AS no, po.date, s.name AS party, po.status, po.total, po.created_at
+      FROM purchase_orders po LEFT JOIN suppliers s ON s.id = po.supplier_id
+      WHERE 1=1${range.sql("po.date")}
+    `).all(...range.params()).forEach(r => allOrders.push({ ...r, docType: "Purchase Order" }));
+    allOrders.sort((x, y) => y.created_at - x.created_at)
+      .forEach(r => rows.push([r.docType, r.no, r.date, r.party || "", r.status || "", round2(r.total)]));
   } else if (type === "PartyProduct") {
     filename = "party-wise-product";
     rows = [["Customer", "Product", "Size", "Qty", "Amount"]];

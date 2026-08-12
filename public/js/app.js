@@ -5311,13 +5311,27 @@ async function renderChallanReport(body){
 }
 async function renderOrdersReport(body){
   const rows = await api("GET","/reports/orders"+reportRangeQS());
-  body.innerHTML = `<div style="font-weight:800;font-size:14px;">Orders Report</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every Purchase Order and Sales Order, newest first — tap a row to open it</div>` +
+  // Three document types share this list, so the row attribute, the type pill
+  // and the status pill all key off r.type rather than a Sales/not-Sales guess.
+  const openAttr = r => r.type==="Sales" ? `data-open-so="${r.id}"`
+                    : r.type==="Quotation" ? `data-open-quotation="${r.id}"`
+                    : `data-open-po="${r.id}"`;
+  const typePill = r => r.type==="Sales" ? "ok" : r.type==="Quotation" ? "" : "warn";
+  const statusPill = r => (r.type==="Sales" ? SO_STATUS_PILL
+                         : r.type==="Quotation" ? QUOTATION_STATUS_PILL
+                         : PO_STATUS_PILL)[r.status] || "";
+  const partyFallback = r => r.type==="Purchase" ? "Unknown Supplier" : "Walk-in";
+
+  body.innerHTML = `<div style="font-weight:800;font-size:14px;">Orders Report</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every Quotation, Purchase Order and Sales Order, newest first — tap a row to open it</div>` +
     (rows.length ? rows.map(r=>`
-      <div class="list-row" style="cursor:pointer;" ${r.type==="Sales"?`data-open-so="${r.id}"`:`data-open-po="${r.id}"`}><div>
-        <div class="row-title">${escapeHtml(r.order_no)} <span class="pill ${r.type==="Sales"?"ok":"warn"}" style="font-size:9.5px;">${r.type}</span></div>
-        <div class="row-sub">${escapeHtml(r.date)} · ${escapeHtml(r.party_name||(r.type==="Sales"?"Walk-in":"Unknown Supplier"))}</div>
-      </div><div class="row-right"><div class="row-title">${fmt(r.total)}</div><span class="pill ${(r.type==="Sales"?SO_STATUS_PILL:PO_STATUS_PILL)[r.status]||''}">${escapeHtml(r.status)}</span></div></div>
-    `).join("") : `<div class="empty-hint">No orders recorded yet.</div>`);
+      <div class="list-row" style="cursor:pointer;" ${openAttr(r)}><div>
+        <div class="row-title">${escapeHtml(r.order_no)} <span class="pill ${typePill(r)}" style="font-size:9.5px;">${r.type}</span></div>
+        <div class="row-sub">${escapeHtml(r.date)} · ${escapeHtml(r.party_name||partyFallback(r))}</div>
+      </div><div class="row-right"><div class="row-title">${fmt(r.total)}</div><span class="pill ${statusPill(r)}">${escapeHtml(r.status)}</span></div></div>
+    `).join("") : `<div class="empty-hint">No quotations or orders recorded yet.</div>`);
+  body.querySelectorAll("[data-open-quotation]").forEach(el=>{
+    el.addEventListener("click", ()=>openQuotationDetail(el.dataset.openQuotation));
+  });
   body.querySelectorAll("[data-open-po]").forEach(el=>{
     el.addEventListener("click", ()=>openPoDetail(el.dataset.openPo));
   });

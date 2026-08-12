@@ -734,3 +734,16 @@ nav.bottom .tab span:last-child{
 /* Row-level actions on the Financial Year list. .btn is full-width on this
    app, which would stack these one per line and bury the list. */
 .fy-mini{width:auto;padding:7px 12px;font-size:12px;}
+
+/* The product picker on Billing, Purchase, Purchase Order, Quotation and
+   Sales Order. It was a fixed 260px on all five — under four rows, so
+   picking anything meant scrolling a tiny window inside a long form.
+   Now it grows with the screen: a laptop or tablet shows roughly twice as
+   many rows, while the min keeps it usable on a short phone and the max
+   stops it swallowing the whole page on a large monitor. */
+.product-picker{
+  max-height:clamp(300px, 60vh, 700px);
+  overflow-y:auto;
+  margin-top:8px;
+  -webkit-overflow-scrolling:touch;
+}

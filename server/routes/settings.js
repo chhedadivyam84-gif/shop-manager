@@ -23,19 +23,20 @@ const cleanTheme = (v, fallback) => (PRINT_THEMES.includes(v) ? v : fallback);
 
 router.put("/", requireRole("owner"), (req, res) => {
   const { businessName, tagline, address, phones, gstin, state, upiId, email, website,
-          invoiceTheme, challanTheme } = req.body;
+          invoiceTheme, challanTheme, allowNegativeStock } = req.body;
   const current = db.prepare("SELECT * FROM settings WHERE id = 1").get();
 
   db.prepare(`
     UPDATE settings SET business_name=?, tagline=?, address=?, phones=?, gstin=?, state=?, upi_id=?, email=?, website=?,
-      invoice_theme=?, challan_theme=? WHERE id=1
+      invoice_theme=?, challan_theme=?, allow_negative_stock=? WHERE id=1
   `).run(
     (businessName || current.business_name).trim(), (tagline ?? current.tagline),
     (address ?? current.address), (phones ?? current.phones), (gstin ?? current.gstin),
     (state ?? current.state), (upiId ?? current.upi_id),
     (email ?? current.email), (website ?? current.website),
     invoiceTheme === undefined ? (current.invoice_theme || "classic") : cleanTheme(invoiceTheme, current.invoice_theme || "classic"),
-    challanTheme === undefined ? (current.challan_theme || "classic") : cleanTheme(challanTheme, current.challan_theme || "classic")
+    challanTheme === undefined ? (current.challan_theme || "classic") : cleanTheme(challanTheme, current.challan_theme || "classic"),
+    allowNegativeStock === undefined ? current.allow_negative_stock : (allowNegativeStock ? 1 : 0)
   );
 
   logAction(req, "settings.update", "");

@@ -12,6 +12,35 @@ function getSettingsRow() {
   return db.prepare("SELECT * FROM settings WHERE id = 1").get();
 }
 
+/* Whether a sale may take stock below zero.
+   Real shops receive goods before anyone types the purchase in, so the shelf
+   figure is routinely behind reality and refusing the bill stops the counter
+   dead. With this on, the sale goes through and the shortfall shows as
+   negative stock — which is a visible, fixable discrepancy, unlike a sale
+   that never got recorded. */
+function negativeStockAllowed() {
+  return (getSettingsRow() || {}).allow_negative_stock === 1;
+}
+
+/* The single stock check for selling. Both the create and the edit path call
+   this, so the two can't drift into disagreeing about what is sellable.
+   Returns an error message, or null when the sale may proceed. */
+function checkSellableStock(piecesBySize, location) {
+  if (negativeStockAllowed()) return null;
+  const locationName = inventory.getLocationById(location).name;
+  for (const [sizeId, pieces] of Object.entries(piecesBySize)) {
+    const size = db.prepare("SELECT * FROM product_sizes WHERE id = ?").get(sizeId);
+    const product = db.prepare("SELECT * FROM products WHERE id = ?").get(size.product_id);
+    const atLocation = inventory.getStock(Number(sizeId), location);
+    if (pieces > atLocation) {
+      return `Not enough ${locationName} stock for ${product.name} (${size.label}). `
+        + `Available: ${atLocation} ${product.unit || "Pc"}, needed: ${pieces}. `
+        + `An owner can allow this in Settings → Allow Negative Stock.`;
+    }
+  }
+  return null;
+}
+
 // A sale defaults to deducting Shop stock, but staff can pick Warehouse
 // instead per-document (requirement: "sale to warehouse") — mirrors
 // purchases.js's resolveLocationId, just defaulting to Shop instead of
@@ -250,17 +279,8 @@ router.post("/", (req, res) => {
       ...calc
     });
   }
-  const locationName = inventory.getLocationById(location).name;
-  for (const [sizeId, pieces] of Object.entries(piecesBySize)) {
-    const size = db.prepare("SELECT * FROM product_sizes WHERE id = ?").get(sizeId);
-    const product = db.prepare("SELECT * FROM products WHERE id = ?").get(size.product_id);
-    const atLocation = inventory.getStock(Number(sizeId), location);
-    if (pieces > atLocation) {
-      return res.status(400).json({
-        error: `Not enough ${locationName} stock for ${product.name} (${size.label}). Available: ${atLocation} ${product.unit || "Pc"}, needed: ${pieces}.`
-      });
-    }
-  }
+  const stockProblem = checkSellableStock(piecesBySize, location);
+  if (stockProblem) return res.status(400).json({ error: stockProblem });
 
   // A delivery challan is never a tax invoice: no GST, no discount, no
   // round-off, no advance, and nothing added to the customer's due —
@@ -445,15 +465,11 @@ router.put("/:id", (req, res) => {
         gstRate: product.gst_rate, product, size, ...calc
       });
     }
-    const newLocationName = inventory.getLocationById(newLocation).name;
-    for (const [sizeId, pieces] of Object.entries(piecesBySize)) {
-      const size = db.prepare("SELECT * FROM product_sizes WHERE id = ?").get(sizeId);
-      const product = db.prepare("SELECT * FROM products WHERE id = ?").get(size.product_id);
-      const atLocation = inventory.getStock(Number(sizeId), newLocation);
-      if (pieces > atLocation) {
-        throw { status: 400, error: `Not enough ${newLocationName} stock for ${product.name} (${size.label}). Available: ${atLocation} ${product.unit || "Pc"}, needed: ${pieces}.` };
-      }
-    }
+    // Same check as the create path, through the same helper — the stock this
+    // edit is measured against has already had the original lines put back
+    // above, so it reflects what would really be on the shelf.
+    const editStockProblem = checkSellableStock(piecesBySize, newLocation);
+    if (editStockProblem) throw { status: 400, error: editStockProblem };
 
     const challanTransport = round2(Math.max(0, Number(transport) || 0));
     const challanLoading = round2(Math.max(0, Number(loading) || 0));

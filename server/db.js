@@ -1276,6 +1276,11 @@ addColumn("settings", "challan_theme", "TEXT NOT NULL DEFAULT 'classic'");
 // living in the database rides along with the ordinary backup instead of
 // needing a second restore path of its own.
 addColumn("settings", "logo_data", "TEXT DEFAULT ''");
+// Allow a sale or challan to go out when the shelf figure says there isn't
+// enough. Real shops receive goods before anyone enters the purchase, and
+// refusing the bill stops the counter dead. OFF by default so no existing
+// shop's behaviour changes until its owner asks for it.
+addColumn("settings", "allow_negative_stock", "INTEGER NOT NULL DEFAULT 0");
 // Per-report print preferences (paper, orientation, margins, chosen columns,
 // with/without rate), as JSON keyed by report id. One column rather than a
 // dozen: the set of options will keep growing, and every new one would

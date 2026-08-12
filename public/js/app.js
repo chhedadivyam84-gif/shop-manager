@@ -108,6 +108,11 @@ function stockLevel(stock){
   return "ok";
 }
 function stockLabel(stock){
+  // A negative figure is NOT the same as empty and must never be flattened
+  // into "Out of stock" — it says goods left the shop that were never
+  // booked in, and the number is how many. Hiding it hides the correction
+  // someone still owes the stock register.
+  if(stock<0) return "Short by "+Math.abs(stock);
   if(stock<=0) return "Out of stock";
   if(stock<5) return "Low: "+stock;
   if(stock<15) return "Medium: "+stock;
@@ -817,6 +822,37 @@ async function loadProducts(){ state.products = await api("GET","/products"); }
 function sellableProducts(){
   return state.products.filter(p => p.active !== 0);
 }
+
+/* Mirrors the server's own rule (settings.allow_negative_stock). The server
+   is still the one that enforces it — this only decides whether the UI
+   should block the user early or let them through with a warning. */
+function negativeStockAllowed(){
+  return (state.settings || {}).allow_negative_stock === 1;
+}
+
+/* Sizes the cart asks for more of than the selling location holds.
+   Totals PER SIZE, not per line: the same size can legitimately appear on
+   several lines (different cut sizes off one board), and two lines of 3
+   against a shelf of 5 is a shortfall even though neither line alone is.
+   The server aggregates the same way, so the two agree. */
+function cartStockShortfalls(){
+  const needBySize = new Map();
+  state.cart.forEach(c=>{
+    if(c.sizeId == null) return;
+    needBySize.set(c.sizeId, (needBySize.get(c.sizeId) || 0) + (Number(c.pieces) || 0));
+  });
+  const short = [];
+  needBySize.forEach((need, sizeId)=>{
+    const p = state.products.find(x=>(x.sizes||[]).some(s=>s.id===sizeId));
+    if(!p) return;
+    const size = p.sizes.find(s=>s.id===sizeId);
+    const avail = billingLocationStock(size);
+    if(need > avail){
+      short.push({ name: p.name, size: size.label, need, have: avail, unit: p.unit||"Pc" });
+    }
+  });
+  return short;
+}
 async function loadCustomers(){ state.customers = await api("GET","/customers"); }
 async function loadSuppliers(){ state.suppliers = await api("GET","/suppliers"); }
 async function loadLocations(){ state.locations = await api("GET","/locations"); }
@@ -979,7 +1015,9 @@ function renderBillingProducts(){
     const shopTotal = p.sizes.reduce((s,sz)=>s+sizeShopStock(sz),0);
     const warehouseTotal = p.sizes.reduce((s,sz)=>s+sizeWarehouseStock(sz),0);
     const sellableTotal = p.sizes.reduce((s,sz)=>s+billingLocationStock(sz),0);
-    const out = sellableTotal<=0;
+    // Only hide the quick-add "+" when the shop actually refuses to sell
+    // below zero; otherwise the row still needs its add button.
+    const out = sellableTotal<=0 && !negativeStockAllowed();
     const stockLine = `&#127978; Shop: ${shopTotal}${warehouseTotal>0?` · &#127974; Warehouse: ${warehouseTotal}`:""}`;
     return `<div class="list-row" data-open-product="${p.id}" style="cursor:pointer;">
       <div class="swatch"></div>
@@ -1014,7 +1052,14 @@ function addToCart(productId, sizeIdx){
   // the specific size, not the product as a whole.
   const existing = state.cart.find(c=>c.sizeId===size.id);
   const piecesForSize = state.cart.filter(c=>c.sizeId===size.id).reduce((s,c)=>s+(c.pieces||0),0);
-  if(piecesForSize >= billingLocationStock(size)){ return false; }
+  // The cap only applies when the shop refuses to go negative. It used to
+  // return false in silence, so a counter tap simply did nothing and nobody
+  // could tell why — say what's wrong instead.
+  if(piecesForSize >= billingLocationStock(size) && !negativeStockAllowed()){
+    const locName = (state.locations.find(l=>l.id===state.billingLocationId)||{}).name || "Shop";
+    toast(`No more ${p.name} (${size.label}) in ${locName} — ${billingLocationStock(size)} available.`);
+    return false;
+  }
   if(existing){ existing.pieces += 1; }
   else{
     state.cart.push({
@@ -1605,6 +1650,26 @@ async function completeSale(){
     }, c.name);
     if(bad){ toast(bad); return; }
   }
+
+  /* Insufficient stock. When negative stock is blocked the server refuses
+     anyway, so say so here rather than after a round trip. When it's allowed
+     the sale may proceed — but never silently: the person at the counter is
+     told exactly which lines go short and by how much, and can still stop. */
+  const short = cartStockShortfalls();
+  if(short.length){
+    const locName = (state.locations.find(l=>l.id===state.billingLocationId)||{}).name || "Shop";
+    const lines = short.map(s=>`  • ${s.name} (${s.size}) — need ${s.need} ${s.unit}, ${locName} has ${s.have}`).join("\n");
+    if(!negativeStockAllowed()){
+      alert(`Not enough ${locName} stock:\n\n${lines}\n\n` +
+        `Record the purchase or transfer stock in first.\n` +
+        `The owner can allow selling below zero in Settings → Stock Rules.`);
+      return;
+    }
+    if(!confirm(`Available stock is insufficient:\n\n${lines}\n\n` +
+      `Continuing will take ${locName} stock below zero for ${short.length===1?"this item":"these items"}. ` +
+      `Fix it later by recording the purchase that hasn't been entered yet.\n\nDo you want to continue?`)) return;
+  }
+
   const btn = document.getElementById("complete-sale-btn");
   btn.disabled = true;
   const editingId = state.editingInvoiceId;
@@ -1861,7 +1926,18 @@ function renderProductDetailSheet(context){
     ${context==="billing" ? (
       !p.sizes.length
         ? `<button class="btn btn-gold" id="add-to-invoice-btn" style="margin-top:14px;" disabled>No price set — tap Edit below</button>`
-        : `<button class="btn btn-gold" id="add-to-invoice-btn" style="margin-top:14px;" ${billingLocationStock(selectedSize)<=0?"disabled":""}>${billingLocationStock(selectedSize)<=0?"Out of stock at this location":"Add to Invoice"}</button>`
+        : (()=>{
+            // With negative stock allowed the button stays live even at zero —
+            // the shelf figure is often just behind reality. The warning comes
+            // when the sale is actually completed, not here, so someone can
+            // still build the bill and decide at the end.
+            const avail = billingLocationStock(selectedSize);
+            const blocked = avail <= 0 && !negativeStockAllowed();
+            const label = avail > 0 ? "Add to Invoice"
+              : blocked ? "Out of stock at this location"
+              : "Add to Invoice (no stock — will go negative)";
+            return `<button class="btn btn-gold" id="add-to-invoice-btn" style="margin-top:14px;" ${blocked?"disabled":""}>${label}</button>`;
+          })()
     ) : ""}
     ${context==="purchase" ? (
       !p.sizes.length
@@ -3723,6 +3799,22 @@ function openSettings(){
       <button class="btn btn-primary" id="st-save-themes" style="margin-top:14px;">Save Theme</button>
       <p class="muted" style="font-size:11px;margin-top:8px;">Open any bill and tap Print to see it. Nothing about the figures changes — only the look.</p>
 
+      <div class="section-title">Stock Rules</div>
+      <label class="pe-check" style="display:flex;align-items:flex-start;gap:8px;font-size:13px;font-weight:700;">
+        <input type="checkbox" id="st-allow-negative" ${(state.settings||{}).allow_negative_stock===1?"checked":""} style="margin-top:2px;">
+        <span>Allow Negative Stock</span>
+      </label>
+      <p class="muted" style="font-size:11px;margin-top:6px;">
+        Off — a bill or challan is refused when the shelf figure is short.<br>
+        On — the bill goes through and the shortfall shows as negative stock, in red, everywhere stock is reported.
+        Staff still get a warning first and can cancel.
+      </p>
+      <p class="muted" style="font-size:11px;margin-top:6px;">
+        Turn this on if goods often arrive before the purchase is entered — a sale that never gets recorded
+        is far harder to find later than a negative figure sitting in plain sight.
+      </p>
+      <button class="btn btn-primary" id="st-save-stock-rules" style="margin-top:10px;">Save Stock Rules</button>
+
       <div class="section-title">Printing</div>
       <div class="card" id="print-server-status"><div class="empty-hint">Checking printer…</div></div>
       <button class="btn btn-outline" id="st-recheck-print" style="margin-top:10px;">Recheck Printer</button>
@@ -3793,6 +3885,18 @@ function openSettings(){
           renderInvoicePageContent();
         }
         toast("Print theme saved.", "ok");
+      }catch(err){ toast(err.message); }
+    });
+
+    sheet.querySelector("#st-save-stock-rules").addEventListener("click", async ()=>{
+      const allow = sheet.querySelector("#st-allow-negative").checked;
+      try{
+        state.settings = await api("PUT","/settings", { allowNegativeStock: allow });
+        // The billing screen decides whether to grey out an out-of-stock
+        // product, so it has to be redrawn against the new rule immediately
+        // rather than staying stale until the next reload.
+        renderBillingProducts();
+        toast(allow ? "Negative stock allowed. Staff will still be warned first." : "Negative stock blocked.", "ok");
       }catch(err){ toast(err.message); }
     });
   }

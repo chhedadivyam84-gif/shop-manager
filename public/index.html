@@ -77,6 +77,7 @@
           <button class="qa-btn" data-goto="customers"><span class="ic">&#128100;</span>Customers</button>
           <button class="qa-btn" data-goto="reports"><span class="ic">&#128202;</span>Reports</button>
           <button class="qa-btn" data-goto="pquery"><span class="ic">&#128269;</span>Product Query</button>
+          <button class="qa-btn" data-goto="accounts"><span class="ic">&#129534;</span>Accounts</button>
           <button class="qa-btn" id="qa-payment"><span class="ic">&#128176;</span>Payment</button>
         </div>
 
@@ -436,6 +437,57 @@
         <button class="btn btn-gold" id="inq-add-btn" style="margin-top:12px;">+ New Inquiry</button>
         <div class="section-title">Inquiries</div>
         <div class="card" id="inquiries-list"></div>
+      </div>
+
+      <!-- ============ ACCOUNTS ============
+           A hub, not a new set of features. Receipts, Payments, Bank Entry
+           and Ledger open the flows that already exist rather than growing
+           second copies of them; only Other Income and Other Expenses are
+           screens in their own right. -->
+      <div class="screen" id="screen-accounts">
+        <a href="#" id="acc-back-link" class="muted" style="font-size:12px;font-weight:700;">&larr; Back to Home</a>
+        <div class="section-title" style="margin-top:10px;">Accounts</div>
+        <div class="quick-actions">
+          <button class="qa-btn" id="acc-receipts"><span class="ic">&#128176;</span>Receipts</button>
+          <button class="qa-btn" id="acc-payments"><span class="ic">&#128184;</span>Payments</button>
+          <button class="qa-btn" id="acc-other-income"><span class="ic">&#128229;</span>Other Income</button>
+          <button class="qa-btn" id="acc-other-expenses"><span class="ic">&#128228;</span>Other Expenses</button>
+          <button class="qa-btn" id="acc-bank-entry"><span class="ic">&#127974;</span>Bank Entry</button>
+          <button class="qa-btn" id="acc-ledger"><span class="ic">&#128210;</span>Ledger</button>
+        </div>
+
+        <div class="section-title">This Month</div>
+        <div class="stat-grid">
+          <div class="stat-card plain"><div class="label">Other Income</div><div class="value" id="acc-stat-income">₹0</div></div>
+          <div class="stat-card plain"><div class="label">Other Expenses</div><div class="value red" id="acc-stat-expense">₹0</div></div>
+          <div class="stat-card plain"><div class="label">Cash Balance</div><div class="value" id="acc-stat-cash">₹0</div></div>
+          <div class="stat-card plain"><div class="label">Bank Balance</div><div class="value" id="acc-stat-bank">₹0</div></div>
+        </div>
+        <p class="muted" style="font-size:11px;margin-top:10px;">
+          Other Income and Other Expenses are money in and out that is <strong>not</strong> a customer
+          receipt or a supplier payment — collecting a debt is not income. Everything entered here
+          lands on its own line in Reports &rarr; Profit &amp; Loss.
+        </p>
+      </div>
+
+      <!-- ============ OTHER INCOME / OTHER EXPENSES ============
+           One screen, two modes — the two differ only in which side of the
+           ledger they read and which category list they offer, so a single
+           renderer keeps them from drifting apart. -->
+      <div class="screen" id="screen-otherledger">
+        <a href="#" id="ol-back-link" class="muted" style="font-size:12px;font-weight:700;">&larr; Back to Accounts</a>
+        <div class="section-title" style="margin-top:10px;" id="ol-title">Other Income</div>
+        <div class="chip-row" id="ol-period-chips">
+          <button class="chip selected" data-ol-period="month">This Month</button>
+          <button class="chip" data-ol-period="lastmonth">Last Month</button>
+          <button class="chip" data-ol-period="year">This Year</button>
+          <button class="chip" data-ol-period="all">All</button>
+        </div>
+        <button class="btn btn-gold" id="ol-add-btn" style="margin-top:12px;">+ Add Entry</button>
+        <div class="section-title">By Category</div>
+        <div class="card" id="ol-by-category"></div>
+        <div class="section-title">Entries</div>
+        <div class="card" id="ol-list"></div>
       </div>
 
       <!-- PRODUCT QUERY -->

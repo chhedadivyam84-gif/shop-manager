@@ -807,15 +807,47 @@ const incomeCategoryNames = () => categoryNames("income");
 function ledgerMovements(range, direction) {
   const where = `voided = 0 AND type = ? AND COALESCE(source_type,'') = '' AND COALESCE(link_id,'') = ''`;
   const cash = db.prepare(
-    `SELECT date, amount, COALESCE(category,'') AS category, COALESCE(party,'') AS party, COALESCE(remarks,'') AS remarks
+    `SELECT id, 'cash' AS source, date, amount, COALESCE(category,'') AS category, COALESCE(party,'') AS party, COALESCE(remarks,'') AS remarks, created_at
      FROM cash_entries WHERE ${where}${range.sql("date")}`
   ).all(direction, ...range.params());
   const bank = db.prepare(
-    `SELECT date, amount, COALESCE(category,'') AS category, COALESCE(party,'') AS party, COALESCE(remarks,'') AS remarks
+    `SELECT id, 'bank' AS source, date, amount, COALESCE(category,'') AS category, COALESCE(party,'') AS party, COALESCE(remarks,'') AS remarks, created_at
      FROM bank_entries WHERE ${where}${range.sql("date")}`
   ).all(direction, ...range.params());
   return [...cash, ...bank];
 }
+
+/**
+ * The Other Income / Other Expenses screens.
+ *
+ * Deliberately the SAME ledgerMovements() the Profit & Loss uses, so the list
+ * on screen and the P&L line can never disagree about what counts. Customer
+ * receipts and supplier payments are excluded there (collecting a debtor is
+ * not income), and so they are excluded here — which is exactly what makes
+ * this "OTHER" income rather than all money in.
+ */
+router.get("/other-entries", (req, res) => {
+  const kind = req.query.kind === "income" ? "income" : "expense";
+  const range = dateRange(req);
+  const rows = ledgerMovements(range, kind === "income" ? "in" : "out")
+    .sort((a, b) => (b.date || "").localeCompare(a.date || "") || b.created_at - a.created_at);
+  const total = round2(rows.reduce((s, r) => s + (Number(r.amount) || 0), 0));
+
+  /* Grouped through the SAME canonical names the P&L uses, case-folded.
+     Grouping on the raw string instead listed "Salary 25,000" and
+     "salary 900" as two rows while the P&L showed one line of 25,900 —
+     the same money described two different ways on two screens. */
+  const canonical = new Map();
+  categoryNames(kind).forEach(n => canonical.set(n.trim().toLowerCase(), n));
+  const byCategory = {};
+  rows.forEach(r => {
+    const key = String(r.category || "").trim().toLowerCase();
+    const k = canonical.get(key) || (key ? (r.category || "").trim() : "Uncategorised");
+    byCategory[k] = round2((byCategory[k] || 0) + (Number(r.amount) || 0));
+  });
+
+  res.json({ kind, rows, total, byCategory, period: { from: range.from || "", to: range.to || "" } });
+});
 
 /**
  * Profit & Loss for a period.

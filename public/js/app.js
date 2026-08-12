@@ -579,6 +579,7 @@ async function initApp(){
   document.getElementById("pq-print-btn").addEventListener("click", ()=>openPrintPreview(productQueryDoc()));
   document.getElementById("pq-export-btn").addEventListener("click", exportProductQuery);
   wirePrintEngine();
+  wireAccounts();
   document.getElementById("pq-q").addEventListener("keydown", (e)=>{ if(e.key==="Enter") runProductQuery(); });
   document.getElementById("pq-advanced-btn").addEventListener("click", ()=>{
     const adv = document.getElementById("pq-advanced");
@@ -794,7 +795,7 @@ async function switchTab(tab){
   document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));
   document.getElementById("screen-"+tab).classList.add("active");
   document.querySelectorAll("nav.bottom .tab").forEach(t=>t.classList.toggle("active", t.dataset.tab===tab));
-  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",quotation:"Quotation",so:"Sales Order",pquery:"Product Query"};
+  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",quotation:"Quotation",so:"Sales Order",pquery:"Product Query",accounts:"Accounts",otherledger:(state.olKind==="income"?"Other Income":"Other Expenses")};
   document.getElementById("hdr-sub").textContent = subMap[tab];
   document.getElementById("hdr-main").textContent = tab==="home" ? greeting() : subMap[tab];
   if(tab==="billing") await renderBilling();
@@ -809,6 +810,8 @@ async function switchTab(tab){
   if(tab==="quotation") await renderQuotationScreen();
   if(tab==="so") await renderSoScreen();
   if(tab==="pquery") await renderPqScreen();
+  if(tab==="accounts") await renderAccountsScreen();
+  if(tab==="otherledger") await renderOtherLedger();
 }
 
 async function renderAll(){
@@ -9715,6 +9718,111 @@ function openTransferStock(p){
 
   render();
   showSheet("sheet-transfer-stock");
+}
+
+/* ============================================================
+   ACCOUNTS
+   A hub over what already exists. Receipts, Payments, Bank Entry and
+   Ledger open the flows the app already has rather than growing second
+   copies; only Other Income and Other Expenses are screens of their own.
+   ============================================================ */
+state.olKind = "income";
+state.olPeriod = "month";
+
+/* From/To for the period chips, as the report routes expect them. */
+function olRangeQS(){
+  const d = new Date();
+  const iso = x => isoDate(x);
+  if(state.olPeriod === "all") return "";
+  if(state.olPeriod === "year"){
+    // Financial year, not calendar — the shop's own, from Settings.
+    const startMonth = ((state.settings||{}).fy_start_month || 4) - 1;
+    const y = d.getMonth() < startMonth ? d.getFullYear()-1 : d.getFullYear();
+    return `?from=${iso(new Date(y, startMonth, 1))}&to=${iso(d)}`;
+  }
+  if(state.olPeriod === "lastmonth"){
+    const from = new Date(d.getFullYear(), d.getMonth()-1, 1);
+    const to = new Date(d.getFullYear(), d.getMonth(), 0);
+    return `?from=${iso(from)}&to=${iso(to)}`;
+  }
+  return `?from=${iso(new Date(d.getFullYear(), d.getMonth(), 1))}&to=${iso(d)}`;
+}
+
+async function renderAccountsScreen(){
+  const thisMonth = `?from=${isoDate(new Date(new Date().getFullYear(), new Date().getMonth(), 1))}&to=${isoDate(new Date())}`;
+  try{
+    const [inc, exp, dash] = await Promise.all([
+      api("GET", "/reports/other-entries" + thisMonth + "&kind=income"),
+      api("GET", "/reports/other-entries" + thisMonth + "&kind=expense"),
+      api("GET", "/reports/dashboard")
+    ]);
+    document.getElementById("acc-stat-income").textContent  = fmt(inc.total);
+    document.getElementById("acc-stat-expense").textContent = fmt(exp.total);
+    document.getElementById("acc-stat-cash").textContent    = fmt(dash.cashBalance || 0);
+    document.getElementById("acc-stat-bank").textContent    = fmt(dash.bankBalance || 0);
+  }catch(e){ /* the tiles are a summary; the buttons below still work */ }
+}
+
+function openOtherLedger(kind){
+  state.olKind = kind === "income" ? "income" : "expense";
+  switchTab("otherledger");
+}
+
+async function renderOtherLedger(){
+  const income = state.olKind === "income";
+  document.getElementById("ol-title").textContent = income ? "Other Income" : "Other Expenses";
+  document.getElementById("ol-add-btn").textContent = income ? "+ Add Income Entry" : "+ Add Expense Entry";
+  document.querySelectorAll("[data-ol-period]").forEach(b=>
+    b.classList.toggle("selected", b.dataset.olPeriod === state.olPeriod));
+
+  const listEl = document.getElementById("ol-list");
+  const catEl = document.getElementById("ol-by-category");
+  listEl.innerHTML = `<div class="empty-hint">Loading…</div>`;
+
+  let data;
+  const qs = olRangeQS();
+  try{
+    data = await api("GET", `/reports/other-entries${qs ? qs+"&" : "?"}kind=${state.olKind}`);
+  }catch(e){ listEl.innerHTML = `<div class="empty-hint">Could not load: ${escapeHtml(e.message||"")}</div>`; return; }
+
+  const cats = Object.entries(data.byCategory).filter(([,v])=>v!==0).sort((a,b)=>b[1]-a[1]);
+  catEl.innerHTML = cats.length
+    ? cats.map(([k,v])=>`<div class="list-row"><div class="row-title">${escapeHtml(k)}</div>
+        <div class="row-right"><div class="row-title">${fmt(v)}</div></div></div>`).join("") +
+      `<div class="list-row" style="border-top:2px solid var(--border);">
+        <div class="row-title">Total</div><div class="row-right"><div class="row-title">${fmt(data.total)}</div></div></div>`
+    : `<div class="empty-hint">Nothing in this period.</div>`;
+
+  listEl.innerHTML = data.rows.length ? data.rows.map(r=>`
+    <div class="list-row">
+      <div><div class="row-title">${escapeHtml(r.category || "Uncategorised")}</div>
+        <div class="row-sub">${escapeHtml(r.date)} · ${escapeHtml(r.source === "bank" ? "Bank" : "Cash")}${
+          r.party ? " · "+escapeHtml(r.party) : ""}${r.remarks ? " · "+escapeHtml(r.remarks) : ""}</div></div>
+      <div class="row-right"><div class="row-title">${fmt(r.amount)}</div></div>
+    </div>`).join("") : `<div class="empty-hint">No entries in this period.</div>`;
+}
+
+function wireAccounts(){
+  document.getElementById("acc-back-link").addEventListener("click", e=>{ e.preventDefault(); switchTab("home"); });
+  document.getElementById("ol-back-link").addEventListener("click", e=>{ e.preventDefault(); switchTab("accounts"); });
+
+  // These four open what already exists rather than duplicating it.
+  document.getElementById("acc-receipts").addEventListener("click", openQuickPayment);
+  document.getElementById("acc-payments").addEventListener("click", openQuickPayment);
+  document.getElementById("acc-bank-entry").addEventListener("click", ()=>switchTab("bankbook"));
+  document.getElementById("acc-ledger").addEventListener("click", ()=>switchTab("customers"));
+
+  document.getElementById("acc-other-income").addEventListener("click", ()=>openOtherLedger("income"));
+  document.getElementById("acc-other-expenses").addEventListener("click", ()=>openOtherLedger("expense"));
+
+  document.querySelectorAll("[data-ol-period]").forEach(b=>{
+    b.addEventListener("click", ()=>{ state.olPeriod = b.dataset.olPeriod; renderOtherLedger(); });
+  });
+  // Reuses the Cash Book's own entry sheet — same validation, same posting,
+  // one place where a cash entry is created.
+  document.getElementById("ol-add-btn").addEventListener("click", ()=>{
+    openCashEntry(state.olKind === "income" ? "in" : "out");
+  });
 }
 
 /* ============================================================

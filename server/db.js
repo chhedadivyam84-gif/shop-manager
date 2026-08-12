@@ -1039,6 +1039,12 @@ addColumn("products", "opening_stock_date", "TEXT DEFAULT ''");
 // Barcode and Sub-Category exist for the Product Query screen, which searches
 // on both. Added as plain optional text: a shop that never scans barcodes or
 // splits a category leaves them blank and nothing changes.
+// Active/Inactive is the ordinary way to retire a product — deleting one that
+// has been sold is the exception, not the routine. Customers and suppliers
+// already worked this way; products were the odd one out, which left deletion
+// as the only option a user had for "stop offering this".
+// Defaults to 1 so every existing product stays exactly as it is.
+addColumn("products", "active", "INTEGER NOT NULL DEFAULT 1");
 addColumn("products", "barcode", "TEXT DEFAULT ''");
 addColumn("products", "sub_category", "TEXT DEFAULT ''");
 

@@ -806,6 +806,17 @@ async function renderAll(){
   if(tab==="reports") await renderReport();
 }
 async function loadProducts(){ state.products = await api("GET","/products"); }
+
+/* Products offered when STARTING a new document — bill, purchase, PO,
+   quotation, sales order. Retired products are left out here and nowhere
+   else: Inventory, Product Query and every report still show them, because
+   an inactive product can still be holding stock worth money and still
+   appears throughout last year's history.
+   One helper rather than the same filter copied into five pickers — the
+   next picker added gets this behaviour for free instead of forgetting it. */
+function sellableProducts(){
+  return state.products.filter(p => p.active !== 0);
+}
 async function loadCustomers(){ state.customers = await api("GET","/customers"); }
 async function loadSuppliers(){ state.suppliers = await api("GET","/suppliers"); }
 async function loadLocations(){ state.locations = await api("GET","/locations"); }
@@ -956,7 +967,7 @@ function renderBillingLocationChips(){
 }
 function renderBillingProducts(){
   const q = (document.getElementById("billing-search").value||"").toLowerCase();
-  const list = state.products.filter(p=>
+  const list = sellableProducts().filter(p=>
     !q || p.name.toLowerCase().includes(q) || (p.brand||"").toLowerCase().includes(q) || (p.sku||"").toLowerCase().includes(q)
   );
   const wrap = document.getElementById("billing-product-list");
@@ -1713,9 +1724,9 @@ async function renderInventoryList(){
   document.getElementById("inventory-list").innerHTML = `<div class="card">` + (list.length ? list.map(p=>{
     const priceLabel = !p.sizes.length ? "⚠ No price — tap Edit" : (p.sizes.length>1 ? "From "+fmt(Math.min(...p.sizes.map(s=>s.price))) : fmt(p.sizes[0].price));
     const locStock = productLocationStock(p, state.invLocationCode);
-    return `<div class="list-row" data-open-inv-product="${p.id}" style="cursor:pointer;">
+    return `<div class="list-row" data-open-inv-product="${p.id}" style="cursor:pointer;${p.active===0?'opacity:0.55;':''}">
       <div class="swatch"></div>
-      <div><div class="row-title">${escapeHtml(p.name)}</div><div class="row-sub">${escapeHtml(p.brand||"")} · ${priceLabel}</div></div>
+      <div><div class="row-title">${escapeHtml(p.name)}${p.active===0?' <span class="pill">Inactive</span>':''}</div><div class="row-sub">${escapeHtml(p.brand||"")} · ${priceLabel}</div></div>
       <div class="row-right">
         <span class="pill ${stockLevel(locStock)}">${stockLabel(locStock)}</span>
         <div class="muted" style="font-size:10px;margin-top:2px;">Total: ${p.stock}</div>
@@ -1811,7 +1822,7 @@ function renderProductDetailSheet(context){
   sheet.innerHTML = `
     <div class="sheet-handle"></div>
     <button class="sheet-close" data-sheetclose>✕</button>
-    <div class="sheet-title">${escapeHtml(p.name)}</div>
+    <div class="sheet-title">${escapeHtml(p.name)}${p.active===0?' <span class="pill">Inactive</span>':''}</div>
     <div class="muted" style="font-size:12px;margin-bottom:8px;">${escapeHtml(p.brand||"")} · ${escapeHtml(p.category||"")}</div>
     <span class="pill ${stockLevel(p.stock)}">${p.stock} ${escapeHtml(p.unit||"")} total, all sizes</span>
 
@@ -1877,9 +1888,19 @@ function renderProductDetailSheet(context){
       <button class="btn btn-outline" id="edit-product-btn">✎ Edit</button>
       <button class="btn btn-outline" id="duplicate-product-btn">⧉ Duplicate</button>
     </div>
-    ${isOwner() ? `<div style="margin-top:12px;text-align:center;">
-      <a href="#" id="delete-product-link" class="btn-danger-link">Delete this product</a>
-    </div>` : `<div class="muted" style="margin-top:12px;font-size:11px;text-align:center;">Only the owner can delete a product.</div>`}
+    ${isOwner() ? `
+      <button class="btn btn-outline" id="toggle-active-btn" style="width:100%;margin-top:8px;">
+        ${p.active===0 ? "&#10004; Make Active again" : "&#9209; Mark Inactive (stop offering it)"}
+      </button>
+      <div class="muted" style="font-size:11px;margin-top:6px;text-align:center;">
+        ${p.active===0
+          ? "Hidden from new bills, purchases and orders. Its stock and history are untouched."
+          : "Marking inactive keeps all stock, history and reports — it just stops appearing when you start a new bill."}
+      </div>
+      <div style="margin-top:12px;text-align:center;">
+        <a href="#" id="delete-product-link" class="btn-danger-link">Delete this product permanently</a>
+      </div>`
+    : `<div class="muted" style="margin-top:12px;font-size:11px;text-align:center;">Only the owner can retire or delete a product.</div>`}
   `;
   const stockArea = sheet.querySelector("#stock-editor-area");
   if(context==="inventory"){
@@ -1992,6 +2013,23 @@ function renderProductDetailSheet(context){
     finally{ btn.disabled = false; }
   });
 
+  const toggleActiveBtn = sheet.querySelector("#toggle-active-btn");
+  if(toggleActiveBtn) toggleActiveBtn.addEventListener("click", async ()=>{
+    const makeActive = p.active === 0;
+    if(!makeActive && !confirm(
+      `Mark "${p.name}" inactive?\n\n` +
+      `It will stop appearing when you start a new bill, purchase, quotation or order.\n\n` +
+      `Nothing is lost — its stock, past invoices, ledger and every report stay exactly as they are, ` +
+      `and you can make it active again at any time.`
+    )) return;
+    try{
+      await api("PATCH", `/products/${p.id}/active`, { active: makeActive });
+      await loadProducts();
+      closeAllSheets(); renderInventoryList(); renderBillingProducts();
+      toast(makeActive ? "Product is active again." : "Product marked inactive.", "ok");
+    }catch(err){ toast(err.message); }
+  });
+
   const deleteProductLink = sheet.querySelector("#delete-product-link");
   if(deleteProductLink) deleteProductLink.addEventListener("click", async (e)=>{
     e.preventDefault();
@@ -2014,8 +2052,10 @@ function renderProductDetailSheet(context){
     if(invoiceCount > 0){
       const step1 = confirm(
         `"${p.name}" has been used in ${invoiceCount} sale line${invoiceCount>1?"s":""} and normally can't be deleted, to keep those invoices accurate.\n\n` +
-        `Force Delete removes it anyway. Those ${invoiceCount} past invoice${invoiceCount>1?"s":""} will still print exactly as issued (they keep their own copy of the name, size and rate) — but they'll lose their live link to this product, which can affect future profit/cost lookups for those sale lines.\n\n` +
-        `This cannot be undone. Force delete "${p.name}"?`
+        `USE "MARK INACTIVE" INSTEAD.\n` +
+        `That hides it from new bills while keeping every invoice, ledger entry and report intact. It is the right answer almost every time, and it is reversible.\n\n` +
+        `Force Delete removes it anyway. Those ${invoiceCount} past invoice${invoiceCount>1?"s":""} will still print exactly as issued (they keep their own copy of the name, size and rate) — but they'll lose their live link to this product, so profit and cost lookups for those sale lines will no longer resolve.\n\n` +
+        `This cannot be undone. Force delete "${p.name}" anyway?`
       );
       if(!step1) return;
       const step2 = confirm(`Last check — permanently delete "${p.name}" and detach it from ${invoiceCount} past sale${invoiceCount>1?"s":""}? This is not reversible.`);
@@ -6624,7 +6664,7 @@ function renderPurchaseSupplierInfo(){
 }
 function renderPurchaseProducts(){
   const q = (document.getElementById("pur-search").value||"").toLowerCase();
-  const list = state.products.filter(p=>
+  const list = sellableProducts().filter(p=>
     !q || p.name.toLowerCase().includes(q) || (p.brand||"").toLowerCase().includes(q) || (p.sku||"").toLowerCase().includes(q)
   );
   const wrap = document.getElementById("pur-product-list");
@@ -7245,7 +7285,7 @@ function renderPoSupplierInfo(){
 }
 function renderPoProducts(){
   const q = (document.getElementById("po-search").value||"").toLowerCase();
-  const list = state.products.filter(p=>
+  const list = sellableProducts().filter(p=>
     !q || p.name.toLowerCase().includes(q) || (p.brand||"").toLowerCase().includes(q) || (p.sku||"").toLowerCase().includes(q)
   );
   const wrap = document.getElementById("po-product-list");
@@ -7815,7 +7855,7 @@ function renderQuotationCustomerInfo(){
 }
 function renderQuotationProducts(){
   const q = (document.getElementById("quotation-search").value||"").toLowerCase();
-  const list = state.products.filter(p=>
+  const list = sellableProducts().filter(p=>
     !q || p.name.toLowerCase().includes(q) || (p.brand||"").toLowerCase().includes(q) || (p.sku||"").toLowerCase().includes(q)
   );
   const wrap = document.getElementById("quotation-product-list");
@@ -8531,7 +8571,7 @@ function renderSoCustomerInfo(){
 }
 function renderSoProducts(){
   const q = (document.getElementById("so-search").value||"").toLowerCase();
-  const list = state.products.filter(p=>
+  const list = sellableProducts().filter(p=>
     !q || p.name.toLowerCase().includes(q) || (p.brand||"").toLowerCase().includes(q) || (p.sku||"").toLowerCase().includes(q)
   );
   const wrap = document.getElementById("so-product-list");

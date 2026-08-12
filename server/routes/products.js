@@ -653,6 +653,20 @@ router.get("/:id/usage", (req, res) => {
   res.json({ invoiceCount, stockInCount, stock: p.stock });
 });
 
+/* Retire a product without destroying it — the ordinary alternative to
+   deletion. An inactive product keeps all its stock, history and ledger
+   entries and still appears in Inventory, Product Query and every report;
+   it simply stops being offered when someone starts a new bill, purchase,
+   quotation or order. Mirrors the customer and supplier routes exactly. */
+router.patch("/:id/active", requireRole("owner"), (req, res) => {
+  const p = db.prepare("SELECT * FROM products WHERE id = ?").get(req.params.id);
+  if (!p) return res.status(404).json({ error: "Product not found." });
+  const active = req.body.active ? 1 : 0;
+  db.prepare("UPDATE products SET active = ? WHERE id = ?").run(active, p.id);
+  logAction(req, active ? "product.activate" : "product.deactivate", p.name);
+  res.json(serialize(db.prepare("SELECT * FROM products WHERE id = ?").get(p.id)));
+});
+
 router.delete("/:id", requireRole("owner"), (req, res) => {
   const p = db.prepare("SELECT * FROM products WHERE id = ?").get(req.params.id);
   if (!p) return res.status(404).json({ error: "Product not found." });

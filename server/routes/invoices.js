@@ -96,12 +96,31 @@ const syncProductStockStmt = db.prepare(
 function nextDocNo(docType) {
   const counterName = docType === "challan" ? "challan-no" : "estimate-no";
   const row = db.prepare("SELECT value FROM counters WHERE name = ?").get(counterName);
-  const next = row ? row.value + 1 : 1;
+  const taken = db.prepare("SELECT 1 FROM invoices WHERE challan_no = ?");
+
+  /* The two series run on independent counters but share ONE column, and
+     invoices.challan_no is UNIQUE — so the moment the trailing series reaches
+     a number the other has already issued, the INSERT fails and the counter
+     hand gets a 500 reading "Something went wrong on the server."
+
+     Skipping a number that is already taken costs an occasional gap in one
+     series; refusing to save costs the shop the bill. The gap is the better
+     trade. (Making the constraint UNIQUE(challan_no, doc_type) instead would
+     remove the need for this, but that is a rebuild of the live invoices
+     table and is not worth doing behind the owner's back.) */
+  let next = row ? row.value + 1 : 1;
+  let docNo = `SP${String(next).padStart(7, "0")}`;
+  let guard = 0;
+  while (taken.get(docNo) && guard++ < 10000) {
+    next += 1;
+    docNo = `SP${String(next).padStart(7, "0")}`;
+  }
+
   db.prepare(`
     INSERT INTO counters (name, value) VALUES (?, ?)
     ON CONFLICT(name) DO UPDATE SET value = excluded.value
   `).run(counterName, next);
-  return `SP${String(next).padStart(7, "0")}`;
+  return docNo;
 }
 
 function computeTotals({ items, discountType, discountValue, advance, taxType, transport, loading, roundOff, gstOnCharges, gstEnabled }) {

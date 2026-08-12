@@ -1248,23 +1248,36 @@ async function loadBillingNavRows(){
       id: r.id, no: r.challan_no, date: r.date, party: r.customer_name, total: r.total
     }));
   }catch(e){ state.billingNavRows = []; }
+  // Delivery challans get their own stepper over their own series — walking
+  // into an invoice from a challan (or the reverse) would jump between two
+  // unrelated numbering runs. /reports/challans also carries PURCHASE
+  // challans, which this screen cannot open, so only the sales ones are kept.
+  try{
+    const rows = await api("GET", "/reports/challans");
+    state.billingChallanNavRows = rows
+      .filter(r => r.type === "Sales")
+      .map(r=>({ id: r.id, no: r.challan_no, date: r.date, party: r.party_name, total: r.total }));
+  }catch(e){ state.billingChallanNavRows = []; }
 }
 
 function renderBillingBillNav(){
   const el = document.getElementById("bill-nav-billing");
   if(!el) return;
 
-  // Tax Invoice only. The rows this walks are invoices, so on a Delivery
-  // Challan the bar offered to step into a different document series
-  // entirely — it now stays out of the way there.
-  if(isChallanMode()){ el.innerHTML = ""; return; }
+  // Each document type steps through its OWN series. Before this the bar
+  // always walked invoices, so pressing Previous while typing a challan
+  // landed on an unrelated invoice from a different numbering run.
+  const challan = isChallanMode();
+  const kind = challan ? "challan" : "invoice";
+  const rows = (challan ? state.billingChallanNavRows : state.billingNavRows) || [];
 
   const id = state.editingInvoiceId;
 
   // EDITING a saved bill: step to the neighbouring bill in the same edit form.
   if(id){
-    el.innerHTML = billNavHtml("invoice", id);
-    wireBillNav(el, "invoice", id, async targetId => {
+    setBillNav(kind, rows);
+    el.innerHTML = billNavHtml(kind, id);
+    wireBillNav(el, kind, id, async targetId => {
       if(invoiceFingerprint() !== state.loadedInvoiceFingerprint &&
          !confirm("This bill has unsaved changes. Leave them and open the next bill?")) return;
       try{
@@ -1279,18 +1292,17 @@ function renderBillingBillNav(){
   // Previous means "the last bill I saved". It opens READ-ONLY rather than in
   // this form — loading a saved bill here would throw away the bill being
   // typed. From that preview the same arrows walk further back.
-  const rows = state.billingNavRows || [];
   if(!rows.length){ el.innerHTML = ""; return; }
   const last = rows[0];
   el.innerHTML = `
     <div class="card" style="margin-bottom:10px;padding:8px;">
       <div style="display:flex;gap:8px;align-items:stretch;">
         <button class="btn btn-outline" id="billing-nav-prev" style="flex:1;min-width:0;padding:7px 8px;font-size:11.5px;line-height:1.3;">
-          <div style="font-weight:800;">← Previous Bill</div>
+          <div style="font-weight:800;">← Previous ${challan ? "Challan" : "Bill"}</div>
           <div class="muted" style="font-size:10.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(last.no||"")}${last.party?" · "+escapeHtml(last.party):""}</div>
         </button>
         <div style="flex:0 0 auto;display:flex;flex-direction:column;justify-content:center;align-items:center;padding:0 6px;">
-          <div style="font-weight:800;font-size:12px;white-space:nowrap;">New Bill</div>
+          <div style="font-weight:800;font-size:12px;white-space:nowrap;">New ${challan ? "Challan" : "Bill"}</div>
           <div class="muted" style="font-size:10px;">${rows.length} saved</div>
         </div>
         <button class="btn btn-outline" disabled style="flex:1;min-width:0;padding:7px 8px;font-size:11.5px;line-height:1.3;opacity:.45;">
@@ -1300,7 +1312,7 @@ function renderBillingBillNav(){
       </div>
     </div>`;
   el.querySelector("#billing-nav-prev").addEventListener("click", ()=>{
-    setBillNav("invoice", rows);
+    setBillNav(kind, rows);
     openExistingInvoice(last.id);   // preview only — the new bill stays intact
   });
 }

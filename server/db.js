@@ -1087,12 +1087,6 @@ addColumn("products", "active", "INTEGER NOT NULL DEFAULT 1");
 
 /* ---- numbering: auto on/off, and a per-financial-year start ---- */
 
-/* Auto ON hands out the next number in the series. Auto OFF makes the
-   operator type it. Default ON, because that is what every existing shop
-   already had and a silent switch to manual entry would be a nasty
-   surprise mid-shift. */
-addColumn("doc_numbering", "auto_enabled", "INTEGER NOT NULL DEFAULT 1");
-
 /* Where each series restarts at the top of a financial year.
    Kept as its own table rather than a column because it is a value PER
    YEAR: a shop that starts 2026-27 at 1001 and 2027-28 at 2001 needs both
@@ -1345,6 +1339,12 @@ CREATE TABLE IF NOT EXISTS doc_numbering (
   updated_at INTEGER NOT NULL
 );
 `);
+
+/* Auto ON hands out the next number in the series. Auto OFF makes the
+   operator type it. Default ON, because that is what every existing shop
+   already had and a silent switch to manual entry would be a nasty
+   surprise mid-shift. */
+addColumn("doc_numbering", "auto_enabled", "INTEGER NOT NULL DEFAULT 1");
 
 /* Seeded from the numbers already issued, so an existing shop keeps its
    series running rather than restarting at 1 on top of live bills. Prefix

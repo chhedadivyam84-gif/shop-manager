@@ -42,10 +42,11 @@ const ITEM_FIELDS = {
   remarks:   { label: "Remarks",        align: "left",   width: 80 }
 };
 
-/* Column sets, so the common shapes are named once. */
-const GOODS_COLUMNS   = ["sn","name","size","qty","unit","rate","disc","taxable","gstPct","cgst","sgst","igst","amount"];
+/* Column sets, so the common shapes are named once.
+   Unit precedes Qty to match the order the bill actually prints in. */
+const GOODS_COLUMNS   = ["sn","name","size","unit","qty","rate","disc","taxable","gstPct","cgst","sgst","igst","amount"];
 const GOODS_EXTRAS    = ["category","brand","code","hsn","remarks"];
-const CHALLAN_COLUMNS = ["sn","name","size","qty","unit","rate","amount"];
+const CHALLAN_COLUMNS = ["sn","name","size","unit","qty","rate","amount"];
 
 const ALL_GOODS = [...GOODS_COLUMNS, ...GOODS_EXTRAS];
 

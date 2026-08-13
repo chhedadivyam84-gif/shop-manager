@@ -1160,6 +1160,30 @@ CREATE INDEX IF NOT EXISTS idx_doc_templates_type ON doc_templates(doc_type);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_doc_templates_name ON doc_templates(doc_type, name);
 `);
 
+/* Templates generated before the registry was corrected carry Qty ahead of
+   Unit, while the bill has always PRINTED Unit then Qty. Once templates
+   drive the printed page that stale order would silently swap two columns on
+   the shop's own paper, so it is put right here.
+
+   Deliberately narrow: it only acts when qty sits IMMEDIATELY before unit —
+   the exact shape the old default generated. A template someone reordered on
+   purpose does not match that and is left alone. Nothing is added or removed,
+   the two entries only trade places. */
+(function alignTemplateColumnOrder() {
+  const rows = db.prepare("SELECT id, config FROM doc_templates").all();
+  const upd = db.prepare("UPDATE doc_templates SET config = ? WHERE id = ?");
+  for (const r of rows) {
+    let cfg;
+    try { cfg = JSON.parse(r.config); } catch (e) { continue; }   // leave anything unreadable untouched
+    if (!cfg || !Array.isArray(cfg.columns)) continue;
+    const q = cfg.columns.findIndex(c => c && c.key === "qty");
+    const u = cfg.columns.findIndex(c => c && c.key === "unit");
+    if (q === -1 || u === -1 || u !== q + 1) continue;
+    cfg.columns.splice(q, 2, cfg.columns[u], cfg.columns[q]);
+    upd.run(JSON.stringify(cfg), r.id);
+  }
+})();
+
 /* Which documents have actually been sent out, so Print Management can
    filter Printed / Not Printed.
 

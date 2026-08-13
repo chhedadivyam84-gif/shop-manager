@@ -9891,6 +9891,7 @@ const QUOTATION_PRINT_CSS = `
   .q2-tb-discount{color:#b03434;}
   .q2-grand{display:flex;justify-content:space-between;padding:7px 10px;background:#12224b;color:#fff;font-weight:800;font-size:12.5px;}
   .q2-words{margin-top:8px;font-size:10.5px;background:#f5f1e6;border:1px solid #d3ac5a;border-radius:4px;padding:6px 12px;}
+  .q2-bank{margin-top:8px;border:1px solid #ccc;border-radius:4px;padding:7px 10px;font-size:10px;line-height:1.6;}
   .q2-sign-row{display:flex;justify-content:space-between;margin-top:34px;font-size:10.5px;}
   .q2-sign-row div{width:44%;border-top:1px solid #888;padding-top:4px;text-align:center;}
   .q2-thankyou{text-align:center;background:#12224b;color:#fff;font-size:10px;padding:6px;margin-top:16px;border-radius:4px;}
@@ -9910,12 +9911,26 @@ function printQuotation(q){
   const cfg = state.settings || {};
   const cust = state.customers.find(c=>c.id===q.customer_id);
 
+  /* Bank details for payment against the quotation. Only the lines the shop
+     has actually filled in are printed; with none set the block is omitted
+     entirely rather than printing an empty bordered box. */
+  const bankLines = [
+    cfg.bank_name       ? "Bank: " + cfg.bank_name : "",
+    cfg.bank_account_no ? "A/c No: " + cfg.bank_account_no : "",
+    cfg.bank_ifsc       ? "IFSC: " + cfg.bank_ifsc : "",
+    cfg.bank_branch     ? "Branch: " + cfg.bank_branch : "",
+    cfg.upi_id          ? "UPI: " + cfg.upi_id : ""
+  ].filter(Boolean);
+  const bankHtml = bankLines.length
+    ? `<div class="q2-box-label">Bank Details</div><div>${bankLines.map(escapeHtml).join(" &nbsp;|&nbsp; ")}</div>`
+    : "";
+
   const rows = q.items.map((it,i)=>{
     const mode = it.mode || "UNIT";
     const unit = it.unit_label || (Pricing.MODES[mode] && Pricing.MODES[mode].unit) || "";
     const product = it.product_id ? state.products.find(p=>p.id===it.product_id) : null;
     const thicknessCell = it.thickness_in ? `${it.thickness_in} in` : "—";
-    return `<tr>
+  return `<tr>
       <td>${i+1}</td>
       <td>${escapeHtml((product && product.code) || "—")}</td>
       <td>${escapeHtml(it.name)}</td>
@@ -10000,6 +10015,8 @@ function printQuotation(q){
       </div>
     </div>
     <div class="q2-words"><b>Amount in Words:</b> ${Pricing.amountInWords(q.total)}</div>
+
+    ${bankHtml ? `<div class="q2-bank">${bankHtml}</div>` : ""}
 
     <div class="q2-sign-row">
       <div>For ${escapeHtml(cfg.business_name||"")}<br><br><br>Authorized Signatory</div>

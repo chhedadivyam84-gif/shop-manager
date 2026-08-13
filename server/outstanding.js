@@ -172,8 +172,26 @@ function outstandingDetails(side) {
       };
     });
 
+    // The report's own columns. Opening is netted (a Receivable opening
+    // less any Advance), Total Bills excludes the opening so the two are
+    // never double-counted, and Total Received is every payment recorded
+    // against the party whether or not it named a bill.
+    const openingReceivable = (opensBy.get(p.id) || [])
+      .filter(o => o.balance_type !== src.advanceType)
+      .reduce((s2, o) => round2(s2 + round2(o.amount)), 0);
+    const openingOutstanding = round2(openingReceivable - advance);
+    const totalBills = rawBills.filter(b => !b.opening)
+      .reduce((s2, b) => round2(s2 + b.total), 0);
+    const totalPaid = (paysBy.get(p.id) || [])
+      .reduce((s2, x) => round2(s2 + round2(x.amount)), 0);
+
     parties.push({
       id: p.id, name: p.name, phone: p.phone || "",
+      openingOutstanding, totalBills, totalPaid,
+      // No adjustment store exists yet, so this is honestly zero rather than
+      // a number invented to make the row add up. When debit/credit notes
+      // land, they sum in here and the arithmetic below still holds.
+      adjustment: 0,
       // The stored due stays the authority for the headline figure; the
       // bill-wise sum is shown beside it, and any gap is surfaced rather
       // than hidden, since a mismatch means something needs looking at.
@@ -186,7 +204,11 @@ function outstandingDetails(side) {
     });
   }
 
-  const withDues = parties.filter(p => p.balance > 0 || p.billwiseTotal > 0);
+  /* Only parties who still owe something. A cleared party drops off the
+     moment its balance reaches zero, and the totals below are therefore the
+     sum of pending amounts alone. The half-paisa threshold keeps a rounding
+     residue like 0.004 from keeping a settled party on the report. */
+  const withDues = parties.filter(p => p.balance > 0.005);
   const totals = withDues.reduce((acc, p) => {
     acc.balance = round2(acc.balance + p.balance);
     for (const k of Object.keys(acc.aging)) acc.aging[k] = round2(acc.aging[k] + p.aging[k]);

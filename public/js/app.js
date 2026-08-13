@@ -4224,27 +4224,33 @@ function openSettings(){
         return;
       }
 
-      // Grouped under one State › City heading rather than repeating it on
-      // every line — a shop with thirty suburbs in one city reads far better.
+      /* Each State › City is a collapsed dropdown, not a flat list.
+         Nine suburbs meant nine full-width rows pushing everything below them
+         off the screen; collapsed, the whole section is one line per city with
+         the count on it. <details> rather than a hand-rolled toggle so it
+         works with the keyboard and needs no state of its own. */
       const groups = {};
       rows.forEach(r=>{
         const k = r.state + " › " + r.city;
         (groups[k] = groups[k] || []).push(r);
       });
-      listEl.innerHTML = Object.entries(groups).map(([heading, list])=>`
-        <div class="list-row" style="background:var(--bg-outer);">
-          <div class="row-title" style="font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;">${escapeHtml(heading)}</div>
-        </div>` +
-        list.map(a=>`
-        <div class="list-row"${a.active ? "" : ' style="opacity:.55;"'}>
-          <div><div class="row-title">${escapeHtml(a.area)}${a.active ? "" : " (retired)"}</div></div>
-          <div class="row-right">
-            <a href="#" data-area-toggle="${escapeHtml(a.id)}" data-area-to="${a.active ? 0 : 1}"
-               class="${a.active ? "btn-danger-link" : ""}" style="font-size:11.5px;font-weight:700;">
-              ${a.active ? "Retire" : "Restore"}</a>
-          </div>
-        </div>`).join("")
-      ).join("");
+      listEl.innerHTML = Object.entries(groups).map(([heading, list])=>{
+        const live = list.filter(a=>a.active).length;
+        const retired = list.length - live;
+        return `
+        <details class="area-group">
+          <summary>
+            <span class="area-group-name">${escapeHtml(heading)}</span>
+            <span class="area-group-count">${live} area${live===1?"":"s"}${retired?` · ${retired} retired`:""}</span>
+          </summary>
+          ${list.map(a=>`
+            <div class="area-row"${a.active ? "" : ' style="opacity:.55;"'}>
+              <span>${escapeHtml(a.area)}${a.active ? "" : " (retired)"}</span>
+              <a href="#" data-area-toggle="${escapeHtml(a.id)}" data-area-to="${a.active ? 0 : 1}"
+                 class="${a.active ? "btn-danger-link" : ""}">${a.active ? "Retire" : "Restore"}</a>
+            </div>`).join("")}
+        </details>`;
+      }).join("");
 
       listEl.querySelectorAll("[data-area-toggle]").forEach(link=>{
         link.addEventListener("click", async e=>{

@@ -5189,7 +5189,196 @@ function fmtMoney(v){
   return (Number(v)||0).toLocaleString("en-IN", {minimumFractionDigits:2, maximumFractionDigits:2});
 }
 
+/* ============================================================
+   THE PRINTED BILL  (the layout this shop uses)
+
+   Restored verbatim from commit 40907e8 at the shop's request — the
+   bill-book redesign that replaced it was not wanted. The plainer
+   arrangement is what they print: centred shop header, buyer and
+   document boxes side by side, the item grid, then amount-in-words
+   beside the totals box, and the terms paragraph at the foot.
+
+   fitBillToPage is deliberately NOT called here. This layout fills the
+   sheet through the table's own flex-grow against the page min-height
+   set by applyPageSizeStyle, which is how it always worked and why it
+   printed on one page.
+   ============================================================ */
 function renderInvoicePageContent(){
+  const inv = lastPreviewInvoice; if(!inv) return;
+  const cfg = state.settings;
+  const cust = state.customers.find(c=>c.id===inv.customer_id);
+  const isA4 = state.paperSize==="A4";
+  const challan = inv.doc_type === "challan";
+  const pageEl = document.getElementById("invoice-page-content");
+  pageEl.classList.toggle("size-a5", !isA4);
+  applyPrintTheme(pageEl, challan);
+
+  // Previous / Next stepper — outside .invoice-page so it is never captured
+  // by the PDF or the printer, which only take the page itself.
+  const navEl = document.getElementById("invoice-bill-nav");
+  if(navEl){
+    navEl.innerHTML = inv.id ? billNavHtml("invoice", inv.id) : "";
+    if(inv.id) wireBillNav(navEl, "invoice", inv.id, openExistingInvoice);
+  }
+
+  // A challan's item table and totals box keep EXACTLY the same layout
+  // whether "Show Rate" is on or off — only the Rate/Amount cell CONTENTS
+  // (and the money values in the totals box below) go blank, never hidden
+  // columns and never a "0.00", so staff can write the real figures in by
+  // hand after printing. "Delivery Challan (With Rate)" vs "(Without Rate)"
+  // is a PRINT-TIME choice on the same saved document — the item rate is
+  // stored either way (see server/routes/invoices.js), this toggle only
+  // controls whether it's PRINTED.
+  const showRate = !challan || state.challanShowRate;
+  const head = `<th class="c-sn">Sr No.</th><th>${challan ? "Product / Item" : "Product Description"}</th><th class="c-size">${challan ? "Description" : "Size"}</th><th class="c-unit">Unit</th><th class="c-num">Qty</th><th class="c-num">Rate</th><th class="c-num c-amt">Amount</th>`;
+  const rows = inv.items.map((it,i)=>{
+    const mode = it.mode || "UNIT";
+    const unit = it.unit_label || (Pricing.MODES[mode] && Pricing.MODES[mode].unit) || "";
+    // Area/length modes bill in a different unit than the physical piece
+    // count (e.g. 4 sheets at 8x4ft = 32 Sq.ft) — show both so "32" doesn't
+    // read as a mismatch against "4". A single piece is shown as just
+    // "1 pc" instead, since the billed number adds nothing when there's
+    // only one piece. UNIT mode has no such split (qty already IS the
+    // piece count), so nothing extra.
+    const qtyCell = mode !== "UNIT" && it.pieces === 1
+      ? "1 pc"
+      : `${Pricing.formatQty(it.qty, mode).replace(" "+unit,"")}${mode !== "UNIT" && it.pieces ? `<div class="c-pieces">(${it.pieces} pc)</div>` : ""}`;
+    const base = `<td class="c-sn">${i+1}</td><td>${escapeHtml(it.name)}</td><td class="c-size">${escapeHtml(it.size_label||"—")}</td><td class="c-unit">${escapeHtml(unit)}</td><td class="c-num">${qtyCell}</td>`;
+    return `<tr>${base}<td class="c-num">${showRate ? fmtPaise(it.rate).replace("Rs. ","") : ""}</td><td class="c-num c-amt">${showRate ? fmtPaise(it.qty*it.rate) : ""}</td></tr>`;
+  }).join("");
+  // Total Quantity is the physical piece count across all items, not the
+  // billed area/length sum — matching what gets counted at load/unload,
+  // and staying meaningful even when items mix billing units (Sq.ft +
+  // Rft + Unit can't be summed together, but pieces always can).
+  const totalQtyForFoot = round2(inv.items.reduce((s,it)=>s+(Number(it.pieces)||0),0));
+  const tfoot = `<tfoot><tr>
+    <td colspan="4" style="text-align:right;">Total Quantity</td>
+    <td class="c-num">${totalQtyForFoot}</td>
+    <td colspan="3"></td>
+  </tr></tfoot>`;
+
+  // Priced invoice: full totals. Challan: same boxed layout for visual
+  // consistency with the shop's paper form, but CGST/SGST/IGST stay at zero
+  // here — a challan never carries real GST regardless of what the box
+  // shows, and this "Grand Total" is a print-only figure (goods value +
+  // transport/loading) that is NEVER what's stored as the invoice's actual
+  // total or added to the customer's due — that stays transport+loading only,
+  // set server-side, so a challan can never function as a demand for payment.
+  const challanSubtotal = inv.items.reduce((s,it)=>s+(it.qty*it.rate||0),0);
+  const displayTotal = challan ? (challanSubtotal + inv.transport + inv.loading) : inv.total;
+  const discountAmt = challan ? 0 : (inv.discount_amount || 0);
+  // A challan never carries real GST, and "Non-GST Invoice" (gst_enabled=0)
+  // deliberately has none either — both skip the tax rows entirely.
+  const gstEnabled = !challan && inv.gst_enabled !== 0;
+  const cgst = gstEnabled ? (inv.cgst || 0) : 0, sgst = gstEnabled ? (inv.sgst || 0) : 0, igst = gstEnabled ? (inv.igst || 0) : 0;
+  const isIGST = gstEnabled && inv.tax_type === "IGST";
+  // Effective rate shown next to the CGST/SGST/IGST label — derived from the
+  // actual stored tax and taxable value (works for a mixed-rate bill too,
+  // since it's a weighted average, not any single item's GST%), not hardcoded.
+  const taxableGoods = Math.max(0, (inv.subtotal||0) - (inv.discount_amount||0));
+  const effectiveRatePct = taxableGoods > 0 ? Math.round(((cgst+sgst+igst) / taxableGoods) * 100) : 0;
+  const halfRatePct = Math.round(effectiveRatePct / 2);
+
+  // The totals box keeps the SAME layout regardless of showRate — only the
+  // money values that depend on item pricing (Subtotal, Discount, Grand
+  // Total) go blank instead of printing a misleading "0.00" when the rate
+  // itself isn't shown. Transport/Additional Charges are real entered
+  // rupee amounts independent of any item rate, so they still print.
+  //
+  // Transport is rendered only when there IS one, matching how Additional
+  // Charges already behaves: a "Without Rate" challan is meant to come out
+  // with every money box empty for staff to fill in by hand, and a printed
+  // "Transport ₹0.00" was the one figure still landing on the page. Hiding
+  // the row at zero (rather than blanking its value) keeps both print modes
+  // identical to each other, since it's absent from both.
+  const totalsBox = `<div class="erp-totals-box">
+    <div class="erp-tb-row"><span>Subtotal</span><span>${showRate ? fmtPaise(challan?challanSubtotal:inv.subtotal) : ""}</span></div>
+    <div class="erp-tb-row"><span>Discount</span><span>${showRate ? (discountAmt>0?"-":"")+fmtPaise(discountAmt) : ""}</span></div>
+    ${inv.transport ? `<div class="erp-tb-row"><span>Transport</span><span>${fmtPaise(inv.transport)}</span></div>` : ""}
+    ${inv.loading ? `<div class="erp-tb-row"><span>Additional Charges</span><span>${fmtPaise(inv.loading)}</span></div>` : ""}
+    ${!gstEnabled ? "" : isIGST
+      ? `<div class="erp-tb-row"><span>IGST ${effectiveRatePct}%</span><span>${fmtPaise(igst)}</span></div>`
+      : `<div class="erp-tb-row"><span>CGST ${halfRatePct}%</span><span>${fmtPaise(cgst)}</span></div><div class="erp-tb-row"><span>SGST ${halfRatePct}%</span><span>${fmtPaise(sgst)}</span></div>`}
+    ${!challan && inv.round_off ? `<div class="erp-tb-row"><span>Round Off</span><span>${inv.round_off>0?"+":""}${fmtPaise(inv.round_off)}</span></div>` : ""}
+    <div class="erp-tb-row erp-tb-grand"><span>Grand Total</span><span>${showRate ? fmtPaise(displayTotal) : ""}</span></div>
+    ${!challan && inv.advance>0 ? `<div class="erp-tb-row"><span>Advance Paid</span><span>-${fmtPaise(inv.advance)}</span></div>
+    <div class="erp-tb-row" style="font-weight:800;"><span>Balance Due</span><span>${fmtPaise(inv.balance_due)}</span></div>` : ""}
+  </div>`;
+
+  const deliveryAddr = inv.delivery_address || (cust && cust.address) || "";
+  const bottomLeft = `<div class="erp-bottom-left">
+    ${deliveryAddr ? `<div><b>Delivery Address:</b> ${escapeHtml(deliveryAddr)}</div>` : ""}
+    ${inv.remarks ? `<div><b>Remarks:</b> ${escapeHtml(inv.remarks)}</div>` : ""}
+    ${challan ? `<div><b>Status:</b> ${inv.converted_invoice_id ? "Billed (Tax Invoice raised)" : "Pending — not yet billed"}</div>` : ""}
+    ${challan ? `<div><b>Acknowledgement:</b> ${inv.ack_status === "Received"
+      ? "Received" + (inv.ack_receiver_name ? " — signed by " + escapeHtml(inv.ack_receiver_name) : "")
+      : "Pending — signed copy not yet returned"}</div>` : ""}
+    ${showRate ? `<div><b>Amount in Words:</b> ${Pricing.amountInWords(displayTotal)}</div>` : ""}
+  </div>`;
+
+  const bannerText = challan ? "DELIVERY CHALLAN" : "ESTIMATE CHALLAN";
+  document.getElementById("invoice-page-content").innerHTML = `
+    <div class="erp-banner">${bannerText}</div>
+    <div class="erp-header">
+      <div class="erp-biz-name">${escapeHtml(cfg.business_name)}</div>
+      ${cfg.tagline ? `<div class="erp-tag">${escapeHtml(cfg.tagline)}</div>` : ""}
+      ${cfg.address ? `<div class="erp-addr">${escapeHtml(cfg.address)}</div>` : ""}
+      <div class="erp-contact-line">${[
+        cfg.gstin ? `GSTIN: ${escapeHtml(cfg.gstin)}` : "",
+        cfg.phones ? `Ph: ${escapeHtml(cfg.phones)}` : "",
+        cfg.email ? `Email: ${escapeHtml(cfg.email)}` : "",
+        cfg.website ? `Website: ${escapeHtml(cfg.website)}` : ""
+      ].filter(Boolean).join("  |  ")}</div>
+    </div>
+
+    <div class="erp-parties">
+      <div class="erp-party-box">
+        <div class="erp-box-label">${challan ? "Deliver To" : "Buyer"}</div>
+        <div class="erp-box-name">${cust?escapeHtml(cust.name):"Walk-in Customer"}</div>
+        ${cust&&cust.address ? `<div>${escapeHtml(cust.address)}</div>` : ""}
+        ${cust&&cust.phone ? `<div>Mobile: ${escapeHtml(cust.phone)}</div>` : ""}
+        ${cust&&cust.gst ? `<div>GSTIN: ${escapeHtml(cust.gst)}</div>` : ""}
+        ${cust&&cust.state ? `<div>State: ${escapeHtml(cust.state)}</div>` : ""}
+      </div>
+      <div class="erp-doc-box">
+        <div class="erp-kv"><span>${challan ? "Challan No." : "Estimate No."}</span><b>${inv.challan_no}</b></div>
+        <div class="erp-kv"><span>Date</span><b>${inv.date}</b></div>
+        ${inv.delivery_man ? `<div class="erp-kv"><span>Salesperson</span><b>${escapeHtml(inv.delivery_man)}</b></div>` : ""}
+        ${inv.vehicle_number ? `<div class="erp-kv"><span>Vehicle No.</span><b>${escapeHtml(inv.vehicle_number)}</b></div>` : ""}
+      </div>
+    </div>
+
+    <div class="erp-table-wrap">
+      <table class="erp-table">
+        <thead><tr>${head}</tr></thead>
+        <tbody>${rows}</tbody>
+        ${tfoot}
+      </table>
+    </div>
+
+    <div class="erp-bottom">
+      ${bottomLeft}
+      ${totalsBox}
+    </div>
+
+    <div class="erp-terms">${challan
+      ? `<strong>PLYWOOD, BLACKBOARD, ARE MANUFACTURED FROM NATURAL WOOD WHICH IS BELOW BIO DEGRADEBLE, WE DONOT GUARANTEE AGAINST ANY NATURAL DECAY DEFICIENTY, DETORATION AND LIKE INCLUDING MANUFACTURING DEFACT AND/OR IMPERFACT QUALITY</strong>`
+      : `<strong>NO GURANTEE AND WARRANTY FOR DECORATIVE PRODUCTS AND AIR BUBBLES IN LAMMINATES, ACRYLIC AND PVC LAMINATES OR ANY SHADE VARIATION AFTER INSTALLATION. NO EXCHANGE. NO RETURN IN ANY CONDITION. PLEASE CHECK THE MATERIAL ON DELIVERY.</strong>`}</div>
+  `;
+}
+
+/* ============================================================
+   THE BILL-BOOK LAYOUT  (kept, not currently used)
+
+   Built to the mockup: logo header, boxed title, ORIGINAL marking,
+   ruled filler rows, three-box footer with bank details, navy grand
+   total. Replaced as the default because the shop preferred the older,
+   plainer layout below.
+
+   Kept whole rather than removed so nothing is lost: to bring it back,
+   point renderInvoicePageContent at it.
+   ============================================================ */
+function renderBillBookLayout(){
   const inv = lastPreviewInvoice; if(!inv) return;
   const cfg = state.settings || {};
   const cust = state.customers.find(c=>c.id===inv.customer_id);
@@ -5399,6 +5588,7 @@ function renderInvoicePageContent(){
 
   fitBillToPage(cols.length);
 }
+
 
 /**
  * Rules the item table down to the foot of the page — using exactly as many

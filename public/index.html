@@ -1098,7 +1098,11 @@
     <div class="fs-bar">
       <div class="fs-title">Invoice Preview</div>
       <div style="display:flex;align-items:center;gap:8px;">
-        <button class="chip" id="bill-panel-btn">&#9881; Print Settings</button>
+        <!-- Hidden while the plain layout is the one that prints: its column
+             show/hide controls belong to the bill-book layout, and a panel
+             whose switches do nothing is worse than no panel. The A4 / A5
+             chips and the challan rate toggle beside it still work. -->
+        <button class="chip" id="bill-panel-btn" style="display:none;">&#9881; Print Settings</button>
         <button class="chip" id="paper-a5">A5</button>
         <button class="chip" id="paper-a4">A4</button>
         <button class="fs-close" data-close-fs="fs-invoice">&#10005;</button>

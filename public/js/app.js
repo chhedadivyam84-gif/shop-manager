@@ -4886,6 +4886,11 @@ function setPaper(size){
 let lastPreviewInvoice = null;
 function openInvoicePreview(existingInvoice){
   if(!existingInvoice && !state.cart.length){ toast("Add items to the invoice first."); return; }
+  /* The shop's saved paper preference SEEDS the session here, once, so it is
+     what a preview opens on — while the A4 / A5 buttons and the print panel
+     stay free to change it for this bill without the seed fighting back. */
+  const savedPaper = billPrefs().paper;
+  if(savedPaper && savedPaper !== state.paperSize) setPaper(savedPaper);
   if(existingInvoice){
     lastPreviewInvoice = existingInvoice;
   } else {
@@ -5190,7 +5195,15 @@ function renderInvoicePageContent(){
   const cust = state.customers.find(c=>c.id===inv.customer_id);
   const challan = inv.doc_type === "challan";
   const prefs = billPrefs();
-  const isA4 = (prefs.paper || state.paperSize) === "A4";
+  /* state.paperSize is the single source of truth for paper, because
+     applyPageSizeStyle() — which sets @page and the full-sheet min-height —
+     reads it. Reading prefs.paper here instead meant the two disagreed: with
+     no saved preference, prefs.paper defaulted to A4 while state.paperSize
+     defaulted to A5, so the sheet was sized A5 and the bill was drawn A4.
+     271mm of content onto a 190mm sheet is a two-page bill. The saved
+     preference now SEEDS state.paperSize when a preview opens (see
+     openInvoicePreview) rather than competing with it. */
+  const isA4 = state.paperSize === "A4";
 
   const pageEl = document.getElementById("invoice-page-content");
   pageEl.classList.toggle("size-a5", !isA4);
@@ -5221,14 +5234,17 @@ function renderInvoicePageContent(){
   const bodyRows = items.map((it,i)=>
     `<tr>${cols.map(c=>`<td class="${c.cls}">${c.cell(it,i)}</td>`).join("")}</tr>`).join("");
 
-  /* Blank ruled lines down to a fixed row count, the way a printed bill book
-     is ruled to the foot of the page whether or not every line is used. It
-     also stops a two-item bill from leaving the totals box floating in the
-     middle of nowhere. */
-  const minRows = isA4 ? 12 : 7;
-  const fillerCount = Math.max(0, minRows - items.length);
-  const filler = Array.from({length: fillerCount}, ()=>
-    `<tr class="bill-filler">${cols.map(c=>`<td class="${c.cls}">&nbsp;</td>`).join("")}</tr>`).join("");
+  /* No filler rows are written here. They are added AFTER the page exists,
+     by fitBillToPage(), which measures how much room is actually left and
+     adds exactly that many.
+
+     A fixed count cannot work: the page already carries a full-sheet
+     min-height, and adding a set twelve rows on top of the header, totals
+     and the three footer boxes pushed a two-item bill onto a second sheet.
+     How many rows fit depends on how many columns are on, how long the
+     terms are, whether the bank box is filled in — none of which a constant
+     can know. */
+  const filler = "";
 
   /* Totals. A challan's are print-only: the goods value plus any transport,
      never stored as what the customer owes (that stays transport + loading,
@@ -5380,6 +5396,68 @@ function renderInvoicePageContent(){
       ? `PLYWOOD, BLACKBOARD, ARE MANUFACTURED FROM NATURAL WOOD WHICH IS BELOW BIO DEGRADEBLE, WE DONOT GUARANTEE AGAINST ANY NATURAL DECAY DEFICIENTY, DETORATION AND LIKE INCLUDING MANUFACTURING DEFACT AND/OR IMPERFACT QUALITY`
       : `NO GURANTEE AND WARRANTY FOR DECORATIVE PRODUCTS AND AIR BUBBLES IN LAMMINATES, ACRYLIC AND PVC LAMINATES OR ANY SHADE VARIATION AFTER INSTALLATION. NO EXCHANGE. NO RETURN IN ANY CONDITION. PLEASE CHECK THE MATERIAL ON DELIVERY.`}</div>
   `;
+
+  fitBillToPage(cols.length);
+}
+
+/**
+ * Rules the item table down to the foot of the page — using exactly as many
+ * blank rows as actually fit, measured, not guessed.
+ *
+ * The page carries a full-sheet min-height so a short bill still fills the
+ * paper. That means the page is ALWAYS at least a full sheet tall, so the
+ * height to measure against is the height of the real content with that
+ * minimum lifted — which is what the temporary minHeight:0 below is for.
+ *
+ * A fixed row count cannot do this job. How much room is left depends on how
+ * many columns are switched on, how long the terms run, whether the bank box
+ * is filled in and how many items there already are. Twelve rows was right
+ * for one of those combinations and pushed the rest onto a second sheet.
+ *
+ * When the real items already fill or overflow the page, nothing is added:
+ * a long bill is allowed to run to a second sheet, which is correct, rather
+ * than being squeezed.
+ */
+function fitBillToPage(colCount){
+  const page = document.getElementById("invoice-page-content");
+  if(!page) return;
+  const tbody = page.querySelector(".bill-items tbody");
+  if(!tbody) return;
+
+  tbody.querySelectorAll(".bill-filler").forEach(r => r.remove());
+
+  const blankRow = () => {
+    const tr = document.createElement("tr");
+    tr.className = "bill-filler";
+    tr.innerHTML = Array.from({length: colCount}, ()=>"<td>&nbsp;</td>").join("");
+    return tr;
+  };
+
+  // Same source as applyPageSizeStyle and the renderer, so all three agree.
+  const isA4 = state.paperSize === "A4";
+  const pageH = isA4 ? 297 : 210, margin = isA4 ? 6 : 3, safety = 14;
+  const MM_TO_PX = 96 / 25.4;
+  const targetPx = (pageH - margin * 2 - safety) * MM_TO_PX;
+
+  // Measure the real content, with the full-sheet minimum lifted.
+  const savedMin = page.style.minHeight;
+  page.style.minHeight = "0";
+  const contentPx = page.scrollHeight;
+
+  // One blank row's height, taken from a real row rather than assumed.
+  const probe = blankRow();
+  tbody.appendChild(probe);
+  const rowPx = probe.getBoundingClientRect().height || 15;
+  probe.remove();
+
+  const room = targetPx - contentPx;
+  page.style.minHeight = savedMin;
+
+  if(room < rowPx) return;   // already full, or genuinely a two-page bill
+  const rows = Math.floor(room / rowPx);
+  const frag = document.createDocumentFragment();
+  for(let i = 0; i < rows; i++) frag.appendChild(blankRow());
+  tbody.appendChild(frag);
 }
 
 /* ============================================================

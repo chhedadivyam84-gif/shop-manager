@@ -4864,7 +4864,12 @@ function applyPageSizeStyle(){
   // footer band is on — so a perfectly normal one-item invoice tipped onto
   // a second sheet. 14mm leaves room for the printer's hardware margin AND
   // a header/footer, while the page still visually fills the sheet.
-  const safetyBuffer = 14;
+  // 14mm on top of the @page margin left a quarter of the sheet blank below
+  // the terms — the bill visibly stopped short of the bottom. The @page
+  // margin already IS the printer's safety; this only guards against
+  // rounding and a browser's own header/footer band, so 5mm is enough.
+  // A4 now targets 285mm of a 297mm sheet instead of 271mm.
+  const safetyBuffer = 5;
   const contentH = pageH - margin * 2 - safetyBuffer;
   // min-height fills the whole sheet, Tally-style, even with just one item —
   // the table's flex-grow (see .erp-table-wrap) is what actually stretches
@@ -5934,7 +5939,20 @@ async function buildInvoicePdf(){
          print path) makes the later scale factor ~1:1, so the capture's
          proportions match the physical page instead of being stretched. */
       #fs-invoice{max-width:none !important;}
-      #invoice-page-content{max-width:none !important;width:${pageWidth}mm !important;margin-left:0 !important;margin-right:0 !important;}`;
+      /* Height as well as width. The screen min-height is deliberately SHORT
+         of the sheet — it subtracts the @page margin and a safety buffer, so
+         a browser print does not tip onto a second page. A PDF has neither:
+         addImage draws at (0,0) with no margin, so every millimetre of that
+         slack became blank paper at the foot of the bill — the "why doesn't
+         it reach the bottom" complaint. Here the page IS the sheet, so the
+         captured node is stretched to the full page height and the bill ends
+         where the paper does. */
+      #invoice-page-content{
+        max-width:none !important;
+        width:${pageWidth}mm !important;
+        min-height:${pageHeight}mm !important;
+        margin-left:0 !important;margin-right:0 !important;
+      }`;
       clonedDoc.head.appendChild(style);
     }
   });

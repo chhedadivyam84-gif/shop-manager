@@ -166,6 +166,7 @@ app.use("/api/staff", requireAuth, requireRole("owner"), require("./routes/staff
 app.use("/api/audit", requireAuth, requireRole("owner"), require("./routes/audit"));
 app.use("/api/backup", requireAuth, requireRole("owner"), require("./routes/backup"));
 app.use("/api/print", requireAuth, require("./routes/print"));
+app.use("/api/print-manager", requireAuth, require("./routes/printManager"));
 app.use("/api/attachments", requireAuth, require("./routes/attachments"));
 app.use("/api/reset", requireAuth, requireRole("owner"), require("./routes/reset"));
 app.use("/api/financial-years", requireAuth, requireRole("owner"), require("./routes/financialYears"));

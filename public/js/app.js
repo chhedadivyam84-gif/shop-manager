@@ -592,6 +592,7 @@ async function initApp(){
   document.getElementById("pq-export-btn").addEventListener("click", exportProductQuery);
   wirePrintEngine();
   wireAccounts();
+  wirePrintManager();
   document.getElementById("pq-q").addEventListener("keydown", (e)=>{ if(e.key==="Enter") runProductQuery(); });
   document.getElementById("pq-advanced-btn").addEventListener("click", ()=>{
     const adv = document.getElementById("pq-advanced");
@@ -808,7 +809,7 @@ async function switchTab(tab){
   document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));
   document.getElementById("screen-"+tab).classList.add("active");
   document.querySelectorAll("nav.bottom .tab").forEach(t=>t.classList.toggle("active", t.dataset.tab===tab));
-  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",quotation:"Quotation",so:"Sales Order",pquery:"Product Query",accounts:"Accounts",otherledger:(state.olKind==="income"?"Other Income":"Other Expenses"),fyear:"Financial Year",fyclose:"Financial Year"};
+  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",quotation:"Quotation",so:"Sales Order",pquery:"Product Query",accounts:"Accounts",otherledger:(state.olKind==="income"?"Other Income":"Other Expenses"),fyear:"Financial Year",fyclose:"Financial Year",printmgr:"Print Management"};
   document.getElementById("hdr-sub").textContent = subMap[tab];
   document.getElementById("hdr-main").textContent = tab==="home" ? greeting() : subMap[tab];
   if(tab==="billing") await renderBilling();
@@ -826,6 +827,7 @@ async function switchTab(tab){
   if(tab==="accounts") await renderAccountsScreen();
   if(tab==="otherledger") await renderOtherLedger();
   if(tab==="fyear") await renderFyScreen();
+  if(tab==="printmgr") await renderPrintManager();
 }
 
 async function renderAll(){
@@ -10551,6 +10553,522 @@ function olRangeQS(){
     return `?from=${iso(from)}&to=${iso(to)}`;
   }
   return `?from=${iso(new Date(d.getFullYear(), d.getMonth(), 1))}&to=${iso(d)}`;
+}
+
+/* ============================================================
+   PRINT MANAGEMENT & SEARCH
+
+   Two halves of one screen:
+
+     Search & Print — find any document of any type, preview it, choose a
+     template, then print / PDF / WhatsApp.
+     Templates — every document type with its own templates, and the
+     designer that edits one.
+
+   Nothing here hard-codes a document type. The list, the type filter and
+   the designer's column list all come from /api/print-manager/documents,
+   which is generated from the server's registry — so a document added
+   later appears here on its own.
+   ============================================================ */
+
+const pmState = {
+  tab: "search",
+  docs: [],
+  filters: { docType: "all", number: "", party: "", from: "", to: "", salesman: "",
+             locationId: "", areaId: "", status: "active", printed: "" },
+  rows: [],
+  warnings: [],
+  openDocKey: null,      // which document's templates are open
+  templates: [],
+  editing: null          // the template being designed
+};
+
+async function renderPrintManager(){
+  if(!pmState.docs.length){
+    try{ pmState.docs = await api("GET","/print-manager/documents"); }
+    catch(e){ pmState.docs = []; }
+  }
+  document.querySelectorAll("[data-pm-tab]").forEach(b=>
+    b.classList.toggle("selected", b.dataset.pmTab === pmState.tab));
+  document.getElementById("pm-search-pane").style.display = pmState.tab==="search" ? "" : "none";
+  document.getElementById("pm-templates-pane").style.display = pmState.tab==="templates" ? "" : "none";
+  if(pmState.tab==="search") renderPmSearchForm();
+  else renderPmDocList();
+}
+
+/* ------------------------------------------------------------------ */
+/* Search & Print                                                      */
+/* ------------------------------------------------------------------ */
+
+function renderPmSearchForm(){
+  const f = pmState.filters;
+  const el = document.getElementById("pm-filters");
+  if(el.dataset.built) return;   // rebuilt only once, so typing is not interrupted
+  el.dataset.built = "1";
+
+  const avail = pmState.docs.filter(d=>d.available);
+  el.innerHTML = `
+    <div class="pm-filter-grid">
+      <label class="pm-field"><span>Document Type</span>
+        <select data-pm-f="docType">
+          <option value="all">All documents</option>
+          ${avail.map(d=>`<option value="${escapeHtml(d.key)}">${escapeHtml(d.label)}</option>`).join("")}
+        </select></label>
+      <label class="pm-field"><span>Document No.</span>
+        <input type="search" data-pm-f="number" placeholder="e.g. SP0000012"></label>
+      <label class="pm-field"><span>Party / Mobile</span>
+        <input type="search" data-pm-f="party" placeholder="Name or phone"></label>
+      <label class="pm-field"><span>Salesman</span>
+        <input type="search" data-pm-f="salesman" placeholder="e.g. Ramesh"></label>
+      <label class="pm-field"><span>Date From</span>
+        <input type="date" data-pm-f="from"></label>
+      <label class="pm-field"><span>Date To</span>
+        <input type="date" data-pm-f="to"></label>
+      <label class="pm-field"><span>Warehouse / Location</span>
+        <select data-pm-f="locationId"><option value="">Any</option>
+          ${(state.locations||[]).map(l=>`<option value="${escapeHtml(l.id)}">${escapeHtml(l.name)}</option>`).join("")}
+        </select></label>
+      <label class="pm-field"><span>Area</span>
+        <select data-pm-f="areaId"><option value="">Any</option>
+          ${(state.areas||[]).map(a=>`<option value="${escapeHtml(a.id)}">${escapeHtml(a.area)}</option>`).join("")}
+        </select></label>
+      <label class="pm-field"><span>Status</span>
+        <select data-pm-f="status">
+          <option value="active">Active only</option>
+          <option value="cancelled">Cancelled only</option>
+          <option value="">Both</option>
+        </select></label>
+      <label class="pm-field"><span>Printed</span>
+        <select data-pm-f="printed">
+          <option value="">Either</option>
+          <option value="yes">Printed</option>
+          <option value="no">Not printed</option>
+        </select></label>
+    </div>
+    <div class="pm-filter-actions">
+      <button class="btn btn-gold pm-btn" id="pm-search-btn">Search</button>
+      <button class="btn btn-outline pm-btn" id="pm-clear-btn">Clear</button>
+    </div>`;
+
+  el.querySelectorAll("[data-pm-f]").forEach(inp=>{
+    inp.value = f[inp.dataset.pmF] || "";
+    inp.addEventListener("change", ()=>{ f[inp.dataset.pmF] = inp.value; });
+    if(inp.tagName === "INPUT"){
+      inp.addEventListener("keydown", e=>{ if(e.key === "Enter") runPmSearch(); });
+    }
+  });
+  document.getElementById("pm-search-btn").addEventListener("click", runPmSearch);
+  document.getElementById("pm-clear-btn").addEventListener("click", ()=>{
+    Object.keys(f).forEach(k=>{ f[k] = (k==="docType") ? "all" : (k==="status" ? "active" : ""); });
+    el.dataset.built = ""; renderPmSearchForm();
+    pmState.rows = []; renderPmResults();
+  });
+}
+
+async function runPmSearch(){
+  const body = document.getElementById("pm-results");
+  body.innerHTML = `<div class="empty-hint">Searching…</div>`;
+  const qs = Object.entries(pmState.filters)
+    .filter(([,v])=>v !== "" && v != null)
+    .map(([k,v])=>`${k}=${encodeURIComponent(v)}`).join("&");
+  try{
+    const data = await api("GET", "/print-manager/search" + (qs ? "?"+qs : ""));
+    pmState.rows = data.rows || [];
+    pmState.warnings = data.warnings || [];
+  }catch(e){
+    body.innerHTML = `<div class="empty-hint">Search failed: ${escapeHtml(e.message||"")}</div>`;
+    return;
+  }
+  renderPmResults();
+}
+
+function renderPmResults(){
+  const body = document.getElementById("pm-results");
+  const rows = pmState.rows;
+  if(!rows.length){
+    body.innerHTML = `<div class="empty-hint">Nothing matched. Adjust the filters and search again.</div>` +
+      pmWarningsHtml();
+    return;
+  }
+  body.innerHTML = pmWarningsHtml() +
+    `<div class="pm-result-count">${rows.length} document${rows.length===1?"":"s"}</div>` +
+    rows.map((r,i)=>`
+      <div class="list-row pm-row"${r.cancelled ? ' style="opacity:.6;"' : ""}>
+        <div style="min-width:0;">
+          <div class="row-title">${escapeHtml(r.docNo || "—")}
+            ${r.cancelled ? `<span class="pill danger" style="margin-left:6px;">Cancelled</span>` : ""}
+            ${r.printed ? `<span class="pill" style="margin-left:6px;">Printed</span>` : ""}</div>
+          <div class="row-sub">${escapeHtml(fyDay(r.date))} · ${escapeHtml(r.docTypeLabel)}</div>
+          <div class="row-sub">${escapeHtml(r.partyName)}${r.partyPhone ? " · "+escapeHtml(r.partyPhone) : ""}</div>
+        </div>
+        <div class="row-right" style="display:flex;gap:6px;align-items:center;">
+          <button class="btn btn-outline pm-mini" data-pm-open="${i}">Preview</button>
+        </div>
+      </div>`).join("");
+
+  body.querySelectorAll("[data-pm-open]").forEach(b=>{
+    b.addEventListener("click", ()=>openPmPreview(pmState.rows[Number(b.dataset.pmOpen)]));
+  });
+}
+
+function pmWarningsHtml(){
+  if(!pmState.warnings.length) return "";
+  return `<div class="pm-warn">${pmState.warnings.map(w=>escapeHtml(w)).join("<br>")}</div>`;
+}
+
+/**
+ * Opens a found document in the existing preview, after letting the user
+ * pick which of that document's templates to use.
+ *
+ * Only Sales Invoice and Delivery Challan have a working preview renderer
+ * today — the other types still print through their own older screens. That
+ * is said out loud rather than opening a blank sheet.
+ */
+async function openPmPreview(row){
+  let templates = [];
+  try{ templates = await api("GET", `/print-manager/templates/${row.docType}`); }catch(e){ /* falls back below */ }
+
+  const sheet = document.getElementById("sheet-pm-preview");
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">${escapeHtml(row.docNo || "Document")}</div>
+    <p class="muted" style="font-size:12px;margin-top:-6px;">
+      ${escapeHtml(row.docTypeLabel)} · ${escapeHtml(fyDay(row.date))} · ${escapeHtml(row.partyName)}</p>
+
+    <label class="field-label">Template</label>
+    <select id="pm-pv-template">
+      ${templates.map(t=>`<option value="${escapeHtml(t.id)}"${t.is_default?" selected":""}>${escapeHtml(t.name)}${t.is_default?" (default)":""}</option>`).join("")
+        || `<option value="">Standard</option>`}
+    </select>
+
+    <div style="display:flex;flex-direction:column;gap:8px;margin-top:16px;">
+      <button class="btn btn-gold" id="pm-pv-open">Open Preview</button>
+      <button class="btn btn-outline" id="pm-pv-mark">Mark as Printed</button>
+    </div>
+    <p class="muted" style="font-size:11px;margin-top:10px;line-height:1.6;" id="pm-pv-note"></p>`;
+
+  const canPreview = row.docType === "sales_invoice" || row.docType === "delivery_challan";
+  document.getElementById("pm-pv-note").innerHTML = canPreview
+    ? "Preview opens the full bill, where Print, PDF and WhatsApp all live."
+    : `A preview for <strong>${escapeHtml(row.docTypeLabel)}</strong> is not wired to this screen yet — open it from its own screen to print. Its templates above are saved and ready.`;
+  document.getElementById("pm-pv-open").disabled = !canPreview;
+
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  document.getElementById("pm-pv-open").addEventListener("click", async ()=>{
+    closeAllSheets();
+    await openExistingInvoice(row.id);
+    logPmPrint(row, document.getElementById("pm-pv-template") ? document.getElementById("pm-pv-template").value : null, "preview");
+  });
+  document.getElementById("pm-pv-mark").addEventListener("click", async ()=>{
+    await logPmPrint(row, document.getElementById("pm-pv-template").value, "manual");
+    closeAllSheets();
+    toast("Marked as printed.", "ok");
+    runPmSearch();
+  });
+  showSheet("sheet-pm-preview");
+}
+
+/** Never allowed to block the print itself — a failed log entry must not
+ *  stop a customer getting their bill. */
+async function logPmPrint(row, templateId, method){
+  try{
+    await api("POST","/print-manager/log", { docType: row.docType, docId: row.id, templateId, method });
+  }catch(e){ /* the print matters, the bookkeeping does not */ }
+}
+
+/* ------------------------------------------------------------------ */
+/* Templates                                                            */
+/* ------------------------------------------------------------------ */
+
+function renderPmDocList(){
+  const el = document.getElementById("pm-doc-list");
+  const groups = {};
+  pmState.docs.forEach(d=>(groups[d.group] = groups[d.group] || []).push(d));
+  el.innerHTML = Object.entries(groups).map(([group, list])=>`
+    <div class="list-row" style="background:var(--bg-outer);">
+      <div class="row-title" style="font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;">${escapeHtml(group)}</div>
+    </div>` +
+    list.map(d=>`
+    <div class="list-row"${d.available ? "" : ' style="opacity:.6;"'}>
+      <div style="min-width:0;">
+        <div class="row-title">${escapeHtml(d.label)}</div>
+        <div class="row-sub">${d.templateCount} template${d.templateCount===1?"":"s"}${
+          d.available ? "" : " · " + escapeHtml(d.unavailableReason || "not available yet")}</div>
+      </div>
+      <div class="row-right">
+        <button class="btn btn-outline pm-mini" data-pm-doc="${escapeHtml(d.key)}">Templates</button>
+      </div>
+    </div>`).join("")).join("");
+
+  el.querySelectorAll("[data-pm-doc]").forEach(b=>
+    b.addEventListener("click", ()=>openPmTemplates(b.dataset.pmDoc)));
+}
+
+async function openPmTemplates(docKey){
+  pmState.openDocKey = docKey;
+  const doc = pmState.docs.find(d=>d.key===docKey);
+  try{ pmState.templates = await api("GET", `/print-manager/templates/${docKey}`); }
+  catch(e){ toast(e.message); return; }
+
+  const sheet = document.getElementById("sheet-pm-templates");
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">${escapeHtml(doc.label)} Templates</div>
+    <p class="muted" style="font-size:11.5px;margin-top:-6px;">
+      These belong to ${escapeHtml(doc.label)} alone. Nothing here changes any other document.</p>
+    <div class="card" id="pm-tpl-list" style="margin-top:10px;"></div>
+    <label class="field-label" style="margin-top:12px;">New template name</label>
+    <input type="text" id="pm-tpl-new" placeholder="e.g. Customer Copy">
+    <label class="field-label" style="margin-top:10px;">Start from</label>
+    <select id="pm-tpl-copy">
+      <option value="">Default settings</option>
+      ${pmState.templates.map(t=>`<option value="${escapeHtml(t.id)}">Copy of ${escapeHtml(t.name)}</option>`).join("")}
+    </select>
+    <button class="btn btn-primary" id="pm-tpl-add" style="margin-top:12px;">Add Template</button>`;
+
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  renderPmTemplateList();
+  document.getElementById("pm-tpl-add").addEventListener("click", async ()=>{
+    const name = document.getElementById("pm-tpl-new").value.trim();
+    if(!name){ toast("Give the template a name."); return; }
+    try{
+      await api("POST", `/print-manager/templates/${docKey}`, {
+        name, copyFrom: document.getElementById("pm-tpl-copy").value || undefined
+      });
+      toast(`${name} added.`, "ok");
+      await openPmTemplates(docKey);
+      await refreshPmDocCounts();
+    }catch(e){ toast(e.message); }
+  });
+  showSheet("sheet-pm-templates");
+}
+
+function renderPmTemplateList(){
+  const el = document.getElementById("pm-tpl-list");
+  if(!el) return;
+  el.innerHTML = pmState.templates.map(t=>`
+    <div class="list-row">
+      <div style="min-width:0;">
+        <div class="row-title">${escapeHtml(t.name)}${t.is_default ? ` <span class="pill">Default</span>` : ""}</div>
+        <div class="row-sub">${escapeHtml(t.config.paper)} ${escapeHtml(t.config.orientation)} ·
+          ${t.config.columns.filter(c=>c.show).length} columns ·
+          ${t.config.showRate ? "With Rate" : "Without Rate"}</div>
+      </div>
+      <div class="row-right" style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
+        <button class="btn btn-outline pm-mini" data-pm-design="${escapeHtml(t.id)}">Design</button>
+        ${t.is_default ? "" : `<button class="btn btn-outline pm-mini" data-pm-default="${escapeHtml(t.id)}">Set Default</button>`}
+        ${pmState.templates.length > 1 ? `<a href="#" data-pm-del="${escapeHtml(t.id)}" class="btn-danger-link" style="font-size:11.5px;align-self:center;">Delete</a>` : ""}
+      </div>
+    </div>`).join("");
+
+  el.querySelectorAll("[data-pm-design]").forEach(b=>b.addEventListener("click", ()=>
+    openPmDesigner(pmState.templates.find(t=>t.id===b.dataset.pmDesign))));
+  el.querySelectorAll("[data-pm-default]").forEach(b=>b.addEventListener("click", async ()=>{
+    try{
+      pmState.templates = await api("POST", `/print-manager/templates/${b.dataset.pmDefault}/default`, {});
+      renderPmTemplateList(); toast("Default set.", "ok");
+    }catch(e){ toast(e.message); }
+  }));
+  el.querySelectorAll("[data-pm-del]").forEach(a=>a.addEventListener("click", async e=>{
+    e.preventDefault();
+    const t = pmState.templates.find(x=>x.id===a.dataset.pmDel);
+    if(!confirm(`Delete the template "${t.name}"? Documents already printed with it are unaffected.`)) return;
+    try{
+      pmState.templates = await api("DELETE", `/print-manager/templates/${a.dataset.pmDel}`);
+      renderPmTemplateList(); await refreshPmDocCounts(); toast("Template deleted.", "ok");
+    }catch(err){ toast(err.message); }
+  }));
+}
+
+async function refreshPmDocCounts(){
+  try{ pmState.docs = await api("GET","/print-manager/documents"); }catch(e){ /* list stays as it was */ }
+  if(pmState.tab === "templates") renderPmDocList();
+}
+
+/* ------------------------------------------------------------------ */
+/* the designer                                                         */
+/* ------------------------------------------------------------------ */
+
+function openPmDesigner(tpl){
+  // Edited on a copy, so closing without saving really does discard.
+  pmState.editing = JSON.parse(JSON.stringify(tpl));
+  const doc = pmState.docs.find(d=>d.key===tpl.doc_type);
+  const c = pmState.editing.config;
+
+  const sheet = document.getElementById("sheet-pm-designer");
+  const num = (label, key, min, max, step) => `
+    <label class="pm-field"><span>${label}</span>
+      <input type="number" data-pm-c="${key}" value="${c[key]}" min="${min}" max="${max}" step="${step||1}"></label>`;
+  const check = (label, key, hint) => `
+    <label class="pm-check"><input type="checkbox" data-pm-c="${key}"${c[key]?" checked":""}>
+      <span>${label}${hint?`<span class="pm-hint">${hint}</span>`:""}</span></label>`;
+
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">${escapeHtml(doc.label)} — ${escapeHtml(tpl.name)}</div>
+    <p class="muted" style="font-size:11.5px;margin-top:-6px;">Everything below applies to this template only.</p>
+
+    <label class="field-label" style="margin-top:12px;">Template name</label>
+    <input type="text" id="pm-d-name" value="${escapeHtml(pmState.editing.name)}">
+
+    <div class="section-title">Page</div>
+    <div class="pm-filter-grid">
+      <label class="pm-field"><span>Paper</span>
+        <select data-pm-c="paper">
+          <option value="A4"${c.paper==="A4"?" selected":""}>A4</option>
+          <option value="A5"${c.paper==="A5"?" selected":""}>A5</option>
+        </select></label>
+      <label class="pm-field"><span>Orientation</span>
+        <select data-pm-c="orientation">
+          <option value="portrait"${c.orientation==="portrait"?" selected":""}>Portrait</option>
+          <option value="landscape"${c.orientation==="landscape"?" selected":""}>Landscape</option>
+        </select></label>
+      ${num("Font size (pt)","fontSize",6,18,0.5)}
+      <label class="pm-field"><span>Margins (mm)</span>
+        <input type="number" id="pm-d-margin" value="${c.margins.top}" min="0" max="40"></label>
+    </div>
+
+    <div class="section-title">Document Title</div>
+    <input type="text" data-pm-c="title" value="${escapeHtml(c.title||"")}" placeholder="${escapeHtml(doc.label.toUpperCase())}">
+
+    <div class="section-title">Item Columns</div>
+    <p class="muted" style="font-size:11px;margin-bottom:8px;">
+      Drag a row to reorder, or use the arrows. Rename any heading, set its width and alignment.
+      Width 0 lets the column take whatever space is left.</p>
+    <div id="pm-d-columns" class="pm-cols"></div>
+
+    <div class="section-title">Show on this template</div>
+    ${check("Rate and Amount", "showRate", doc.supportsRate ? "Off prints them blank — never ₹0" : "")}
+    ${check("Logo", "showLogo")}
+    ${check("Company details", "showCompany")}
+    ${check("Party details", "showParty")}
+    ${check("Totals box", "showTotals")}
+    ${check("Tax breakdown", "showTax")}
+    ${check("Amount in words", "showAmountInWords")}
+    ${check("Column borders", "showBorders")}
+    ${check("Page numbers", "showPageNumbers")}
+    ${check("Signature block", "showSignature")}
+    <label class="field-label" style="margin-top:8px;">Signature wording</label>
+    <input type="text" data-pm-c="signatureText" value="${escapeHtml(c.signatureText||"")}" placeholder="Authorised Signature">
+
+    <div class="section-title">Header / Footer</div>
+    <label class="field-label">Header line</label>
+    <input type="text" data-pm-c="header" value="${escapeHtml(c.header||"")}" placeholder="Printed above the shop name">
+    <label class="field-label" style="margin-top:10px;">Footer line</label>
+    <input type="text" data-pm-c="footer" value="${escapeHtml(c.footer||"")}" placeholder="e.g. Thank you for your business!">
+    <label class="field-label" style="margin-top:10px;">Terms &amp; Conditions</label>
+    <textarea data-pm-c="terms" rows="3" placeholder="Printed at the foot of the document">${escapeHtml(c.terms||"")}</textarea>
+    <label class="field-label" style="margin-top:10px;">Custom text</label>
+    <textarea data-pm-c="customText" rows="2" placeholder="Anything else this document should carry">${escapeHtml(c.customText||"")}</textarea>
+
+    <button class="btn btn-gold" id="pm-d-save" style="margin-top:16px;">Save Template</button>`;
+
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+
+  sheet.querySelectorAll("[data-pm-c]").forEach(inp=>{
+    const key = inp.dataset.pmC;
+    inp.addEventListener("change", ()=>{
+      if(inp.type === "checkbox") c[key] = inp.checked ? 1 : 0;
+      else if(inp.type === "number") c[key] = Number(inp.value);
+      else c[key] = inp.value;
+      if(key === "showRate") renderPmColumns();   // greys the money columns
+    });
+  });
+  // One margin box sets all four — four separate boxes for a value almost
+  // nobody sets asymmetrically is more work than it is worth.
+  document.getElementById("pm-d-margin").addEventListener("change", e=>{
+    const v = Math.max(0, Math.min(40, Number(e.target.value)||0));
+    c.margins = { top:v, right:v, bottom:v, left:v };
+  });
+
+  renderPmColumns();
+  document.getElementById("pm-d-save").addEventListener("click", savePmTemplate);
+  showSheet("sheet-pm-designer");
+}
+
+function renderPmColumns(){
+  const wrap = document.getElementById("pm-d-columns");
+  if(!wrap) return;
+  const c = pmState.editing.config;
+  const moneyish = new Set(["rate","disc","taxable","cgst","sgst","igst","amount"]);
+
+  wrap.innerHTML = c.columns.map((col,i)=>`
+    <div class="pm-col" draggable="true" data-pm-idx="${i}">
+      <span class="pm-grip" title="Drag to reorder">⋮⋮</span>
+      <input type="checkbox" data-pm-col-show="${i}"${col.show?" checked":""} title="Show this column">
+      <input type="text" class="pm-col-label" data-pm-col-label="${i}" value="${escapeHtml(col.label)}">
+      <input type="number" class="pm-col-w" data-pm-col-w="${i}" value="${col.width}" min="0" max="400" title="Width in px, 0 = auto">
+      <select class="pm-col-a" data-pm-col-a="${i}" title="Alignment">
+        <option value="left"${col.align==="left"?" selected":""}>L</option>
+        <option value="center"${col.align==="center"?" selected":""}>C</option>
+        <option value="right"${col.align==="right"?" selected":""}>R</option>
+      </select>
+      <span class="pm-col-move">
+        <button data-pm-col-up="${i}"${i===0?" disabled":""}>↑</button>
+        <button data-pm-col-dn="${i}"${i===c.columns.length-1?" disabled":""}>↓</button>
+      </span>
+      ${!c.showRate && moneyish.has(col.key)
+        ? `<span class="pm-col-note">blank</span>` : ""}
+    </div>`).join("");
+
+  wrap.querySelectorAll("[data-pm-col-show]").forEach(x=>x.addEventListener("change", ()=>{
+    c.columns[+x.dataset.pmColShow].show = x.checked ? 1 : 0; }));
+  wrap.querySelectorAll("[data-pm-col-label]").forEach(x=>x.addEventListener("input", ()=>{
+    c.columns[+x.dataset.pmColLabel].label = x.value; }));
+  wrap.querySelectorAll("[data-pm-col-w]").forEach(x=>x.addEventListener("change", ()=>{
+    c.columns[+x.dataset.pmColW].width = Math.max(0, Math.min(400, Number(x.value)||0)); }));
+  wrap.querySelectorAll("[data-pm-col-a]").forEach(x=>x.addEventListener("change", ()=>{
+    c.columns[+x.dataset.pmColA].align = x.value; }));
+
+  const move = (from, to)=>{
+    if(to < 0 || to >= c.columns.length) return;
+    const [row] = c.columns.splice(from, 1);
+    c.columns.splice(to, 0, row);
+    renderPmColumns();
+  };
+  wrap.querySelectorAll("[data-pm-col-up]").forEach(b=>b.addEventListener("click", ()=>move(+b.dataset.pmColUp, +b.dataset.pmColUp-1)));
+  wrap.querySelectorAll("[data-pm-col-dn]").forEach(b=>b.addEventListener("click", ()=>move(+b.dataset.pmColDn, +b.dataset.pmColDn+1)));
+
+  /* Drag to reorder on a mouse; the arrows above do the same job and are
+     what actually works on a phone, where HTML5 drag events do not fire. */
+  let dragFrom = null;
+  wrap.querySelectorAll(".pm-col").forEach(row=>{
+    row.addEventListener("dragstart", e=>{ dragFrom = +row.dataset.pmIdx; row.classList.add("dragging"); });
+    row.addEventListener("dragend", ()=>{ row.classList.remove("dragging"); dragFrom = null; });
+    row.addEventListener("dragover", e=>{ e.preventDefault(); row.classList.add("drop-target"); });
+    row.addEventListener("dragleave", ()=>row.classList.remove("drop-target"));
+    row.addEventListener("drop", e=>{
+      e.preventDefault(); row.classList.remove("drop-target");
+      if(dragFrom === null) return;
+      move(dragFrom, +row.dataset.pmIdx);
+    });
+  });
+}
+
+async function savePmTemplate(){
+  const btn = document.getElementById("pm-d-save");
+  btn.disabled = true;
+  try{
+    const saved = await api("PUT", `/print-manager/templates/${pmState.editing.id}`, {
+      name: document.getElementById("pm-d-name").value.trim(),
+      config: pmState.editing.config
+    });
+    pmState.templates = pmState.templates.map(t=>t.id===saved.id ? saved : t);
+    renderPmTemplateList();
+    closeAllSheets();
+    toast("Template saved.", "ok");
+  }catch(e){ toast(e.message); }
+  btn.disabled = false;
+}
+
+function wirePrintManager(){
+  const back = document.getElementById("pm-back-link");
+  if(back) back.addEventListener("click", e=>{ e.preventDefault(); switchTab("home"); });
+  document.querySelectorAll("[data-pm-tab]").forEach(b=>
+    b.addEventListener("click", ()=>{ pmState.tab = b.dataset.pmTab; renderPrintManager(); }));
 }
 
 async function renderAccountsScreen(){

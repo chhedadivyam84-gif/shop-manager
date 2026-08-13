@@ -1056,6 +1056,79 @@ addColumn("products", "active", "INTEGER NOT NULL DEFAULT 1");
 
 
 /* ============================================================
+   PRINT TEMPLATES
+
+   One row per named template, keyed by doc_type. The isolation rule —
+   changing one document's print format must never touch another's — is
+   enforced HERE, by the schema, rather than by discipline in the UI: a
+   template row belongs to exactly one doc_type, and there is no shared
+   record for two documents to fight over.
+
+   That matters because the thing it replaces was exactly such a record.
+   settings.print_prefs was a single shop-wide blob read by both the
+   Invoice and the Challan, so "change the Challan columns" and "change
+   the Invoice columns" wrote to the same place. No amount of careful
+   coding makes that safe; a different shape does.
+
+   doc_type holds a registry key (see server/printRegistry.js) and is
+   deliberately NOT a foreign key: a template may be designed for a
+   document whose module does not exist yet, and must survive until it
+   does.
+   ============================================================ */
+db.exec(`
+CREATE TABLE IF NOT EXISTS doc_templates (
+  id TEXT PRIMARY KEY,
+  doc_type TEXT NOT NULL,
+  name TEXT NOT NULL,
+  config TEXT NOT NULL,
+  is_default INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_doc_templates_type ON doc_templates(doc_type);
+-- Two templates of one document cannot share a name. The same name under a
+-- DIFFERENT document is fine and expected — every document has a "Standard".
+CREATE UNIQUE INDEX IF NOT EXISTS idx_doc_templates_name ON doc_templates(doc_type, name);
+`);
+
+/* Which documents have actually been sent out, so Print Management can
+   filter Printed / Not Printed.
+
+   print_jobs already tracks the Windows spooler queue for the shop's own
+   printer. This is the wider fact: a PDF downloaded or a copy sent on
+   WhatsApp also answers "did this go to the customer?", and an owner
+   asking that question does not care which button was used. */
+db.exec(`
+CREATE TABLE IF NOT EXISTS doc_print_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  doc_type TEXT NOT NULL,
+  doc_id TEXT NOT NULL,
+  template_id TEXT,
+  method TEXT NOT NULL,
+  staff_name TEXT,
+  at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_doc_print_log_doc ON doc_print_log(doc_type, doc_id);
+`);
+
+/* Every registered document starts with one template named Standard, built
+   from the registry's own defaults. A shop that never opens the designer
+   still gets a sensible printout, and the designer always has something to
+   open rather than an empty screen. */
+(function seedDocTemplates() {
+  const reg = require("./printRegistry");
+  const insert = db.prepare(
+    "INSERT INTO doc_templates (id, doc_type, name, config, is_default, created_at) VALUES (?, ?, ?, ?, 1, ?)"
+  );
+  const has = db.prepare("SELECT COUNT(*) AS n FROM doc_templates WHERE doc_type = ?");
+  for (const doc of reg.DOCUMENTS) {
+    if (has.get(doc.key).n > 0) continue;
+    insert.run("TPL_" + doc.key + "_std", doc.key, "Standard",
+      JSON.stringify(reg.defaultConfig(doc)), Date.now());
+  }
+})();
+
+/* ============================================================
    FINANCIAL YEARS
 
    This app derives balances from current state rather than posting into

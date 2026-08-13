@@ -77,6 +77,7 @@
           <button class="qa-btn" data-goto="customers"><span class="ic">&#128100;</span>Customers</button>
           <button class="qa-btn" data-goto="reports"><span class="ic">&#128202;</span>Reports</button>
           <button class="qa-btn" data-goto="pquery"><span class="ic">&#128269;</span>Product Query</button>
+          <button class="qa-btn" data-goto="printmgr"><span class="ic">&#128424;</span>Print Manager</button>
           <button class="qa-btn" data-goto="accounts"><span class="ic">&#129534;</span>Accounts</button>
           <button class="qa-btn" id="qa-payment"><span class="ic">&#128176;</span>Payment</button>
         </div>
@@ -542,6 +543,32 @@
         <div class="section-title">What will be recorded</div>
         <div class="card" id="fyc-lines"></div>
         <div id="fyc-actions" style="margin-top:14px;"></div>
+      </div>
+
+      <!-- ============ PRINT MANAGEMENT & SEARCH ============
+           Every document type keeps its own templates. The two panes are
+           one screen because finding a document and choosing how it prints
+           are the same task, done in that order. -->
+      <div class="screen" id="screen-printmgr">
+        <a href="#" id="pm-back-link" class="muted" style="font-size:12px;font-weight:700;">&larr; Back to Home</a>
+        <div class="section-title" style="margin-top:10px;">Print Management</div>
+        <div class="chip-row">
+          <button class="chip selected" data-pm-tab="search">Search &amp; Print</button>
+          <button class="chip" data-pm-tab="templates">Templates</button>
+        </div>
+
+        <div id="pm-search-pane">
+          <div class="card" id="pm-filters" style="padding:12px;margin-top:10px;"></div>
+          <div class="section-title">Results</div>
+          <div class="card" id="pm-results"><div class="empty-hint">Set your filters and press Search.</div></div>
+        </div>
+
+        <div id="pm-templates-pane" style="display:none;">
+          <p class="muted" style="font-size:11px;margin:10px 0;">
+            Each document below keeps its own templates, page size, columns and wording.
+            Changing one never affects another.</p>
+          <div class="card" id="pm-doc-list"></div>
+        </div>
       </div>
 
       <!-- PRODUCT QUERY -->
@@ -1063,6 +1090,10 @@
   </div>
 
   <!-- ============ FULLSCREEN: INVOICE PREVIEW ============ -->
+  <div class="sheet" id="sheet-pm-preview"></div>
+  <div class="sheet" id="sheet-pm-templates"></div>
+  <div class="sheet" id="sheet-pm-designer"></div>
+
   <div class="fullscreen" id="fs-invoice">
     <div class="fs-bar">
       <div class="fs-title">Invoice Preview</div>

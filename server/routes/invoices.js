@@ -123,6 +123,29 @@ function nextDocNo(docType) {
   return docNo;
 }
 
+/**
+ * Applies a per-line discount percentage to a priced line.
+ *
+ * The bill-level discount (invoices.discount_type / discount_value) is
+ * unchanged and still applies on top of this — the two stack, line first.
+ * So a line reads: gross = qty x rate, then less its own discount%, and the
+ * printed Amount column is the NET figure, which is also what the subtotal
+ * sums. That ordering matters: taxing the gross and discounting afterwards
+ * would charge GST on money the customer never paid.
+ *
+ * discountPct defaults to 0, so every line saved before this existed nets to
+ * exactly its gross and no past bill changes by a paisa.
+ */
+function applyLineDiscount(calc, rawPct) {
+  const pct = Math.min(100, Math.max(0, Number(rawPct) || 0));
+  const gross = round2(calc.amount);
+  const lineDiscount = round2(gross * (pct / 100));
+  // calc.amount is overwritten with the NET figure deliberately: everything
+  // downstream (subtotal, per-line GST share, the printed Amount) should see
+  // one number, not two that can drift apart.
+  return { ...calc, discountPct: pct, grossAmount: gross, lineDiscount, amount: round2(gross - lineDiscount) };
+}
+
 function computeTotals({ items, discountType, discountValue, advance, taxType, transport, loading, roundOff, gstOnCharges, gstEnabled }) {
   // `it.amount` is already (rounded billed qty × rate) from the shared pricing
   // module — summing that rather than recomputing keeps the invoice's line
@@ -242,13 +265,24 @@ router.get("/:id", (req, res) => {
   const inv = db.prepare("SELECT * FROM invoices WHERE id = ?").get(req.params.id);
   if (!inv) return res.status(404).json({ error: "Invoice not found." });
   const items = db.prepare("SELECT * FROM invoice_items WHERE invoice_id = ?").all(inv.id);
-  res.json({ ...withStatus(inv), items });
+
+  /* The Estimate this bill was raised from, for the "Estimate No. / Estimate
+     Date" lines on the printed bill. The link is recorded on the QUOTATION
+     (quotations.converted_invoice_id), so this reads backwards — hence the
+     index added in db.js. Returns null for a bill typed from scratch, which is
+     most of them, and the print layout simply omits the lines. */
+  const estimate = db.prepare(
+    "SELECT quotation_no, date FROM quotations WHERE converted_invoice_id = ? LIMIT 1"
+  ).get(inv.id) || null;
+
+  res.json({ ...withStatus(inv), items, estimate });
 });
 
 router.post("/", (req, res) => {
   const { customerId, items: rawItems, discountType, discountValue, advance,
           paymentMethod, paperSize, transport, loading, roundOff, deliveryMan,
-          vehicleNumber, deliveryAddress, remarks, taxType: taxTypeOverride, locationId, areaId, date } = req.body;
+          vehicleNumber, deliveryAddress, remarks, taxType: taxTypeOverride, locationId, areaId, date,
+          dueDate, transportMode } = req.body;
   const docType = req.body.docType === "challan" ? "challan" : "invoice";
   const isChallan = docType === "challan";
   const location = resolveLocationId(locationId);
@@ -306,7 +340,7 @@ router.post("/", (req, res) => {
     const invalid = Pricing.validateLine(line, `${product.name} (${size.label})`);
     if (invalid) return res.status(400).json({ error: invalid });
 
-    const calc = Pricing.computeLine(line);
+    const calc = applyLineDiscount(Pricing.computeLine(line), raw.discountPct);
     piecesBySize[size.id] = (piecesBySize[size.id] || 0) + calc.pieces;
     items.push({
       productId: product.id,
@@ -349,16 +383,18 @@ router.post("/", (req, res) => {
   const insertInvoice = db.prepare(`
     INSERT INTO invoices (id, challan_no, doc_type, date, created_at, customer_id, subtotal, discount_type, discount_value,
       discount_amount, tax_type, cgst, sgst, igst, transport, loading, gst_on_charges, gst_enabled, round_off, total, advance, balance_due,
-      payment_method, paper_size, delivery_man, vehicle_number, delivery_address, remarks, location_id, area_id)
+      payment_method, paper_size, delivery_man, vehicle_number, delivery_address, remarks, location_id, area_id,
+      due_date, transport_mode)
     VALUES (@id, @challanNo, @docType, @date, @createdAt, @customerId, @subtotal, @discountType, @discountValue,
       @discountAmount, @taxType, @cgst, @sgst, @igst, @transport, @loading, @gstOnCharges, @gstEnabled, @roundOffAmount, @total, @advance,
-      @balanceDue, @paymentMethod, @paperSize, @deliveryMan, @vehicleNumber, @deliveryAddress, @remarks, @locationId, @areaId)
+      @balanceDue, @paymentMethod, @paperSize, @deliveryMan, @vehicleNumber, @deliveryAddress, @remarks, @locationId, @areaId,
+      @dueDate, @transportMode)
   `);
   const insertItem = db.prepare(`
     INSERT INTO invoice_items
       (invoice_id, product_id, size_id, name, code, brand, hsn_code, mode, length_ft, width_val, thickness_in,
-       size_label, pieces, per_piece, unit_label, qty, rate, gst_rate)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       size_label, pieces, per_piece, unit_label, qty, rate, gst_rate, discount_pct)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const bumpDue = db.prepare("UPDATE customers SET due = due + ? WHERE id = ?");
 
@@ -380,7 +416,10 @@ router.post("/", (req, res) => {
       deliveryAddress: (deliveryAddress || "").trim(),
       remarks: (remarks || "").trim(),
       locationId: location,
-      areaId: resolveAreaId(areaId, customerId)
+      areaId: resolveAreaId(areaId, customerId),
+      // Printed on the bill; neither drives any calculation.
+      dueDate: (dueDate || "").trim() || null,
+      transportMode: (transportMode || "").trim() || null
     });
     items.forEach(it => insertItem.run(
       id, it.productId, it.sizeId, it.name, it.code, it.brand, it.hsnCode, it.mode,
@@ -390,7 +429,7 @@ router.post("/", (req, res) => {
       // screen can offer "Delivery Challan (With Rate)" — but the invoice-level
       // GST/discount/transport/total above stays zero either way: a challan is
       // never a tax invoice regardless of whether a rate was noted per line.
-      it.billedQty, it.rate, it.gstRate
+      it.billedQty, it.rate, it.gstRate, it.discountPct || 0
     ));
     // Stock moves in pieces, not in billed area/length/volume — for a challan
     // too, since the goods physically leave the shop or warehouse. Deducted
@@ -428,7 +467,8 @@ router.put("/:id", (req, res) => {
 
   const { customerId, items: rawItems, discountType, discountValue, advance,
           paymentMethod, paperSize, transport, loading, roundOff, deliveryMan,
-          vehicleNumber, deliveryAddress, remarks, taxType: taxTypeOverride, locationId, areaId, date } = req.body;
+          vehicleNumber, deliveryAddress, remarks, taxType: taxTypeOverride, locationId, areaId, date,
+          dueDate, transportMode } = req.body;
   const gstOnCharges = req.body.gstOnCharges !== false;
   const gstEnabled = req.body.gstEnabled !== false;
   // Same optional-date rule as creating: a valid YYYY-MM-DD moves the
@@ -460,8 +500,8 @@ router.put("/:id", (req, res) => {
   const insertItem = db.prepare(`
     INSERT INTO invoice_items
       (invoice_id, product_id, size_id, name, code, brand, hsn_code, mode, length_ft, width_val, thickness_in,
-       size_label, pieces, per_piece, unit_label, qty, rate, gst_rate)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       size_label, pieces, per_piece, unit_label, qty, rate, gst_rate, discount_pct)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   // The OLD location this document actually deducted from — never the NEW
   // requested one — so reversal always undoes what really happened. Falls
@@ -499,7 +539,7 @@ router.put("/:id", (req, res) => {
       const invalid = Pricing.validateLine(line, `${product.name} (${size.label})`);
       if (invalid) throw { status: 400, error: invalid };
 
-      const calc = Pricing.computeLine(line);
+      const calc = applyLineDiscount(Pricing.computeLine(line), raw.discountPct);
       piecesBySize[size.id] = (piecesBySize[size.id] || 0) + calc.pieces;
       items.push({
         productId: product.id, sizeId: size.id, name: raw.name || product.name,
@@ -534,7 +574,7 @@ router.put("/:id", (req, res) => {
     items.forEach(it => insertItem.run(
       inv.id, it.productId, it.sizeId, it.name, it.code, it.brand, it.hsnCode, it.mode,
       it.lengthFt || null, it.widthVal || null, it.thicknessIn || null,
-      it.sizeLabel, it.pieces, it.perPiece, it.unit, it.billedQty, it.rate, it.gstRate
+      it.sizeLabel, it.pieces, it.perPiece, it.unit, it.billedQty, it.rate, it.gstRate, it.discountPct || 0
     ));
 
     // 5. Deduct stock for the NEW items at the NEW location and resync
@@ -555,6 +595,7 @@ router.put("/:id", (req, res) => {
         gst_on_charges=@gstOnCharges, gst_enabled=@gstEnabled, round_off=@roundOffAmount, total=@total, advance=@advance,
         balance_due=@balanceDue, payment_method=@paymentMethod, paper_size=@paperSize,
         delivery_man=@deliveryMan, vehicle_number=@vehicleNumber, delivery_address=@deliveryAddress,
+        due_date=@dueDate, transport_mode=@transportMode,
         remarks=@remarks, location_id=@locationId, area_id=@areaId, date=@date
       WHERE id=@id
     `).run({
@@ -571,7 +612,9 @@ router.put("/:id", (req, res) => {
       deliveryMan: (deliveryMan || "").trim(), vehicleNumber: (vehicleNumber || "").trim(),
       deliveryAddress: (deliveryAddress || "").trim(), remarks: (remarks || "").trim(),
       locationId: newLocation,
-      areaId: resolveAreaId(areaId, customerId)
+      areaId: resolveAreaId(areaId, customerId),
+      dueDate: (dueDate || "").trim() || null,
+      transportMode: (transportMode || "").trim() || null
     });
 
     // 7. Bump the (possibly new) customer's due by the new balance.
@@ -659,7 +702,13 @@ router.post("/:id/convert-to-invoice", (req, res) => {
 
   // Reuse the rate/GST% already noted on the challan's own items — computeTotals
   // just needs each line's amount and GST rate, not the full geometry.
-  const items = challanItems.map(it => ({ amount: round2(it.qty * it.rate), gstRate: it.gst_rate }));
+  // qty x rate is the GROSS line value; the stored discount_pct is what makes
+  // it net, so the raised bill totals exactly what the challan's own print
+  // showed rather than quietly dropping the line discounts.
+  const items = challanItems.map(it => ({
+    amount: round2(round2(it.qty * it.rate) * (1 - (Number(it.discount_pct) || 0) / 100)),
+    gstRate: it.gst_rate
+  }));
   const totals = computeTotals({
     items, discountType: discountType === "flat" ? "flat" : "pct", discountValue: Number(discountValue) || 0,
     advance, taxType, transport: challan.transport, loading: challan.loading,
@@ -680,8 +729,8 @@ router.post("/:id/convert-to-invoice", (req, res) => {
   const insertItem = db.prepare(`
     INSERT INTO invoice_items
       (invoice_id, product_id, size_id, name, code, brand, hsn_code, mode, length_ft, width_val, thickness_in,
-       size_label, pieces, per_piece, unit_label, qty, rate, gst_rate)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       size_label, pieces, per_piece, unit_label, qty, rate, gst_rate, discount_pct)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   db.transaction(() => {
@@ -703,7 +752,7 @@ router.post("/:id/convert-to-invoice", (req, res) => {
     challanItems.forEach(it => insertItem.run(
       invoiceId, it.product_id, it.size_id, it.name, it.code, it.brand, it.hsn_code, it.mode,
       it.length_ft, it.width_val, it.thickness_in, it.size_label, it.pieces, it.per_piece, it.unit_label,
-      it.qty, it.rate, it.gst_rate
+      it.qty, it.rate, it.gst_rate, it.discount_pct || 0
     ));
     if (challan.customer_id && totals.balanceDue > 0) {
       db.prepare("UPDATE customers SET due = due + ? WHERE id = ?").run(totals.balanceDue, challan.customer_id);

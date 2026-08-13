@@ -1552,6 +1552,41 @@ addColumn("settings", "allow_negative_stock", "INTEGER NOT NULL DEFAULT 0");
 // otherwise be another migration.
 addColumn("settings", "print_prefs", "TEXT NOT NULL DEFAULT '{}'");
 
+/* ---- what the printed bill needs and the app never asked for ----
+   The Bank Book's bank_accounts are a DIFFERENT thing: those record money
+   moving in and out. These four are the shop's own details as they appear
+   in the Bank Details box on a bill, so a customer knows where to pay. */
+addColumn("settings", "bank_name", "TEXT NOT NULL DEFAULT ''");
+addColumn("settings", "bank_account_no", "TEXT NOT NULL DEFAULT ''");
+addColumn("settings", "bank_ifsc", "TEXT NOT NULL DEFAULT ''");
+addColumn("settings", "bank_branch", "TEXT NOT NULL DEFAULT ''");
+
+/* The banner text and the closing line, typed by the owner rather than
+   fixed in code. Separate per document, because "SALE BILL" and
+   "DELIVERY CHALLAN" are not interchangeable. */
+addColumn("settings", "invoice_title", "TEXT NOT NULL DEFAULT 'TAX INVOICE'");
+addColumn("settings", "challan_title", "TEXT NOT NULL DEFAULT 'DELIVERY CHALLAN'");
+addColumn("settings", "footer_message", "TEXT NOT NULL DEFAULT 'Thank you for your business!'");
+
+/* ORIGINAL / DUPLICATE / TRIPLICATE, printed top-right. Off by default so
+   nobody's existing bills change appearance without them asking. */
+addColumn("settings", "show_copy_label", "INTEGER NOT NULL DEFAULT 0");
+
+/* ---- fields the bill layout shows that the document never stored ---- */
+addColumn("invoices", "due_date", "TEXT");
+addColumn("invoices", "transport_mode", "TEXT");
+
+/* Per-line discount percentage.
+   Until now a discount was one figure for the whole bill (invoices.discount_type
+   / discount_value / discount_amount), and that stays exactly as it is — this
+   is an ADDITIONAL discount applied to the line before the bill-level one, so
+   every existing bill still totals to precisely what it did. Default 0 means
+   no line ever changes value on upgrade. */
+addColumn("invoice_items", "discount_pct", "REAL NOT NULL DEFAULT 0");
+/* A Sale Bill prints the Estimate number it came from. The link is stored on
+   the quotation, so the lookup runs backwards and needs this index. */
+db.exec("CREATE INDEX IF NOT EXISTS idx_quotations_converted ON quotations(converted_invoice_id)");
+
 addColumn("invoices", "ack_status", "TEXT NOT NULL DEFAULT 'Pending'");
 addColumn("invoices", "ack_received_at", "INTEGER");
 addColumn("invoices", "ack_receiver_name", "TEXT DEFAULT ''");

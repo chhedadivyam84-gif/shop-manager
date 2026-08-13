@@ -166,6 +166,18 @@
           <input type="text" id="delivery-man-input" placeholder="e.g. Rahul">
           <label class="field-label" style="margin-top:10px;">Vehicle No. <span class="muted" style="font-weight:400;">— optional</span></label>
           <input type="text" id="vehicle-number-input" placeholder="e.g. MH 01 AB 1234">
+          <label class="field-label" style="margin-top:10px;">Transportation <span class="muted" style="font-weight:400;">— optional, prints on the bill</span></label>
+          <input type="text" id="transport-mode-input" placeholder="e.g. By Road" list="transport-mode-list">
+          <datalist id="transport-mode-list">
+            <option value="By Road"></option>
+            <option value="By Rail"></option>
+            <option value="By Air"></option>
+            <option value="By Sea"></option>
+            <option value="Self Pickup"></option>
+            <option value="Hand Delivery"></option>
+          </datalist>
+          <label class="field-label" style="margin-top:10px;">Payment Due Date <span class="muted" style="font-weight:400;">— optional, for a credit bill</span></label>
+          <input type="date" id="due-date-input">
           <label class="field-label" style="margin-top:10px;">Delivery Address <span class="muted" style="font-weight:400;">— optional, if different from billing address</span></label>
           <input type="text" id="delivery-address-input" placeholder="Leave blank to use the customer's address">
           <label class="field-label" style="margin-top:10px;">Remarks <span class="muted" style="font-weight:400;">— optional</span></label>
@@ -1044,10 +1056,19 @@
     <div class="fs-bar">
       <div class="fs-title">Invoice Preview</div>
       <div style="display:flex;align-items:center;gap:8px;">
+        <button class="chip" id="bill-panel-btn">&#9881; Print Settings</button>
         <button class="chip" id="paper-a5">A5</button>
         <button class="chip" id="paper-a4">A4</button>
         <button class="fs-close" data-close-fs="fs-invoice">&#10005;</button>
       </div>
+    </div>
+
+    <!-- Bill Print Settings. Slides in beside the bill on a wide screen and
+         sits above it on a phone. Every change redraws the bill immediately,
+         so the panel is never describing something you cannot see. -->
+    <div class="bill-panel" id="bill-panel">
+      <div class="bp-head">Bill Print Settings</div>
+      <div class="bp-body" id="bill-panel-body"></div>
     </div>
     <!-- Previous / Next bill stepper. Filled by renderInvoicePageContent() only
          when the bill was opened from a list; empty otherwise. -->

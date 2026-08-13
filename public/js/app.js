@@ -374,6 +374,18 @@ async function initApp(){
   document.getElementById("vehicle-number-input").addEventListener("input", (e)=>{
     state.vehicleNumber = e.target.value;
   });
+  /* Both are optional extras on the bill. Guarded because this runs during
+     app start-up: an unguarded miss here throws before anything else is
+     wired, and the whole app comes up dead rather than just missing one
+     field. */
+  const transportModeInput = document.getElementById("transport-mode-input");
+  if(transportModeInput) transportModeInput.addEventListener("input", (e)=>{
+    state.transportMode = e.target.value;
+  });
+  const dueDateInput = document.getElementById("due-date-input");
+  if(dueDateInput) dueDateInput.addEventListener("input", (e)=>{
+    state.dueDate = e.target.value;
+  });
   document.getElementById("delivery-address-input").addEventListener("input", (e)=>{
     state.deliveryAddress = e.target.value;
   });
@@ -778,6 +790,7 @@ async function initApp(){
 
   document.getElementById("paper-a5").addEventListener("click", ()=>setPaper("A5"));
   document.getElementById("paper-a4").addEventListener("click", ()=>setPaper("A4"));
+  document.getElementById("bill-panel-btn").addEventListener("click", toggleBillPanel);
   document.getElementById("inv-download").addEventListener("click", downloadInvoicePdf);
   document.getElementById("inv-print").addEventListener("click", ()=>window.print());
   document.getElementById("inv-whatsapp-pdf").addEventListener("click", shareInvoicePdfWhatsApp);
@@ -1360,12 +1373,14 @@ function renderEditModeBanner(){
     state.cart = []; state.selectedCustomerId = null; state.taxTypeOverride = null; state.advance = 0; state.discountValue = 0;
     state.transport = 0; state.loading = 0; state.deliveryMan = "";
     state.vehicleNumber = ""; state.deliveryAddress = ""; state.remarks = ""; state.gstEnabled = true;
+    state.transportMode = ""; state.dueDate = "";
     // A fresh bill always starts at "Without Rate" — the previous bill's
     // print choice must not carry into an unrelated new challan.
     state.challanShowRate = false;
     const set = (id, val) => { const inp=document.getElementById(id); if(inp) inp.value = val; };
     set("advance-input", 0); set("discount-value", 0); set("transport-input", 0); set("loading-input", 0);
     set("delivery-man-input", ""); set("vehicle-number-input", ""); set("delivery-address-input", ""); set("remarks-input", "");
+    set("transport-mode-input", ""); set("due-date-input", "");
     set("billing-date", isoDate(new Date()));
     setGstEnabled(true);
     renderEditModeBanner();
@@ -1409,6 +1424,8 @@ async function editExistingInvoice(inv){
   state.gstEnabled = inv.gst_enabled !== 0;
   state.deliveryMan = inv.delivery_man || "";
   state.vehicleNumber = inv.vehicle_number || "";
+  state.transportMode = inv.transport_mode || "";
+  state.dueDate = inv.due_date || "";
   state.deliveryAddress = inv.delivery_address || "";
   state.remarks = inv.remarks || "";
   state.editingInvoiceId = inv.id;
@@ -1433,6 +1450,8 @@ async function editExistingInvoice(inv){
   set("loading-input", state.loading);
   set("delivery-man-input", state.deliveryMan);
   set("vehicle-number-input", state.vehicleNumber);
+  set("transport-mode-input", state.transportMode);
+  set("due-date-input", state.dueDate);
   set("delivery-address-input", state.deliveryAddress);
   set("remarks-input", state.remarks);
   document.querySelectorAll('[data-disc]').forEach(b=>b.classList.toggle("selected", b.dataset.disc===state.discountType));
@@ -1448,11 +1467,20 @@ async function editExistingInvoice(inv){
 }
 
 /** Live figures for a cart line, straight from the shared pricing module. */
+/** Prices one cart line, INCLUDING its own discount percentage.
+ *  Mirrors applyLineDiscount in server/routes/invoices.js exactly: gross is
+ *  qty x rate, the line discount comes off first, and the result is what the
+ *  subtotal sums and the bill prints. If these two ever disagree, the figure
+ *  on screen would not be the figure saved. */
 function lineCalc(c){
-  return Pricing.computeLine({
+  const calc = Pricing.computeLine({
     mode:c.mode, lengthFt:c.lengthFt, widthVal:c.widthVal,
     thicknessIn:c.thicknessIn, pieces:c.pieces, rate:c.rate
   });
+  const pct = Math.min(100, Math.max(0, Number(c.discountPct) || 0));
+  const gross = round2(calc.amount);
+  const lineDiscount = round2(gross * (pct/100));
+  return { ...calc, discountPct: pct, grossAmount: gross, lineDiscount, amount: round2(gross - lineDiscount) };
 }
 function renderCart(){
   const wrap = document.getElementById("cart-list");
@@ -1498,6 +1526,7 @@ function renderCart(){
         ${m.needsWidth ? dim("Width", m.widthUnit, "widthVal", c.widthVal) : ""}
         ${dim("Qty", "pcs", "pieces", c.pieces)}
         ${dim("Rate", "₹/"+m.unit+(isChallanMode()?" · optional":""), "rate", c.rate)}
+        ${dim("Disc", "%", "discountPct", c.discountPct)}
       </div>
 
       <div class="line-calc">
@@ -1738,13 +1767,14 @@ async function completeSale(){
       items: state.cart.map(c=>({
         productId:c.productId, sizeId:c.sizeId, name:c.name, mode:c.mode,
         lengthFt:c.lengthFt, widthVal:c.widthVal, thicknessIn:c.thicknessIn,
-        pieces:c.pieces, rate: c.rate
+        pieces:c.pieces, rate: c.rate, discountPct: c.discountPct || 0
       })),
       discountType: state.discountType, discountValue: state.discountValue,
       advance: state.advance, paymentMethod: state.paymentMethod, paperSize: state.paperSize,
       transport: state.transport, loading: state.loading, roundOff: state.roundOff,
       gstOnCharges: state.gstOnCharges, gstEnabled: state.gstEnabled, deliveryMan: state.deliveryMan,
       vehicleNumber: state.vehicleNumber, deliveryAddress: state.deliveryAddress, remarks: state.remarks,
+      transportMode: state.transportMode || "", dueDate: state.dueDate || "",
       // Only sent when staff explicitly picked a GST Type for this invoice —
       // omitted (undefined) falls back to the customer's Customer Master
       // default server-side, same as before this override existed.
@@ -1761,6 +1791,7 @@ async function completeSale(){
     state.cart = []; state.advance = 0; state.discountValue = 0; state.taxTypeOverride = null;
     state.transport = 0; state.loading = 0; state.deliveryMan = "";
     state.vehicleNumber = ""; state.deliveryAddress = ""; state.remarks = ""; state.gstEnabled = true;
+    state.transportMode = ""; state.dueDate = "";
     // A fresh bill always starts at "Without Rate" — the previous bill's
     // print choice must not carry into an unrelated new challan.
     state.challanShowRate = false;
@@ -3844,6 +3875,57 @@ function openSettings(){
       <button class="btn btn-outline" id="st-run-backup" style="margin-top:8px;">Back Up Now</button>
       <p class="muted" style="font-size:11px;margin-top:8px;">Your whole shop lives in one file. Automatic snapshots are kept on this PC daily. Use <strong>Download Backup</strong> to keep a copy on your phone or a USB drive — that's your safety net if this PC is ever lost.</p>
 
+      <div class="section-title">Bill Header &amp; Footer</div>
+      <p class="muted" style="font-size:11px;margin-bottom:10px;">
+        Your logo, your bank details and the wording that prints on every bill and challan.
+      </p>
+
+      <label class="field-label">Shop Logo</label>
+      <div class="st-logo-row">
+        <div class="st-logo-preview" id="st-logo-preview">${
+          (state.settings||{}).logo_data
+            ? `<img src="${state.settings.logo_data}" alt="Current logo">`
+            : `<span class="muted" style="font-size:10.5px;">No logo</span>`}</div>
+        <div style="flex:1;">
+          <input type="file" id="st-logo-file" accept="image/png,image/jpeg,image/svg+xml,image/webp" style="font-size:12px;">
+          <p class="muted" style="font-size:11px;margin-top:6px;">
+            Prints about 2 cm wide at the top-left of the bill, so a small file is plenty — under 400 KB.
+          </p>
+          ${(state.settings||{}).logo_data
+            ? `<a href="#" id="st-logo-remove" class="btn-danger-link" style="font-size:11.5px;">Remove logo</a>` : ""}
+        </div>
+      </div>
+
+      <label class="field-label" style="margin-top:14px;">Bank Name</label>
+      <input type="text" id="st-bank-name" value="${escapeHtml((state.settings||{}).bank_name||"")}" placeholder="e.g. HDFC Bank">
+      <label class="field-label" style="margin-top:10px;">Account Number</label>
+      <input type="text" id="st-bank-acc" value="${escapeHtml((state.settings||{}).bank_account_no||"")}" placeholder="e.g. 1234 5678 9012 34">
+      <label class="field-label" style="margin-top:10px;">IFSC Code</label>
+      <input type="text" id="st-bank-ifsc" value="${escapeHtml((state.settings||{}).bank_ifsc||"")}" placeholder="e.g. HDFC0001234">
+      <label class="field-label" style="margin-top:10px;">Branch</label>
+      <input type="text" id="st-bank-branch" value="${escapeHtml((state.settings||{}).bank_branch||"")}" placeholder="e.g. Malad West">
+      <p class="muted" style="font-size:11px;margin-top:6px;">
+        Printed in the <strong>Bank Details</strong> box so a customer knows where to pay. This is separate from
+        Bank Book accounts, which record money actually moving.
+      </p>
+
+      <label class="field-label" style="margin-top:14px;">Invoice Heading</label>
+      <input type="text" id="st-invoice-title" value="${escapeHtml((state.settings||{}).invoice_title||"")}" placeholder="TAX INVOICE">
+      <label class="field-label" style="margin-top:10px;">Challan Heading</label>
+      <input type="text" id="st-challan-title" value="${escapeHtml((state.settings||{}).challan_title||"")}" placeholder="DELIVERY CHALLAN">
+      <label class="field-label" style="margin-top:10px;">Footer Message</label>
+      <input type="text" id="st-footer-message" value="${escapeHtml((state.settings||{}).footer_message||"")}" placeholder="Thank you for your business!">
+
+      <label class="pe-check" style="display:flex;align-items:flex-start;gap:8px;font-size:13px;font-weight:700;margin-top:14px;">
+        <input type="checkbox" id="st-copy-label" ${(state.settings||{}).show_copy_label===1?"checked":""} style="margin-top:2px;">
+        <span>Print an ORIGINAL marking</span>
+      </label>
+      <p class="muted" style="font-size:11px;margin-top:6px;">
+        Adds a boxed <strong>ORIGINAL</strong> at the top-right, the way a carbon bill book marks the customer's copy.
+      </p>
+
+      <button class="btn btn-primary" id="st-save-bill-header" style="margin-top:14px;">Save Bill Header &amp; Footer</button>
+
       <div class="section-title">Printed Document Theme</div>
       <p class="muted" style="font-size:11px;margin-bottom:10px;">How your Invoice and Delivery Challan look when printed. Set separately, so a formal Tally-style invoice can go out alongside a plain challan.</p>
       <label class="field-label">Invoice / Estimate</label>
@@ -3929,6 +4011,67 @@ function openSettings(){
     describe();
     invThemeSel.addEventListener("change", describe);
     chThemeSel.addEventListener("change", describe);
+    /* Bill header & footer — the shop's own details as they appear on paper. */
+    sheet.querySelector("#st-save-bill-header").addEventListener("click", async ()=>{
+      const btn = sheet.querySelector("#st-save-bill-header");
+      btn.disabled = true;
+      try{
+        state.settings = await api("PUT","/settings", {
+          bankName:      sheet.querySelector("#st-bank-name").value.trim(),
+          bankAccountNo: sheet.querySelector("#st-bank-acc").value.trim(),
+          bankIfsc:      sheet.querySelector("#st-bank-ifsc").value.trim().toUpperCase(),
+          bankBranch:    sheet.querySelector("#st-bank-branch").value.trim(),
+          invoiceTitle:  sheet.querySelector("#st-invoice-title").value.trim(),
+          challanTitle:  sheet.querySelector("#st-challan-title").value.trim(),
+          footerMessage: sheet.querySelector("#st-footer-message").value,
+          showCopyLabel: sheet.querySelector("#st-copy-label").checked
+        });
+        if(lastPreviewInvoice && document.getElementById("fs-invoice").classList.contains("show")){
+          renderInvoicePageContent();
+        }
+        toast("Saved. Every bill from now on carries these.", "ok");
+      }catch(err){ toast(err.message); }
+      btn.disabled = false;
+    });
+
+    /* Logo upload. Read in the browser and sent as a data URI — no file
+       handling on the server, and it travels inside the one .db file that
+       backup and restore already move. */
+    const logoFile = sheet.querySelector("#st-logo-file");
+    if(logoFile) logoFile.addEventListener("change", ()=>{
+      const file = logoFile.files && logoFile.files[0];
+      if(!file) return;
+      const reader = new FileReader();
+      reader.onload = async ()=>{
+        try{
+          await api("PUT","/settings/logo", { logo: reader.result });
+          state.settings = await api("GET","/settings");
+          sheet.querySelector("#st-logo-preview").innerHTML =
+            `<img src="${state.settings.logo_data}" alt="Current logo">`;
+          if(lastPreviewInvoice && document.getElementById("fs-invoice").classList.contains("show")){
+            renderInvoicePageContent();
+          }
+          toast("Logo saved — it prints at the top of every bill.", "ok");
+        }catch(err){ toast(err.message); logoFile.value = ""; }
+      };
+      reader.onerror = ()=>toast("Could not read that file.");
+      reader.readAsDataURL(file);
+    });
+
+    const logoRemove = sheet.querySelector("#st-logo-remove");
+    if(logoRemove) logoRemove.addEventListener("click", async e=>{
+      e.preventDefault();
+      if(!confirm("Remove the logo from your bills?")) return;
+      try{
+        await api("PUT","/settings/logo", { logo: null });
+        state.settings = await api("GET","/settings");
+        sheet.querySelector("#st-logo-preview").innerHTML =
+          `<span class="muted" style="font-size:10.5px;">No logo</span>`;
+        logoRemove.style.display = "none";
+        toast("Logo removed.", "ok");
+      }catch(err){ toast(err.message); }
+    });
+
     sheet.querySelector("#st-save-themes").addEventListener("click", async ()=>{
       try{
         state.settings = await api("PUT","/settings", {
@@ -4497,7 +4640,9 @@ function openInvoicePreview(existingInvoice){
           mode:r.mode, size_label:r.sizeLabel,
           length_ft:r.lengthFt, width_val:r.widthVal, thickness_in:r.thicknessIn,
           pieces:r.pieces, per_piece:r.perPiece, unit_label:r.unit,
-          qty:r.billedQty, rate:r.rate
+          // Named as the database names it, because the print renderer reads
+          // saved bills and unsaved previews through exactly the same code.
+          qty:r.billedQty, rate:r.rate, discount_pct:r.discountPct || 0
         };
       }),
       tax_type: t.taxType, discount_amount:t.discount, subtotal:t.subtotal,
@@ -4697,168 +4842,489 @@ function applyPrintTheme(el, challan){
   return t;
 }
 
+/* ============================================================
+   THE PRINTED BILL
+
+   One layout, driven by Bill Print Settings. Which columns appear, whether
+   rates print, the paper size and the wording all come from `billPrefs()`;
+   the figures themselves always come from the saved document, never from the
+   print panel. That split is the whole design: the panel decides what is
+   SHOWN, and can never change what is OWED.
+   ============================================================ */
+
+/* Every column the item table can carry, in printing order.
+   `show` reads the saved preferences; `cell` renders one line. Adding a
+   column here is the only edit needed — the header, the body and the blank
+   filler rows below are all generated from this one list, so they can never
+   disagree about how many columns there are. */
+function billColumns(ctx){
+  const p = ctx.prefs, money = v => ctx.showRate ? fmtMoney(v) : "";
+  return [
+    { key:"sn",     label:"Sr.",                cls:"c-sn",   show:p.cols.sn,
+      cell:(it,i)=>String(i+1) },
+    { key:"name",   label:"Item Name",          cls:"c-name", show:p.cols.name,
+      cell:it=>escapeHtml(it.name) },
+    { key:"size",   label:"Size / Description", cls:"c-size", show:p.cols.size,
+      cell:it=>escapeHtml(it.size_label || "") },
+    { key:"qty",    label:"Qty",                cls:"c-qty num", show:p.cols.qty,
+      cell:it=>billQtyCell(it) },
+    { key:"unit",   label:"Unit",               cls:"c-unit", show:p.cols.unit,
+      cell:it=>escapeHtml(billUnitOf(it)) },
+    { key:"rate",   label:"Rate",               cls:"c-rate num", show:p.cols.rate,
+      cell:it=>money(it.rate) },
+    { key:"disc",   label:"Disc.%",             cls:"c-disc num", show:p.cols.disc,
+      cell:it=>ctx.showRate ? Number(it.discount_pct || 0).toFixed(2) : "" },
+    { key:"taxable",label:"Taxable Amt",        cls:"c-taxable num", show:p.cols.taxable,
+      cell:it=>money(billLineNet(it)) },
+    { key:"cgst",   label:"CGST",               cls:"c-cgst num", show:p.cols.cgst && ctx.gstEnabled && !ctx.isIGST,
+      cell:it=>money(billLineTax(it) / 2) },
+    { key:"sgst",   label:"SGST",               cls:"c-sgst num", show:p.cols.sgst && ctx.gstEnabled && !ctx.isIGST,
+      cell:it=>money(billLineTax(it) / 2) },
+    { key:"igst",   label:"IGST",               cls:"c-igst num", show:p.cols.igst && ctx.gstEnabled && ctx.isIGST,
+      cell:it=>money(billLineTax(it)) },
+    { key:"amount", label:"Amount",             cls:"c-amt num", show:p.cols.amount,
+      cell:it=>money(billLineNet(it)) }
+  ].filter(c=>c.show);
+}
+
+/** Gross line value, before its own discount. */
+function billLineGross(it){ return round2((Number(it.qty)||0) * (Number(it.rate)||0)); }
+/** What the line is actually worth after its own discount — the figure the
+ *  Amount column shows and the subtotal sums. */
+function billLineNet(it){
+  return round2(billLineGross(it) * (1 - (Number(it.discount_pct)||0)/100));
+}
+/** This line's share of GST, at its own rate, on its own discounted value. */
+function billLineTax(it){
+  return round2(billLineNet(it) * ((Number(it.gst_rate)||0)/100));
+}
+function billUnitOf(it){
+  const mode = it.mode || "UNIT";
+  return it.unit_label || (Pricing.MODES[mode] && Pricing.MODES[mode].unit) || "";
+}
+/* Area and length items bill in a different unit from the physical piece
+   count — 4 sheets at 8x4ft is 32 Sq.ft — so both are shown, or "32" reads
+   as a mismatch against a delivery of 4. */
+function billQtyCell(it){
+  const mode = it.mode || "UNIT";
+  const unit = billUnitOf(it);
+  if(mode !== "UNIT" && it.pieces === 1) return "1 pc";
+  const q = Pricing.formatQty(it.qty, mode).replace(" "+unit, "");
+  return q + (mode !== "UNIT" && it.pieces ? `<span class="c-pieces">(${it.pieces} pc)</span>` : "");
+}
+
+/** Plain grouped figure, no symbol — the bill's own columns are already
+ *  headed in rupees and a symbol per cell only crowds the grid. */
+function fmtMoney(v){
+  return (Number(v)||0).toLocaleString("en-IN", {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+
 function renderInvoicePageContent(){
   const inv = lastPreviewInvoice; if(!inv) return;
-  const cfg = state.settings;
+  const cfg = state.settings || {};
   const cust = state.customers.find(c=>c.id===inv.customer_id);
-  const isA4 = state.paperSize==="A4";
   const challan = inv.doc_type === "challan";
+  const prefs = billPrefs();
+  const isA4 = (prefs.paper || state.paperSize) === "A4";
+
   const pageEl = document.getElementById("invoice-page-content");
   pageEl.classList.toggle("size-a5", !isA4);
   applyPrintTheme(pageEl, challan);
 
-  // Previous / Next stepper — outside .invoice-page so it is never captured
-  // by the PDF or the printer, which only take the page itself.
   const navEl = document.getElementById("invoice-bill-nav");
   if(navEl){
     navEl.innerHTML = inv.id ? billNavHtml("invoice", inv.id) : "";
     if(inv.id) wireBillNav(navEl, "invoice", inv.id, openExistingInvoice);
   }
 
-  // A challan's item table and totals box keep EXACTLY the same layout
-  // whether "Show Rate" is on or off — only the Rate/Amount cell CONTENTS
-  // (and the money values in the totals box below) go blank, never hidden
-  // columns and never a "0.00", so staff can write the real figures in by
-  // hand after printing. "Delivery Challan (With Rate)" vs "(Without Rate)"
-  // is a PRINT-TIME choice on the same saved document — the item rate is
-  // stored either way (see server/routes/invoices.js), this toggle only
-  // controls whether it's PRINTED.
-  const showRate = !challan || state.challanShowRate;
-  const head = `<th class="c-sn">Sr No.</th><th>${challan ? "Product / Item" : "Product Description"}</th><th class="c-size">${challan ? "Description" : "Size"}</th><th class="c-unit">Unit</th><th class="c-num">Qty</th><th class="c-num">Rate</th><th class="c-num c-amt">Amount</th>`;
-  const rows = inv.items.map((it,i)=>{
-    const mode = it.mode || "UNIT";
-    const unit = it.unit_label || (Pricing.MODES[mode] && Pricing.MODES[mode].unit) || "";
-    // Area/length modes bill in a different unit than the physical piece
-    // count (e.g. 4 sheets at 8x4ft = 32 Sq.ft) — show both so "32" doesn't
-    // read as a mismatch against "4". A single piece is shown as just
-    // "1 pc" instead, since the billed number adds nothing when there's
-    // only one piece. UNIT mode has no such split (qty already IS the
-    // piece count), so nothing extra.
-    const qtyCell = mode !== "UNIT" && it.pieces === 1
-      ? "1 pc"
-      : `${Pricing.formatQty(it.qty, mode).replace(" "+unit,"")}${mode !== "UNIT" && it.pieces ? `<div class="c-pieces">(${it.pieces} pc)</div>` : ""}`;
-    const base = `<td class="c-sn">${i+1}</td><td>${escapeHtml(it.name)}</td><td class="c-size">${escapeHtml(it.size_label||"—")}</td><td class="c-unit">${escapeHtml(unit)}</td><td class="c-num">${qtyCell}</td>`;
-    return `<tr>${base}<td class="c-num">${showRate ? fmtPaise(it.rate).replace("Rs. ","") : ""}</td><td class="c-num c-amt">${showRate ? fmtPaise(it.qty*it.rate) : ""}</td></tr>`;
-  }).join("");
-  // Total Quantity is the physical piece count across all items, not the
-  // billed area/length sum — matching what gets counted at load/unload,
-  // and staying meaningful even when items mix billing units (Sq.ft +
-  // Rft + Unit can't be summed together, but pieces always can).
-  const totalQtyForFoot = round2(inv.items.reduce((s,it)=>s+(Number(it.pieces)||0),0));
-  const tfoot = `<tfoot><tr>
-    <td colspan="4" style="text-align:right;">Total Quantity</td>
-    <td class="c-num">${totalQtyForFoot}</td>
-    <td colspan="3"></td>
-  </tr></tfoot>`;
+  /* A challan can print with the rate column blank so staff write the figures
+     in by hand — the layout stays byte-for-byte identical either way, so the
+     ruled boxes still line up. An invoice can now do the same. */
+  const showRate = challan ? state.challanShowRate : prefs.showRate !== false;
 
-  // Priced invoice: full totals. Challan: same boxed layout for visual
-  // consistency with the shop's paper form, but CGST/SGST/IGST stay at zero
-  // here — a challan never carries real GST regardless of what the box
-  // shows, and this "Grand Total" is a print-only figure (goods value +
-  // transport/loading) that is NEVER what's stored as the invoice's actual
-  // total or added to the customer's due — that stays transport+loading only,
-  // set server-side, so a challan can never function as a demand for payment.
-  const challanSubtotal = inv.items.reduce((s,it)=>s+(it.qty*it.rate||0),0);
-  const displayTotal = challan ? (challanSubtotal + inv.transport + inv.loading) : inv.total;
-  const discountAmt = challan ? 0 : (inv.discount_amount || 0);
-  // A challan never carries real GST, and "Non-GST Invoice" (gst_enabled=0)
-  // deliberately has none either — both skip the tax rows entirely.
+  /* A challan never carries GST, and a Non-GST Invoice deliberately has none.
+     Both come from the SAVED document — the print panel shows this but cannot
+     change it, because the tax on the paper must match the tax in the books. */
   const gstEnabled = !challan && inv.gst_enabled !== 0;
-  const cgst = gstEnabled ? (inv.cgst || 0) : 0, sgst = gstEnabled ? (inv.sgst || 0) : 0, igst = gstEnabled ? (inv.igst || 0) : 0;
   const isIGST = gstEnabled && inv.tax_type === "IGST";
-  // Effective rate shown next to the CGST/SGST/IGST label — derived from the
-  // actual stored tax and taxable value (works for a mixed-rate bill too,
-  // since it's a weighted average, not any single item's GST%), not hardcoded.
-  const taxableGoods = Math.max(0, (inv.subtotal||0) - (inv.discount_amount||0));
-  const effectiveRatePct = taxableGoods > 0 ? Math.round(((cgst+sgst+igst) / taxableGoods) * 100) : 0;
-  const halfRatePct = Math.round(effectiveRatePct / 2);
+  const ctx = { prefs, showRate, gstEnabled, isIGST };
 
-  // The totals box keeps the SAME layout regardless of showRate — only the
-  // money values that depend on item pricing (Subtotal, Discount, Grand
-  // Total) go blank instead of printing a misleading "0.00" when the rate
-  // itself isn't shown. Transport/Additional Charges are real entered
-  // rupee amounts independent of any item rate, so they still print.
-  //
-  // Transport is rendered only when there IS one, matching how Additional
-  // Charges already behaves: a "Without Rate" challan is meant to come out
-  // with every money box empty for staff to fill in by hand, and a printed
-  // "Transport ₹0.00" was the one figure still landing on the page. Hiding
-  // the row at zero (rather than blanking its value) keeps both print modes
-  // identical to each other, since it's absent from both.
-  const totalsBox = `<div class="erp-totals-box">
-    <div class="erp-tb-row"><span>Subtotal</span><span>${showRate ? fmtPaise(challan?challanSubtotal:inv.subtotal) : ""}</span></div>
-    <div class="erp-tb-row"><span>Discount</span><span>${showRate ? (discountAmt>0?"-":"")+fmtPaise(discountAmt) : ""}</span></div>
-    ${inv.transport ? `<div class="erp-tb-row"><span>Transport</span><span>${fmtPaise(inv.transport)}</span></div>` : ""}
-    ${inv.loading ? `<div class="erp-tb-row"><span>Additional Charges</span><span>${fmtPaise(inv.loading)}</span></div>` : ""}
+  const cols = billColumns(ctx);
+  const items = inv.items || [];
+
+  const headRow = cols.map(c=>`<th class="${c.cls}">${escapeHtml(c.label)}</th>`).join("");
+  const bodyRows = items.map((it,i)=>
+    `<tr>${cols.map(c=>`<td class="${c.cls}">${c.cell(it,i)}</td>`).join("")}</tr>`).join("");
+
+  /* Blank ruled lines down to a fixed row count, the way a printed bill book
+     is ruled to the foot of the page whether or not every line is used. It
+     also stops a two-item bill from leaving the totals box floating in the
+     middle of nowhere. */
+  const minRows = isA4 ? 12 : 7;
+  const fillerCount = Math.max(0, minRows - items.length);
+  const filler = Array.from({length: fillerCount}, ()=>
+    `<tr class="bill-filler">${cols.map(c=>`<td class="${c.cls}">&nbsp;</td>`).join("")}</tr>`).join("");
+
+  /* Totals. A challan's are print-only: the goods value plus any transport,
+     never stored as what the customer owes (that stays transport + loading,
+     set server-side), so a challan can never act as a demand for payment. */
+  const challanSubtotal = round2(items.reduce((s,it)=>s+billLineNet(it), 0));
+  const subtotal = challan ? challanSubtotal : inv.subtotal;
+  const discountAmt = challan ? 0 : (inv.discount_amount || 0);
+  const displayTotal = challan ? round2(challanSubtotal + inv.transport + inv.loading) : inv.total;
+  const cgst = gstEnabled ? (inv.cgst||0) : 0;
+  const sgst = gstEnabled ? (inv.sgst||0) : 0;
+  const igst = gstEnabled ? (inv.igst||0) : 0;
+  const taxableGoods = round2(Math.max(0, subtotal - discountAmt));
+  const effRate = taxableGoods > 0 ? Math.round(((cgst+sgst+igst)/taxableGoods)*100) : 0;
+  const halfRate = Math.round(effRate/2);
+
+  const tRow = (label, value, cls) =>
+    `<div class="bt-row${cls?" "+cls:""}"><span>${label}</span><span>${value}</span></div>`;
+  const money = v => showRate ? fmtMoney(v) : "";
+
+  const totalsBox = `<div class="bill-totals">
+    ${tRow("Sub Total", money(subtotal))}
+    ${tRow("Discount", showRate ? (discountAmt>0?"-":"")+fmtMoney(discountAmt) : "")}
+    ${gstEnabled ? tRow("Taxable Amount", money(taxableGoods)) : ""}
+    ${prefs.cols.transport && inv.transport ? tRow("Transport Charges", fmtMoney(inv.transport)) : ""}
+    ${prefs.cols.labour && inv.loading ? tRow("Labour Charges", fmtMoney(inv.loading)) : ""}
     ${!gstEnabled ? "" : isIGST
-      ? `<div class="erp-tb-row"><span>IGST ${effectiveRatePct}%</span><span>${fmtPaise(igst)}</span></div>`
-      : `<div class="erp-tb-row"><span>CGST ${halfRatePct}%</span><span>${fmtPaise(cgst)}</span></div><div class="erp-tb-row"><span>SGST ${halfRatePct}%</span><span>${fmtPaise(sgst)}</span></div>`}
-    ${!challan && inv.round_off ? `<div class="erp-tb-row"><span>Round Off</span><span>${inv.round_off>0?"+":""}${fmtPaise(inv.round_off)}</span></div>` : ""}
-    <div class="erp-tb-row erp-tb-grand"><span>Grand Total</span><span>${showRate ? fmtPaise(displayTotal) : ""}</span></div>
-    ${!challan && inv.advance>0 ? `<div class="erp-tb-row"><span>Advance Paid</span><span>-${fmtPaise(inv.advance)}</span></div>
-    <div class="erp-tb-row" style="font-weight:800;"><span>Balance Due</span><span>${fmtPaise(inv.balance_due)}</span></div>` : ""}
+      ? tRow(`IGST @ ${effRate}%`, money(igst))
+      : tRow(`CGST @ ${halfRate}%`, money(cgst)) + tRow(`SGST @ ${halfRate}%`, money(sgst))}
+    ${!challan && inv.round_off ? tRow("Round Off", (inv.round_off>0?"+":"")+fmtMoney(inv.round_off)) : ""}
+    ${tRow("Grand Total ₹", money(displayTotal), "bt-grand")}
+    ${!challan && inv.advance>0
+      ? tRow("Advance Paid", "-"+fmtMoney(inv.advance)) + tRow("Balance Due", fmtMoney(inv.balance_due), "bt-bold")
+      : ""}
   </div>`;
 
-  const deliveryAddr = inv.delivery_address || (cust && cust.address) || "";
-  const bottomLeft = `<div class="erp-bottom-left">
-    ${deliveryAddr ? `<div><b>Delivery Address:</b> ${escapeHtml(deliveryAddr)}</div>` : ""}
-    ${inv.remarks ? `<div><b>Remarks:</b> ${escapeHtml(inv.remarks)}</div>` : ""}
-    ${challan ? `<div><b>Status:</b> ${inv.converted_invoice_id ? "Billed (Tax Invoice raised)" : "Pending — not yet billed"}</div>` : ""}
-    ${challan ? `<div><b>Acknowledgement:</b> ${inv.ack_status === "Received"
-      ? "Received" + (inv.ack_receiver_name ? " — signed by " + escapeHtml(inv.ack_receiver_name) : "")
-      : "Pending — signed copy not yet returned"}</div>` : ""}
-    ${showRate ? `<div><b>Amount in Words:</b> ${Pricing.amountInWords(displayTotal)}</div>` : ""}
-  </div>`;
+  /* The meta strip under the party block: how this bill prints, who sold it,
+     how it travelled. Each chip is omitted when there is nothing to say,
+     rather than printing an empty label. */
+  const metaChips = [
+    `<span class="bm-chip"><b>${showRate ? "With Rate" : "Without Rate"}</b></span>`,
+    gstEnabled ? `<span class="bm-chip">GST Type : <b>${isIGST ? "IGST" : "CGST + SGST"}</b></span>`
+               : `<span class="bm-chip">GST Type : <b>No GST</b></span>`,
+    inv.delivery_man ? `<span class="bm-chip">Salesman : <b>${escapeHtml(inv.delivery_man)}</b></span>` : "",
+    inv.transport_mode ? `<span class="bm-chip">Transportation : <b>${escapeHtml(inv.transport_mode)}</b></span>` : "",
+    inv.vehicle_number ? `<span class="bm-chip">Vehicle : <b>${escapeHtml(inv.vehicle_number)}</b></span>` : ""
+  ].filter(Boolean).join("");
 
-  const bannerText = challan ? "DELIVERY CHALLAN" : "ESTIMATE CHALLAN";
-  document.getElementById("invoice-page-content").innerHTML = `
-    <div class="erp-banner">${bannerText}</div>
-    <div class="erp-header">
-      <div class="erp-biz-name">${escapeHtml(cfg.business_name)}</div>
-      ${cfg.tagline ? `<div class="erp-tag">${escapeHtml(cfg.tagline)}</div>` : ""}
-      ${cfg.address ? `<div class="erp-addr">${escapeHtml(cfg.address)}</div>` : ""}
-      <div class="erp-contact-line">${[
-        cfg.gstin ? `GSTIN: ${escapeHtml(cfg.gstin)}` : "",
-        cfg.phones ? `Ph: ${escapeHtml(cfg.phones)}` : "",
-        cfg.email ? `Email: ${escapeHtml(cfg.email)}` : "",
-        cfg.website ? `Website: ${escapeHtml(cfg.website)}` : ""
-      ].filter(Boolean).join("  |  ")}</div>
+  const title = challan
+    ? (cfg.challan_title || "DELIVERY CHALLAN")
+    : (cfg.invoice_title || "TAX INVOICE");
+
+  const est = inv.estimate;
+  const leftInfo = [
+    [challan ? "Challan No." : "Bill No.", escapeHtml(inv.challan_no)],
+    ["Date", fyDay(inv.date)],
+    est ? ["Estimate No.", escapeHtml(est.quotation_no)] : null,
+    est ? ["Estimate Date", fyDay(est.date)] : null
+  ].filter(Boolean);
+  const rightInfo = [
+    ["Party Name", cust ? escapeHtml(cust.name) : "Walk-in Customer"],
+    cust && cust.phone ? ["Mobile", escapeHtml(cust.phone)] : null,
+    cust && cust.address ? ["Address", escapeHtml(cust.address)] : null,
+    cust && cust.gst ? ["GSTIN", escapeHtml(cust.gst)] : null
+  ].filter(Boolean);
+  const kvHtml = rows => rows.map(([k,v])=>
+    `<div class="bi-row"><span class="bi-k">${k}</span><span class="bi-c">:</span><span class="bi-v">${v}</span></div>`).join("");
+
+  const hasBank = cfg.bank_name || cfg.bank_account_no || cfg.bank_ifsc;
+  const dueDateLine = inv.due_date ? `<div class="bf-row"><span>Due Date</span><span>: ${fyDay(inv.due_date)}</span></div>` : "";
+
+  pageEl.innerHTML = `
+    <div class="bill-head">
+      ${cfg.logo_data ? `<div class="bh-logo"><img src="${cfg.logo_data}" alt=""></div>` : `<div class="bh-logo bh-logo-empty"></div>`}
+      <div class="bh-mid">
+        <div class="bh-name">${escapeHtml(cfg.business_name || "")}</div>
+        ${cfg.tagline ? `<div class="bh-tag">${escapeHtml(cfg.tagline)}</div>` : ""}
+        ${cfg.address ? `<div class="bh-addr">${escapeHtml(cfg.address)}</div>` : ""}
+        <div class="bh-contact">${[
+          cfg.phones ? "☎ " + escapeHtml(cfg.phones) : "",
+          cfg.email ? "✉ " + escapeHtml(cfg.email) : "",
+          cfg.website ? escapeHtml(cfg.website) : ""
+        ].filter(Boolean).join("  |  ")}</div>
+      </div>
+      <div class="bh-right">
+        ${cfg.show_copy_label ? `<div class="bh-copy">ORIGINAL</div>` : ""}
+        ${cfg.gstin ? `<div class="bh-gstin">GSTIN : ${escapeHtml(cfg.gstin)}</div>` : ""}
+      </div>
     </div>
 
-    <div class="erp-parties">
-      <div class="erp-party-box">
-        <div class="erp-box-label">${challan ? "Deliver To" : "Buyer"}</div>
-        <div class="erp-box-name">${cust?escapeHtml(cust.name):"Walk-in Customer"}</div>
-        ${cust&&cust.address ? `<div>${escapeHtml(cust.address)}</div>` : ""}
-        ${cust&&cust.phone ? `<div>Mobile: ${escapeHtml(cust.phone)}</div>` : ""}
-        ${cust&&cust.gst ? `<div>GSTIN: ${escapeHtml(cust.gst)}</div>` : ""}
-        ${cust&&cust.state ? `<div>State: ${escapeHtml(cust.state)}</div>` : ""}
-      </div>
-      <div class="erp-doc-box">
-        <div class="erp-kv"><span>${challan ? "Challan No." : "Estimate No."}</span><b>${inv.challan_no}</b></div>
-        <div class="erp-kv"><span>Date</span><b>${inv.date}</b></div>
-        ${inv.delivery_man ? `<div class="erp-kv"><span>Salesperson</span><b>${escapeHtml(inv.delivery_man)}</b></div>` : ""}
-        ${inv.vehicle_number ? `<div class="erp-kv"><span>Vehicle No.</span><b>${escapeHtml(inv.vehicle_number)}</b></div>` : ""}
-      </div>
+    <div class="bill-title"><span>${escapeHtml(title)}</span></div>
+
+    <div class="bill-info">
+      <div class="bi-col">${kvHtml(leftInfo)}</div>
+      <div class="bi-col">${kvHtml(rightInfo)}</div>
     </div>
 
-    <div class="erp-table-wrap">
-      <table class="erp-table">
-        <thead><tr>${head}</tr></thead>
-        <tbody>${rows}</tbody>
-        ${tfoot}
+    <div class="bill-meta">${metaChips}</div>
+
+    <div class="bill-items">
+      <table>
+        <thead><tr>${headRow}</tr></thead>
+        <tbody>${bodyRows}${filler}</tbody>
       </table>
     </div>
 
-    <div class="erp-bottom">
-      ${bottomLeft}
+    <div class="bill-lower">
+      <div class="bl-left">
+        <div class="bl-words">
+          <div class="bl-label">Amount in Words :</div>
+          <div class="bl-words-text">${showRate ? escapeHtml(Pricing.amountInWords(displayTotal)) : "&nbsp;"}</div>
+        </div>
+        ${prefs.cols.remarks ? `<div class="bl-remarks">
+          <div class="bl-label">Remarks :</div>
+          <div class="bl-remarks-text">${escapeHtml(inv.remarks || "")}</div>
+        </div>` : ""}
+      </div>
       ${totalsBox}
     </div>
 
-    <div class="erp-terms">${challan
-      ? `<strong>PLYWOOD, BLACKBOARD, ARE MANUFACTURED FROM NATURAL WOOD WHICH IS BELOW BIO DEGRADEBLE, WE DONOT GUARANTEE AGAINST ANY NATURAL DECAY DEFICIENTY, DETORATION AND LIKE INCLUDING MANUFACTURING DEFACT AND/OR IMPERFACT QUALITY</strong>`
-      : `<strong>NO GURANTEE AND WARRANTY FOR DECORATIVE PRODUCTS AND AIR BUBBLES IN LAMMINATES, ACRYLIC AND PVC LAMINATES OR ANY SHADE VARIATION AFTER INSTALLATION. NO EXCHANGE. NO RETURN IN ANY CONDITION. PLEASE CHECK THE MATERIAL ON DELIVERY.</strong>`}</div>
+    <div class="bill-foot">
+      <div class="bf-box">
+        <div class="bf-title">Payment Details :</div>
+        ${!challan ? `<div class="bf-row"><span>Payment Type</span><span>: ${escapeHtml(inv.payment_method || "—")}</span></div>` : ""}
+        ${dueDateLine}
+        ${!challan && showRate ? `<div class="bf-row bf-due"><span>Balance Due</span><span>: ₹ ${fmtMoney(inv.balance_due)}</span></div>` : ""}
+        ${challan ? `<div class="bf-row"><span>Status</span><span>: ${inv.converted_invoice_id ? "Billed" : "Pending — not yet billed"}</span></div>` : ""}
+      </div>
+      ${hasBank ? `<div class="bf-box">
+        <div class="bf-title">Bank Details :</div>
+        ${cfg.bank_name ? `<div class="bf-line">${escapeHtml(cfg.bank_name)}</div>` : ""}
+        ${cfg.bank_account_no ? `<div class="bf-line">A/c No. ${escapeHtml(cfg.bank_account_no)}</div>` : ""}
+        ${cfg.bank_ifsc ? `<div class="bf-line">IFSC : ${escapeHtml(cfg.bank_ifsc)}</div>` : ""}
+        ${cfg.bank_branch ? `<div class="bf-line">Branch : ${escapeHtml(cfg.bank_branch)}</div>` : ""}
+      </div>` : ""}
+      <div class="bf-box bf-sign">
+        <div class="bf-title bf-sign-for">For ${escapeHtml(cfg.business_name || "")}</div>
+        <div class="bf-sign-line">Authorised Signature</div>
+      </div>
+    </div>
+
+    ${cfg.footer_message ? `<div class="bill-thanks">${escapeHtml(cfg.footer_message)}</div>` : ""}
+
+    <div class="bill-terms">${challan
+      ? `PLYWOOD, BLACKBOARD, ARE MANUFACTURED FROM NATURAL WOOD WHICH IS BELOW BIO DEGRADEBLE, WE DONOT GUARANTEE AGAINST ANY NATURAL DECAY DEFICIENTY, DETORATION AND LIKE INCLUDING MANUFACTURING DEFACT AND/OR IMPERFACT QUALITY`
+      : `NO GURANTEE AND WARRANTY FOR DECORATIVE PRODUCTS AND AIR BUBBLES IN LAMMINATES, ACRYLIC AND PVC LAMINATES OR ANY SHADE VARIATION AFTER INSTALLATION. NO EXCHANGE. NO RETURN IN ANY CONDITION. PLEASE CHECK THE MATERIAL ON DELIVERY.`}</div>
   `;
+}
+
+/* ============================================================
+   BILL PRINT SETTINGS
+
+   What the panel controls and, just as importantly, what it does not.
+
+   It controls PRESENTATION: paper, which columns appear, whether rates
+   print. All of that is saved shop-wide in settings.print_prefs, so the
+   format an owner sets once is what every counter prints.
+
+   It does NOT control the figures. GST type and whether a bill carries GST
+   are properties of the SAVED BILL — they set the tax charged, the
+   customer's balance and the GST return. The panel shows them so the
+   operator can see what they are about to print, and offers an Edit Bill
+   link, but changing them here would let the paper in a customer's hand
+   disagree with the books. That is why they are read-only.
+   ============================================================ */
+
+const BILL_PREF_DEFAULTS = {
+  paper: "A4",
+  showRate: true,
+  cols: {
+    sn: 1, name: 1, size: 1, qty: 1, unit: 1, rate: 1, disc: 1, amount: 1,
+    taxable: 0, cgst: 0, sgst: 0, igst: 0,
+    transport: 1, labour: 1, remarks: 1
+  }
+};
+
+/* The checkbox list, in the order the panel shows it. `col` is the key in
+   prefs.cols; `hint` explains anything not obvious from the label alone. */
+const BILL_PREF_COLUMNS = [
+  { col:"sn",       label:"Sr. No." },
+  { col:"name",     label:"Item Name" },
+  { col:"size",     label:"Size / Description" },
+  { col:"qty",      label:"Quantity" },
+  { col:"unit",     label:"Unit" },
+  { col:"rate",     label:"Rate" },
+  { col:"disc",     label:"Discount" },
+  { col:"amount",   label:"Amount" },
+  { col:"taxable",  label:"Taxable Amount" },
+  { col:"cgst",     label:"CGST",  hint:"Only prints on a CGST + SGST bill" },
+  { col:"sgst",     label:"SGST",  hint:"Only prints on a CGST + SGST bill" },
+  { col:"igst",     label:"IGST",  hint:"Only prints on an IGST bill" },
+  { col:"transport",label:"Transport Charges" },
+  { col:"labour",   label:"Labour Charges" },
+  { col:"remarks",  label:"Remarks" }
+];
+
+/** Current preferences, always complete — a stored value missing a key (from
+ *  an older save, or a hand-edited row) falls back to the default rather than
+ *  reaching the renderer as undefined and hiding a column by accident.
+ *
+ *  While the panel is open its working copy wins, so ticking a box redraws the
+ *  bill straight away. Close the panel without saving and the shop default
+ *  comes back — the preview is never showing something nobody chose. */
+function billPrefs(){
+  if(billPanelPrefs) return billPanelPrefs;
+  let stored = {};
+  try{ stored = JSON.parse((state.settings && state.settings.print_prefs) || "{}") || {}; }
+  catch(e){ stored = {}; }
+  return {
+    paper: stored.paper === "A5" ? "A5" : "A4",
+    showRate: stored.showRate !== false,
+    cols: { ...BILL_PREF_DEFAULTS.cols, ...(stored.cols || {}) }
+  };
+}
+
+/** Saves shop-wide. Owner-only server-side, so staff changing the panel see
+ *  it apply to the bill in front of them but cannot alter the shop default. */
+async function saveBillPrefs(prefs){
+  const json = JSON.stringify(prefs);
+  if(state.settings) state.settings.print_prefs = json;
+  try{
+    await api("PUT", "/settings/print-prefs", { printPrefs: json });
+    return true;
+  }catch(e){
+    // Staff can still print with their choices; only the saving is refused.
+    toast(e.message || "Could not save as default.");
+    return false;
+  }
+}
+
+/* Working copy while the panel is open. Edits apply to the preview at once;
+   "Save as Default" is what makes them stick for everyone. */
+let billPanelPrefs = null;
+
+function renderBillPanel(){
+  const inv = lastPreviewInvoice;
+  const el = document.getElementById("bill-panel-body");
+  if(!el || !inv) return;
+  const p = billPanelPrefs;
+  const challan = inv.doc_type === "challan";
+  const gstEnabled = !challan && inv.gst_enabled !== 0;
+  const isIGST = gstEnabled && inv.tax_type === "IGST";
+
+  const check = (id, label, checked, hint) => `
+    <label class="bp-check">
+      <input type="checkbox" data-bp-col="${id}"${checked ? " checked" : ""}>
+      <span>${escapeHtml(label)}${hint ? `<span class="bp-hint">${escapeHtml(hint)}</span>` : ""}</span>
+    </label>`;
+
+  const radio = (name, value, label, checked, disabled) => `
+    <label class="bp-radio${disabled ? " bp-disabled" : ""}">
+      <input type="radio" name="${name}" value="${value}"${checked ? " checked" : ""}${disabled ? " disabled" : ""}>
+      <span>${escapeHtml(label)}</span>
+    </label>`;
+
+  el.innerHTML = `
+    <div class="bp-group">
+      <div class="bp-label">Select Format</div>
+      <div class="bp-row">
+        ${radio("bp-paper","A4","A4", p.paper==="A4")}
+        ${radio("bp-paper","A5","A5", p.paper==="A5")}
+      </div>
+    </div>
+
+    <div class="bp-group">
+      <div class="bp-label">Show / Hide Columns</div>
+      ${BILL_PREF_COLUMNS.map(c=>check(c.col, c.label, !!p.cols[c.col], c.hint)).join("")}
+    </div>
+
+    <div class="bp-group">
+      <div class="bp-label">Rate Display Option</div>
+      ${radio("bp-rate","with","With Rate", p.showRate)}
+      ${radio("bp-rate","without","Without Rate", !p.showRate)}
+      <div class="bp-hint bp-hint-block">The Rate and Amount columns print blank, with the
+      layout unchanged, so figures can be written in by hand.</div>
+    </div>
+
+    <div class="bp-group">
+      <div class="bp-label">GST Option</div>
+      ${radio("bp-gst","cgst","CGST + SGST", gstEnabled && !isIGST, true)}
+      ${radio("bp-gst","igst","IGST", isIGST, true)}
+      ${radio("bp-gst","none","No GST", !gstEnabled, true)}
+      <div class="bp-hint bp-hint-block">This is what the bill itself carries &mdash; it sets the
+      tax charged, the customer's balance and your GST return, so it is not a print choice.
+      ${inv.id && !challan ? `<a href="#" id="bp-edit-gst">Edit this bill</a> to change it.` : ""}</div>
+    </div>
+
+    <div class="bp-group">
+      <div class="bp-label">Document Title</div>
+      <input type="text" id="bp-title" class="bp-input"
+             value="${escapeHtml(challan ? (state.settings.challan_title||"") : (state.settings.invoice_title||""))}"
+             placeholder="${challan ? "DELIVERY CHALLAN" : "TAX INVOICE"}">
+      <div class="bp-label" style="margin-top:12px;">Footer Message</div>
+      <input type="text" id="bp-footer" class="bp-input"
+             value="${escapeHtml(state.settings.footer_message||"")}"
+             placeholder="Thank you for your business!">
+      <div class="bp-hint bp-hint-block">Saved for every bill, not just this one.</div>
+    </div>
+
+    <div class="bp-group bp-actions">
+      <button class="btn btn-gold" id="bp-save">Save as Default</button>
+    </div>
+  `;
+
+  el.querySelectorAll("[data-bp-col]").forEach(cb=>{
+    cb.addEventListener("change", ()=>{
+      billPanelPrefs.cols[cb.dataset.bpCol] = cb.checked ? 1 : 0;
+      renderInvoicePageContent();
+    });
+  });
+  el.querySelectorAll('[name="bp-paper"]').forEach(r=>{
+    r.addEventListener("change", ()=>{
+      billPanelPrefs.paper = r.value;
+      state.paperSize = r.value;
+      renderInvoicePageContent();
+    });
+  });
+  el.querySelectorAll('[name="bp-rate"]').forEach(r=>{
+    r.addEventListener("change", ()=>{
+      billPanelPrefs.showRate = r.value === "with";
+      if(challan) state.challanShowRate = billPanelPrefs.showRate;
+      renderInvoicePageContent();
+    });
+  });
+
+  const editLink = document.getElementById("bp-edit-gst");
+  if(editLink) editLink.addEventListener("click", e=>{
+    e.preventDefault();
+    closeInvoicePreview();
+    openExistingInvoice(inv.id);
+  });
+
+  document.getElementById("bp-save").addEventListener("click", async ()=>{
+    const title = document.getElementById("bp-title").value.trim();
+    const footer = document.getElementById("bp-footer").value;
+    const body = { footerMessage: footer };
+    if(title) body[challan ? "challanTitle" : "invoiceTitle"] = title;
+    try{
+      const saved = await api("PUT", "/settings", body);
+      state.settings = { ...state.settings, ...saved };
+    }catch(e){ toast(e.message || "Could not save the wording."); return; }
+    const ok = await saveBillPrefs(billPanelPrefs);
+    if(ok) toast("Saved as the default for every bill.", "ok");
+    renderInvoicePageContent();
+  });
+}
+
+function toggleBillPanel(){
+  const panel = document.getElementById("bill-panel");
+  if(!panel) return;
+  const open = panel.classList.toggle("open");
+  document.getElementById("bill-panel-btn").classList.toggle("active", open);
+  if(open){
+    // Seeded from the saved default, then edited freely. Cleared on close so
+    // billPrefs() goes back to reading the shop's own setting.
+    billPanelPrefs = null;
+    billPanelPrefs = JSON.parse(JSON.stringify(billPrefs()));
+    renderBillPanel();
+  }else{
+    billPanelPrefs = null;
+  }
+  renderInvoicePageContent();
 }
 /**
  * Rasterises the on-screen invoice/challan into a jsPDF document and hands

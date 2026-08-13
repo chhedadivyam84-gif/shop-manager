@@ -23,12 +23,16 @@ const cleanTheme = (v, fallback) => (PRINT_THEMES.includes(v) ? v : fallback);
 
 router.put("/", requireRole("owner"), (req, res) => {
   const { businessName, tagline, address, phones, gstin, state, upiId, email, website,
-          invoiceTheme, challanTheme, allowNegativeStock } = req.body;
+          invoiceTheme, challanTheme, allowNegativeStock,
+          bankName, bankAccountNo, bankIfsc, bankBranch,
+          invoiceTitle, challanTitle, footerMessage, showCopyLabel } = req.body;
   const current = db.prepare("SELECT * FROM settings WHERE id = 1").get();
 
   db.prepare(`
     UPDATE settings SET business_name=?, tagline=?, address=?, phones=?, gstin=?, state=?, upi_id=?, email=?, website=?,
-      invoice_theme=?, challan_theme=?, allow_negative_stock=? WHERE id=1
+      invoice_theme=?, challan_theme=?, allow_negative_stock=?,
+      bank_name=?, bank_account_no=?, bank_ifsc=?, bank_branch=?,
+      invoice_title=?, challan_title=?, footer_message=?, show_copy_label=? WHERE id=1
   `).run(
     (businessName || current.business_name).trim(), (tagline ?? current.tagline),
     (address ?? current.address), (phones ?? current.phones), (gstin ?? current.gstin),
@@ -36,7 +40,20 @@ router.put("/", requireRole("owner"), (req, res) => {
     (email ?? current.email), (website ?? current.website),
     invoiceTheme === undefined ? (current.invoice_theme || "classic") : cleanTheme(invoiceTheme, current.invoice_theme || "classic"),
     challanTheme === undefined ? (current.challan_theme || "classic") : cleanTheme(challanTheme, current.challan_theme || "classic"),
-    allowNegativeStock === undefined ? current.allow_negative_stock : (allowNegativeStock ? 1 : 0)
+    allowNegativeStock === undefined ? current.allow_negative_stock : (allowNegativeStock ? 1 : 0),
+    // The shop's OWN bank, printed in the Bank Details box so a customer knows
+    // where to pay. Nothing here touches the Bank Book's accounts — those
+    // record money moving, these are just four lines of text on paper.
+    (bankName ?? current.bank_name), (bankAccountNo ?? current.bank_account_no),
+    (bankIfsc ?? current.bank_ifsc), (bankBranch ?? current.bank_branch),
+    // A blank title would print a bill with no heading at all, so an empty
+    // string keeps what is already stored rather than saving nothing.
+    ((invoiceTitle ?? "").trim() || current.invoice_title),
+    ((challanTitle ?? "").trim() || current.challan_title),
+    // The footer, by contrast, is allowed to be blank — some shops want no
+    // closing line at all.
+    (footerMessage ?? current.footer_message),
+    showCopyLabel === undefined ? current.show_copy_label : (showCopyLabel ? 1 : 0)
   );
 
   logAction(req, "settings.update", "");
@@ -98,6 +115,77 @@ router.put("/numbering", requireRole("owner"), (req, res) => {
   logAction(req, "settings.numbering",
     `Next Estimate: ${result.nextEstimateNo || "(unchanged)"}, Next Challan: ${result.nextChallanNo || "(unchanged)"}`);
   res.json(result);
+});
+
+/**
+ * Bill Print Settings — paper, which columns print, whether rates show.
+ *
+ * Shop-wide rather than per device, because "Save as Default" on a bill means
+ * "this is how our bills look", not "how this one PC prints". Report print
+ * settings stay per device for the opposite reason: those genuinely differ
+ * between the counter PC and the warehouse phone.
+ *
+ * Stored as opaque JSON. The client owns the shape and validates it on read
+ * (see billPrefs in app.js) — the important thing here is that nothing but
+ * presentation can get in, so this can never affect a figure on a bill.
+ */
+router.put("/print-prefs", requireRole("owner"), (req, res) => {
+  const { printPrefs } = req.body;
+  let parsed;
+  try {
+    parsed = JSON.parse(printPrefs);
+  } catch (e) {
+    return res.status(400).json({ error: "Print settings could not be read." });
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return res.status(400).json({ error: "Print settings could not be read." });
+  }
+  // Re-serialised from the parsed object rather than storing the raw string,
+  // so whatever lands in the column is always valid JSON this app wrote.
+  db.prepare("UPDATE settings SET print_prefs = ? WHERE id = 1").run(JSON.stringify(parsed));
+  logAction(req, "settings.printPrefs", "");
+  res.json({ ok: true, printPrefs: JSON.stringify(parsed) });
+});
+
+/**
+ * The shop's logo, as a data URI, printed at the top-left of every bill.
+ *
+ * Stored in the database rather than as a file on disk on purpose: the whole
+ * app backs up and restores by copying one .db file, so a logo kept beside it
+ * as a loose file would quietly vanish on the first restore — and nobody
+ * notices a missing logo until a customer is holding the bill.
+ *
+ * Kept small deliberately. A 2 MB photograph would be read out of the database
+ * and pushed into the page on every single print; a logo has no need to be
+ * more than a few tens of kilobytes at the size it prints.
+ */
+const LOGO_MAX_BYTES = 400 * 1024;
+
+router.put("/logo", requireRole("owner"), (req, res) => {
+  const { logo } = req.body;
+
+  // An explicit null is "remove the logo" — a real instruction, not a mistake,
+  // and the only way back to a plain header once one has been set.
+  if (logo === null || logo === "") {
+    db.prepare("UPDATE settings SET logo_data = '' WHERE id = 1").run();
+    logAction(req, "settings.logo", "Logo removed");
+    return res.json({ ok: true, hasLogo: false });
+  }
+
+  if (typeof logo !== "string" || !/^data:image\/(png|jpeg|jpg|gif|webp|svg\+xml);base64,/.test(logo)) {
+    return res.status(400).json({ error: "That does not look like an image. Choose a PNG, JPG or SVG file." });
+  }
+  // Rough decoded size — base64 carries 3 bytes in every 4 characters.
+  const approxBytes = Math.floor((logo.length - logo.indexOf(",") - 1) * 0.75);
+  if (approxBytes > LOGO_MAX_BYTES) {
+    return res.status(400).json({
+      error: `That image is about ${Math.round(approxBytes / 1024)} KB. Please use one under ${LOGO_MAX_BYTES / 1024} KB — a logo prints at around 2 cm, so a small file is plenty.`
+    });
+  }
+
+  db.prepare("UPDATE settings SET logo_data = ? WHERE id = 1").run(logo);
+  logAction(req, "settings.logo", `Logo set (${Math.round(approxBytes / 1024)} KB)`);
+  res.json({ ok: true, hasLogo: true });
 });
 
 module.exports = router;

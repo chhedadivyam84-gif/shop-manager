@@ -747,3 +747,248 @@ nav.bottom .tab span:last-child{
   margin-top:8px;
   -webkit-overflow-scrolling:touch;
 }
+
+
+/* ============================================================
+   THE PRINTED BILL
+   Built to match a printed bill book: everything ruled, the grid
+   carried down to the foot of the page whether or not every line
+   is used, and one navy band on the grand total.
+
+   Colours are literal hex, never the app's oklch() theme tokens:
+   this markup is rasterised by html2canvas for the PDF, and that
+   build cannot parse oklch().
+   ============================================================ */
+.invoice-page{ --bl-ink:#111827; --bl-rule:#9aa3af; --bl-hair:#c9cfd8; --bl-navy:#16294d; --bl-red:#b3261e; }
+
+.bill-head{
+  display:grid;
+  grid-template-columns:auto 1fr auto;
+  gap:12px;
+  align-items:flex-start;
+  padding-bottom:8px;
+  border-bottom:2px solid var(--bl-ink);
+}
+.bh-logo{ width:74px; }
+.bh-logo img{ max-width:74px; max-height:74px; display:block; }
+.bh-logo-empty{ width:0; }
+.bh-mid{ text-align:center; }
+.bh-name{ font-size:27px; font-weight:800; letter-spacing:.5px; line-height:1.1; color:var(--bl-ink); }
+.bh-tag{ font-size:10.5px; letter-spacing:.6px; text-transform:uppercase; margin-top:2px; }
+.bh-addr{ font-size:11px; margin-top:3px; }
+.bh-contact{ font-size:10.5px; margin-top:2px; }
+.bh-right{ text-align:right; min-width:112px; }
+.bh-copy{
+  border:1.5px solid var(--bl-red);
+  color:var(--bl-red);
+  font-weight:800;
+  font-size:11px;
+  letter-spacing:1px;
+  padding:5px 10px;
+  text-align:center;
+}
+.bh-gstin{ font-size:9.5px; margin-top:6px; }
+
+.bill-title{ text-align:center; margin:10px 0 9px; }
+.bill-title span{
+  display:inline-block;
+  border:1.5px solid var(--bl-ink);
+  padding:5px 26px;
+  font-size:15px;
+  font-weight:800;
+  letter-spacing:1.5px;
+}
+
+/* Bill No / Date on the left, party on the right — one ruled box, split. */
+.bill-info{
+  display:grid;
+  grid-template-columns:1fr 1.15fr;
+  border:1px solid var(--bl-ink);
+  font-size:11px;
+}
+.bi-col{ padding:7px 9px; }
+.bi-col + .bi-col{ border-left:1px solid var(--bl-ink); }
+.bi-row{ display:grid; grid-template-columns:82px 8px 1fr; align-items:baseline; padding:1.5px 0; }
+.bi-k{ color:#374151; }
+.bi-v{ font-weight:700; }
+
+.bill-meta{ display:flex; flex-wrap:wrap; gap:0; margin-top:7px; }
+.bm-chip{
+  border:1px solid var(--bl-ink);
+  padding:4px 10px;
+  font-size:10px;
+  margin:0 -1px -1px 0;
+  white-space:nowrap;
+}
+.bm-chip b{ font-weight:700; }
+
+.bill-items{ margin-top:7px; }
+.bill-items table{ width:100%; border-collapse:collapse; font-size:10.5px; }
+.bill-items th, .bill-items td{
+  border:1px solid var(--bl-ink);
+  padding:4px 6px;
+  vertical-align:top;
+}
+.bill-items th{
+  background:#eef1f6;
+  font-weight:700;
+  font-size:10px;
+  text-align:left;
+  white-space:nowrap;
+}
+.bill-items .num{ text-align:right; font-variant-numeric:tabular-nums; }
+.bill-items th.num{ text-align:right; }
+.bill-items .c-sn{ width:26px; text-align:center; }
+.bill-items th.c-sn{ text-align:center; }
+.bill-items .c-qty{ width:48px; }
+.bill-items .c-unit{ width:44px; }
+.bill-items .c-rate, .bill-items .c-amt, .bill-items .c-taxable{ width:74px; }
+.bill-items .c-disc{ width:46px; }
+.bill-items .c-cgst, .bill-items .c-sgst, .bill-items .c-igst{ width:62px; }
+.bill-items .c-size{ width:23%; }
+.c-pieces{ display:block; font-size:8.5px; color:#4b5563; }
+/* The unused rules of a bill book — present, ruled, and empty. */
+.bill-filler td{ height:15px; }
+
+.bill-lower{ display:grid; grid-template-columns:1fr 268px; gap:0; margin-top:-1px; }
+.bl-left{ border:1px solid var(--bl-ink); border-right:none; display:flex; flex-direction:column; }
+.bl-words{ padding:6px 9px; border-bottom:1px solid var(--bl-ink); }
+.bl-label{ font-size:9.5px; font-weight:700; }
+.bl-words-text{ font-size:11px; font-style:italic; margin-top:2px; }
+.bl-remarks{ padding:6px 9px; flex:1; min-height:52px; }
+.bl-remarks-text{ font-size:10.5px; margin-top:2px; white-space:pre-wrap; }
+
+.bill-totals{ border:1px solid var(--bl-ink); font-size:11px; }
+.bt-row{
+  display:flex;
+  justify-content:space-between;
+  gap:10px;
+  padding:3.5px 10px;
+  border-bottom:1px solid var(--bl-hair);
+}
+.bt-row:last-child{ border-bottom:none; }
+.bt-row span:last-child{ font-variant-numeric:tabular-nums; }
+.bt-grand{
+  background:var(--bl-navy);
+  color:#ffffff;
+  font-weight:800;
+  font-size:13px;
+  padding:6px 10px;
+  border-bottom:none;
+}
+.bt-bold{ font-weight:800; }
+
+.bill-foot{ display:grid; grid-template-columns:repeat(3, 1fr); margin-top:8px; }
+.bf-box{ border:1px solid var(--bl-ink); padding:7px 9px; margin-right:-1px; font-size:10.5px; min-height:74px; }
+.bf-box:last-child{ margin-right:0; }
+.bf-title{ font-weight:700; margin-bottom:3px; }
+.bf-row{ display:flex; justify-content:space-between; gap:8px; padding:1px 0; }
+.bf-row span:first-child{ color:#374151; }
+.bf-due span:last-child{ color:var(--bl-red); font-weight:800; }
+.bf-line{ padding:1px 0; }
+.bf-sign{ text-align:center; display:flex; flex-direction:column; }
+.bf-sign-for{ margin-bottom:auto; }
+.bf-sign-line{ font-size:9.5px; padding-top:4px; }
+
+.bill-thanks{
+  text-align:center;
+  font-size:13px;
+  font-style:italic;
+  margin-top:9px;
+  font-family:Georgia, "Times New Roman", serif;
+}
+.bill-terms{ margin-top:7px; font-size:7.5px; line-height:1.35; text-align:justify; font-weight:700; }
+
+/* A5 is half the area, so everything steps down rather than overflowing. */
+.invoice-page.size-a5 .bh-name{ font-size:21px; }
+.invoice-page.size-a5 .bill-items table{ font-size:9px; }
+.invoice-page.size-a5 .bill-items th{ font-size:8.5px; }
+.invoice-page.size-a5 .bill-lower{ grid-template-columns:1fr 210px; }
+.invoice-page.size-a5 .bill-title span{ font-size:12.5px; padding:4px 18px; }
+.invoice-page.size-a5 .bill-info{ font-size:10px; }
+.invoice-page.size-a5 .bf-box{ font-size:9px; min-height:60px; }
+
+/* ============================================================
+   BILL PRINT SETTINGS PANEL
+   Screen only — never printed, never captured into the PDF.
+   ============================================================ */
+.bill-panel{
+  display:none;
+  background:#ffffff;
+  border:1px solid #d5d9e0;
+  border-radius:10px;
+  margin:0 16px 10px;
+  max-height:52vh;
+  overflow-y:auto;
+}
+.bill-panel.open{ display:block; }
+.bp-head{
+  background:var(--navy);
+  color:#fff;
+  font-weight:800;
+  font-size:13px;
+  padding:10px 14px;
+  border-radius:9px 9px 0 0;
+  position:sticky;
+  top:0;
+  z-index:1;
+}
+.bp-body{ padding:4px 14px 14px; }
+.bp-group{ padding:11px 0; border-bottom:1px solid #eceff3; }
+.bp-group:last-child{ border-bottom:none; }
+.bp-label{ font-size:12px; font-weight:800; color:#111827; margin-bottom:7px; }
+.bp-row{ display:flex; gap:20px; }
+.bp-check, .bp-radio{
+  display:flex;
+  align-items:flex-start;
+  gap:9px;
+  padding:5px 0;
+  font-size:13.5px;
+  color:#111827;
+  cursor:pointer;
+}
+.bp-check input, .bp-radio input{ width:17px; height:17px; margin:1px 0 0; flex:none; cursor:pointer; }
+.bp-disabled{ cursor:default; color:#6b7280; }
+.bp-disabled input{ cursor:default; }
+.bp-hint{ display:block; font-size:11px; color:#6b7280; font-weight:400; margin-top:1px; }
+.bp-hint-block{ margin-top:6px; line-height:1.5; }
+.bp-hint-block a{ color:var(--navy); font-weight:700; }
+.bp-input{
+  width:100%;
+  padding:9px 11px;
+  font-size:14px;
+  border:1px solid #d5d9e0;
+  border-radius:7px;
+  background:#fff;
+  color:#111827;
+}
+.bp-actions{ padding-top:14px; }
+
+/* Beside the bill rather than above it once there is room for both. */
+@media (min-width:1000px){
+  #fs-invoice .bill-panel{
+    position:absolute;
+    top:56px;
+    right:16px;
+    width:310px;
+    max-height:calc(100vh - 150px);
+    margin:0;
+    z-index:5;
+    box-shadow:0 8px 30px rgba(17,24,39,.16);
+  }
+  #fs-invoice{ position:relative; }
+}
+
+@media print{
+  .bill-panel{ display:none !important; }
+}
+
+/* Logo picker in Settings — the preview sits beside the file input so
+   the current logo is visible while choosing a replacement. */
+.st-logo-row{ display:flex; gap:14px; align-items:flex-start; }
+.st-logo-preview{
+  width:84px; height:84px; flex:none;
+  border:1px dashed #c9cfd8; border-radius:8px;
+  display:grid; place-items:center; background:#fafbfc; overflow:hidden;
+}
+.st-logo-preview img{ max-width:100%; max-height:100%; display:block; }

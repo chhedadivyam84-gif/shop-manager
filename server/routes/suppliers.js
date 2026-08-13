@@ -291,8 +291,19 @@ router.post("/:id/payments/:paymentId/void", requireRole("owner"), (req, res) =>
   res.json(db.prepare("SELECT * FROM suppliers WHERE id = ?").get(s.id));
 });
 
+/** Validates an area id against the master list.
+ *  A supplier's own area is the fallback used when a purchase leaves the field
+ *  blank, so a stale or mistyped id here would quietly mis-file every future
+ *  purchase from them. Blank stays blank — not knowing is a legitimate answer. */
+function cleanAreaId(id, fallback) {
+  if (id === undefined) return fallback;
+  if (!id) return null;
+  const a = db.prepare("SELECT id FROM areas WHERE id = ?").get(id);
+  return a ? a.id : null;
+}
+
 router.post("/", (req, res) => {
-  const { name, phone, address, gst, state, gstType } = req.body;
+  const { name, phone, address, gst, state, gstType, areaId } = req.body;
   if (!name || !String(name).trim()) {
     return res.status(400).json({ error: "Supplier name is required." });
   }
@@ -307,9 +318,9 @@ router.post("/", (req, res) => {
   const id = uid("SUP");
   db.transaction(() => {
     db.prepare(`
-      INSERT INTO suppliers (id, name, phone, address, gst, state, due, created_at, gst_type)
-      VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
-    `).run(id, name.trim(), (phone || "").trim(), (address || "").trim(), (gst || "").trim(), (state || "").trim(), Date.now(), gstType === "IGST" ? "IGST" : "CGST_SGST");
+      INSERT INTO suppliers (id, name, phone, address, gst, state, due, created_at, gst_type, area_id)
+      VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+    `).run(id, name.trim(), (phone || "").trim(), (address || "").trim(), (gst || "").trim(), (state || "").trim(), Date.now(), gstType === "IGST" ? "IGST" : "CGST_SGST", cleanAreaId(areaId, null));
 
     if (openingAmount > 0) {
       const balanceType = req.body.openingBalanceType === "Advance" ? "Advance" : "Payable";
@@ -331,12 +342,13 @@ router.post("/", (req, res) => {
 router.put("/:id", (req, res) => {
   const s = db.prepare("SELECT * FROM suppliers WHERE id = ?").get(req.params.id);
   if (!s) return res.status(404).json({ error: "Supplier not found." });
-  const { name, phone, address, gst, state, gstType } = req.body;
+  const { name, phone, address, gst, state, gstType, areaId } = req.body;
   db.prepare(`
-    UPDATE suppliers SET name=?, phone=?, address=?, gst=?, state=?, gst_type=? WHERE id=?
+    UPDATE suppliers SET name=?, phone=?, address=?, gst=?, state=?, gst_type=?, area_id=? WHERE id=?
   `).run(
     (name || s.name).trim(), (phone ?? s.phone), (address ?? s.address), (gst ?? s.gst), (state ?? s.state),
-    gstType === "IGST" ? "IGST" : gstType === "CGST_SGST" ? "CGST_SGST" : s.gst_type, s.id
+    gstType === "IGST" ? "IGST" : gstType === "CGST_SGST" ? "CGST_SGST" : s.gst_type,
+    cleanAreaId(areaId, s.area_id), s.id
   );
   logAction(req, "supplier.update", s.name);
   res.json(db.prepare("SELECT * FROM suppliers WHERE id = ?").get(s.id));

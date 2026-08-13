@@ -3628,6 +3628,9 @@ function openAddSupplier(editing){
     <label class="field-label">Name</label><input type="text" id="ns-name" value="${editing?escapeHtml(editing.name):""}">
     <label class="field-label">Phone</label><input type="tel" id="ns-phone" value="${editing?escapeHtml(editing.phone||""):""}">
     <label class="field-label">Address</label><textarea id="ns-address" rows="2">${editing?escapeHtml(editing.address||""):""}</textarea>
+    <label class="field-label">Location / Area <span class="muted" style="font-weight:400;">— optional</span></label>
+    <div id="ns-area-picker"></div>
+    <p class="muted" style="font-size:11px;margin-top:5px;">Used on every purchase from this supplier unless a different area is chosen on the purchase itself.</p>
     <label class="field-label">State (for GST)</label>
     <select id="ns-state"><option value="">${state.settings.state ? "Same as shop ("+escapeHtml(state.settings.state)+")" : "Select state"}</option>${INDIAN_STATES.map(s=>`<option value="${s}" ${editing&&editing.state===s?'selected':''}>${s}</option>`).join("")}</select>
     <label class="field-label">GST Type</label>
@@ -3653,6 +3656,10 @@ function openAddSupplier(editing){
     <button class="btn btn-primary" id="ns-save" style="margin-top:16px;">${editing?"Update Supplier":"Save Supplier"}</button>
   `;
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  // Kept in a variable, not read back from the DOM — the picker rebuilds its
+  // selects whenever the state or city changes.
+  let nsAreaId = editing ? (editing.area_id || null) : null;
+  renderAreaPicker("ns-area-picker", nsAreaId, id => { nsAreaId = id; });
   sheet.querySelectorAll("[data-gsttype]").forEach(b=>b.addEventListener("click", ()=>{
     sheet.querySelectorAll("[data-gsttype]").forEach(x=>x.classList.remove("selected")); b.classList.add("selected");
   }));
@@ -3668,7 +3675,8 @@ function openAddSupplier(editing){
       address: document.getElementById("ns-address").value.trim(),
       gst: document.getElementById("ns-gst").value.trim(),
       state: document.getElementById("ns-state").value || state.settings.state,
-      gstType: sheet.querySelector("[data-gsttype].selected").dataset.gsttype
+      gstType: sheet.querySelector("[data-gsttype].selected").dataset.gsttype,
+      areaId: nsAreaId
     };
     if(openingAmountEl && parseFloat(openingAmountEl.value)>0){
       payload.openingBalance = parseFloat(openingAmountEl.value);
@@ -3898,6 +3906,9 @@ function openAddCustomer(editing){
     <div class="chip-row" id="nc-type-chips">${types.map(t=>`<button class="chip ${(editing?editing.type===t:t===types[0])?'selected':''}" data-type="${t}">${t}</button>`).join("")}</div>
     <label class="field-label">Phone / WhatsApp</label><input type="tel" id="nc-phone" value="${editing?escapeHtml(editing.phone||""):""}">
     <label class="field-label">Address</label><textarea id="nc-address" rows="2" placeholder="Shop / site address — shown on the invoice">${editing?escapeHtml(editing.address||""):""}</textarea>
+    <label class="field-label">Location / Area <span class="muted" style="font-weight:400;">— optional</span></label>
+    <div id="nc-area-picker"></div>
+    <p class="muted" style="font-size:11px;margin-top:5px;">Used on every bill for this customer unless a different area is chosen on the bill itself.</p>
     <label class="field-label">State (for GST)</label>
     <select id="nc-state"><option value="">${state.settings.state ? "Same as shop ("+escapeHtml(state.settings.state)+")" : "Select state"}</option>${INDIAN_STATES.map(s=>`<option value="${s}" ${editing&&editing.state===s?'selected':''}>${s}</option>`).join("")}</select>
     <label class="field-label">GST Type</label>
@@ -3924,6 +3935,11 @@ function openAddCustomer(editing){
     <button class="btn btn-primary" id="nc-save" style="margin-top:16px;">${editing?"Update Customer":"Save Customer"}</button>
   `;
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  // Held here rather than read from the DOM on save: the picker redraws its
+  // own selects as the chain changes, so the last CHOICE is the reliable
+  // thing to keep, not whatever a select happens to show afterwards.
+  let ncAreaId = editing ? (editing.area_id || null) : null;
+  renderAreaPicker("nc-area-picker", ncAreaId, id => { ncAreaId = id; });
   sheet.querySelectorAll("[data-type]").forEach(b=>b.addEventListener("click", ()=>{
     sheet.querySelectorAll("[data-type]").forEach(x=>x.classList.remove("selected")); b.classList.add("selected");
   }));
@@ -3944,7 +3960,8 @@ function openAddCustomer(editing){
       gst: document.getElementById("nc-gst").value.trim(),
       state: document.getElementById("nc-state").value || state.settings.state,
       gstType: sheet.querySelector("[data-gsttype].selected").dataset.gsttype,
-      creditLimit: parseFloat(document.getElementById("nc-credit").value)||0
+      creditLimit: parseFloat(document.getElementById("nc-credit").value)||0,
+      areaId: ncAreaId
     };
     if(openingAmountEl && parseFloat(openingAmountEl.value)>0){
       payload.openingBalance = parseFloat(openingAmountEl.value);
@@ -7497,6 +7514,7 @@ function renderPurchaseSupplierInfo(){
     ${sup.gst ? `<div class="muted">GST: ${escapeHtml(sup.gst)}</div>` : ""}
     ${sup.state ? `<div class="muted">${escapeHtml(sup.state)}</div>` : ""}
     ${sup.address ? `<div class="muted">${escapeHtml(sup.address)}</div>` : ""}
+    ${sup.area_id ? `<div class="muted">&#128205; ${escapeHtml(areaLabel(sup.area_id))}</div>` : ""}
     ${sup.due>0 ? `<div style="color:var(--danger);font-weight:700;margin-top:4px;">Payable due: ${fmt(sup.due)}</div>` : ""}
   `;
 }
@@ -8121,6 +8139,7 @@ function renderPoSupplierInfo(){
     ${sup.gst ? `<div class="muted">GST: ${escapeHtml(sup.gst)}</div>` : ""}
     ${sup.state ? `<div class="muted">${escapeHtml(sup.state)}</div>` : ""}
     ${sup.address ? `<div class="muted">${escapeHtml(sup.address)}</div>` : ""}
+    ${sup.area_id ? `<div class="muted">&#128205; ${escapeHtml(areaLabel(sup.area_id))}</div>` : ""}
   `;
 }
 function renderPoProducts(){
@@ -8691,6 +8710,7 @@ function renderQuotationCustomerInfo(){
     ${cust.gst ? `<div class="muted">GST: ${escapeHtml(cust.gst)}</div>` : ""}
     ${cust.state ? `<div class="muted">${escapeHtml(cust.state)}</div>` : ""}
     ${cust.address ? `<div class="muted">${escapeHtml(cust.address)}</div>` : ""}
+    ${cust.area_id ? `<div class="muted">&#128205; ${escapeHtml(areaLabel(cust.area_id))}</div>` : ""}
   `;
 }
 function renderQuotationProducts(){
@@ -9422,6 +9442,7 @@ function renderSoCustomerInfo(){
     ${cust.gst ? `<div class="muted">GST: ${escapeHtml(cust.gst)}</div>` : ""}
     ${cust.state ? `<div class="muted">${escapeHtml(cust.state)}</div>` : ""}
     ${cust.address ? `<div class="muted">${escapeHtml(cust.address)}</div>` : ""}
+    ${cust.area_id ? `<div class="muted">&#128205; ${escapeHtml(areaLabel(cust.area_id))}</div>` : ""}
   `;
 }
 function renderSoProducts(){

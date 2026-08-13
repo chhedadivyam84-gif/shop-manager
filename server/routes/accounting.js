@@ -252,5 +252,13 @@ router.post("/outstanding/:id/settle", requireRole("owner"), (req, res) => {
   res.json({ ok: true });
 });
 
+/* Party-wise outstanding with its bill-wise breakdown and aging.
+   Derived on read, so it can never drift from the bills and payments it
+   describes. side=customer (receivable) or supplier (payable). */
+router.get("/outstanding-details", (req, res) => {
+  const side = req.query.side === "supplier" ? "supplier" : "customer";
+  res.json(outstandingDetails(side));
+});
+
 module.exports = router;
 module.exports.capitalSummary = capitalSummary;

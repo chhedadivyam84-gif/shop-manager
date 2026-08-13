@@ -472,6 +472,7 @@
           <button class="qa-btn" id="acc-other-income"><span class="ic">&#128229;</span>Other Income</button>
           <button class="qa-btn" id="acc-other-expenses"><span class="ic">&#128228;</span>Other Expenses</button>
           <button class="qa-btn" id="acc-bank-entry"><span class="ic">&#127974;</span>Bank Entry</button>
+          <button class="qa-btn" id="acc-outstanding"><span class="ic">&#9203;</span>Outstanding</button>
           <button class="qa-btn" id="acc-ledger"><span class="ic">&#128210;</span>Ledger</button>
           <button class="qa-btn" id="acc-fyear" style="display:none;"><span class="ic">&#128197;</span>Financial Year</button>
         </div>
@@ -494,6 +495,38 @@
            One screen, two modes — the two differ only in which side of the
            ledger they read and which category list they offer, so a single
            renderer keeps them from drifting apart. -->
+      <!-- ============ OUTSTANDING ============
+           A module of its own, deliberately not folded into Ledger or the
+           Reports screen: this answers one question only — who owes money
+           right now, and how much. Anything already settled is absent. -->
+      <div class="screen" id="screen-outstanding">
+        <a href="#" id="os-back-link" class="muted" style="font-size:12px;font-weight:700;">&larr; Back to Accounts</a>
+
+        <div class="chip-row" style="margin-top:10px;">
+          <button class="chip selected" data-os-side="customer">Customer / Debitor</button>
+          <button class="chip" data-os-side="supplier">Supplier / Creditor</button>
+        </div>
+
+        <div class="searchbar" style="margin-top:10px;">
+          <span>&#128269;</span>
+          <input type="text" id="os-search" placeholder="Search party by name or phone">
+        </div>
+
+        <div class="card" id="os-total-card" style="padding:12px 14px;margin-top:10px;">
+          <div class="muted" style="font-size:11px;font-weight:700;" id="os-total-label">TOTAL RECEIVABLE</div>
+          <div style="font-size:22px;font-weight:800;" id="os-total-amt">&#8377;0.00</div>
+          <div class="muted" style="font-size:11px;" id="os-total-sub"></div>
+        </div>
+
+        <div class="pq-actionbar">
+          <div class="pq-actionbar-btns">
+            <button class="btn btn-gold" id="os-print-btn">&#128424; Print / PDF / Excel</button>
+          </div>
+        </div>
+
+        <div id="os-list"></div>
+      </div>
+
       <div class="screen" id="screen-otherledger">
         <a href="#" id="ol-back-link" class="muted" style="font-size:12px;font-weight:700;">&larr; Back to Accounts</a>
         <div class="section-title" style="margin-top:10px;" id="ol-title">Other Income</div>
@@ -1005,6 +1038,7 @@
   <div class="sheet" id="sheet-purchase-return-detail"></div>
   <div class="sheet" id="sheet-transfer-stock"></div>
   <div class="sheet" id="sheet-factory-reset"></div>
+  <div class="sheet" id="sheet-outstanding-detail"></div>
 
   <!-- ============ FULLSCREEN: STOCK REPORT PRINT ============
        In-page print (not window.open) — a PWA installed to the home screen

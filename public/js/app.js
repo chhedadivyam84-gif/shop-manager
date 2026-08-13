@@ -809,7 +809,7 @@ async function switchTab(tab){
   document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));
   document.getElementById("screen-"+tab).classList.add("active");
   document.querySelectorAll("nav.bottom .tab").forEach(t=>t.classList.toggle("active", t.dataset.tab===tab));
-  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",quotation:"Quotation",so:"Sales Order",pquery:"Product Query",accounts:"Accounts",otherledger:(state.olKind==="income"?"Other Income":"Other Expenses"),fyear:"Financial Year",fyclose:"Financial Year",printmgr:"Print Management"};
+  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",quotation:"Quotation",so:"Sales Order",pquery:"Product Query",accounts:"Accounts",otherledger:(state.olKind==="income"?"Other Income":"Other Expenses"),fyear:"Financial Year",fyclose:"Financial Year",printmgr:"Print Management",outstanding:"Outstanding"};
   document.getElementById("hdr-sub").textContent = subMap[tab];
   document.getElementById("hdr-main").textContent = tab==="home" ? greeting() : subMap[tab];
   if(tab==="billing") await renderBilling();
@@ -817,6 +817,7 @@ async function switchTab(tab){
   if(tab==="customers") await renderCustomersList();
   if(tab==="reports") await renderReport();
   if(tab==="cashbook") await renderCashBook();
+  if(tab==="outstanding") await renderOutstanding();
   if(tab==="bankbook") await renderBankBook();
   if(tab==="inquiries") await renderInquiries();
   if(tab==="purchase") await renderPurchaseScreen();
@@ -12013,6 +12014,18 @@ async function savePmTemplate(){
 }
 
 function wirePrintManager(){
+  const osBtn = document.getElementById("acc-outstanding");
+  if(osBtn) osBtn.addEventListener("click", ()=>openOutstanding());
+  const osBack = document.getElementById("os-back-link");
+  if(osBack) osBack.addEventListener("click", e=>{ e.preventDefault(); switchTab("accounts"); });
+  document.querySelectorAll("[data-os-side]").forEach(b=>b.addEventListener("click", ()=>{
+    state.osSide = b.dataset.osSide; renderOutstanding();
+  }));
+  const osSearch = document.getElementById("os-search");
+  if(osSearch) osSearch.addEventListener("input", renderOutstandingList);
+  const osPrint = document.getElementById("os-print-btn");
+  if(osPrint) osPrint.addEventListener("click", printOutstanding);
+
   const back = document.getElementById("pm-back-link");
   if(back) back.addEventListener("click", e=>{ e.preventDefault(); switchTab("home"); });
   document.querySelectorAll("[data-pm-tab]").forEach(b=>
@@ -12035,6 +12048,165 @@ async function renderAccountsScreen(){
     document.getElementById("acc-stat-cash").textContent    = fmt(dash.cashBalance || 0);
     document.getElementById("acc-stat-bank").textContent    = fmt(dash.bankBalance || 0);
   }catch(e){ /* the tiles are a summary; the buttons below still work */ }
+}
+
+/* ============================================================
+   OUTSTANDING — its own screen
+
+   Deliberately standalone, not a view onto Ledger or Reports. It answers one
+   question: who owes money right now, and how much. A party that has settled
+   is simply absent — that is the whole point of the screen, so there is no
+   "show cleared parties" switch to get it wrong.
+
+   The list itself carries two things only, party and amount. Everything
+   else — which bills make up that figure, their ages and part-payments —
+   lives one tap away, so the list stays scannable on a phone at the counter.
+   ============================================================ */
+
+let osData = null;   // last payload, kept so search filters without refetching
+
+function openOutstanding(){
+  state.osSide = state.osSide === "supplier" ? "supplier" : "customer";
+  switchTab("outstanding");
+}
+
+async function renderOutstanding(){
+  const side = state.osSide === "supplier" ? "supplier" : "customer";
+  document.querySelectorAll("[data-os-side]").forEach(b =>
+    b.classList.toggle("selected", b.dataset.osSide === side));
+  document.getElementById("os-total-label").textContent =
+    side === "supplier" ? "TOTAL PAYABLE" : "TOTAL RECEIVABLE";
+
+  const list = document.getElementById("os-list");
+  list.innerHTML = `<div class="empty-hint">Loading…</div>`;
+  try{
+    osData = await api("GET", `/accounting/outstanding-details?side=${side}`);
+  }catch(e){
+    osData = null;
+    list.innerHTML = `<div class="empty-hint">${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  renderOutstandingList();
+}
+
+/** Filters the loaded parties by the search box and draws the list. */
+function renderOutstandingList(){
+  if(!osData) return;
+  const q = (document.getElementById("os-search").value || "").trim().toLowerCase();
+  const parties = osData.parties.filter(p =>
+    !q || p.name.toLowerCase().includes(q) || (p.phone || "").includes(q));
+
+  // The headline total follows the search, so a filtered list and its total
+  // always describe the same set of parties.
+  const total = parties.reduce((s, p) => s + p.balance, 0);
+  document.getElementById("os-total-amt").textContent = fmt(total);
+  document.getElementById("os-total-sub").textContent =
+    `${parties.length} part${parties.length === 1 ? "y" : "ies"} pending` +
+    (q ? ` (filtered from ${osData.parties.length})` : "");
+
+  const list = document.getElementById("os-list");
+  if(!parties.length){
+    list.innerHTML = `<div class="empty-hint">${
+      q ? "No party matches that search."
+        : "Nothing outstanding — every account is settled."}</div>`;
+    return;
+  }
+  list.innerHTML = parties.map((p, i) => `
+    <div class="list-row" data-os-party="${i}" style="cursor:pointer;">
+      <div style="min-width:0;">
+        <div class="row-title">${escapeHtml(p.name)}</div>
+        <div class="row-sub">${p.billCount} pending bill${p.billCount === 1 ? "" : "s"}${
+          p.phone ? " · " + escapeHtml(p.phone) : ""}</div>
+      </div>
+      <div class="row-right" style="font-weight:800;">${fmt(p.balance)}</div>
+    </div>`).join("");
+
+  list.querySelectorAll("[data-os-party]").forEach(row =>
+    row.addEventListener("click", () =>
+      openOutstandingDetail(parties[Number(row.dataset.osParty)])));
+}
+
+/** One party's pending bills — what actually makes up the amount. */
+function openOutstandingDetail(p){
+  const sheet = document.getElementById("sheet-outstanding-detail");
+  const pending = (p.bills || []).filter(b => b.balance > 0);
+  const statusPill = b => b.status === "Partially Paid"
+    ? `<span class="pill" style="margin-left:6px;">Part paid</span>`
+    : (b.status === "Pending" ? "" : `<span class="pill" style="margin-left:6px;">Paid</span>`);
+
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>&#10005;</button>
+    <div class="sheet-title">${escapeHtml(p.name)}</div>
+    <p class="muted" style="font-size:12px;margin-top:-6px;">
+      ${state.osSide === "supplier" ? "Payable" : "Receivable"} · ${escapeHtml(p.phone || "no phone on file")}</p>
+
+    <div class="card" style="padding:12px 14px;margin-top:10px;">
+      <div class="erp-kv"><span>Opening Outstanding</span><b>${fmt(p.openingOutstanding)}</b></div>
+      <div class="erp-kv"><span>Total Bills</span><b>${fmt(p.totalBills)}</b></div>
+      <div class="erp-kv"><span>Total ${state.osSide === "supplier" ? "Paid" : "Received"}</span><b>${fmt(p.totalPaid)}</b></div>
+      <div class="erp-kv"><span>Adjustment</span><b>${fmt(p.adjustment)}</b></div>
+      <div class="erp-kv" style="font-weight:800;border-top:1px solid #ddd;margin-top:6px;padding-top:6px;">
+        <span>Pending Outstanding</span><b>${fmt(p.balance)}</b></div>
+    </div>
+
+    ${p.unappliedCredit > 0 ? `<p class="muted" style="font-size:11px;margin-top:8px;">
+      ${fmt(p.unappliedCredit)} received is not yet applied to any bill — it will settle the next one raised.</p>` : ""}
+
+    <div class="section-title" style="margin-top:14px;">Pending Bills</div>
+    ${pending.length ? pending.map(b => `
+      <div class="list-row">
+        <div style="min-width:0;">
+          <div class="row-title">${escapeHtml(b.no)}${statusPill(b)}</div>
+          <div class="row-sub">${escapeHtml(fyDay(b.date))} · ${b.daysOld} day${b.daysOld === 1 ? "" : "s"} old</div>
+          <div class="row-sub">Bill ${fmt(b.total)}${b.paid > 0 ? ` · paid ${fmt(b.paid)}` : ""}</div>
+        </div>
+        <div class="row-right" style="font-weight:800;">${fmt(b.balance)}</div>
+      </div>`).join("")
+      : `<div class="empty-hint">The balance is an opening amount with no bill against it.</div>`}
+
+    <div class="section-title" style="margin-top:14px;">Age of the pending amount</div>
+    <div class="card" style="padding:12px 14px;">
+      <div class="erp-kv"><span>0 – 30 days</span><b>${fmt(p.aging.d0_30)}</b></div>
+      <div class="erp-kv"><span>31 – 60 days</span><b>${fmt(p.aging.d31_60)}</b></div>
+      <div class="erp-kv"><span>61 – 90 days</span><b>${fmt(p.aging.d61_90)}</b></div>
+      <div class="erp-kv"><span>Over 90 days</span><b>${fmt(p.aging.d90plus)}</b></div>
+    </div>`;
+
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  sheet.classList.add("show");
+}
+
+/**
+ * Hands the current list to the shared print engine, which already provides
+ * Print, PDF, Excel and CSV — so this screen does not grow three exporters
+ * of its own that would drift from the ones Reports uses.
+ */
+function printOutstanding(){
+  if(!osData || !osData.parties.length){ toast("Nothing outstanding to print."); return; }
+  const q = (document.getElementById("os-search").value || "").trim().toLowerCase();
+  const parties = osData.parties.filter(p =>
+    !q || p.name.toLowerCase().includes(q) || (p.phone || "").includes(q));
+  if(!parties.length){ toast("No party matches that search."); return; }
+
+  const supplier = state.osSide === "supplier";
+  openPrintPreview({
+    id: "outstanding-" + state.osSide,
+    title: supplier ? "Supplier / Creditor Outstanding" : "Customer / Debitor Outstanding",
+    filters: [q ? `Search: ${q}` : "", `${parties.length} parties with a pending balance`].filter(Boolean),
+    columns: [
+      { key: "name",    label: "Party",                       type: "text" },
+      { key: "opening", label: "Opening",                     type: "money", rate: true },
+      { key: "bills",   label: "Total Bills",                 type: "money", rate: true },
+      { key: "paid",    label: supplier ? "Paid" : "Received", type: "money", rate: true },
+      { key: "adj",     label: "Adjustment",                  type: "money", rate: true },
+      { key: "pending", label: "Pending Outstanding",         type: "money", rate: true }
+    ],
+    rows: parties.map(p => ({
+      name: p.name, opening: p.openingOutstanding, bills: p.totalBills,
+      paid: p.totalPaid, adj: p.adjustment, pending: p.balance
+    }))
+  });
 }
 
 function openOtherLedger(kind){

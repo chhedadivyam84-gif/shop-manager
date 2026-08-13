@@ -457,6 +457,11 @@ table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #178a6e;color:#0
 }
 
 @media print{
+  /* EVERY rule that reveals a print surface below is scoped to .show — the
+     class that marks an overlay as actually open. Without that scoping the
+     rules fire whether or not the overlay is on screen, so a bill left in
+     the DOM from an earlier preview printed on top of the next Report,
+     Cash Book or Product Query job. Keep .show on any surface added here. */
   html,body{background:#fff !important;margin:0;}
   /* Isolating the printed page via position:absolute (the previous approach)
      is a known source of print-pagination bugs in real browsers — an
@@ -468,15 +473,15 @@ table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #178a6e;color:#0
      actually expect. */
   #toast{display:none !important;}
   #shell > *{display:none !important;}
-  #fs-invoice{display:block !important;position:static !important;background:#fff !important;max-width:none !important;margin:0 !important;}
-  #fs-invoice > *{display:none !important;}
-  #fs-invoice > .invoice-page{display:flex !important;}
-  #fs-stock-report{display:block !important;position:static !important;background:#fff !important;max-width:none !important;margin:0 !important;}
-  #fs-stock-report > *{display:none !important;}
-  #fs-stock-report > #stock-report-content{display:block !important;}
-  #fs-pq-report{display:block !important;position:static !important;background:#fff !important;max-width:none !important;margin:0 !important;}
-  #fs-pq-report > *{display:none !important;}
-  #fs-pq-report > #pq-report-content{display:block !important;}
+  #fs-invoice.show{display:block !important;position:static !important;background:#fff !important;max-width:none !important;margin:0 !important;}
+  #fs-invoice.show > *{display:none !important;}
+  #fs-invoice.show > .invoice-page{display:flex !important;}
+  #fs-stock-report.show{display:block !important;position:static !important;background:#fff !important;max-width:none !important;margin:0 !important;}
+  #fs-stock-report.show > *{display:none !important;}
+  #fs-stock-report.show > #stock-report-content{display:block !important;}
+  #fs-pq-report.show{display:block !important;position:static !important;background:#fff !important;max-width:none !important;margin:0 !important;}
+  #fs-pq-report.show > *{display:none !important;}
+  #fs-pq-report.show > #pq-report-content{display:block !important;}
   /* Product Query is the one sheet that must print landscape — 17 columns
      clip off the right edge of a portrait page. It has to be a NAMED page
      declared here rather than a bare @page inside the injected <style>:
@@ -484,7 +489,7 @@ table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #178a6e;color:#0
      written into innerHTML is ignored by the print engine anyway, which is
      why this printed portrait and lost every column after "Out". */
   @page pqLandscape{ size: A4 landscape; margin: 8mm; }
-  #fs-pq-report{ page: pqLandscape; }
+  #fs-pq-report.show{ page: pqLandscape; }
   .invoice-page{
     position:static;margin:0 !important;
     border:1px solid #000;border-radius:0 !important;box-shadow:none !important;
@@ -575,12 +580,12 @@ table.pq-table tr.pq-open-row td{ background:#f9fafb; font-weight:700; }
 #pe-content{ background:#fff; margin:0 auto; box-shadow:0 2px 10px rgba(0,0,0,.18); }
 
 @media print{
-  #fs-print-engine{ display:block !important; position:static !important; background:#fff !important; max-width:none !important; margin:0 !important; }
-  #fs-print-engine > *{ display:none !important; }
-  #fs-print-engine > .pe-paper-wrap{
+  #fs-print-engine.show{ display:block !important; position:static !important; background:#fff !important; max-width:none !important; margin:0 !important; }
+  #fs-print-engine.show > *{ display:none !important; }
+  #fs-print-engine.show > .pe-paper-wrap{
     display:block !important; background:#fff !important; padding:0 !important; overflow:visible !important;
   }
-  #fs-print-engine #pe-content{ box-shadow:none !important; margin:0 !important; width:auto !important; padding:0 !important; }
+  #fs-print-engine.show #pe-content{ box-shadow:none !important; margin:0 !important; width:auto !important; padding:0 !important; }
 }
 
 /* -------------------------------------------------- Product Query controls

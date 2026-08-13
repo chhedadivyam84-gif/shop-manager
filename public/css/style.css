@@ -1060,3 +1060,71 @@ select.pm-col-a{ width:48px; flex:none; padding:5px 2px; font-size:12px; }
   .pm-col-label{ flex-basis:60px; }
   input.pm-col-w{ width:46px; }
 }
+
+/* ============================================================
+   TEMPLATE PREVIEW (Print Designer)
+
+   The page inside is drawn at true millimetre size and then scaled by
+   transform, so a 74px column and a 10mm margin appear in their real
+   proportions. Drawing it at screen sizes would show a shape the printer
+   never produces.
+   ============================================================ */
+.tpl-preview-host{
+  overflow:hidden;
+  border:1px solid var(--border);
+  border-radius:8px;
+  background:#e9ecf1;
+  padding:8px;
+}
+.tpl-scaler{ transform-origin:top left; }
+
+/* Fixed hex, not theme tokens: this is paper, and it must look the same
+   whatever the app theme is doing. */
+.tpl-page{ background:#fff; color:#111827; box-shadow:0 1px 6px rgba(0,0,0,.18);
+  box-sizing:border-box; font-family:inherit; }
+.tpl-header-line{ text-align:center; font-size:.85em; padding-bottom:3px; }
+.tpl-top{ display:flex; gap:8px; align-items:flex-start; border-bottom:1.5px solid #111827; padding-bottom:5px; }
+.tpl-logo{ max-width:60px; max-height:60px; }
+.tpl-co{ flex:1; text-align:center; }
+.tpl-co-name{ font-size:1.7em; font-weight:800; line-height:1.1; }
+.tpl-title{ text-align:center; margin:7px 0; }
+.tpl-title::before, .tpl-title::after{ content:; }
+.tpl-title{ font-weight:800; letter-spacing:1.5px; font-size:1.15em; }
+.tpl-party{ display:flex; justify-content:space-between; gap:10px;
+  border:1px solid #111827; padding:5px 7px; font-size:.9em; }
+.tpl-party-r{ text-align:right; white-space:nowrap; }
+
+.tpl-items{ width:100%; border-collapse:collapse; margin-top:6px; font-size:.85em; }
+.tpl-items th, .tpl-items td{ border:1px solid #111827; padding:3px 5px; }
+.tpl-items th{ background:#eef1f6; font-weight:700; }
+/* Borders off is a real template choice, so the preview must honour it. */
+.tpl-page.no-rules .tpl-items th, .tpl-page.no-rules .tpl-items td,
+.tpl-page.no-rules .tpl-party{ border:none; }
+
+.tpl-lower{ display:flex; gap:8px; margin-top:6px; font-size:.85em; }
+.tpl-lower-l{ flex:1; }
+.tpl-terms{ margin-top:4px; font-size:.85em; }
+.tpl-totals{ width:38%; border:1px solid #111827; }
+.tpl-totals > div{ display:flex; justify-content:space-between; padding:2px 6px; }
+.tpl-grand{ background:#16294d; color:#fff; font-weight:800; }
+.tpl-foot{ display:flex; gap:8px; margin-top:8px; font-size:.8em; }
+.tpl-foot-box{ flex:1; border:1px solid #111827; padding:5px 7px; min-height:42px; }
+.tpl-sign{ text-align:center; display:flex; flex-direction:column; justify-content:space-between; }
+.tpl-sign-line{ border-top:1px solid #111827; padding-top:3px; }
+.tpl-footer-line{ text-align:center; font-style:italic; margin-top:7px; }
+.tpl-pageno{ text-align:center; font-size:.75em; margin-top:4px; color:#4b5563; }
+
+/* The theme preview draws a REAL .invoice-page so every theme rule applies,
+   but that class carries screen-only chrome (a scrolling card, rounded
+   corners, page margins, and the full-sheet min-height set by
+   applyPageSizeStyle). Inside a preview box those would show a rounded
+   scrolling card instead of a sheet of paper, so they are undone here —
+   the theme colours and rules are untouched. */
+.theme-preview-page{
+  margin:0 !important;
+  min-height:0 !important;
+  border-radius:0 !important;
+  overflow:visible !important;
+  box-shadow:0 1px 6px rgba(0,0,0,.18);
+}
+.theme-preview-host{ margin-top:6px; }

@@ -4030,8 +4030,14 @@ function openSettings(){
       </p>
       <div class="card" id="st-area-list"><div class="empty-hint">Loading…</div></div>
       <label class="field-label" style="margin-top:12px;">State</label>
-      <input type="text" id="st-area-state" list="st-area-states" placeholder="e.g. Maharashtra">
-      <datalist id="st-area-states"></datalist>
+      <!-- A real dropdown of the 36 states and union territories, the same list
+           the Customer and Supplier forms use, rather than a free-text box with
+           suggestions. Typing it by hand let "Maharashtra" and "maharashtra"
+           become two states, which then split every area report between them. -->
+      <select id="st-area-state">
+        <option value="">Select state</option>
+        ${INDIAN_STATES.map(x=>`<option value="${escapeHtml(x)}"${x===((state.settings||{}).state||"")?" selected":""}>${escapeHtml(x)}</option>`).join("")}
+      </select>
       <label class="field-label" style="margin-top:10px;">City</label>
       <input type="text" id="st-area-city" list="st-area-cities" placeholder="e.g. Mumbai">
       <datalist id="st-area-cities"></datalist>
@@ -4100,9 +4106,11 @@ function openSettings(){
       <label class="field-label">Invoice / Estimate</label>
       <select id="st-invoice-theme">${PRINT_THEMES.map(t=>`<option value="${t.id}" ${printThemeFor(false)===t.id?"selected":""}>${t.name}</option>`).join("")}</select>
       <div class="muted" id="st-invoice-theme-desc" style="font-size:11px;margin-top:4px;"></div>
+      <div class="tpl-preview-host theme-preview-host" id="st-invoice-preview"></div>
       <label class="field-label" style="margin-top:12px;">Delivery Challan</label>
       <select id="st-challan-theme">${PRINT_THEMES.map(t=>`<option value="${t.id}" ${printThemeFor(true)===t.id?"selected":""}>${t.name}</option>`).join("")}</select>
       <div class="muted" id="st-challan-theme-desc" style="font-size:11px;margin-top:4px;"></div>
+      <div class="tpl-preview-host theme-preview-host" id="st-challan-preview"></div>
       <button class="btn btn-primary" id="st-save-themes" style="margin-top:14px;">Save Theme</button>
       <p class="muted" style="font-size:11px;margin-top:8px;">Open any bill and tap Print to see it. Nothing about the figures changes — only the look.</p>
 
@@ -4172,6 +4180,11 @@ function openSettings(){
   const invThemeSel = sheet.querySelector("#st-invoice-theme");
   const chThemeSel = sheet.querySelector("#st-challan-theme");
   if(invThemeSel && chThemeSel){
+    // Both previews are drawn now and again on every change, so the theme
+    // can be judged before Save rather than after opening a bill.
+    renderThemePreviews();
+    invThemeSel.addEventListener("change", renderThemePreviews);
+    chThemeSel.addEventListener("change", renderThemePreviews);
     const describe = ()=>{
       const d = id => (PRINT_THEMES.find(t=>t.id===id)||{}).desc || "";
       sheet.querySelector("#st-invoice-theme-desc").textContent = d(invThemeSel.value);
@@ -4200,7 +4213,10 @@ function openSettings(){
       // twice with different capitalisation cannot split into two.
       const states = [...new Set(rows.map(r=>r.state))].sort();
       const cities = [...new Set(rows.map(r=>r.city))].sort();
-      sheet.querySelector("#st-area-states").innerHTML = states.map(s=>`<option value="${escapeHtml(s)}"></option>`).join("");
+      /* The State field is a real <select> of all 36 states now, so it needs no
+         suggestions. Only City still learns from what already exists — cities are
+         not a fixed list, and reusing the exact spelling stops "Mumbai" and
+         "mumbai" splitting into two. */
       sheet.querySelector("#st-area-cities").innerHTML = cities.map(c=>`<option value="${escapeHtml(c)}"></option>`).join("");
 
       if(!rows.length){
@@ -11247,6 +11263,295 @@ async function refreshPmDocCounts(){
 /* the designer                                                         */
 /* ------------------------------------------------------------------ */
 
+/* ============================================================
+   TEMPLATE PREVIEW
+
+   Draws a document FROM a template config, so the designer shows what a
+   change actually does instead of asking someone to save, find a bill and
+   open it.
+
+   This is deliberately the renderer the real print will use once templates
+   drive printing — same config in, same page out. Building the preview off
+   a separate throwaway would guarantee the two drift, and then the preview
+   would be a lie.
+
+   Sample figures, real shop. The header, GSTIN, bank box and footer come
+   from the shop's own settings so the preview looks like their paper; the
+   items are invented, because a designer that only works once you have
+   documents is no use on day one.
+   ============================================================ */
+
+const PM_SAMPLE_ITEMS = [
+  { sn:1, category:"Plywood", brand:"Century", name:"Commercial Plywood", code:"CP-18",
+    hsn:"4412", size:"8 x 4 Feet, 18mm", qty:"10", unit:"Sheet",
+    rate:1850, disc:0, gstPct:18, remarks:"" },
+  { sn:2, category:"Laminate", brand:"Merino", name:"Laminate Sheet", code:"LM-125",
+    hsn:"4823", size:"1.25mm, Matte", qty:"15", unit:"Sheet",
+    rate:650, disc:5, gstPct:18, remarks:"" },
+  { sn:3, category:"Hardware", brand:"Hettich", name:"Edge Band", code:"EB-22",
+    hsn:"3919", size:"22mm, Brown", qty:"5", unit:"Roll",
+    rate:180, disc:0, gstPct:18, remarks:"" }
+];
+
+/** One sample line's money, honouring the per-line discount the same way a
+ *  real bill does — gross, less its own discount, then tax on the result. */
+function pmSampleLine(it){
+  const gross = (Number(it.qty) || 0) * (Number(it.rate) || 0);
+  const net = gross * (1 - (Number(it.disc) || 0) / 100);
+  const tax = net * ((Number(it.gstPct) || 0) / 100);
+  return { gross, net, tax };
+}
+
+/** What each column key prints for a sample row. `blank` mirrors Without
+ *  Rate: the cell stays, the figure does not — never a ₹0. */
+function pmCellFor(key, it, cfg){
+  const m = pmSampleLine(it);
+  const money = v => cfg.showRate ? v.toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2}) : "";
+  switch(key){
+    case "sn": return String(it.sn);
+    case "category": return it.category;
+    case "brand": return it.brand;
+    case "name": return it.name;
+    case "code": return it.code;
+    case "hsn": return it.hsn;
+    case "size": return it.size;
+    case "qty": return it.qty;
+    case "unit": return it.unit;
+    case "rate": return money(it.rate);
+    case "disc": return cfg.showRate ? Number(it.disc).toFixed(2) : "";
+    case "taxable": return money(m.net);
+    case "gstPct": return String(it.gstPct) + "%";
+    case "cgst": return money(m.tax / 2);
+    case "sgst": return money(m.tax / 2);
+    case "igst": return money(m.tax);
+    case "amount": return money(m.net);
+    case "remarks": return it.remarks || "";
+    default: return "";
+  }
+}
+
+/**
+ * The preview markup for a template config.
+ *
+ * Drawn at real paper proportions and then scaled down to whatever width the
+ * designer has, so what is on screen is the shape of the page rather than a
+ * squashed approximation of it.
+ */
+function buildTemplatePreviewHtml(cfg, docLabel){
+  const s = state.settings || {};
+  const cols = (cfg.columns || []).filter(c => c.show);
+  const isA4 = cfg.paper !== "A5";
+  const landscape = cfg.orientation === "landscape";
+  const pageW = (isA4 ? 210 : 148) * (landscape ? (isA4 ? 297/210 : 210/148) : 1);
+  const pageH = (isA4 ? 297 : 210) / (landscape ? (isA4 ? 297/210 : 210/148) : 1);
+
+  const totals = PM_SAMPLE_ITEMS.reduce((a,it)=>{
+    const m = pmSampleLine(it);
+    a.gross += m.gross; a.net += m.net; a.tax += m.tax; return a;
+  }, { gross:0, net:0, tax:0 });
+  const money = v => cfg.showRate ? "₹" + v.toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2}) : "";
+
+  const th = cols.map(c=>
+    `<th style="text-align:${c.align};${c.width ? `width:${c.width}px;` : ""}">${escapeHtml(c.label)}</th>`).join("");
+  const rows = PM_SAMPLE_ITEMS.map(it=>
+    `<tr>${cols.map(c=>`<td style="text-align:${c.align};">${escapeHtml(pmCellFor(c.key, it, cfg))}</td>`).join("")}</tr>`).join("");
+  // A few ruled blanks, the way the real page fills to the foot.
+  const filler = Array.from({length:4}, ()=>
+    `<tr>${cols.map(c=>`<td style="text-align:${c.align};">&nbsp;</td>`).join("")}</tr>`).join("");
+
+  const bank = [s.bank_name, s.bank_account_no && "A/c " + s.bank_account_no,
+                s.bank_ifsc && "IFSC " + s.bank_ifsc, s.bank_branch].filter(Boolean);
+
+  return `
+    <div class="tpl-page${cfg.showBorders ? "" : " no-rules"}"
+         style="width:${pageW}mm;min-height:${pageH}mm;padding:${cfg.margins?cfg.margins.top:10}mm;
+                font-size:${cfg.fontSize || 10.5}pt;">
+      ${cfg.header ? `<div class="tpl-header-line">${escapeHtml(cfg.header)}</div>` : ""}
+      <div class="tpl-top">
+        ${cfg.showLogo && s.logo_data ? `<img class="tpl-logo" src="${s.logo_data}" alt="">` : ""}
+        ${cfg.showCompany ? `<div class="tpl-co">
+          <div class="tpl-co-name">${escapeHtml(s.business_name || "Your Shop")}</div>
+          ${s.tagline ? `<div>${escapeHtml(s.tagline)}</div>` : ""}
+          ${s.address ? `<div>${escapeHtml(s.address)}</div>` : ""}
+          ${s.gstin ? `<div>GSTIN: ${escapeHtml(s.gstin)}</div>` : ""}
+        </div>` : `<div class="tpl-co"></div>`}
+      </div>
+
+      <div class="tpl-title">${escapeHtml(cfg.title || docLabel)}</div>
+
+      ${cfg.showParty ? `<div class="tpl-party">
+        <div><b>M/S. Sample Customer</b><br>Shop No. 5, Market Road<br>Mobile: 98XXXXXX21</div>
+        <div class="tpl-party-r">No. : SAMPLE-001<br>Date : ${escapeHtml(fyDay(isoDate(new Date())))}</div>
+      </div>` : ""}
+
+      <table class="tpl-items"><thead><tr>${th}</tr></thead>
+        <tbody>${rows}${filler}</tbody></table>
+
+      <div class="tpl-lower">
+        <div class="tpl-lower-l">
+          ${cfg.showAmountInWords ? `<div><b>Amount in Words:</b> ${cfg.showRate ? "Rupees Thirty Two Thousand…" : "&nbsp;"}</div>` : ""}
+          ${cfg.terms ? `<div class="tpl-terms">${escapeHtml(cfg.terms)}</div>` : ""}
+          ${cfg.customText ? `<div class="tpl-terms">${escapeHtml(cfg.customText)}</div>` : ""}
+        </div>
+        ${cfg.showTotals ? `<div class="tpl-totals">
+          <div><span>Sub Total</span><span>${money(totals.net)}</span></div>
+          ${cfg.showTax ? `<div><span>CGST</span><span>${money(totals.tax/2)}</span></div>
+                           <div><span>SGST</span><span>${money(totals.tax/2)}</span></div>` : ""}
+          <div class="tpl-grand"><span>Grand Total</span><span>${money(totals.net + (cfg.showTax ? totals.tax : 0))}</span></div>
+        </div>` : ""}
+      </div>
+
+      <div class="tpl-foot">
+        ${bank.length ? `<div class="tpl-foot-box"><b>Bank Details</b><br>${bank.map(escapeHtml).join("<br>")}</div>` : `<div></div>`}
+        ${cfg.showSignature ? `<div class="tpl-foot-box tpl-sign">
+          <div>For ${escapeHtml(s.business_name || "Your Shop")}</div>
+          <div class="tpl-sign-line">${escapeHtml(cfg.signatureText || "Authorised Signature")}</div>
+        </div>` : `<div></div>`}
+      </div>
+
+      ${cfg.footer ? `<div class="tpl-footer-line">${escapeHtml(cfg.footer)}</div>` : ""}
+      ${cfg.showPageNumbers ? `<div class="tpl-pageno">Page 1 of 1</div>` : ""}
+    </div>`;
+}
+
+/**
+ * Draws the preview and scales it to the space available.
+ *
+ * Rendered at true millimetre size then scaled with a transform, so column
+ * widths and margins are shown in their real proportions — a preview drawn
+ * at screen sizes would make a 74px column look like something it is not.
+ */
+function renderTemplatePreview(){
+  const host = document.getElementById("pm-d-preview");
+  if(!host || !pmState.editing) return;
+  const cfg = pmState.editing.config;
+  const doc = pmState.docs.find(d => d.key === pmState.editing.doc_type);
+
+  host.innerHTML = `<div class="tpl-scaler">${buildTemplatePreviewHtml(cfg, doc ? doc.label : "Document")}</div>`;
+
+  const scaler = host.querySelector(".tpl-scaler");
+  const page = host.querySelector(".tpl-page");
+  /* clientWidth INCLUDES the host padding, so scaling to it sized the page
+     to a width the box does not actually have and it spilled by exactly
+     the padding. The content width is what the page has to fit. */
+  const hostCs = getComputedStyle(host);
+  const avail = host.clientWidth - parseFloat(hostCs.paddingLeft) - parseFloat(hostCs.paddingRight);
+  const natural = page.getBoundingClientRect().width;
+  if(natural > 0 && avail > 0){
+    const scale = Math.min(1, avail / natural);
+    scaler.style.transform = `scale(${scale})`;
+    // The scaled element still reserves its unscaled height, which would
+    // leave a large gap below; setting the wrapper's height to the scaled
+    // height closes it.
+    host.style.height = (page.getBoundingClientRect().height * scale) + "px";
+  }
+}
+
+/* ============================================================
+   PRINT THEME PREVIEW
+
+   The four themes are CSS variants of .invoice-page, so the honest way to
+   preview one is to draw a real bill in that class and scale it down —
+   not to paint a swatch that approximates it. What is shown here is the
+   same markup and the same stylesheet the printer gets.
+
+   Sample figures on the shop's own letterhead, for the same reason the
+   template preview uses them: a preview that needs an existing bill is no
+   use to a shop setting the app up.
+   ============================================================ */
+
+/** A small but complete bill in the live .erp-* markup, so every theme rule
+ *  has something to style — banner, header, party boxes, grid, totals. */
+function themePreviewHtml(challan){
+  const s = state.settings || {};
+  const rows = [
+    { n:1, name:"Commercial Plywood", size:"8 x 4 Feet, 18mm", unit:"Sheet", qty:"10", rate:"1,850.00", amt:"18,500.00" },
+    { n:2, name:"Laminate Sheet",     size:"1.25mm, Matte",    unit:"Sheet", qty:"15", rate:"650.00",   amt:"9,750.00" }
+  ];
+  return `
+    <div class="erp-banner">${escapeHtml(challan ? "DELIVERY CHALLAN" : "ESTIMATE CHALLAN")}</div>
+    <div class="erp-header">
+      <div class="erp-biz-name">${escapeHtml(s.business_name || "Your Shop")}</div>
+      ${s.tagline ? `<div class="erp-tag">${escapeHtml(s.tagline)}</div>` : ""}
+      ${s.address ? `<div class="erp-addr">${escapeHtml(s.address)}</div>` : ""}
+      <div class="erp-contact-line">${[
+        s.gstin ? "GSTIN: " + escapeHtml(s.gstin) : "",
+        s.phones ? "Ph: " + escapeHtml(s.phones) : ""
+      ].filter(Boolean).join("  |  ")}</div>
+    </div>
+    <div class="erp-parties">
+      <div class="erp-party-box">
+        <div class="erp-box-label">${challan ? "Deliver To" : "Buyer"}</div>
+        <div class="erp-box-name">M/S. Sample Customer</div>
+        <div>Shop No. 5, Market Road</div>
+        <div>Mobile: 98XXXXXX21</div>
+      </div>
+      <div class="erp-doc-box">
+        <div class="erp-kv"><span>${challan ? "Challan No." : "Estimate No."}</span><b>SAMPLE-001</b></div>
+        <div class="erp-kv"><span>Date</span><b>${escapeHtml(isoDate(new Date()))}</b></div>
+      </div>
+    </div>
+    <div class="erp-table-wrap">
+      <table class="erp-table">
+        <thead><tr>
+          <th class="c-sn">Sr No.</th><th>Product Description</th><th class="c-size">Size</th>
+          <th class="c-unit">Unit</th><th class="c-num">Qty</th>
+          <th class="c-num">Rate</th><th class="c-num c-amt">Amount</th>
+        </tr></thead>
+        <tbody>${rows.map(r=>`<tr>
+          <td class="c-sn">${r.n}</td><td>${escapeHtml(r.name)}</td><td class="c-size">${escapeHtml(r.size)}</td>
+          <td class="c-unit">${escapeHtml(r.unit)}</td><td class="c-num">${r.qty}</td>
+          <td class="c-num">${r.rate}</td><td class="c-num c-amt">₹${r.amt}</td></tr>`).join("")}</tbody>
+        <tfoot><tr><td colspan="4" style="text-align:right;">Total Quantity</td>
+          <td class="c-num">25</td><td colspan="3"></td></tr></tfoot>
+      </table>
+    </div>
+    <div class="erp-bottom">
+      <div class="erp-bottom-left">
+        <div><b>Amount in Words:</b> Rupees Twenty Eight Thousand Two Hundred Fifty Only</div>
+      </div>
+      <div class="erp-totals-box">
+        <div class="erp-tb-row"><span>Subtotal</span><span>₹28,250.00</span></div>
+        <div class="erp-tb-row"><span>Discount</span><span>₹0.00</span></div>
+        <div class="erp-tb-row erp-tb-grand"><span>Grand Total</span><span>₹28,250.00</span></div>
+      </div>
+    </div>`;
+}
+
+/**
+ * Draws both theme previews at true A4 width and scales them into the
+ * space the Settings sheet has. Called on load and whenever either
+ * dropdown changes, so the choice is visible before it is saved.
+ */
+function renderThemePreviews(){
+  [["st-invoice-theme", "st-invoice-preview", false],
+   ["st-challan-theme", "st-challan-preview", true]].forEach(([selId, hostId, challan])=>{
+    const sel = document.getElementById(selId);
+    const host = document.getElementById(hostId);
+    if(!sel || !host) return;
+
+    const theme = sel.value;
+    host.innerHTML = `<div class="tpl-scaler">
+      <div class="invoice-page theme-preview-page${theme !== "classic" ? " theme-" + theme : ""}"
+           style="width:210mm;">${themePreviewHtml(challan)}</div>
+    </div>`;
+
+    const scaler = host.querySelector(".tpl-scaler");
+    const page = host.querySelector(".invoice-page");
+    /* clientWidth INCLUDES the host padding, so scaling to it sized the page
+     to a width the box does not actually have and it spilled by exactly
+     the padding. The content width is what the page has to fit. */
+  const hostCs = getComputedStyle(host);
+  const avail = host.clientWidth - parseFloat(hostCs.paddingLeft) - parseFloat(hostCs.paddingRight);
+    const natural = page.getBoundingClientRect().width;
+    if(natural > 0 && avail > 0){
+      const scale = Math.min(1, avail / natural);
+      scaler.style.transform = `scale(${scale})`;
+      host.style.height = (page.getBoundingClientRect().height * scale) + "px";
+    }
+  });
+}
+
 function openPmDesigner(tpl){
   // Edited on a copy, so closing without saving really does discard.
   pmState.editing = JSON.parse(JSON.stringify(tpl));
@@ -11266,6 +11571,11 @@ function openPmDesigner(tpl){
     <button class="sheet-close" data-sheetclose>✕</button>
     <div class="sheet-title">${escapeHtml(doc.label)} — ${escapeHtml(tpl.name)}</div>
     <p class="muted" style="font-size:11.5px;margin-top:-6px;">Everything below applies to this template only.</p>
+    <div class="section-title">Preview</div>
+    <div class="tpl-preview-host" id="pm-d-preview"></div>
+    <p class="muted" style="font-size:11px;margin-top:6px;">
+      Sample figures on your own letterhead. Every change below redraws it.</p>
+
 
     <label class="field-label" style="margin-top:12px;">Template name</label>
     <input type="text" id="pm-d-name" value="${escapeHtml(pmState.editing.name)}">
@@ -11331,6 +11641,7 @@ function openPmDesigner(tpl){
       else if(inp.type === "number") c[key] = Number(inp.value);
       else c[key] = inp.value;
       if(key === "showRate") renderPmColumns();   // greys the money columns
+      renderTemplatePreview();
     });
   });
   // One margin box sets all four — four separate boxes for a value almost
@@ -11338,9 +11649,11 @@ function openPmDesigner(tpl){
   document.getElementById("pm-d-margin").addEventListener("change", e=>{
     const v = Math.max(0, Math.min(40, Number(e.target.value)||0));
     c.margins = { top:v, right:v, bottom:v, left:v };
+    renderTemplatePreview();
   });
 
   renderPmColumns();
+  renderTemplatePreview();
   document.getElementById("pm-d-save").addEventListener("click", savePmTemplate);
   showSheet("sheet-pm-designer");
 }
@@ -11373,19 +11686,20 @@ function renderPmColumns(){
     </div>`).join("");
 
   wrap.querySelectorAll("[data-pm-col-show]").forEach(x=>x.addEventListener("change", ()=>{
-    c.columns[+x.dataset.pmColShow].show = x.checked ? 1 : 0; }));
+    c.columns[+x.dataset.pmColShow].show = x.checked ? 1 : 0; renderTemplatePreview(); }));
   wrap.querySelectorAll("[data-pm-col-label]").forEach(x=>x.addEventListener("input", ()=>{
-    c.columns[+x.dataset.pmColLabel].label = x.value; }));
+    c.columns[+x.dataset.pmColLabel].label = x.value; renderTemplatePreview(); }));
   wrap.querySelectorAll("[data-pm-col-w]").forEach(x=>x.addEventListener("change", ()=>{
-    c.columns[+x.dataset.pmColW].width = Math.max(0, Math.min(400, Number(x.value)||0)); }));
+    c.columns[+x.dataset.pmColW].width = Math.max(0, Math.min(400, Number(x.value)||0)); renderTemplatePreview(); }));
   wrap.querySelectorAll("[data-pm-col-a]").forEach(x=>x.addEventListener("change", ()=>{
-    c.columns[+x.dataset.pmColA].align = x.value; }));
+    c.columns[+x.dataset.pmColA].align = x.value; renderTemplatePreview(); }));
 
   const move = (from, to)=>{
     if(to < 0 || to >= c.columns.length) return;
     const [row] = c.columns.splice(from, 1);
     c.columns.splice(to, 0, row);
     renderPmColumns();
+    renderTemplatePreview();
   };
   wrap.querySelectorAll("[data-pm-col-up]").forEach(b=>b.addEventListener("click", ()=>move(+b.dataset.pmColUp, +b.dataset.pmColUp-1)));
   wrap.querySelectorAll("[data-pm-col-dn]").forEach(b=>b.addEventListener("click", ()=>move(+b.dataset.pmColDn, +b.dataset.pmColDn+1)));

@@ -829,7 +829,7 @@ async function switchTab(tab){
 }
 
 async function renderAll(){
-  await Promise.all([loadProducts(), loadCustomers(), loadSuppliers(), loadLocations(), loadBankAccounts(), loadStaffNames(), loadCategories()]);
+  await Promise.all([loadProducts(), loadCustomers(), loadSuppliers(), loadLocations(), loadBankAccounts(), loadStaffNames(), loadCategories(), loadAreas()]);
   await renderHome();
   const activeTab = document.querySelector("nav.bottom .tab.active");
   const tab = activeTab ? activeTab.dataset.tab : "home";
@@ -885,6 +885,130 @@ async function loadCustomers(){ state.customers = await api("GET","/customers");
 async function loadSuppliers(){ state.suppliers = await api("GET","/suppliers"); }
 async function loadLocations(){ state.locations = await api("GET","/locations"); }
 async function loadBankAccounts(){ state.bankAccounts = await api("GET","/bank-accounts"); }
+/* ============================================================
+   STATE -> CITY -> AREA
+
+   One picker, used by Sales Entry and Purchase Entry alike, so a bill and
+   a purchase always record the area the same way and the reports can put
+   them side by side.
+
+   Three dropdowns rather than one long list: "Kandivali" means nothing
+   without "Mumbai, Maharashtra" above it, and a shop that grows into a
+   second city would otherwise face one flat list of every area it has
+   ever traded in.
+
+   Optional by design. A walk-in customer often has no area worth
+   recording, and forcing a choice would only teach staff to pick the
+   first entry to get past it — which is worse than a blank, because a
+   blank is honestly unknown while a wrong area quietly corrupts every
+   area report afterwards.
+   ============================================================ */
+
+async function loadAreas(){
+  try{
+    const data = await api("GET", "/areas");
+    state.areas = data.areas || [];
+    state.areaTree = data.tree || {};
+  }catch(e){
+    state.areas = [];
+    state.areaTree = {};
+  }
+}
+
+/** The area row behind an id, or null. */
+function areaById(id){
+  return (state.areas || []).find(a => String(a.id) === String(id)) || null;
+}
+
+/** "Maharashtra › Mumbai › Kandivali", for showing a chosen area back. */
+function areaLabel(id){
+  const a = areaById(id);
+  return a ? `${a.state} › ${a.city} › ${a.area}` : "";
+}
+
+/**
+ * Renders the three dropdowns into `containerId` and calls `onChange(areaId)`
+ * whenever the selection settles on an area (or is cleared, with null).
+ *
+ * `selectedId` pre-selects an existing choice — used when editing a saved
+ * bill, so re-opening it shows the area it was filed under rather than an
+ * empty picker that would wipe the area on the next save.
+ */
+function renderAreaPicker(containerId, selectedId, onChange){
+  const wrap = document.getElementById(containerId);
+  if(!wrap) return;
+  const tree = state.areaTree || {};
+  const states = Object.keys(tree).sort();
+
+  if(!states.length){
+    wrap.innerHTML = `<p class="muted" style="font-size:11px;">
+      No areas set up yet. An owner can add them in Settings &rarr; Areas.</p>`;
+    return;
+  }
+
+  const chosen = areaById(selectedId);
+  // An existing choice decides what the State and City boxes show; a fresh
+  // entry starts on the only state / only city when there is just one, since
+  // making someone pick from a list of one is pure friction.
+  let curState = chosen ? chosen.state : (states.length === 1 ? states[0] : "");
+  let cities = curState ? Object.keys(tree[curState] || {}).sort() : [];
+  let curCity = chosen ? chosen.city : (cities.length === 1 ? cities[0] : "");
+
+  const opt = (value, label, sel) =>
+    `<option value="${escapeHtml(value)}"${sel ? " selected" : ""}>${escapeHtml(label)}</option>`;
+
+  const draw = () => {
+    cities = curState ? Object.keys(tree[curState] || {}).sort() : [];
+    if(curCity && !cities.includes(curCity)) curCity = "";
+    const areas = (curState && curCity) ? (tree[curState][curCity] || []) : [];
+    const curAreaId = chosen && chosen.state === curState && chosen.city === curCity ? chosen.id : selectedId;
+
+    wrap.innerHTML = `
+      <div class="area-grid">
+        <label class="area-field">
+          <span>State</span>
+          <select data-area-part="state">
+            ${opt("", "— Select —", !curState)}
+            ${states.map(s => opt(s, s, s === curState)).join("")}
+          </select>
+        </label>
+        <label class="area-field">
+          <span>City</span>
+          <select data-area-part="city"${curState ? "" : " disabled"}>
+            ${opt("", curState ? "— Select —" : "Choose a state first", !curCity)}
+            ${cities.map(c => opt(c, c, c === curCity)).join("")}
+          </select>
+        </label>
+        <label class="area-field">
+          <span>Location / Area</span>
+          <select data-area-part="area"${curCity ? "" : " disabled"}>
+            ${opt("", curCity ? "— Select —" : "Choose a city first", true)}
+            ${areas.map(a => opt(a.id, a.area, String(a.id) === String(curAreaId))).join("")}
+          </select>
+        </label>
+      </div>`;
+
+    wrap.querySelector('[data-area-part="state"]').addEventListener("change", e=>{
+      curState = e.target.value;
+      curCity = "";
+      // Changing the state invalidates whatever area was chosen under the old
+      // one, so the caller is told immediately rather than keeping a stale id.
+      onChange(null);
+      draw();
+    });
+    wrap.querySelector('[data-area-part="city"]').addEventListener("change", e=>{
+      curCity = e.target.value;
+      onChange(null);
+      draw();
+    });
+    wrap.querySelector('[data-area-part="area"]').addEventListener("change", e=>{
+      onChange(e.target.value || null);
+    });
+  };
+
+  draw();
+}
+
 async function loadCategories(){
   try{ state.categories = await api("GET","/categories"); }
   catch(e){ state.categories = { income: [], expense: [] }; }
@@ -972,6 +1096,7 @@ async function renderBilling(){
   renderBillingBillNav();
   renderBillingCustomers();
   renderBillingLocationChips();
+  renderAreaPicker("billing-area-picker", state.areaId, id => { state.areaId = id; });
   renderBillingProducts();
   // Re-applies the document-type UI (which section is hidden, button labels)
   // and calls renderCart + renderTotals itself, so a challan-in-progress
@@ -1373,7 +1498,7 @@ function renderEditModeBanner(){
     state.cart = []; state.selectedCustomerId = null; state.taxTypeOverride = null; state.advance = 0; state.discountValue = 0;
     state.transport = 0; state.loading = 0; state.deliveryMan = "";
     state.vehicleNumber = ""; state.deliveryAddress = ""; state.remarks = ""; state.gstEnabled = true;
-    state.transportMode = ""; state.dueDate = "";
+    state.transportMode = ""; state.dueDate = ""; state.areaId = null;
     // A fresh bill always starts at "Without Rate" — the previous bill's
     // print choice must not carry into an unrelated new challan.
     state.challanShowRate = false;
@@ -1425,6 +1550,7 @@ async function editExistingInvoice(inv){
   state.deliveryMan = inv.delivery_man || "";
   state.vehicleNumber = inv.vehicle_number || "";
   state.transportMode = inv.transport_mode || "";
+  state.areaId = inv.area_id || null;
   state.dueDate = inv.due_date || "";
   state.deliveryAddress = inv.delivery_address || "";
   state.remarks = inv.remarks || "";
@@ -1775,6 +1901,9 @@ async function completeSale(){
       gstOnCharges: state.gstOnCharges, gstEnabled: state.gstEnabled, deliveryMan: state.deliveryMan,
       vehicleNumber: state.vehicleNumber, deliveryAddress: state.deliveryAddress, remarks: state.remarks,
       transportMode: state.transportMode || "", dueDate: state.dueDate || "",
+      // Blank is honest "not recorded" — the server then falls back to the
+      // customer's own area rather than inventing one.
+      areaId: state.areaId || undefined,
       // Only sent when staff explicitly picked a GST Type for this invoice —
       // omitted (undefined) falls back to the customer's Customer Master
       // default server-side, same as before this override existed.
@@ -1791,7 +1920,7 @@ async function completeSale(){
     state.cart = []; state.advance = 0; state.discountValue = 0; state.taxTypeOverride = null;
     state.transport = 0; state.loading = 0; state.deliveryMan = "";
     state.vehicleNumber = ""; state.deliveryAddress = ""; state.remarks = ""; state.gstEnabled = true;
-    state.transportMode = ""; state.dueDate = "";
+    state.transportMode = ""; state.dueDate = ""; state.areaId = null;
     // A fresh bill always starts at "Without Rate" — the previous bill's
     // print choice must not carry into an unrelated new challan.
     state.challanShowRate = false;
@@ -5752,6 +5881,7 @@ async function renderReport(){
     if(state.reportType==="TaxInvoice") return renderTaxInvoiceReport(body);
     if(state.reportType==="PurchaseBill") return renderPurchaseBillReport(body);
     if(state.reportType==="Salesman") return renderSalesmanReport(body);
+    if(state.reportType==="Area") return renderAreaReport(body);
     if(state.reportType==="Party") return renderPartyReport(body);
     if(state.reportType==="PartyProduct") return renderPartyProductReport(body);
     if(state.reportType==="Profit") return renderProfitReport(body);
@@ -5923,6 +6053,55 @@ async function renderSalesmanReport(body){
         <div style="height:8px;background:var(--bg-outer);border-radius:100px;"><div style="height:100%;width:${max>0?(r.value/max)*100:0}%;background:var(--navy);border-radius:100px;"></div></div>
       </div>`).join("") : `<div class="empty-hint">No sales recorded yet.</div>`);
 }
+/** Sales and purchases per State › City › Area, side by side.
+ *
+ *  Bars are scaled against the largest figure across BOTH columns, not each
+ *  column's own maximum — otherwise a ₹5,000 purchase bar would look the same
+ *  length as a ₹5,00,000 sales bar sitting next to it. */
+async function renderAreaReport(body){
+  const data = await api("GET","/reports/area-wise"+reportRangeQS());
+  const rows = data.rows || [];
+  const t = data.totals || {};
+  const max = Math.max(1, ...rows.map(r=>Math.max(r.salesValue, r.purchaseValue)));
+
+  const bar = (value, colour) =>
+    `<div style="height:7px;background:var(--bg-outer);border-radius:100px;">
+       <div style="height:100%;width:${(value/max)*100}%;background:${colour};border-radius:100px;"></div>
+     </div>`;
+
+  body.innerHTML =
+    `<div style="font-weight:800;font-size:14px;">Area-wise Sales &amp; Purchase</div>
+     <div class="muted" style="font-size:11.5px;margin-bottom:10px;">
+       State &rsaquo; City &rsaquo; Location, from the area recorded on each bill</div>` +
+    (rows.length ? rows.map(r=>`
+      <div style="margin-bottom:14px;${r.state ? "" : "opacity:.72;"}">
+        <div style="font-size:12.5px;font-weight:800;margin-bottom:5px;">${escapeHtml(r.label)}</div>
+        <div style="display:flex;justify-content:space-between;font-size:11.5px;margin-bottom:3px;">
+          <span class="muted">Sales</span>
+          <span style="font-weight:700;">${fmt(r.salesValue)} · ${r.salesBills} bill${r.salesBills===1?"":"s"}</span>
+        </div>
+        ${bar(r.salesValue, "var(--navy)")}
+        <div style="display:flex;justify-content:space-between;font-size:11.5px;margin:6px 0 3px;">
+          <span class="muted">Purchase</span>
+          <span style="font-weight:700;">${fmt(r.purchaseValue)} · ${r.purchaseBills} bill${r.purchaseBills===1?"":"s"}</span>
+        </div>
+        ${bar(r.purchaseValue, "var(--gold)")}
+      </div>`).join("") : `<div class="empty-hint">Nothing in this period.</div>`) +
+    (rows.length ? `
+      <div class="list-row" style="border-top:2px solid var(--border);margin-top:4px;">
+        <div class="row-title">Total</div>
+        <div class="row-right"><div class="row-title">${fmt(t.salesValue)} sales</div>
+          <div class="row-sub">${fmt(t.purchaseValue)} purchase</div></div>
+      </div>` : "") +
+    // Said plainly rather than left for the owner to work out from a gap in
+    // the numbers: this is how much of the turnover has no area on it.
+    (t.unrecordedSales > 0 ? `
+      <p class="muted" style="font-size:11px;margin-top:10px;line-height:1.6;">
+        ${fmt(t.unrecordedSales)} of sales carries no area — those bills were saved before the
+        area field existed, or left blank. Set the Location / Area on the bill to move it onto a line above.
+      </p>` : "");
+}
+
 async function renderLocationStockReport(body){
   const rows = await api("GET","/reports/stock-by-location");
   const codeIcon = code => code==="shop" ? "&#127978;" : code==="warehouse" ? "&#127974;" : "&#128230;";
@@ -7125,6 +7304,7 @@ async function renderPurchaseScreen(){
   }
   renderPurchaseEditBanner();
   renderPurchaseLocationChips();
+  renderAreaPicker("pur-area-picker", state.pur.areaId, id => { state.pur.areaId = id; });
   renderPurchaseSuppliers();
   renderPurchaseSupplierInfo();
   renderPurchaseProducts();
@@ -7264,7 +7444,7 @@ function renderPurchaseEditBanner(){
       docType: "purchase", supplierId: null, purchaseType: "Local", paymentMethod: "Credit",
       date: "", invoiceNo: "", dueDate: "", vehicleNumber: "", transportName: "", lrNumber: "", remarks: "",
       transport: 0, loading: 0, otherCharges: 0, roundOff: true, cart: [], editingPurchaseId: null, locationId: null,
-      gstEnabled: true, purchaseNo: null
+      gstEnabled: true, purchaseNo: null, areaId: null
     };
     const set = (id, val) => { const inp=document.getElementById(id); if(inp) inp.value = val; };
     set("pur-invoice-no", ""); set("pur-due-date", ""); set("pur-vehicle", "");
@@ -7518,7 +7698,7 @@ function clearPurchaseForm(){
     docType: "purchase", supplierId: null, purchaseType: "Local", paymentMethod: "Credit",
     date: "", invoiceNo: "", dueDate: "", vehicleNumber: "", transportName: "", lrNumber: "", remarks: "",
     transport: 0, loading: 0, otherCharges: 0, roundOff: true, cart: [], editingPurchaseId: null, locationId: null,
-    gstEnabled: true, purchaseNo: null
+    gstEnabled: true, purchaseNo: null, areaId: null
   };
   const set = (id, val) => { const el=document.getElementById(id); if(el) el.value = val; };
   set("pur-invoice-no", ""); set("pur-due-date", ""); set("pur-vehicle", "");
@@ -7657,6 +7837,7 @@ async function savePurchase(){
       otherCharges: state.pur.otherCharges,
       roundOff: state.pur.roundOff,
       locationId: state.pur.locationId,
+      areaId: state.pur.areaId || undefined,
       gstEnabled: state.pur.gstEnabled,
       // Only the raw inputs are sent — the server recomputes every derived
       // figure itself, same principle as completeSale() on the Billing side.
@@ -7675,7 +7856,7 @@ async function savePurchase(){
       docType: "purchase", supplierId: null, purchaseType: "Local", paymentMethod: "Credit",
       date: "", invoiceNo: "", dueDate: "", vehicleNumber: "", transportName: "", lrNumber: "", remarks: "",
       transport: 0, loading: 0, otherCharges: 0, roundOff: true, cart: [], editingPurchaseId: null, locationId: null,
-      gstEnabled: true, purchaseNo: null
+      gstEnabled: true, purchaseNo: null, areaId: null
     };
     const set = (id, val) => { const el=document.getElementById(id); if(el) el.value = val; };
     set("pur-invoice-no", ""); set("pur-due-date", ""); set("pur-vehicle", "");
@@ -7820,6 +8001,7 @@ async function editExistingPurchase(p){
   state.pur.transportName = p.transport_name || "";
   state.pur.lrNumber = p.lr_number || "";
   state.pur.remarks = p.remarks || "";
+  state.pur.areaId = p.area_id || null;
   state.pur.transport = p.transport || 0;
   state.pur.loading = p.loading || 0;
   state.pur.otherCharges = p.other_charges || 0;
@@ -10845,7 +11027,7 @@ const REPORT_TITLES = {
   Sales:"Sales Report", GST:"GST Report", Stock:"Stock Report", Customer:"Customer Report",
   Purchase:"Purchase Report", Challan:"Delivery Challan Report", Orders:"Sales Orders",
   TaxInvoice:"Tax Invoice Report", PurchaseBill:"Purchase Bill Report", Salesman:"Salesman Report",
-  Brand:"Brand-wise Stock", Party:"Party-wise Report", PartyProduct:"Party-wise Product",
+  Brand:"Brand-wise Stock", Area:"Area-wise Report", Party:"Party-wise Report", PartyProduct:"Party-wise Product",
   Profit:"Profit Report", ProfitByInvoice:"Profit per Invoice", Supplier:"Supplier Report",
   SalePayments:"Sale Payments", PurchasePayments:"Purchase Payments",
   LocationStock:"Shop / Warehouse Stock", Transfers:"Stock Transfers",

@@ -992,3 +992,13 @@ nav.bottom .tab span:last-child{
   display:grid; place-items:center; background:#fafbfc; overflow:hidden;
 }
 .st-logo-preview img{ max-width:100%; max-height:100%; display:block; }
+
+/* State -> City -> Area picker, on Sales Entry and Purchase Entry.
+   Three across on a wide screen, stacked on a phone, so the chain reads
+   left to right where there is room and top to bottom where there is not. */
+.area-grid{ display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; }
+.area-field{ display:flex; flex-direction:column; gap:4px; min-width:0; }
+.area-field > span{ font-size:11px; font-weight:700; color:var(--muted); }
+.area-field select{ width:100%; }
+.area-field select:disabled{ opacity:.55; }
+@media (max-width:560px){ .area-grid{ grid-template-columns:1fr; } }

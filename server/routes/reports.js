@@ -537,6 +537,76 @@ router.get("/brand-wise", (req, res) => {
   res.json(rows);
 });
 
+/**
+ * Sales and purchases side by side, per State › City › Area.
+ *
+ * The whole point of asking for an area on entry, so both halves are read
+ * from one endpoint and can never be filtered differently by accident.
+ *
+ * Documents with no area are NOT dropped. They are gathered into a single
+ * "(Not recorded)" line, because an area report that quietly omits a third
+ * of the turnover is worse than one that shows the gap — an owner needs to
+ * know how much of the picture is missing before trusting the rest.
+ */
+router.get("/area-wise", (req, res) => {
+  const range = dateRange(req);
+  const key = a => (a ? `${a.state}|${a.city}|${a.area}` : "|||");
+
+  const salesRows = db.prepare(`
+    SELECT ar.state, ar.city, ar.area,
+           COUNT(*) AS bills,
+           COALESCE(SUM(i.total),0) AS value
+    FROM invoices i
+    LEFT JOIN areas ar ON ar.id = i.area_id
+    WHERE i.voided = 0 AND i.doc_type = 'invoice'${range.sql("i.date")}
+    GROUP BY ar.state, ar.city, ar.area
+  `).all(...range.params());
+
+  const purchaseRows = db.prepare(`
+    SELECT ar.state, ar.city, ar.area,
+           COUNT(*) AS bills,
+           COALESCE(SUM(p.total),0) AS value
+    FROM purchases p
+    LEFT JOIN areas ar ON ar.id = p.area_id
+    WHERE p.voided = 0${range.sql("p.date")}
+    GROUP BY ar.state, ar.city, ar.area
+  `).all(...range.params());
+
+  const byKey = new Map();
+  const slot = r => {
+    const k = key(r.state ? r : null);
+    if (!byKey.has(k)) {
+      byKey.set(k, {
+        state: r.state || "", city: r.city || "", area: r.area || "",
+        label: r.state ? `${r.state} › ${r.city} › ${r.area}` : "(Not recorded)",
+        salesValue: 0, salesBills: 0, purchaseValue: 0, purchaseBills: 0
+      });
+    }
+    return byKey.get(k);
+  };
+  salesRows.forEach(r => { const s = slot(r); s.salesValue = round2(r.value); s.salesBills = r.bills; });
+  purchaseRows.forEach(r => { const s = slot(r); s.purchaseValue = round2(r.value); s.purchaseBills = r.bills; });
+
+  // Biggest selling area first — that is the question this report is opened
+  // to answer. "(Not recorded)" sinks to the bottom whatever its size, since
+  // it is a data-quality note rather than a place.
+  const rows = [...byKey.values()].sort((a, b) => {
+    if (!a.state !== !b.state) return a.state ? -1 : 1;
+    return b.salesValue - a.salesValue;
+  });
+
+  res.json({
+    rows,
+    totals: {
+      salesValue: round2(rows.reduce((s, r) => s + r.salesValue, 0)),
+      purchaseValue: round2(rows.reduce((s, r) => s + r.purchaseValue, 0)),
+      salesBills: rows.reduce((s, r) => s + r.salesBills, 0),
+      purchaseBills: rows.reduce((s, r) => s + r.purchaseBills, 0),
+      unrecordedSales: round2(rows.filter(r => !r.state).reduce((s, r) => s + r.salesValue, 0))
+    }
+  });
+});
+
 /** Every customer's total business — full list, not just the dashboard's top 4.
  *  Range goes on the JOIN, not a WHERE, so a customer with no sales in the
  *  period still appears at zero with their `due` intact — dropping them would

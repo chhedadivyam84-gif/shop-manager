@@ -4021,6 +4021,27 @@ function openSettings(){
       <button class="btn btn-outline" id="st-run-backup" style="margin-top:8px;">Back Up Now</button>
       <p class="muted" style="font-size:11px;margin-top:8px;">Your whole shop lives in one file. Automatic snapshots are kept on this PC daily. Use <strong>Download Backup</strong> to keep a copy on your phone or a USB drive — that's your safety net if this PC is ever lost.</p>
 
+      <div class="section-title">Locations / Areas</div>
+      <p class="muted" style="font-size:11px;margin-bottom:10px;">
+        The State &rsaquo; City &rsaquo; Area list offered on bills, purchases, customers and suppliers.
+        Add a new suburb the moment you start selling there.
+      </p>
+      <div class="card" id="st-area-list"><div class="empty-hint">Loading…</div></div>
+      <label class="field-label" style="margin-top:12px;">State</label>
+      <input type="text" id="st-area-state" list="st-area-states" placeholder="e.g. Maharashtra">
+      <datalist id="st-area-states"></datalist>
+      <label class="field-label" style="margin-top:10px;">City</label>
+      <input type="text" id="st-area-city" list="st-area-cities" placeholder="e.g. Mumbai">
+      <datalist id="st-area-cities"></datalist>
+      <label class="field-label" style="margin-top:10px;">Location / Area</label>
+      <input type="text" id="st-area-area" placeholder="e.g. Dahisar">
+      <button class="btn btn-primary" id="st-area-add" style="margin-top:12px;">Add Area</button>
+      <p class="muted" style="font-size:11px;margin-top:8px;">
+        Typing an existing State or City reuses it — the boxes suggest what you already have, so
+        &ldquo;Mumbai&rdquo; and &ldquo;mumbai&rdquo; don't become two cities. An area you stop using can be
+        <strong>retired</strong>: it disappears from the dropdowns but stays on every bill already filed under it.
+      </p>
+
       <div class="section-title">Bill Header &amp; Footer</div>
       <p class="muted" style="font-size:11px;margin-bottom:10px;">
         Your logo, your bank details and the wording that prints on every bill and challan.
@@ -4157,8 +4178,102 @@ function openSettings(){
     describe();
     invThemeSel.addEventListener("change", describe);
     chThemeSel.addEventListener("change", describe);
+    /* ---- Locations / Areas master ----
+       Retired areas are shown too, greyed, with a way back. Hiding them
+       entirely would leave an owner who retired one by mistake with no route
+       to undo it, and no clue why re-adding the same name says it exists. */
+    async function renderSettingsAreas(){
+      const listEl = sheet.querySelector("#st-area-list");
+      if(!listEl) return;
+      let rows;
+      try{
+        const data = await api("GET","/areas?all=true");
+        rows = data.areas || [];
+      }catch(e){
+        listEl.innerHTML = `<div class="empty-hint">Could not load: ${escapeHtml(e.message||"")}</div>`;
+        return;
+      }
+
+      // Suggestions come from what already exists, so the same city typed
+      // twice with different capitalisation cannot split into two.
+      const states = [...new Set(rows.map(r=>r.state))].sort();
+      const cities = [...new Set(rows.map(r=>r.city))].sort();
+      sheet.querySelector("#st-area-states").innerHTML = states.map(s=>`<option value="${escapeHtml(s)}"></option>`).join("");
+      sheet.querySelector("#st-area-cities").innerHTML = cities.map(c=>`<option value="${escapeHtml(c)}"></option>`).join("");
+
+      if(!rows.length){
+        listEl.innerHTML = `<div class="empty-hint">No areas yet. Add your first one below.</div>`;
+        return;
+      }
+
+      // Grouped under one State › City heading rather than repeating it on
+      // every line — a shop with thirty suburbs in one city reads far better.
+      const groups = {};
+      rows.forEach(r=>{
+        const k = r.state + " › " + r.city;
+        (groups[k] = groups[k] || []).push(r);
+      });
+      listEl.innerHTML = Object.entries(groups).map(([heading, list])=>`
+        <div class="list-row" style="background:var(--bg-outer);">
+          <div class="row-title" style="font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;">${escapeHtml(heading)}</div>
+        </div>` +
+        list.map(a=>`
+        <div class="list-row"${a.active ? "" : ' style="opacity:.55;"'}>
+          <div><div class="row-title">${escapeHtml(a.area)}${a.active ? "" : " (retired)"}</div></div>
+          <div class="row-right">
+            <a href="#" data-area-toggle="${escapeHtml(a.id)}" data-area-to="${a.active ? 0 : 1}"
+               class="${a.active ? "btn-danger-link" : ""}" style="font-size:11.5px;font-weight:700;">
+              ${a.active ? "Retire" : "Restore"}</a>
+          </div>
+        </div>`).join("")
+      ).join("");
+
+      listEl.querySelectorAll("[data-area-toggle]").forEach(link=>{
+        link.addEventListener("click", async e=>{
+          e.preventDefault();
+          const to = link.dataset.areaTo === "1";
+          try{
+            await api("PATCH", `/areas/${encodeURIComponent(link.dataset.areaToggle)}/active`, { active: to });
+            await loadAreas();
+            if(owner) renderSettingsAreas();
+            toast(to ? "Area restored." : "Area retired — it stays on bills already filed under it.", "ok");
+          }catch(err){ toast(err.message); }
+        });
+      });
+    }
+    renderSettingsAreas();
+
+    const stAreaAdd = sheet.querySelector("#st-area-add");
+    if(stAreaAdd) stAreaAdd.addEventListener("click", async ()=>{
+      const btn = sheet.querySelector("#st-area-add");
+      const stateEl = sheet.querySelector("#st-area-state");
+      const cityEl  = sheet.querySelector("#st-area-city");
+      const areaEl  = sheet.querySelector("#st-area-area");
+      const payload = {
+        state: stateEl.value.trim(),
+        city:  cityEl.value.trim(),
+        area:  areaEl.value.trim()
+      };
+      if(!payload.state || !payload.city || !payload.area){
+        toast("Fill in State, City and Area."); return;
+      }
+      btn.disabled = true;
+      try{
+        await api("POST","/areas", payload);
+        // The State and City are kept, only the Area is cleared — adding six
+        // suburbs of one city is the normal case, and re-typing "Maharashtra,
+        // Mumbai" six times is the kind of thing people stop bothering with.
+        areaEl.value = "";
+        await loadAreas();
+        await renderSettingsAreas();
+        toast(`${payload.area} added.`, "ok");
+      }catch(err){ toast(err.message); }
+      btn.disabled = false;
+    });
+
     /* Bill header & footer — the shop's own details as they appear on paper. */
-    sheet.querySelector("#st-save-bill-header").addEventListener("click", async ()=>{
+    const stSaveBillHeader = sheet.querySelector("#st-save-bill-header");
+    if(stSaveBillHeader) stSaveBillHeader.addEventListener("click", async ()=>{
       const btn = sheet.querySelector("#st-save-bill-header");
       btn.disabled = true;
       try{
@@ -4218,7 +4333,8 @@ function openSettings(){
       }catch(err){ toast(err.message); }
     });
 
-    sheet.querySelector("#st-save-themes").addEventListener("click", async ()=>{
+    const stSaveThemes = sheet.querySelector("#st-save-themes");
+    if(stSaveThemes) stSaveThemes.addEventListener("click", async ()=>{
       try{
         state.settings = await api("PUT","/settings", {
           invoiceTheme: invThemeSel.value,
@@ -4233,7 +4349,8 @@ function openSettings(){
       }catch(err){ toast(err.message); }
     });
 
-    sheet.querySelector("#st-save-stock-rules").addEventListener("click", async ()=>{
+    const stSaveStockRules = sheet.querySelector("#st-save-stock-rules");
+    if(stSaveStockRules) stSaveStockRules.addEventListener("click", async ()=>{
       const allow = sheet.querySelector("#st-allow-negative").checked;
       try{
         state.settings = await api("PUT","/settings", { allowNegativeStock: allow });

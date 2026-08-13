@@ -3,6 +3,7 @@ const db = require("../db");
 const { uid, todayStr, round2, logAction } = require("../util");
 const { requireRole } = require("../auth");
 const inventory = require("../inventory");
+const docNumber = require("../docNumber");
 // Same module the browser loads — see public/js/pricing.js for why it is shared.
 const Pricing = require("../../public/js/pricing.js");
 
@@ -94,33 +95,13 @@ const syncProductStockStmt = db.prepare(
 // once), the printed document banner (ESTIMATE CHALLAN vs DELIVERY CHALLAN)
 // is what actually tells them apart — the number alone does not.
 function nextDocNo(docType) {
-  const counterName = docType === "challan" ? "challan-no" : "estimate-no";
-  const row = db.prepare("SELECT value FROM counters WHERE name = ?").get(counterName);
-  const taken = db.prepare("SELECT 1 FROM invoices WHERE challan_no = ?");
-
-  /* The two series run on independent counters but share ONE column, and
-     invoices.challan_no is UNIQUE — so the moment the trailing series reaches
-     a number the other has already issued, the INSERT fails and the counter
-     hand gets a 500 reading "Something went wrong on the server."
-
-     Skipping a number that is already taken costs an occasional gap in one
-     series; refusing to save costs the shop the bill. The gap is the better
-     trade. (Making the constraint UNIQUE(challan_no, doc_type) instead would
-     remove the need for this, but that is a rebuild of the live invoices
-     table and is not worth doing behind the owner's back.) */
-  let next = row ? row.value + 1 : 1;
-  let docNo = `SP${String(next).padStart(7, "0")}`;
-  let guard = 0;
-  while (taken.get(docNo) && guard++ < 10000) {
-    next += 1;
-    docNo = `SP${String(next).padStart(7, "0")}`;
-  }
-
-  db.prepare(`
-    INSERT INTO counters (name, value) VALUES (?, ?)
-    ON CONFLICT(name) DO UPDATE SET value = excluded.value
-  `).run(counterName, next);
-  return docNo;
+  /* One engine for every series (server/docNumber.js). This used to keep its
+     own counter in the  table, which meant a deletion rolling back
+     doc_numbering had no effect on what the next bill was actually given —
+     two counters, one of them ignored. The engine also does the
+     skip-if-already-taken walk this function used to do by hand, for the same
+     reason: invoices and challans share one UNIQUE challan_no column. */
+  return docNumber.allocate(docType === "challan" ? "challan" : "invoice");
 }
 
 /**
@@ -374,7 +355,34 @@ router.post("/", (req, res) => {
     ? challanTotals
     : computeTotals({ items, discountType, discountValue, advance, taxType, transport, loading, roundOff, gstOnCharges, gstEnabled });
   const id = uid(isChallan ? "DC" : "INV");
-  const challanNo = nextDocNo(docType);
+  /* Auto ON hands out the next number in the series; auto OFF makes the
+     operator type one, which is checked for a clash before anything is
+     saved. A typed number is also allowed while auto is ON — the screen
+     offers it — so the client sends the flag rather than the server
+     inferring it from the setting alone. */
+  const series = isChallan ? "challan" : "invoice";
+  const autoOff = docNumber.config(series).auto_enabled !== 1;
+  let challanNo;
+  try {
+    challanNo = docNumber.resolve(series, {
+      manualNumber: req.body.manualNumber,
+      useManual: req.body.useManualNumber === true || (autoOff && req.body.manualNumber)
+    });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.error });
+    throw err;
+  }
+  if (autoOff && !req.body.manualNumber) {
+    return res.status(400).json({
+      error: "Auto numbering is off for this document — enter the number yourself, or switch it back on in Settings."
+    });
+  }
+  if (req.body.useManualNumber === true || (autoOff && req.body.manualNumber)) {
+    docNumber.logNumber(req, {
+      docType: series, action: "manual", docId: id, docNumber: challanNo,
+      detail: "Number entered by hand instead of the automatic one"
+    });
+  }
   // Same optional-backdate pattern as purchases.js/quotations.js — falls
   // back to today whenever the client doesn't send a valid YYYY-MM-DD date,
   // so every existing caller (which never sends one) keeps today's date.
@@ -833,8 +841,16 @@ router.delete("/:id", requireRole("owner"), (req, res) => {
     db.prepare("DELETE FROM invoices WHERE id = ?").run(inv.id); // cascades to invoice_items
   })();
 
-  logAction(req, inv.doc_type === "challan" ? "challan.delete" : "invoice.delete", `${inv.challan_no}`);
-  res.json({ ok: true });
+  /* Hand the number back if this was the latest one issued, so the next
+     bill continues the sequence instead of leaving a hole. Done AFTER the
+     row is gone, so "is anything numbered above it" is asked of what is
+     really left. An older number stays spent — see docNumber.js rule 4. */
+  const released = docNumber.releaseOnDelete(
+    req, inv.doc_type === "challan" ? "challan" : "invoice", inv.challan_no, inv.id);
+
+  logAction(req, inv.doc_type === "challan" ? "challan.delete" : "invoice.delete",
+    `${inv.challan_no}${released ? " (number released for re-use)" : ""}`);
+  res.json({ ok: true, releasedNumber: released ? released.number : null });
 });
 
 module.exports = router;

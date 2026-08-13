@@ -1055,6 +1055,81 @@ addColumn("products", "active", "INTEGER NOT NULL DEFAULT 1");
 
 
 
+/* One-time carry-over from the old per-route `counters` rows.
+
+   Numbers used to be issued from counters (estimate-no, challan-no, ...)
+   while doc_numbering sat unused, so the two disagreed. Issuing now runs
+   entirely through doc_numbering — which is also what a deletion rolls
+   back — and this lifts it to wherever the old counter had reached, so
+   the switch changes no shop's next number.
+
+   Only ever raises. A counter behind the documents that actually exist
+   must not drag the series backwards into re-issuing live numbers. */
+(function syncDocNumberingFromCounters() {
+  const pairs = [
+    ["invoice", "estimate-no"],
+    ["challan", "challan-no"],
+    ["quotation", "quotation-no"],
+    ["purchase", "purchase-no"]
+  ];
+  for (const [docType, counterName] of pairs) {
+    const c = db.prepare("SELECT value FROM counters WHERE name = ?").get(counterName);
+    if (!c) continue;
+    const cur = db.prepare("SELECT next_number FROM doc_numbering WHERE doc_type = ?").get(docType);
+    if (!cur) continue;
+    const wanted = c.value + 1;   // counters store the LAST issued number
+    if (wanted > cur.next_number) {
+      db.prepare("UPDATE doc_numbering SET next_number = ?, updated_at = ? WHERE doc_type = ?")
+        .run(wanted, Date.now(), docType);
+    }
+  }
+})();
+
+/* ---- numbering: auto on/off, and a per-financial-year start ---- */
+
+/* Auto ON hands out the next number in the series. Auto OFF makes the
+   operator type it. Default ON, because that is what every existing shop
+   already had and a silent switch to manual entry would be a nasty
+   surprise mid-shift. */
+addColumn("doc_numbering", "auto_enabled", "INTEGER NOT NULL DEFAULT 1");
+
+/* Where each series restarts at the top of a financial year.
+   Kept as its own table rather than a column because it is a value PER
+   YEAR: a shop that starts 2026-27 at 1001 and 2027-28 at 2001 needs both
+   on file, and a single column could only remember the latest. */
+db.exec(`
+CREATE TABLE IF NOT EXISTS doc_number_fy_start (
+  doc_type TEXT NOT NULL,
+  fy_label TEXT NOT NULL,
+  start_number INTEGER NOT NULL,
+  applied_at INTEGER,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (doc_type, fy_label)
+);
+`);
+
+/* Every movement of a document number, in one place.
+   audit_log already records WHAT happened in prose; this records the
+   numbers themselves, so "who changed 1003 to 1007, and when" is a query
+   rather than a hunt through free text. Nothing here is ever deleted —
+   it is the paper trail that makes re-using a number defensible. */
+db.exec(`
+CREATE TABLE IF NOT EXISTS doc_number_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  doc_type TEXT NOT NULL,
+  action TEXT NOT NULL,
+  doc_id TEXT,
+  doc_number TEXT,
+  previous_number TEXT,
+  new_number TEXT,
+  detail TEXT,
+  staff_id TEXT,
+  staff_name TEXT,
+  at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_doc_number_log_type ON doc_number_log(doc_type, at DESC);
+`);
+
 /* ============================================================
    PRINT TEMPLATES
 

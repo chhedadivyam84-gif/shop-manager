@@ -11356,18 +11356,20 @@ function renderPmColumns(){
       <span class="pm-grip" title="Drag to reorder">⋮⋮</span>
       <input type="checkbox" data-pm-col-show="${i}"${col.show?" checked":""} title="Show this column">
       <input type="text" class="pm-col-label" data-pm-col-label="${i}" value="${escapeHtml(col.label)}">
-      <input type="number" class="pm-col-w" data-pm-col-w="${i}" value="${col.width}" min="0" max="400" title="Width in px, 0 = auto">
-      <select class="pm-col-a" data-pm-col-a="${i}" title="Alignment">
-        <option value="left"${col.align==="left"?" selected":""}>L</option>
-        <option value="center"${col.align==="center"?" selected":""}>C</option>
-        <option value="right"${col.align==="right"?" selected":""}>R</option>
-      </select>
-      <span class="pm-col-move">
-        <button data-pm-col-up="${i}"${i===0?" disabled":""}>↑</button>
-        <button data-pm-col-dn="${i}"${i===c.columns.length-1?" disabled":""}>↓</button>
+      <span class="pm-col-ctl">
+        <input type="number" class="pm-col-w" data-pm-col-w="${i}" value="${col.width}" min="0" max="400" title="Width in px, 0 = auto">
+        <select class="pm-col-a" data-pm-col-a="${i}" title="Alignment">
+          <option value="left"${col.align==="left"?" selected":""}>L</option>
+          <option value="center"${col.align==="center"?" selected":""}>C</option>
+          <option value="right"${col.align==="right"?" selected":""}>R</option>
+        </select>
+        <span class="pm-col-move">
+          <button data-pm-col-up="${i}"${i===0?" disabled":""}>↑</button>
+          <button data-pm-col-dn="${i}"${i===c.columns.length-1?" disabled":""}>↓</button>
+        </span>
+        ${!c.showRate && moneyish.has(col.key)
+          ? `<span class="pm-col-note">blank</span>` : ""}
       </span>
-      ${!c.showRate && moneyish.has(col.key)
-        ? `<span class="pm-col-note">blank</span>` : ""}
     </div>`).join("");
 
   wrap.querySelectorAll("[data-pm-col-show]").forEach(x=>x.addEventListener("change", ()=>{

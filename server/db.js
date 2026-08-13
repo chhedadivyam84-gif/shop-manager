@@ -1346,6 +1346,58 @@ CREATE INDEX IF NOT EXISTS idx_txn_categories_kind ON txn_categories(kind, activ
   income.forEach((n, i) => ins.run("CAT_inc_" + n.toLowerCase().replace(/[^a-z0-9]+/g, "_"), "income", n, i, now));
 })();
 
+/* Same idea for the header WORDING. Templates generated before the registry
+   carried per-document labels say "Sr. No." / "Product" / "Quantity", while
+   the bill prints "Sr No." / "Product Description" / "Qty" (and a challan
+   says "Product / Item" / "Description"). Left alone, switching the printed
+   page over to templates would silently reword the shop's own headers.
+
+   Narrow in the same way as the order fix: a column is only rewritten when
+   its label still equals the OLD generic default, i.e. nobody has renamed it.
+   A header the owner typed themselves is never touched. */
+(function alignTemplateLabelsAndWidths() {
+  const reg = require("./printRegistry");
+  const rows = db.prepare("SELECT id, doc_type, config FROM doc_templates").all();
+  const upd = db.prepare("UPDATE doc_templates SET config = ? WHERE id = ?");
+  for (const r of rows) {
+    const doc = reg.getDoc(r.doc_type);
+    if (!doc || !doc.labels) continue;
+    let cfg;
+    try { cfg = JSON.parse(r.config); } catch (e) { continue; }
+    if (!cfg || !Array.isArray(cfg.columns)) continue;
+    let changed = false;
+    for (const col of cfg.columns) {
+      const field = reg.ITEM_FIELDS[col.key];
+      const want = doc.labels[col.key];
+      const generic = field && field.label;
+      if (want && col.label === generic && col.label !== want) { col.label = want; changed = true; }
+      // Bill columns size themselves from the stylesheet. A stored width
+      // still equal to the generic default was never chosen by anyone, and
+      // applying it would pin columns the bill has always left to flow.
+      if (doc.autoWidths && field && col.width === field.width && col.width !== 0) {
+        col.width = 0; changed = true;
+      }
+    }
+    // Page metrics too. A stored 10.5pt / 10mm still at the generic default
+    // was never chosen by anyone, and applying it redrew the whole bill
+    // (11px text became 14px, 10px padding became 37.8px). Zero means
+    // "inherit the stylesheet", which is how the bill has always printed.
+    if (doc.autoWidths) {
+      const reg2 = reg.defaultConfig(doc);
+      if (cfg.fontSize === 10.5) { cfg.fontSize = 0; changed = true; }
+      if (cfg.margins && cfg.margins.top === 10) {
+        cfg.margins = { top: 0, right: 0, bottom: 0, left: 0 }; changed = true;
+      }
+      // Same for a heading nobody has retyped.
+      if (cfg.title && cfg.title !== reg2.title &&
+          (cfg.title === "TAX INVOICE" || cfg.title === doc.label)) {
+        cfg.title = reg2.title; changed = true;
+      }
+    }
+    if (changed) upd.run(JSON.stringify(cfg), r.id);
+  }
+})();
+
 /* Per-document-type numbering: its own prefix, width and high-water counter.
    Each type gets its OWN series — which is also what stops tax invoices and
    delivery challans colliding in the single UNIQUE challan_no column they

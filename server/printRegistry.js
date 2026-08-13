@@ -69,7 +69,12 @@ const DOCUMENTS = [
     voidedCol: "voided", locationCol: "location_id", areaCol: "area_id",
     salesmanCol: "delivery_man", totalCol: "total",
     itemsTable: "invoice_items", itemsKey: "invoice_id",
-    items: ALL_GOODS, supportsRate: true, defaultTitle: "TAX INVOICE"
+    items: ALL_GOODS, supportsRate: true, defaultTitle: "ESTIMATE CHALLAN",
+    // The wording the bill has always printed. Without these a default
+    // template would relabel the shop's own headers ("Sr. No.", "Product",
+    // "Quantity") the moment templates drive the page.
+    labels: { sn: "Sr No.", name: "Product Description", size: "Size", qty: "Qty" },
+    autoWidths: true
   },
   {
     key: "delivery_challan", label: "Delivery Challan", group: "Sales", available: true,
@@ -79,7 +84,10 @@ const DOCUMENTS = [
     salesmanCol: "delivery_man", totalCol: "total",
     itemsTable: "invoice_items", itemsKey: "invoice_id",
     items: [...CHALLAN_COLUMNS, ...GOODS_EXTRAS], supportsRate: true,
-    defaultTitle: "DELIVERY CHALLAN"
+    defaultTitle: "DELIVERY CHALLAN",
+    // A challan words two of these differently from the invoice.
+    labels: { sn: "Sr No.", name: "Product / Item", size: "Description", qty: "Qty" },
+    autoWidths: true
   },
   {
     key: "purchase_invoice", label: "Purchase Invoice", group: "Purchase", available: true,
@@ -185,13 +193,18 @@ function defaultConfig(doc) {
     // Tax and extra columns start hidden: a bill that prints eighteen
     // columns by default is unreadable, and turning one on is one tick.
     const onByDefault = ["sn", "name", "size", "qty", "unit", "rate", "amount"].includes(key);
-    return { key, label: f.label, show: onByDefault ? 1 : 0, width: f.width, align: f.align };
+    const label = (doc.labels && doc.labels[key]) || f.label;
+    return { key, label, show: onByDefault ? 1 : 0,
+             width: doc.autoWidths ? 0 : f.width, align: f.align };
   });
   return {
     paper: "A4",
+    // 0 = inherit the stylesheet, which is what the bill has always used.
+    // Only documents without their own stylesheet carry real numbers here.
     orientation: "portrait",
-    margins: { top: 10, right: 10, bottom: 10, left: 10 },
-    fontSize: 10.5,
+    margins: doc.autoWidths ? { top: 0, right: 0, bottom: 0, left: 0 }
+                            : { top: 10, right: 10, bottom: 10, left: 10 },
+    fontSize: doc.autoWidths ? 0 : 10.5,
     title: doc.defaultTitle || doc.label,
     showRate: true,
     showLogo: true,

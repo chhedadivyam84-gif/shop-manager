@@ -4990,6 +4990,9 @@ function setPaper(size){
 let lastPreviewInvoice = null;
 function openInvoicePreview(existingInvoice){
   if(!existingInvoice && !state.cart.length){ toast("Add items to the invoice first."); return; }
+  // Re-read on every open so a template edited in the Designer shows on the
+  // very next bill, then redraw once it lands.
+  loadBillTemplates().then(() => { if(lastPreviewInvoice) renderInvoicePageContent(); });
   /* The shop's saved paper preference SEEDS the session here, once, so it is
      what a preview opens on — while the A4 / A5 buttons and the print panel
      stay free to change it for this bill without the seed fighting back. */
@@ -5307,6 +5310,136 @@ function fmtMoney(v){
    set by applyPageSizeStyle, which is how it always worked and why it
    printed on one page.
    ============================================================ */
+/* ============================================================
+   TEMPLATE-DRIVEN BILL COLUMNS
+
+   The bill used to hard-code its seven columns. These helpers let the
+   Print Designer decide which columns appear, in what order, how wide,
+   how aligned and under what heading — while every cell still renders
+   through the SAME logic the hard-coded bill used, so a default template
+   reproduces the shop's existing paper exactly.
+   ============================================================ */
+
+/** The active template's config for a document type, or the registry
+ *  default when none has loaded yet. Never throws: printing a bill must
+ *  not depend on the Print Manager having been opened. */
+/**
+ * Fetches the default template for both bill types.
+ *
+ * Failure is deliberately silent: if the request fails the bill still
+ * prints, from the built-in fallback columns. A print is not something to
+ * block on a settings lookup.
+ */
+async function loadBillTemplates(){
+  state.billTemplates = state.billTemplates || {};
+  for(const key of ["sales_invoice", "delivery_challan"]){
+    try{
+      const list = await api("GET", `/print-manager/templates/${key}`);
+      const chosen = (list || []).find(t => t.is_default) || (list || [])[0];
+      if(chosen){
+        state.billTemplates[key] = {
+          ...chosen,
+          config: typeof chosen.config === "string" ? JSON.parse(chosen.config) : chosen.config
+        };
+      }
+    }catch(e){ /* fallback columns cover this */ }
+  }
+}
+
+function billConfig(challan){
+  const key = challan ? "delivery_challan" : "sales_invoice";
+  const t = (state.billTemplates || {})[key];
+  return (t && t.config) || null;
+}
+
+/** Columns to print: only those switched on, in the template's order.
+ *  Falls back to the classic seven so an unconfigured shop still prints. */
+function billColumns(challan){
+  const cfg = billConfig(challan);
+  if(cfg && Array.isArray(cfg.columns)){
+    const on = cfg.columns.filter(c => c && c.show);
+    if(on.length) return on;
+  }
+  return [
+    { key:"sn",     label:"Sr No.", width:0, align:"center" },
+    { key:"name",   label: challan ? "Product / Item" : "Product Description", width:0, align:"left" },
+    { key:"size",   label: challan ? "Description" : "Size", width:0, align:"left" },
+    { key:"unit",   label:"Unit",   width:0, align:"left" },
+    { key:"qty",    label:"Qty",    width:0, align:"right" },
+    { key:"rate",   label:"Rate",   width:0, align:"right" },
+    { key:"amount", label:"Amount", width:0, align:"right" }
+  ];
+}
+
+/* The classes the stylesheet already targets, kept per column key so the
+   themes and the print CSS keep working untouched. */
+const BILL_CELL_CLASS = {
+  sn:"c-sn", size:"c-size", unit:"c-unit", qty:"c-num", rate:"c-num",
+  amount:"c-num c-amt", disc:"c-num", taxable:"c-num", gstPct:"c-num",
+  cgst:"c-num", sgst:"c-num", igst:"c-num"
+};
+
+/**
+ * One cell of one line.
+ *
+ * `showRate` blanks the money cells rather than hiding them — the challan
+ * rule the bill has always followed, so staff can write figures in by hand
+ * on a "Without Rate" print. A blank, never a misleading 0.00.
+ */
+function billCellFor(key, it, i, ctx){
+  const money = v => ctx.showRate ? fmtPaise(v) : "";
+  const gross = (Number(it.qty) || 0) * (Number(it.rate) || 0);
+  const discPct = Number(it.discount_pct) || 0;
+  const net = gross * (1 - discPct / 100);
+  const gstPct = Number(it.gst_rate) || 0;
+  const tax = ctx.gstEnabled ? net * (gstPct / 100) : 0;
+  const product = (state.products || []).find(p => p.id === it.product_id);
+
+  switch(key){
+    case "sn":   return String(i + 1);
+    case "name": return escapeHtml(it.name);
+    case "size": return escapeHtml(it.size_label || "—");
+    case "unit": return escapeHtml(ctx.unitOf(it));
+    case "qty":  return ctx.qtyCellOf(it);
+    // Rate prints bare, the way the bill always has — the currency symbol
+    // sits in the Amount column and the totals box, not on every line.
+    case "rate":    return ctx.showRate ? fmtPaise(it.rate).replace("Rs. ", "") : "";
+    case "amount":  return money(ctx.lineAmount(it));
+    case "disc":    return ctx.showRate && discPct ? discPct.toFixed(2) : "";
+    case "taxable": return money(net);
+    case "gstPct":  return ctx.gstEnabled ? gstPct + "%" : "";
+    case "cgst":    return ctx.gstEnabled && !ctx.isIGST ? money(tax / 2) : "";
+    case "sgst":    return ctx.gstEnabled && !ctx.isIGST ? money(tax / 2) : "";
+    case "igst":    return ctx.gstEnabled && ctx.isIGST ? money(tax) : "";
+    case "code":    return escapeHtml(it.code || "");
+    case "hsn":     return escapeHtml(it.hsn_code || "");
+    case "brand":   return escapeHtml(it.brand || (product && product.brand) || "");
+    // Category is not stored on the line, so it comes from the product it
+    // was billed from; a deleted product simply prints blank.
+    case "category":return escapeHtml((product && product.category) || "");
+    case "remarks": return "";
+    default:        return "";
+  }
+}
+
+/** A column's <th>, carrying the designer's width and alignment. */
+function billHeadCell(col){
+  const cls = BILL_CELL_CLASS[col.key] || "";
+  const style = [
+    col.width ? "width:" + col.width + "px;" : "",
+    col.align ? "text-align:" + col.align + ";" : ""
+  ].join("");
+  return `<th${cls ? ` class="${cls}"` : ""}${style ? ` style="${style}"` : ""}>${escapeHtml(col.label || "")}</th>`;
+}
+
+/** A column's <td>. Alignment is repeated on the body cell because the
+ *  stylesheet aligns by class, and a designer override has to beat it. */
+function billBodyCell(col, html){
+  const cls = BILL_CELL_CLASS[col.key] || "";
+  const style = col.align ? ` style="text-align:${col.align};"` : "";
+  return `<td${cls ? ` class="${cls}"` : ""}${style}>${html}</td>`;
+}
+
 function renderInvoicePageContent(){
   const inv = lastPreviewInvoice; if(!inv) return;
   const cfg = state.settings;
@@ -5316,6 +5449,19 @@ function renderInvoicePageContent(){
   const pageEl = document.getElementById("invoice-page-content");
   pageEl.classList.toggle("size-a5", !isA4);
   applyPrintTheme(pageEl, challan);
+
+  /* Page-level settings from the template. Each is applied only when the
+     template actually carries a value, so a shop that has never opened the
+     Designer keeps the stylesheet's own metrics exactly as before. */
+  {
+    const c = billConfig(challan);
+    pageEl.style.fontSize = c && c.fontSize ? c.fontSize + "pt" : "";
+    pageEl.style.padding  = c && c.margins && c.margins.top ? c.margins.top + "mm" : "";
+    // Row height is a floor, not a fixed height: a long product name must
+    // still be free to wrap onto a second line rather than be clipped.
+    pageEl.style.setProperty("--bill-row-h", c && c.rowHeight ? c.rowHeight + "mm" : "");
+    pageEl.classList.toggle("no-rules", !!(c && c.showBorders === false));
+  }
 
   // Previous / Next stepper — outside .invoice-page so it is never captured
   // by the PDF or the printer, which only take the page itself.
@@ -5334,7 +5480,12 @@ function renderInvoicePageContent(){
   // stored either way (see server/routes/invoices.js), this toggle only
   // controls whether it's PRINTED.
   const showRate = !challan || state.challanShowRate;
-  const head = `<th class="c-sn">Sr No.</th><th>${challan ? "Product / Item" : "Product Description"}</th><th class="c-size">${challan ? "Description" : "Size"}</th><th class="c-unit">Unit</th><th class="c-num">Qty</th><th class="c-num">Rate</th><th class="c-num c-amt">Amount</th>`;
+  // Which columns, in what order, headed how, how wide and how aligned all
+  // come from the active template now. A default template reproduces the
+  // classic seven exactly; billColumns() falls back to them outright if no
+  // template has loaded, so printing never depends on the Print Manager.
+  const cols = billColumns(challan);
+  const head = cols.map(billHeadCell).join("");
   const rows = inv.items.map((it,i)=>{
     const mode = it.mode || "UNIT";
     const unit = it.unit_label || (Pricing.MODES[mode] && Pricing.MODES[mode].unit) || "";
@@ -5347,18 +5498,33 @@ function renderInvoicePageContent(){
     const qtyCell = mode !== "UNIT" && it.pieces === 1
       ? "1 pc"
       : `${Pricing.formatQty(it.qty, mode).replace(" "+unit,"")}${mode !== "UNIT" && it.pieces ? `<div class="c-pieces">(${it.pieces} pc)</div>` : ""}`;
-    const base = `<td class="c-sn">${i+1}</td><td>${escapeHtml(it.name)}</td><td class="c-size">${escapeHtml(it.size_label||"—")}</td><td class="c-unit">${escapeHtml(unit)}</td><td class="c-num">${qtyCell}</td>`;
-    return `<tr>${base}<td class="c-num">${showRate ? fmtPaise(it.rate).replace("Rs. ","") : ""}</td><td class="c-num c-amt">${showRate ? fmtPaise(it.qty*it.rate) : ""}</td></tr>`;
+    // The per-line context every cell renderer needs. qtyCellOf and unitOf
+    // are passed in rather than duplicated so the piece-count split above
+    // stays the single source of that logic.
+    const cellCtx = {
+      showRate, gstEnabled: !challan && inv.gst_enabled !== 0,
+      isIGST: inv.tax_type === "IGST",
+      unitOf: () => unit,
+      qtyCellOf: () => qtyCell,
+      lineAmount: x => (Number(x.qty)||0) * (Number(x.rate)||0) * (1 - (Number(x.discount_pct)||0)/100)
+    };
+    return `<tr>${cols.map(c => billBodyCell(c, billCellFor(c.key, it, i, cellCtx))).join("")}</tr>`;
   }).join("");
   // Total Quantity is the physical piece count across all items, not the
   // billed area/length sum — matching what gets counted at load/unload,
   // and staying meaningful even when items mix billing units (Sq.ft +
   // Rft + Unit can't be summed together, but pieces always can).
   const totalQtyForFoot = round2(inv.items.reduce((s,it)=>s+(Number(it.pieces)||0),0));
-  const tfoot = `<tfoot><tr>
-    <td colspan="4" style="text-align:right;">Total Quantity</td>
+  // Spans computed from the live column list. The old hard-coded
+  // colspan 4 / 1 / 3 totalled eight across a seven-column table, and
+  // broke outright the moment a column was switched on or off.
+  const qtyIdx = cols.findIndex(c => c.key === "qty");
+  const tfoot = qtyIdx === -1
+    ? `<tfoot><tr><td colspan="${cols.length}" style="text-align:right;">Total Quantity ${totalQtyForFoot}</td></tr></tfoot>`
+    : `<tfoot><tr>
+    ${qtyIdx > 0 ? `<td colspan="${qtyIdx}" style="text-align:right;">Total Quantity</td>` : ""}
     <td class="c-num">${totalQtyForFoot}</td>
-    <td colspan="3"></td>
+    ${cols.length - qtyIdx - 1 > 0 ? `<td colspan="${cols.length - qtyIdx - 1}"></td>` : ""}
   </tr></tfoot>`;
 
   // Priced invoice: full totals. Challan: same boxed layout for visual
@@ -5420,7 +5586,9 @@ function renderInvoicePageContent(){
     ${showRate ? `<div><b>Amount in Words:</b> ${Pricing.amountInWords(displayTotal)}</div>` : ""}
   </div>`;
 
-  const bannerText = challan ? "DELIVERY CHALLAN" : "ESTIMATE CHALLAN";
+  // The heading the template names, or the wording the bill has always used.
+  const tplCfg = billConfig(challan) || {};
+  const bannerText = (tplCfg.title || "").trim() || (challan ? "DELIVERY CHALLAN" : "ESTIMATE CHALLAN");
   document.getElementById("invoice-page-content").innerHTML = `
     <div class="erp-banner">${bannerText}</div>
     <div class="erp-header">

@@ -1172,3 +1172,14 @@ select.pm-col-a{ width:48px; flex:none; padding:5px 2px; font-size:12px; }
 /* The scaled page still reserves its unscaled box, so the wrapper is sized to
    the scaled result — otherwise the overlay scrolls past a large empty area. */
 #fs-preview-zoom .zoom-fit{overflow:visible;}
+
+/* ---- Template-driven bill metrics ---------------------------------------
+   Row height set in the Print Designer is a MINIMUM, applied to the cell so
+   a long product name still wraps onto a second line instead of being
+   clipped. Unset (the default) leaves rows exactly as the padding makes
+   them, which is how the bill has always printed. */
+table.erp-table tbody td{ height: var(--bill-row-h, auto); }
+/* "Show borders" off in the Designer strips the rules from the item table
+   the same way the Minimal theme does, rather than only from the preview. */
+.invoice-page.no-rules table.erp-table th,
+.invoice-page.no-rules table.erp-table td{ border-color: transparent; }

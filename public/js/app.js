@@ -4999,11 +4999,16 @@ function renderInvoicePageContent(){
       : ""}
   </div>`;
 
-  /* The meta strip under the party block: how this bill prints, who sold it,
+  /* The meta strip under the party block: what the bill carries, who sold it,
      how it travelled. Each chip is omitted when there is nothing to say,
-     rather than printing an empty label. */
+     rather than printing an empty label.
+
+     With Rate / Without Rate is deliberately NOT here. It is a choice about
+     how this copy is printed, not a fact about the sale, and a customer
+     holding the bill has no use for it — on a Without Rate copy it would be
+     the one filled-in thing on a page of blanks. The setting stays in the
+     print panel, where it belongs. */
   const metaChips = [
-    `<span class="bm-chip"><b>${showRate ? "With Rate" : "Without Rate"}</b></span>`,
     gstEnabled ? `<span class="bm-chip">GST Type : <b>${isIGST ? "IGST" : "CGST + SGST"}</b></span>`
                : `<span class="bm-chip">GST Type : <b>No GST</b></span>`,
     inv.delivery_man ? `<span class="bm-chip">Salesman : <b>${escapeHtml(inv.delivery_man)}</b></span>` : "",
@@ -5197,6 +5202,19 @@ async function saveBillPrefs(prefs){
    "Save as Default" is what makes them stick for everyone. */
 let billPanelPrefs = null;
 
+/** The working copy, created on demand.
+ *
+ *  Every panel control goes through this rather than touching billPanelPrefs
+ *  directly. Seeding it only when the panel opens looked fine and was not:
+ *  if the panel's state and the variable ever fell out of step, each control
+ *  threw on a null and the bill silently stopped responding to the panel —
+ *  which is exactly what happened. Creating it on first use means a control
+ *  works whenever it is reachable, whatever the panel did before. */
+function panelPrefs(){
+  if(!billPanelPrefs) billPanelPrefs = JSON.parse(JSON.stringify(billPrefs()));
+  return billPanelPrefs;
+}
+
 function renderBillPanel(){
   const inv = lastPreviewInvoice;
   const el = document.getElementById("bill-panel-body");
@@ -5269,20 +5287,20 @@ function renderBillPanel(){
 
   el.querySelectorAll("[data-bp-col]").forEach(cb=>{
     cb.addEventListener("change", ()=>{
-      billPanelPrefs.cols[cb.dataset.bpCol] = cb.checked ? 1 : 0;
+      panelPrefs().cols[cb.dataset.bpCol] = cb.checked ? 1 : 0;
       renderInvoicePageContent();
     });
   });
   el.querySelectorAll('[name="bp-paper"]').forEach(r=>{
     r.addEventListener("change", ()=>{
-      billPanelPrefs.paper = r.value;
+      panelPrefs().paper = r.value;
       state.paperSize = r.value;
       renderInvoicePageContent();
     });
   });
   el.querySelectorAll('[name="bp-rate"]').forEach(r=>{
     r.addEventListener("change", ()=>{
-      billPanelPrefs.showRate = r.value === "with";
+      panelPrefs().showRate = r.value === "with";
       if(challan) state.challanShowRate = billPanelPrefs.showRate;
       renderInvoicePageContent();
     });
@@ -5304,7 +5322,7 @@ function renderBillPanel(){
       const saved = await api("PUT", "/settings", body);
       state.settings = { ...state.settings, ...saved };
     }catch(e){ toast(e.message || "Could not save the wording."); return; }
-    const ok = await saveBillPrefs(billPanelPrefs);
+    const ok = await saveBillPrefs(panelPrefs());
     if(ok) toast("Saved as the default for every bill.", "ok");
     renderInvoicePageContent();
   });
@@ -5316,10 +5334,10 @@ function toggleBillPanel(){
   const open = panel.classList.toggle("open");
   document.getElementById("bill-panel-btn").classList.toggle("active", open);
   if(open){
-    // Seeded from the saved default, then edited freely. Cleared on close so
-    // billPrefs() goes back to reading the shop's own setting.
+    // Fresh from the saved default each time the panel opens, so an
+    // abandoned edit never leaks into the next bill.
     billPanelPrefs = null;
-    billPanelPrefs = JSON.parse(JSON.stringify(billPrefs()));
+    panelPrefs();
     renderBillPanel();
   }else{
     billPanelPrefs = null;

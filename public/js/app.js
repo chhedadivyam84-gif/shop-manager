@@ -11442,15 +11442,23 @@ function renderTemplatePreview(){
      the padding. The content width is what the page has to fit. */
   const hostCs = getComputedStyle(host);
   const avail = host.clientWidth - parseFloat(hostCs.paddingLeft) - parseFloat(hostCs.paddingRight);
-  const natural = page.getBoundingClientRect().width;
+  /* Both dimensions captured BEFORE the transform. getBoundingClientRect
+     reports the SCALED box once a transform is on, so measuring the height
+     afterwards and multiplying by the scale applied it twice — on a phone
+     that shrank the preview to a 59px sliver. */
+  const rect = page.getBoundingClientRect();
+  const natural = rect.width, naturalHeight = rect.height;
   if(natural > 0 && avail > 0){
     const scale = Math.min(1, avail / natural);
     scaler.style.transform = `scale(${scale})`;
-    // The scaled element still reserves its unscaled height, which would
-    // leave a large gap below; setting the wrapper's height to the scaled
-    // height closes it.
-    host.style.height = (page.getBoundingClientRect().height * scale) + "px";
+    // A scaled element still reserves its UNSCALED height, which would leave
+    // a tall gap below it; the wrapper is set to the scaled height instead.
+    host.style.height = (naturalHeight * scale) + "px";
   }
+  host.style.cursor = "zoom-in";
+  host.title = "Tap to view full size";
+  host.onclick = () => openPreviewZoom(host.innerHTML,
+    (doc ? doc.label : "Document") + " — " + pmState.editing.name);
 }
 
 /* ============================================================
@@ -11529,6 +11537,68 @@ function themePreviewHtml(challan){
  * space the Settings sheet has. Called on load and whenever either
  * dropdown changes, so the choice is visible before it is saved.
  */
+/**
+ * Opens any preview at a readable size.
+ *
+ * An A4 page scaled into a phone-width box lands around 0.41 — legible as a
+ * shape, useless as text. Rather than choosing between "fits" and "readable",
+ * the inline preview stays small and tapping it brings the same markup up
+ * here, big, scrollable both ways.
+ */
+/* Previews are drawn at true paper size and scaled to the box they sit in, so
+   the scale is only right for the width it was measured at. Rotating a phone
+   or resizing a window left the old scale in place and the preview spilled out
+   of its card — redrawn here instead, debounced so a drag does not thrash. */
+let __previewResizeTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(__previewResizeTimer);
+  __previewResizeTimer = setTimeout(() => {
+    const designer = document.getElementById("pm-d-preview");
+    if(designer && designer.offsetParent !== null) renderTemplatePreview();
+    const theme = document.getElementById("st-invoice-preview");
+    if(theme && theme.offsetParent !== null) renderThemePreviews();
+  }, 200);
+});
+
+function openPreviewZoom(html, title){
+  const box = document.getElementById("fs-zoom-body");
+  const heading = document.getElementById("fs-zoom-title");
+  const overlay = document.getElementById("fs-preview-zoom");
+  if(!box || !overlay) return;
+  heading.textContent = title || "Preview";
+  box.innerHTML = "<div class=\"zoom-fit\">" + html + "</div>";
+
+  /* Shown BEFORE measuring. A display:none overlay reports clientWidth 0,
+     which silently skipped the whole calculation and left the markup at
+     whatever scale it was copied at. */
+  overlay.classList.add("show");
+
+  /* The markup comes from an inline preview that is already scaled down to
+     thumbnail size, so its transform is cleared before anything is measured
+     — otherwise we would be scaling a scaled box. */
+  const scaler = box.querySelector(".tpl-scaler") || box.firstElementChild;
+  const page = box.querySelector(".tpl-page, .invoice-page");
+  if(scaler && page){
+    scaler.style.transform = "none";
+    const rect = page.getBoundingClientRect();
+    const avail = box.clientWidth - 24;
+    if(rect.width > 0 && avail > 0){
+      /* Shrink only while the result is still readable. A phone can only fit
+         an A4 page at about 0.41, which turns 10pt body text into 4px — so
+         below 0.8 we stop shrinking altogether and show the page at full size,
+         letting the box scroll. Scrolling a readable page beats staring at an
+         unreadable whole one. */
+      const fit = Math.min(1, avail / rect.width);
+      const scale = fit >= 0.8 ? fit : 1;
+      scaler.style.transformOrigin = "top left";
+      scaler.style.transform = "scale(" + scale + ")";
+      scaler.style.width = rect.width + "px";
+      scaler.parentElement.style.height = (rect.height * scale) + "px";
+      scaler.parentElement.style.width = (rect.width * scale) + "px";
+    }
+  }
+}
+
 function renderThemePreviews(){
   [["st-invoice-theme", "st-invoice-preview", false],
    ["st-challan-theme", "st-challan-preview", true]].forEach(([selId, hostId, challan])=>{
@@ -11549,12 +11619,20 @@ function renderThemePreviews(){
      the padding. The content width is what the page has to fit. */
   const hostCs = getComputedStyle(host);
   const avail = host.clientWidth - parseFloat(hostCs.paddingLeft) - parseFloat(hostCs.paddingRight);
-    const natural = page.getBoundingClientRect().width;
+    // Measured before the transform — see renderTemplatePreview.
+    const rect = page.getBoundingClientRect();
+    const natural = rect.width, naturalHeight = rect.height;
     if(natural > 0 && avail > 0){
       const scale = Math.min(1, avail / natural);
       scaler.style.transform = `scale(${scale})`;
-      host.style.height = (page.getBoundingClientRect().height * scale) + "px";
+      host.style.height = (naturalHeight * scale) + "px";
     }
+    // Tap anywhere on it to read it properly — essential on a phone, where
+    // the fitted preview is about 40% size.
+    host.style.cursor = "zoom-in";
+    host.title = "Tap to view full size";
+    host.onclick = () => openPreviewZoom(host.innerHTML,
+      (challan ? "Delivery Challan" : "Invoice") + " — " + theme + " theme");
   });
 }
 

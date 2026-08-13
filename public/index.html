@@ -1094,6 +1094,17 @@
   <div class="sheet" id="sheet-pm-templates"></div>
   <div class="sheet" id="sheet-pm-designer"></div>
 
+  <!-- Any preview, opened big. A preview scaled to fit a phone is far too
+       small to read, so every preview is tappable and lands here at a
+       readable size, scrollable in both directions. -->
+  <div class="fullscreen" id="fs-preview-zoom">
+    <div class="fs-bar">
+      <div class="fs-title" id="fs-zoom-title">Preview</div>
+      <button class="fs-close" data-close-fs="fs-preview-zoom">&#10005;</button>
+    </div>
+    <div class="zoom-scroll" id="fs-zoom-body"></div>
+  </div>
+
   <div class="fullscreen" id="fs-invoice">
     <div class="fs-bar">
       <div class="fs-title">Invoice Preview</div>

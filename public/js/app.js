@@ -793,7 +793,7 @@ async function initApp(){
   document.getElementById("paper-a4").addEventListener("click", ()=>setPaper("A4"));
   document.getElementById("bill-panel-btn").addEventListener("click", toggleBillPanel);
   document.getElementById("inv-download").addEventListener("click", downloadInvoicePdf);
-  document.getElementById("inv-print").addEventListener("click", ()=>window.print());
+  document.getElementById("inv-print").addEventListener("click", printInvoiceOnePage);
   document.getElementById("inv-whatsapp-pdf").addEventListener("click", shareInvoicePdfWhatsApp);
   document.getElementById("inv-server-print").addEventListener("click", printViaServer);
 
@@ -4881,6 +4881,76 @@ function applyPageSizeStyle(){
     .invoice-page{ min-height:${contentH}mm; }
   `;
 }
+/**
+ * Browser Print, guaranteed to come out on ONE page.
+ *
+ * window.print() on its own leaves the outcome to whatever the browser and
+ * the printer settings happen to do, which is how a bill that measured as
+ * fitting still arrived on two sheets: Chrome's own header/footer band, a
+ * tray loaded with Letter instead of A4, or "shrink to fit" being off all
+ * eat into the printable area after our measuring is done.
+ *
+ * So the page is measured against the real printable height and, if it is
+ * over, shrunk to fit before printing. `zoom` is the lever rather than a
+ * transform because Chrome applies zoom during LAYOUT, so pagination sees
+ * the smaller size — a transform only scales the pixels and the browser
+ * still breaks the page where the unscaled content ended.
+ *
+ * A floor of 0.55 stops a very long bill being reduced to something nobody
+ * can read; past that it is allowed onto a second sheet, and the operator
+ * is told rather than left to discover it at the printer.
+ */
+function printInvoiceOnePage(){
+  const page = document.getElementById("invoice-page-content");
+  if(!page){ window.print(); return; }
+
+  const isA4 = state.paperSize === "A4";
+  const pageH = isA4 ? 297 : 210, margin = isA4 ? 6 : 3;
+  const MM_TO_PX = 96 / 25.4;
+  // The @page margin is the only thing between content and the sheet edge,
+  // so the printable height is the sheet less both margins.
+  const availablePx = (pageH - margin * 2) * MM_TO_PX;
+
+  const previousZoom = page.style.zoom;
+  page.style.zoom = "";                       // measure unscaled
+  const naturalPx = page.scrollHeight;
+
+  /* Converged, not calculated in one shot.
+     Shrinking reflows the page — text rewraps, rows change height — so the
+     result of a single available/natural division is not what you get. The
+     first attempt measured 295mm where the arithmetic promised 284. So:
+     apply, measure what really happened, correct, repeat. Four passes is
+     ample; each one lands much closer than the last. */
+  let note = "";
+  const FLOOR = 0.55;
+  if(naturalPx > availablePx + 1){
+    let scale = availablePx / naturalPx;
+    for(let pass = 0; pass < 4; pass++){
+      if(scale < FLOOR){ scale = FLOOR; }
+      page.style.zoom = String(Math.floor(scale * 1000) / 1000);
+      // Real rendered height, in the same device pixels as availablePx.
+      const actualPx = page.getBoundingClientRect().height;
+      if(actualPx <= availablePx || scale <= FLOOR) break;
+      scale *= availablePx / actualPx;
+    }
+    if(page.getBoundingClientRect().height > availablePx + 2){
+      // Held at the floor and still over: too many items to shrink into one
+      // readable page. Say so rather than let it be a surprise at the tray.
+      page.style.zoom = String(FLOOR);
+      note = "This bill has too many items to fit one readable page — it will print on two.";
+    }
+  }
+
+  const restore = () => { page.style.zoom = previousZoom; window.removeEventListener("afterprint", restore); };
+  window.addEventListener("afterprint", restore);
+  // afterprint does not fire in every browser; this is the belt to its braces
+  // so the preview is never left shrunk on screen.
+  setTimeout(restore, 3000);
+
+  if(note) toast(note);
+  window.print();
+}
+
 function setPaper(size){
   state.paperSize = size;
   document.getElementById("paper-a5").classList.toggle("selected", size==="A5");

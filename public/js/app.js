@@ -1016,20 +1016,27 @@ async function loadCategories(){
   catch(e){ state.categories = { income: [], expense: [] }; }
 }
 
-/* A dropdown, not a text box. The category decides which Profit & Loss line
-   the money lands on, and it used to be typed by hand and matched exactly —
-   so "salary" or "Labour Charges" quietly became Uncategorised and the owner
-   could not see what they spend on wages.
-   An older entry whose category is no longer in the list keeps its own value
-   as a selected option, so editing it does not silently reassign it. */
-function categorySelectHtml(id, kind, selected){
+/* A text box the owner types into, with the category master offered as
+   suggestions rather than imposed as a fixed list.
+
+   This was a plain input, then became a <select> so the Profit & Loss could
+   match categories exactly — typing "salary" where the master said "Salary"
+   quietly landed the money in Uncategorised. A closed dropdown fixed that but
+   took away the ability to write a category that is not on the list, which is
+   what the shop actually needs day to day.
+
+   A datalist gives both: type anything, and the existing names appear as you
+   type so picking one still spells it exactly the way the P&L expects. The
+   category master itself is untouched — this only changes how it is offered. */
+function categoryInputHtml(id, kind, selected){
   const list = ((state.categories||{})[kind] || []).map(c=>c.name);
-  const cur = (selected||"").trim();
-  if(cur && !list.some(n=>n.toLowerCase()===cur.toLowerCase())) list.unshift(cur);
-  return `<select id="${id}">
-    <option value="">— None —</option>
-    ${list.map(n=>`<option value="${escapeHtml(n)}" ${n.toLowerCase()===cur.toLowerCase()?"selected":""}>${escapeHtml(n)}</option>`).join("")}
-  </select>`;
+  const listId = id + "-options";
+  return `<input type="text" id="${id}" list="${listId}" autocomplete="off"
+      value="${escapeHtml((selected||"").trim())}"
+      placeholder="e.g. Wages, Electricity, Petty Cash">
+    <datalist id="${listId}">
+      ${list.map(n=>`<option value="${escapeHtml(n)}"></option>`).join("")}
+    </datalist>`;
 }
 // Public regardless of login flow (the login screen's own staffList variable
 // isn't guaranteed populated when boot() resumes an existing session without
@@ -7058,7 +7065,7 @@ function openCashEntry(type, editEntry){
     <label class="field-label">Party / Person <span class="muted" style="font-weight:400;">— optional</span></label>
     <input type="text" id="cbe-party" value="${editEntry ? escapeHtml(editEntry.party||"") : ""}" placeholder="e.g. Ramesh, Electricity Board">
     <label class="field-label">Category <span class="muted" style="font-weight:400;">— decides the Profit &amp; Loss line</span></label>
-    ${categorySelectHtml("cbe-category", type === "in" ? "income" : "expense", editEntry ? editEntry.category : "")}
+    ${categoryInputHtml("cbe-category", type === "in" ? "income" : "expense", editEntry ? editEntry.category : "")}
     <label class="field-label">Remarks <span class="muted" style="font-weight:400;">— optional</span></label>
     <input type="text" id="cbe-remarks" value="${editEntry ? escapeHtml(editEntry.remarks||"") : ""}" placeholder="e.g. Advance for June">
     <button class="btn btn-primary" id="cbe-save" style="margin-top:16px;">${editEntry ? "Update Entry" : "Save Entry"}</button>

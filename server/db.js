@@ -1846,6 +1846,22 @@ addColumn("settings", "logo_data", "TEXT DEFAULT ''");
 // refusing the bill stops the counter dead. OFF by default so no existing
 // shop's behaviour changes until its owner asks for it.
 addColumn("settings", "allow_negative_stock", "INTEGER NOT NULL DEFAULT 0");
+
+/* The e-invoice portal requires a six-digit PIN for both the shop and the
+   buyer, and neither was stored anywhere. Added as plain optional columns so
+   nothing existing is disturbed: every current row simply has none until it
+   is filled in, and the readiness check names exactly which records need it
+   rather than blocking billing. Legal Name and Trade Name are separate from
+   business_name because the portal matches them against the GSTIN record,
+   which often differs from the name a shop trades under. */
+addColumn("settings", "pin_code", "TEXT NOT NULL DEFAULT ''");
+addColumn("settings", "legal_name", "TEXT NOT NULL DEFAULT ''");
+addColumn("settings", "trade_name", "TEXT NOT NULL DEFAULT ''");
+addColumn("customers", "pin_code", "TEXT NOT NULL DEFAULT ''");
+addColumn("suppliers", "pin_code", "TEXT NOT NULL DEFAULT ''");
+/* A product whose unit wording has no automatic UQC match gets one set by
+   hand here, rather than the portal accepting a guess that is legally wrong. */
+addColumn("products", "uqc", "TEXT NOT NULL DEFAULT ''");
 // Per-report print preferences (paper, orientation, margins, chosen columns,
 // with/without rate), as JSON keyed by report id. One column rather than a
 // dozen: the set of options will keep growing, and every new one would

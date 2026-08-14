@@ -1862,6 +1862,25 @@ addColumn("suppliers", "pin_code", "TEXT NOT NULL DEFAULT ''");
 /* A product whose unit wording has no automatic UQC match gets one set by
    hand here, rather than the portal accepting a guess that is legally wrong. */
 addColumn("products", "uqc", "TEXT NOT NULL DEFAULT ''");
+
+/* E-way bill details recorded against the invoice they cover.
+
+   These are filled in whether the bill was generated on the government
+   portal by hand or, later, through an API — the storage is the same either
+   way, so recording them now is not throwaway work. status is left free
+   text rather than a CHECK constraint because the portal owns that
+   vocabulary and it is not ours to freeze. */
+addColumn("invoices", "eway_bill_no", "TEXT NOT NULL DEFAULT ''");
+addColumn("invoices", "eway_bill_date", "TEXT NOT NULL DEFAULT ''");
+addColumn("invoices", "eway_valid_until", "TEXT NOT NULL DEFAULT ''");
+addColumn("invoices", "eway_status", "TEXT NOT NULL DEFAULT ''");
+addColumn("invoices", "transporter_name", "TEXT NOT NULL DEFAULT ''");
+addColumn("invoices", "transporter_id", "TEXT NOT NULL DEFAULT ''");
+addColumn("invoices", "vehicle_type", "TEXT NOT NULL DEFAULT ''");
+addColumn("invoices", "lr_number", "TEXT NOT NULL DEFAULT ''");
+addColumn("invoices", "lr_date", "TEXT NOT NULL DEFAULT ''");
+addColumn("invoices", "distance_km", "REAL NOT NULL DEFAULT 0");
+addColumn("invoices", "dispatch_from", "TEXT NOT NULL DEFAULT ''");
 // Per-report print preferences (paper, orientation, margins, chosen columns,
 // with/without rate), as JSON keyed by report id. One column rather than a
 // dozen: the set of options will keep growing, and every new one would

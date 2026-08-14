@@ -1398,6 +1398,82 @@ CREATE INDEX IF NOT EXISTS idx_txn_categories_kind ON txn_categories(kind, activ
   }
 })();
 
+/* ============================================================
+   CHEQUES
+
+   A cheque book belongs to a bank account (bank_accounts already carries the
+   bank master fields — name, bank_name, account_no) and hands out numbers
+   from a series, the same high-water idea the document numbering uses: the
+   next number only ever moves forward, so cancelling a spoiled cheque never
+   drags the series back onto a number already printed.
+
+   The bank balance deliberately does NOT move when a cheque is written. A
+   cheque is a promise; the money leaves when the bank clears it. So the
+   balance moves on CLEARED and only then, by posting a normal bank entry
+   tagged source_type=cheque — which means reconciliation, the Bank Book and
+   every existing report keep working with no special cases for cheques.
+   Bouncing or un-clearing voids that entry and the balance comes back.
+   ============================================================ */
+db.exec(`
+CREATE TABLE IF NOT EXISTS cheque_books (
+  id TEXT PRIMARY KEY,
+  bank_account_id TEXT NOT NULL REFERENCES bank_accounts(id),
+  prefix TEXT NOT NULL DEFAULT '',
+  start_number INTEGER NOT NULL,
+  end_number INTEGER,
+  next_number INTEGER NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cheque_books_account ON cheque_books(bank_account_id, active);
+
+CREATE TABLE IF NOT EXISTS cheques (
+  id TEXT PRIMARY KEY,
+  cheque_book_id TEXT REFERENCES cheque_books(id),
+  bank_account_id TEXT NOT NULL REFERENCES bank_accounts(id),
+  cheque_no TEXT NOT NULL,
+  payee_name TEXT NOT NULL,
+  amount REAL NOT NULL,
+  -- The date written ON the cheque. A future one is a PDC; nothing special
+  -- is stored for that, it falls out of the date being ahead of today.
+  cheque_date TEXT NOT NULL,
+  issue_date TEXT NOT NULL,
+  crossing TEXT NOT NULL DEFAULT 'account_payee'
+    CHECK (crossing IN ('account_payee', 'bearer', 'self')),
+  status TEXT NOT NULL DEFAULT 'Issued'
+    CHECK (status IN ('Issued', 'Printed', 'Cleared', 'Bounced', 'Cancelled')),
+  -- The bank entry raised when it cleared, so un-clearing knows what to void.
+  bank_entry_id TEXT,
+  cleared_date TEXT,
+  bounce_reason TEXT,
+  party_type TEXT,
+  party_id TEXT,
+  remarks TEXT NOT NULL DEFAULT '',
+  voided INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  -- One number can only exist once per bank account. Two accounts may
+  -- legitimately both have a cheque 000123.
+  UNIQUE(bank_account_id, cheque_no)
+);
+CREATE INDEX IF NOT EXISTS idx_cheques_status ON cheques(status, voided);
+CREATE INDEX IF NOT EXISTS idx_cheques_date ON cheques(cheque_date);
+CREATE INDEX IF NOT EXISTS idx_cheques_account ON cheques(bank_account_id, voided);
+
+-- Where each field sits on the paper, per bank. Every bank's cheque differs,
+-- so the layout is data, not code: printing is a millimetre problem and the
+-- owner is the one holding the cheque against the test print.
+CREATE TABLE IF NOT EXISTS cheque_layouts (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  bank_account_id TEXT REFERENCES bank_accounts(id),
+  config TEXT NOT NULL,
+  is_default INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_cheque_layouts_account ON cheque_layouts(bank_account_id);
+`);
+
 /* Per-document-type numbering: its own prefix, width and high-water counter.
    Each type gets its OWN series — which is also what stops tax invoices and
    delivery challans colliding in the single UNIQUE challan_no column they

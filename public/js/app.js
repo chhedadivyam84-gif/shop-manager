@@ -5199,7 +5199,11 @@ const PRINT_THEMES = [
   { id:"classic", name:"Classic",      desc:"The standard layout — black rules, teal item grid." },
   { id:"tally",   name:"Tally Style",  desc:"Everything ruled in black, double lines, grey table head." },
   { id:"navy",    name:"Navy & Gold",  desc:"Matches your Quotation template — navy header, gold accents." },
-  { id:"minimal", name:"Minimal",      desc:"Hairline rules, no boxes, lots of white space. Uses less ink." }
+  { id:"minimal", name:"Minimal",      desc:"Hairline rules, no boxes, lots of white space. Uses less ink." },
+  // A LAYOUT, not a colour scheme — its own markup, with the HSN/SAC tax
+  // summary, declaration and bank block a Tally invoice carries. Classic
+  // stays exactly as it is; switching back returns it unchanged.
+  { id:"tallyfull", name:"Tally Format", desc:"Full Tally-style tax invoice — ruled party grid, HSN/SAC tax summary, declaration and bank details." }
 ];
 const THEME_IDS = PRINT_THEMES.map(t=>t.id);
 
@@ -5441,6 +5445,195 @@ function billBodyCell(col, html){
   return `<td${cls ? ` class="${cls}"` : ""}${style}>${html}</td>`;
 }
 
+/* ============================================================
+   TALLY-STYLE TAX INVOICE
+
+   A different LAYOUT, not a different colour scheme. The existing themes are
+   additive CSS over one markup; this needs its own structure — the ruled
+   grid of party boxes against dispatch details, the HSN/SAC tax summary, the
+   declaration and bank block — so it renders separately and is chosen by the
+   same theme setting.
+
+   The classic layout is untouched. Switching the theme back returns the bill
+   the shop already approved, byte for byte.
+
+   Columns still come from billColumns(), so anything switched on in the
+   Print Designer appears here too rather than this being a second place to
+   configure the same thing.
+   ============================================================ */
+
+/** Tally prints a rupee figure plain — no symbol in the grid, two decimals. */
+function tallyMoney(v){
+  const n = Number(v) || 0;
+  return n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+/**
+ * The HSN/SAC summary — the part that makes a bill read as a Tally GST
+ * invoice. Lines are grouped by HSN, because that is what the return needs;
+ * two products sharing an HSN are one row here even though they are two
+ * rows above.
+ */
+function tallyHsnSummary(inv, items, ctx){
+  const groups = new Map();
+  for(const it of items){
+    const hsn = String(it.hsn_code || "").trim() || "—";
+    const gross = (Number(it.qty) || 0) * (Number(it.rate) || 0);
+    const net = gross * (1 - (Number(it.discount_pct) || 0) / 100);
+    const pct = Number(it.gst_rate) || 0;
+    const g = groups.get(hsn) || { hsn, taxable: 0, pct, tax: 0 };
+    g.taxable += net;
+    // A mixed-rate HSN keeps the highest rate seen, and the tax is summed
+    // per line rather than recomputed off the group, so the total stays true.
+    g.pct = Math.max(g.pct, pct);
+    g.tax += ctx.gstEnabled ? net * (pct / 100) : 0;
+    groups.set(hsn, g);
+  }
+  const rows = [...groups.values()];
+  if(!rows.length) return "";
+
+  const totals = rows.reduce((a, r) => ({ taxable: a.taxable + r.taxable, tax: a.tax + r.tax }),
+                             { taxable: 0, tax: 0 });
+  const half = ctx.isIGST ? null : 2;
+
+  const body = rows.map(r => {
+    const halfPct = (r.pct / 2).toFixed(2).replace(/\.00$/, "") + "%";
+    return `<tr>
+      <td>${escapeHtml(r.hsn)}</td>
+      <td class="c-num">${tallyMoney(r.taxable)}</td>
+      ${ctx.isIGST
+        ? `<td class="c-num">${r.pct}%</td><td class="c-num">${tallyMoney(r.tax)}</td>`
+        : `<td class="c-num">${halfPct}</td><td class="c-num">${tallyMoney(r.tax / half)}</td>
+           <td class="c-num">${halfPct}</td><td class="c-num">${tallyMoney(r.tax / half)}</td>`}
+      <td class="c-num">${tallyMoney(r.tax)}</td>
+    </tr>`;
+  }).join("");
+
+  return `
+    <table class="tly-hsn">
+      <thead>
+        <tr>
+          <th rowspan="2">HSN/SAC</th>
+          <th rowspan="2" class="c-num">Taxable<br>Value</th>
+          ${ctx.isIGST
+            ? `<th colspan="2">Integrated Tax</th>`
+            : `<th colspan="2">Central Tax</th><th colspan="2">State Tax</th>`}
+          <th rowspan="2" class="c-num">Total<br>Tax Amount</th>
+        </tr>
+        <tr>
+          <th class="c-num">Rate</th><th class="c-num">Amount</th>
+          ${ctx.isIGST ? "" : `<th class="c-num">Rate</th><th class="c-num">Amount</th>`}
+        </tr>
+      </thead>
+      <tbody>${body}</tbody>
+      <tfoot>
+        <tr>
+          <td><b>Total</b></td>
+          <td class="c-num"><b>${tallyMoney(totals.taxable)}</b></td>
+          ${ctx.isIGST
+            ? `<td></td><td class="c-num"><b>${tallyMoney(totals.tax)}</b></td>`
+            : `<td></td><td class="c-num"><b>${tallyMoney(totals.tax / 2)}</b></td>
+               <td></td><td class="c-num"><b>${tallyMoney(totals.tax / 2)}</b></td>`}
+          <td class="c-num"><b>${tallyMoney(totals.tax)}</b></td>
+        </tr>
+      </tfoot>
+    </table>
+    <div class="tly-taxwords">Tax Amount (in words): <b>${Pricing.amountInWords(totals.tax)}</b></div>`;
+}
+
+/**
+ * The whole page. Returns the inner HTML for .invoice-page, so paper sizing,
+ * the one-page fit and the PDF path all keep working unchanged.
+ */
+function renderTallyInvoiceHtml(inv, cust, cols, rowsHtml, ctx){
+  const s = state.settings || {};
+  const challan = inv.doc_type === "challan";
+  const gstEnabled = !challan && inv.gst_enabled !== 0;
+  const isIGST = gstEnabled && inv.tax_type === "IGST";
+
+  const kv = (label, value) => `<div class="tly-kv"><span>${escapeHtml(label)}</span><b>${value || "&nbsp;"}</b></div>`;
+  const bank = [
+    s.bank_name ? "Bank: " + s.bank_name : "",
+    s.bank_account_no ? "A/c No: " + s.bank_account_no : "",
+    s.bank_ifsc ? "IFSC: " + s.bank_ifsc : "",
+    s.bank_branch ? "Branch: " + s.bank_branch : ""
+  ].filter(Boolean);
+
+  const shipTo = inv.delivery_address || (cust && cust.address) || "";
+  const eway = inv.eway_bill_no
+    ? kv("E-Way Bill No.", escapeHtml(inv.eway_bill_no) +
+        (inv.eway_valid_until ? ` <span style="font-weight:400;">(valid to ${escapeHtml(fyDay(inv.eway_valid_until))})</span>` : ""))
+    : "";
+
+  return `
+    <div class="tly-title">${escapeHtml(challan ? "DELIVERY CHALLAN" : "TAX INVOICE")}</div>
+
+    <div class="tly-grid">
+      <div class="tly-left">
+        <div class="tly-seller">
+          <div class="tly-co">${escapeHtml(s.business_name || "")}</div>
+          ${s.address ? `<div>${escapeHtml(s.address)}</div>` : ""}
+          ${s.gstin ? `<div>GSTIN/UIN: ${escapeHtml(s.gstin)}</div>` : ""}
+          ${s.state ? `<div>State Name: ${escapeHtml(s.state)}</div>` : ""}
+          ${s.email ? `<div>E-Mail: ${escapeHtml(s.email)}</div>` : ""}
+        </div>
+        <div class="tly-party">
+          <div class="tly-lbl">Buyer (Bill to)</div>
+          <div class="tly-co">${cust ? escapeHtml(cust.name) : "Walk-in Customer"}</div>
+          ${cust && cust.address ? `<div>${escapeHtml(cust.address)}</div>` : ""}
+          ${cust && cust.gst ? `<div>GSTIN/UIN: ${escapeHtml(cust.gst)}</div>` : ""}
+          ${cust && cust.state ? `<div>State Name: ${escapeHtml(cust.state)}</div>` : ""}
+          ${cust && cust.phone ? `<div>Mobile: ${escapeHtml(cust.phone)}</div>` : ""}
+        </div>
+        ${shipTo ? `<div class="tly-party">
+          <div class="tly-lbl">Consignee (Ship to)</div>
+          <div>${escapeHtml(shipTo)}</div>
+        </div>` : ""}
+      </div>
+
+      <div class="tly-right">
+        ${kv("Invoice No.", escapeHtml(inv.challan_no || ""))}
+        ${kv("Dated", escapeHtml(fyDay(inv.date)))}
+        ${kv("Mode/Terms of Payment", escapeHtml(inv.payment_method || ""))}
+        ${kv("Despatched through", escapeHtml(inv.transport_mode || inv.transporter_name || ""))}
+        ${kv("Vehicle No.", escapeHtml(inv.vehicle_number || ""))}
+        ${kv("Destination", escapeHtml((cust && cust.city) || (cust && cust.state) || ""))}
+        ${inv.lr_number ? kv("L.R. No.", escapeHtml(inv.lr_number)) : ""}
+        ${eway}
+        ${kv("Terms of Delivery", escapeHtml(inv.remarks || ""))}
+      </div>
+    </div>
+
+    <div class="erp-table-wrap">
+      <table class="erp-table tly-items">
+        <thead><tr>${cols.map(billHeadCell).join("")}</tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    </div>
+
+    <div class="tly-amtwords">
+      <span>Amount Chargeable (in words)</span>
+      <b>${ctx.showRate ? Pricing.amountInWords(ctx.displayTotal) : "&nbsp;"}</b>
+      <span class="tly-eoe">E. &amp; O.E</span>
+    </div>
+
+    ${gstEnabled ? tallyHsnSummary(inv, inv.items || [], { gstEnabled, isIGST }) : ""}
+
+    <div class="tly-foot">
+      <div class="tly-foot-l">
+        <div class="tly-lbl">Declaration</div>
+        <div>We declare that this invoice shows the actual price of the goods
+             described and that all particulars are true and correct.</div>
+        ${bank.length ? `<div class="tly-bank"><b>Company's Bank Details</b><br>${bank.map(escapeHtml).join("<br>")}</div>` : ""}
+      </div>
+      <div class="tly-foot-r">
+        <div>for <b>${escapeHtml(s.business_name || "")}</b></div>
+        <div class="tly-sign">Authorised Signatory</div>
+      </div>
+    </div>
+    <div class="tly-computer">This is a Computer Generated Invoice</div>`;
+}
+
 function renderInvoicePageContent(){
   const inv = lastPreviewInvoice; if(!inv) return;
   const cfg = state.settings;
@@ -5590,6 +5783,17 @@ function renderInvoicePageContent(){
   // The heading the template names, or the wording the bill has always used.
   const tplCfg = billConfig(challan) || {};
   const bannerText = (tplCfg.title || "").trim() || (challan ? "DELIVERY CHALLAN" : "ESTIMATE CHALLAN");
+
+  /* Tally Format is a different LAYOUT, so it builds its own page from the
+     same columns and rows computed above. Every other theme falls through
+     to the classic markup below, unchanged. */
+  if(printThemeFor(challan) === "tallyfull"){
+    document.getElementById("invoice-page-content").innerHTML =
+      renderTallyInvoiceHtml(inv, cust, cols, rows, {
+        showRate, displayTotal, gstEnabled, isIGST
+      });
+    return;
+  }
   document.getElementById("invoice-page-content").innerHTML = `
     <div class="erp-banner">${bannerText}</div>
     <div class="erp-header">

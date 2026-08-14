@@ -18,7 +18,7 @@ router.get("/", (req, res) => {
 // Printed-document themes. Validated against this list rather than stored as
 // free text: an unrecognised value would reach the print CSS as a class that
 // matches nothing, silently printing an unstyled document.
-const PRINT_THEMES = ["classic", "tally", "navy", "minimal"];
+const PRINT_THEMES = ["classic", "tally", "navy", "minimal", "tallyfull"];
 const cleanTheme = (v, fallback) => (PRINT_THEMES.includes(v) ? v : fallback);
 
 router.put("/", requireRole("owner"), (req, res) => {

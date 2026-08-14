@@ -473,6 +473,7 @@
           <button class="qa-btn" id="acc-other-expenses"><span class="ic">&#128228;</span>Other Expenses</button>
           <button class="qa-btn" id="acc-bank-entry"><span class="ic">&#127974;</span>Bank Entry</button>
           <button class="qa-btn" id="acc-outstanding"><span class="ic">&#9203;</span>Outstanding</button>
+          <button class="qa-btn" id="acc-ewb"><span class="ic">&#128667;</span>E-Way Bill</button>
           <button class="qa-btn" id="acc-ledger"><span class="ic">&#128210;</span>Ledger</button>
           <button class="qa-btn" id="acc-fyear" style="display:none;"><span class="ic">&#128197;</span>Financial Year</button>
         </div>
@@ -499,6 +500,38 @@
            A module of its own, deliberately not folded into Ledger or the
            Reports screen: this answers one question only — who owes money
            right now, and how much. Anything already settled is absent. -->
+      <!-- ============ E-WAY BILL ============
+           Its own module. The dashboard counts are derived on read, so a
+           bill that expired overnight reads as expired without anything
+           having run. -->
+      <div class="screen" id="screen-ewb">
+        <a href="#" id="ewb-back-link" class="muted" style="font-size:12px;font-weight:700;">&larr; Back to Accounts</a>
+
+        <div id="ewb-provider-note" class="pm-warn" style="margin-top:10px;"></div>
+
+        <div class="stat-grid" id="ewb-tiles"></div>
+
+        <div class="chip-row" style="margin-top:12px;overflow-x:auto;">
+          <button class="chip selected" data-ewb-status="">All</button>
+          <button class="chip" data-ewb-status="Draft">Drafts</button>
+          <button class="chip" data-ewb-status="Generated">Generated</button>
+          <button class="chip" data-ewb-status="Expired">Expired</button>
+          <button class="chip" data-ewb-status="Failed">Failed</button>
+          <button class="chip" data-ewb-status="Cancelled">Cancelled</button>
+        </div>
+
+        <div class="searchbar" style="margin-top:10px;">
+          <span>&#128269;</span>
+          <input type="text" id="ewb-search" placeholder="Search EWB no., invoice, party or vehicle">
+        </div>
+        <div class="pm-filter-grid" style="margin-top:8px;">
+          <label class="pm-field"><span>From</span><input type="date" id="ewb-from"></label>
+          <label class="pm-field"><span>To</span><input type="date" id="ewb-to"></label>
+        </div>
+
+        <div id="ewb-list"></div>
+      </div>
+
       <div class="screen" id="screen-outstanding">
         <a href="#" id="os-back-link" class="muted" style="font-size:12px;font-weight:700;">&larr; Back to Accounts</a>
 
@@ -1039,6 +1072,7 @@
   <div class="sheet" id="sheet-transfer-stock"></div>
   <div class="sheet" id="sheet-factory-reset"></div>
   <div class="sheet" id="sheet-outstanding-detail"></div>
+  <div class="sheet" id="sheet-ewb"></div>
 
   <!-- ============ FULLSCREEN: STOCK REPORT PRINT ============
        In-page print (not window.open) — a PWA installed to the home screen
@@ -1175,6 +1209,7 @@
       <button id="inv-download">&#11015; Download PDF</button>
       <button id="inv-whatsapp-pdf">&#128172; Share PDF on WhatsApp</button>
       <button id="inv-print">&#128424; Browser Print</button>
+      <button id="inv-ewb">&#128667; Generate E-Way Bill</button>
     </div>
   </div>
 

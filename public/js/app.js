@@ -794,6 +794,13 @@ async function initApp(){
   document.getElementById("bill-panel-btn").addEventListener("click", toggleBillPanel);
   document.getElementById("inv-download").addEventListener("click", downloadInvoicePdf);
   document.getElementById("inv-print").addEventListener("click", printInvoiceOnePage);
+  document.getElementById("inv-ewb").addEventListener("click", ()=>{
+    // An unsaved preview has no invoice to attach an e-way bill to.
+    if(!lastPreviewInvoice || !lastPreviewInvoice.id){
+      toast("Save the invoice first, then raise its e-way bill."); return;
+    }
+    startEwbForInvoice(lastPreviewInvoice.id);
+  });
   document.getElementById("inv-whatsapp-pdf").addEventListener("click", shareInvoicePdfWhatsApp);
   document.getElementById("inv-server-print").addEventListener("click", printViaServer);
 
@@ -809,7 +816,7 @@ async function switchTab(tab){
   document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));
   document.getElementById("screen-"+tab).classList.add("active");
   document.querySelectorAll("nav.bottom .tab").forEach(t=>t.classList.toggle("active", t.dataset.tab===tab));
-  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",quotation:"Quotation",so:"Sales Order",pquery:"Product Query",accounts:"Accounts",otherledger:(state.olKind==="income"?"Other Income":"Other Expenses"),fyear:"Financial Year",fyclose:"Financial Year",printmgr:"Print Management",outstanding:"Outstanding"};
+  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",quotation:"Quotation",so:"Sales Order",pquery:"Product Query",accounts:"Accounts",otherledger:(state.olKind==="income"?"Other Income":"Other Expenses"),fyear:"Financial Year",fyclose:"Financial Year",printmgr:"Print Management",outstanding:"Outstanding",ewb:"E-Way Bill"};
   document.getElementById("hdr-sub").textContent = subMap[tab];
   document.getElementById("hdr-main").textContent = tab==="home" ? greeting() : subMap[tab];
   if(tab==="billing") await renderBilling();
@@ -818,6 +825,7 @@ async function switchTab(tab){
   if(tab==="reports") await renderReport();
   if(tab==="cashbook") await renderCashBook();
   if(tab==="outstanding") await renderOutstanding();
+  if(tab==="ewb") await renderEwb();
   if(tab==="bankbook") await renderBankBook();
   if(tab==="inquiries") await renderInquiries();
   if(tab==="purchase") await renderPurchaseScreen();
@@ -12225,6 +12233,18 @@ async function savePmTemplate(){
 }
 
 function wirePrintManager(){
+  const ewbBtn = document.getElementById("acc-ewb");
+  if(ewbBtn) ewbBtn.addEventListener("click", ()=>openEwb());
+  const ewbBack = document.getElementById("ewb-back-link");
+  if(ewbBack) ewbBack.addEventListener("click", e=>{ e.preventDefault(); switchTab("accounts"); });
+  document.querySelectorAll("[data-ewb-status]").forEach(b=>b.addEventListener("click", ()=>{
+    state.ewbStatus = b.dataset.ewbStatus || ""; renderEwb();
+  }));
+  ["ewb-search","ewb-from","ewb-to"].forEach(id=>{
+    const el=document.getElementById(id);
+    if(el) el.addEventListener(id==="ewb-search"?"input":"change", ()=>renderEwb());
+  });
+
   const osBtn = document.getElementById("acc-outstanding");
   if(osBtn) osBtn.addEventListener("click", ()=>openOutstanding());
   const osBack = document.getElementById("os-back-link");
@@ -12275,6 +12295,228 @@ async function renderAccountsScreen(){
    ============================================================ */
 
 let osData = null;   // last payload, kept so search filters without refetching
+
+/* ============================================================
+   E-WAY BILL — screen and invoice flow
+
+   The invoice already holds almost everything an e-way bill needs, so the
+   flow never asks for it again: open a bill, tap Generate E-Way Bill, and
+   the only fields presented are the transport ones that genuinely are not
+   on the invoice. Anything missing elsewhere is named with the record to
+   fix it in, rather than a form field the operator cannot answer.
+   ============================================================ */
+
+let ewbData = null;
+
+function openEwb(){ switchTab("ewb"); }
+
+const EWB_PILL = {
+  Draft:     "",
+  Generated: "background:rgba(52,199,89,.14);color:#1a7f37;",
+  Expired:   "background:rgba(255,149,0,.16);color:#8a5300;",
+  Failed:    "background:rgba(255,59,48,.14);color:#b3261e;",
+  Cancelled: "background:rgba(118,118,128,.16);color:#6b6b70;"
+};
+
+async function renderEwb(){
+  // Said plainly rather than hidden: nothing here reaches the government
+  // until a provider is connected, and an owner should never be unsure
+  // whether a number on screen is real.
+  const note = document.getElementById("ewb-provider-note");
+  note.innerHTML = "No GST provider is connected yet, so e-way bills are " +
+    "<b>practice only</b> — numbers generated here are not registered with the portal.";
+
+  const list = document.getElementById("ewb-list");
+  list.innerHTML = `<div class="empty-hint">Loading…</div>`;
+  const q = document.getElementById("ewb-search").value.trim();
+  const from = document.getElementById("ewb-from").value;
+  const to = document.getElementById("ewb-to").value;
+  const status = state.ewbStatus || "";
+  const qs = new URLSearchParams();
+  if(q) qs.set("q", q);
+  if(status) qs.set("status", status);
+  if(from) qs.set("from", from);
+  if(to) qs.set("to", to);
+
+  try{ ewbData = await api("GET", `/ewb?${qs}`); }
+  catch(e){ list.innerHTML = `<div class="empty-hint">${escapeHtml(e.message)}</div>`; return; }
+
+  const s = ewbData.summary;
+  document.getElementById("ewb-tiles").innerHTML = [
+    ["Total", s.total, "navy"], ["Generated", s.generated, "plain"],
+    ["Drafts", s.drafts, "plain"], ["Expiring soon", s.expiringSoon, "plain"],
+    ["Expired", s.expired, "plain"], ["Failed", s.failed, "plain"]
+  ].map(([label, n, kind]) =>
+    `<div class="stat-card ${kind}"><div class="label">${label}</div><div class="value">${n}</div></div>`
+  ).join("");
+
+  document.querySelectorAll("[data-ewb-status]").forEach(b =>
+    b.classList.toggle("selected", (b.dataset.ewbStatus || "") === status));
+
+  if(!ewbData.rows.length){
+    list.innerHTML = `<div class="empty-hint">${
+      q || status || from || to ? "Nothing matches those filters."
+        : "No e-way bills yet. Open a Tax Invoice and tap Generate E-Way Bill."}</div>`;
+    return;
+  }
+  list.innerHTML = ewbData.rows.map((b, i) => `
+    <div class="list-row" data-ewb-open="${i}" style="cursor:pointer;">
+      <div style="min-width:0;">
+        <div class="row-title">${escapeHtml(b.ewb_no || b.doc_no || "Draft")}
+          <span class="pill" style="margin-left:6px;${EWB_PILL[b.shownStatus] || ""}">${b.shownStatus}</span></div>
+        <div class="row-sub">${escapeHtml(b.doc_no)} · ${escapeHtml(fyDay(b.doc_date))} · ${escapeHtml(b.to_name)}</div>
+        <div class="row-sub">${b.vehicle_no ? escapeHtml(b.vehicle_no) + " · " : ""}${
+          b.valid_until ? "valid to " + escapeHtml(fyDay(b.valid_until)) : "not generated"}</div>
+      </div>
+      <div class="row-right" style="font-weight:800;">${fmt(b.total_value)}</div>
+    </div>`).join("");
+
+  list.querySelectorAll("[data-ewb-open]").forEach(row =>
+    row.addEventListener("click", () => openEwbSheet(ewbData.rows[Number(row.dataset.ewbOpen)].id)));
+}
+
+/* ---- the flow from an invoice ---- */
+
+/**
+ * Opens the transport step for an invoice, after showing anything that would
+ * be rejected. Problems are listed with the record to fix them in, because
+ * a missing customer PIN code cannot be answered from a transport form.
+ */
+async function startEwbForInvoice(invoiceId){
+  let prep;
+  try{ prep = await api("POST", `/ewb/prepare/${invoiceId}`, {}); }
+  catch(e){ toast(e.message); return; }
+
+  const p = prep.payload;
+  const blockers = prep.problems.filter(x =>
+    !["transMode","vehicleNo","distanceKm","transDocNo"].includes(x.field));
+
+  const sheet = document.getElementById("sheet-ewb");
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>&#10005;</button>
+    <div class="sheet-title">E-Way Bill · ${escapeHtml(p.doc_no)}</div>
+    <p class="muted" style="font-size:12px;margin-top:-6px;">
+      ${escapeHtml(p.to_name)} · ${fmt(p.doc_value)} · ${escapeHtml(fyDay(p.doc_date))}</p>
+
+    ${blockers.length ? `<div class="pm-warn" style="margin-top:10px;">
+      <b>Fix these first — the portal would reject the bill:</b><br>
+      ${blockers.map(b => "• " + escapeHtml(b.message)).join("<br>")}
+    </div>` : `<div class="card" style="padding:10px 12px;margin-top:10px;">
+      <div class="erp-kv"><span>From</span><b>${escapeHtml(p.from_state_code)} · ${escapeHtml(p.from_pin)}</b></div>
+      <div class="erp-kv"><span>To</span><b>${escapeHtml(p.to_state_code)} · ${escapeHtml(p.to_pin)}</b></div>
+      <div class="erp-kv"><span>Taxable</span><b>${fmt(p.taxable_value)}</b></div>
+      <div class="erp-kv"><span>Items</span><b>${p.items.length}</b></div>
+    </div>`}
+
+    <div class="section-title" style="margin-top:14px;">Transport details</div>
+    <label class="field-label">Mode</label>
+    <select id="ewb-mode">
+      <option value="Road">Road</option><option value="Rail">Rail</option>
+      <option value="Air">Air</option><option value="Ship">Ship</option>
+    </select>
+    <label class="field-label">Vehicle number</label>
+    <input type="text" id="ewb-vehicle" value="${escapeHtml(p.vehicle_no || "")}" placeholder="MH02AB1234">
+    <label class="field-label">Distance (km)</label>
+    <input type="number" id="ewb-distance" value="${p.distance_km || ""}" placeholder="e.g. 42">
+    <label class="field-label">Transporter name — optional</label>
+    <input type="text" id="ewb-transporter" value="${escapeHtml(p.transporter_name || "")}">
+    <label class="field-label">Transport document no. — optional</label>
+    <input type="text" id="ewb-lr" value="${escapeHtml(p.trans_doc_no || "")}">
+
+    <div style="display:flex;flex-direction:column;gap:8px;margin-top:16px;">
+      <button class="btn btn-gold" id="ewb-save-generate"${blockers.length ? " disabled" : ""}>
+        ${blockers.length ? "Fix the problems above first" : "Save & Generate"}</button>
+      <button class="btn btn-outline" id="ewb-save-draft">Save as Draft</button>
+    </div>`;
+
+  const transport = () => ({
+    transMode: document.getElementById("ewb-mode").value,
+    vehicleNo: document.getElementById("ewb-vehicle").value,
+    distanceKm: document.getElementById("ewb-distance").value,
+    transporterName: document.getElementById("ewb-transporter").value,
+    transDocNo: document.getElementById("ewb-lr").value
+  });
+
+  const makeDraft = async () => {
+    const r = await api("POST", `/ewb/draft/${invoiceId}`, transport());
+    if(r.id) await api("PUT", `/ewb/${r.id}/transport`, transport());
+    return r.id;
+  };
+
+  document.getElementById("ewb-save-draft").addEventListener("click", async ()=>{
+    try{ const id = await makeDraft(); closeAllSheets(); toast("Saved as draft.", "ok"); openEwbSheet(id); }
+    catch(e){ toast(e.message); }
+  });
+  document.getElementById("ewb-save-generate").addEventListener("click", async (ev)=>{
+    const btn = ev.currentTarget;
+    btn.disabled = true; btn.textContent = "Submitting…";   // no double-tap
+    try{
+      const id = await makeDraft();
+      const r = await api("POST", `/ewb/${id}/generate`, {});
+      closeAllSheets();
+      toast(`E-way bill ${r.bill.ewb_no} generated.`, "ok");
+      openEwbSheet(id);
+    }catch(e){
+      btn.disabled = false; btn.textContent = "Save & Generate";
+      toast(e.message);
+    }
+  });
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  sheet.classList.add("show");
+}
+
+/* ---- one bill ---- */
+async function openEwbSheet(id){
+  let b;
+  try{ b = await api("GET", `/ewb/${id}`); }catch(e){ toast(e.message); return; }
+  const sheet = document.getElementById("sheet-ewb");
+  const kv = (k, v) => `<div class="erp-kv"><span>${k}</span><b>${v || "—"}</b></div>`;
+
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>&#10005;</button>
+    <div class="sheet-title">${escapeHtml(b.ewb_no || "Draft")}
+      <span class="pill" style="margin-left:6px;${EWB_PILL[b.status] || ""}">${b.status}</span></div>
+
+    <div class="card" style="padding:12px 14px;margin-top:10px;">
+      ${kv("Invoice", escapeHtml(b.doc_no) + " · " + escapeHtml(fyDay(b.doc_date)))}
+      ${kv("Party", escapeHtml(b.to_name))}
+      ${kv("Value", fmt(b.total_value))}
+      ${kv("Vehicle", escapeHtml(b.vehicle_no))}
+      ${kv("Distance", b.distance_km ? b.distance_km + " km" : "")}
+      ${b.valid_until ? kv("Valid until", escapeHtml(fyDay(b.valid_until))) : ""}
+    </div>
+
+    ${b.last_error ? `<div class="pm-warn" style="margin-top:10px;"><b>Last attempt failed:</b><br>${escapeHtml(b.last_error)}</div>` : ""}
+    ${b.problems && b.problems.length ? `<div class="pm-warn" style="margin-top:10px;">
+      <b>Not ready to submit:</b><br>${b.problems.map(p=>"• "+escapeHtml(p.message)).join("<br>")}</div>` : ""}
+
+    <div style="display:flex;flex-direction:column;gap:8px;margin-top:16px;">
+      ${b.status === "Generated"
+        ? `<button class="btn btn-outline" id="ewb-cancel">Cancel this E-Way Bill</button>`
+        : `<button class="btn btn-gold" id="ewb-retry"${(b.problems||[]).length?" disabled":""}>
+             ${b.status === "Failed" ? "Retry" : "Generate"}</button>`}
+    </div>`;
+
+  const retry = document.getElementById("ewb-retry");
+  if(retry) retry.addEventListener("click", async (ev)=>{
+    ev.currentTarget.disabled = true; ev.currentTarget.textContent = "Submitting…";
+    try{ const r = await api("POST", `/ewb/${id}/generate`, {});
+      toast(`Generated ${r.bill.ewb_no}.`, "ok"); openEwbSheet(id); renderEwb();
+    }catch(e){ toast(e.message); openEwbSheet(id); }
+  });
+  const cancelBtn = document.getElementById("ewb-cancel");
+  if(cancelBtn) cancelBtn.addEventListener("click", async ()=>{
+    const reason = prompt("Why is this e-way bill being cancelled?");
+    if(!reason) return;
+    try{ await api("POST", `/ewb/${id}/cancel`, { reason });
+      toast("Cancelled.", "ok"); openEwbSheet(id); renderEwb();
+    }catch(e){ toast(e.message); }
+  });
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  sheet.classList.add("show");
+}
 
 function openOutstanding(){
   state.osSide = state.osSide === "supplier" ? "supplier" : "customer";

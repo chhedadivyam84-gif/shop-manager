@@ -1399,6 +1399,112 @@ CREATE INDEX IF NOT EXISTS idx_txn_categories_kind ON txn_categories(kind, activ
 })();
 
 /* ============================================================
+   E-WAY BILL
+
+   ewb_bills is the record of truth; the eway_* columns already on invoices
+   stay as the denormalised copy the printed bill reads, so printing never
+   has to join. invoice_id is the traceability requirement — every e-way
+   bill can be walked back to the document that produced it.
+
+   client_ref is the idempotency key. It is generated once when a bill moves
+   to Submitting and is UNIQUE, so a double-tap, a retry after a timeout, or
+   two staff on two devices cannot produce two e-way bills for one invoice.
+   The provider echoes it back and a duplicate insert fails loudly rather
+   than quietly generating twice.
+
+   status vocabulary is ours; a provider's own wording is mapped onto it in
+   the adapter rather than leaking through the app. Expired is NOT stored —
+   it is derived from valid_until, so nothing has to run overnight and a bill
+   cancelled before expiry stays Cancelled.
+   ============================================================ */
+db.exec(`
+CREATE TABLE IF NOT EXISTS transporters (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  trans_id TEXT NOT NULL DEFAULT '',
+  gstin TEXT NOT NULL DEFAULT '',
+  phone TEXT NOT NULL DEFAULT '',
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_transporters_active ON transporters(active, name);
+
+CREATE TABLE IF NOT EXISTS ewb_bills (
+  id TEXT PRIMARY KEY,
+  invoice_id TEXT REFERENCES invoices(id),
+  doc_type TEXT NOT NULL DEFAULT 'invoice',
+  status TEXT NOT NULL DEFAULT 'Draft'
+    CHECK (status IN ('Draft','Validated','Submitting','Generated','Failed','Cancelled')),
+  client_ref TEXT UNIQUE,
+
+  ewb_no TEXT NOT NULL DEFAULT '',
+  ewb_date TEXT NOT NULL DEFAULT '',
+  valid_until TEXT NOT NULL DEFAULT '',
+
+  supply_type TEXT NOT NULL DEFAULT 'Outward',
+  sub_type TEXT NOT NULL DEFAULT 'Supply',
+  doc_no TEXT NOT NULL DEFAULT '',
+  doc_date TEXT NOT NULL DEFAULT '',
+  doc_value REAL NOT NULL DEFAULT 0,
+
+  from_gstin TEXT NOT NULL DEFAULT '',  from_name TEXT NOT NULL DEFAULT '',
+  from_addr TEXT NOT NULL DEFAULT '',   from_place TEXT NOT NULL DEFAULT '',
+  from_pin TEXT NOT NULL DEFAULT '',    from_state_code TEXT NOT NULL DEFAULT '',
+
+  to_gstin TEXT NOT NULL DEFAULT '',    to_name TEXT NOT NULL DEFAULT '',
+  to_addr TEXT NOT NULL DEFAULT '',     to_place TEXT NOT NULL DEFAULT '',
+  to_pin TEXT NOT NULL DEFAULT '',      to_state_code TEXT NOT NULL DEFAULT '',
+
+  transporter_id TEXT REFERENCES transporters(id),
+  transporter_name TEXT NOT NULL DEFAULT '',
+  trans_id TEXT NOT NULL DEFAULT '',
+  trans_mode TEXT NOT NULL DEFAULT '',
+  vehicle_no TEXT NOT NULL DEFAULT '',
+  vehicle_type TEXT NOT NULL DEFAULT '',
+  trans_doc_no TEXT NOT NULL DEFAULT '',
+  trans_doc_date TEXT NOT NULL DEFAULT '',
+  distance_km REAL NOT NULL DEFAULT 0,
+
+  taxable_value REAL NOT NULL DEFAULT 0,
+  cgst REAL NOT NULL DEFAULT 0, sgst REAL NOT NULL DEFAULT 0,
+  igst REAL NOT NULL DEFAULT 0, cess REAL NOT NULL DEFAULT 0,
+  total_value REAL NOT NULL DEFAULT 0,
+
+  last_error TEXT NOT NULL DEFAULT '',
+  cancelled_at INTEGER, cancel_reason TEXT NOT NULL DEFAULT '',
+  created_by TEXT, created_at INTEGER NOT NULL, updated_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_ewb_status ON ewb_bills(status);
+CREATE INDEX IF NOT EXISTS idx_ewb_invoice ON ewb_bills(invoice_id);
+CREATE INDEX IF NOT EXISTS idx_ewb_date ON ewb_bills(doc_date);
+
+CREATE TABLE IF NOT EXISTS ewb_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ewb_id TEXT NOT NULL REFERENCES ewb_bills(id) ON DELETE CASCADE,
+  product_id TEXT,
+  name TEXT NOT NULL, hsn TEXT NOT NULL DEFAULT '',
+  qty REAL NOT NULL DEFAULT 0, uqc TEXT NOT NULL DEFAULT '',
+  taxable_value REAL NOT NULL DEFAULT 0, gst_rate REAL NOT NULL DEFAULT 0,
+  cgst REAL NOT NULL DEFAULT 0, sgst REAL NOT NULL DEFAULT 0,
+  igst REAL NOT NULL DEFAULT 0, cess REAL NOT NULL DEFAULT 0,
+  total REAL NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_ewb_items_bill ON ewb_items(ewb_id);
+
+-- Every call to the provider, request and response. SERVER-SIDE ONLY: it
+-- holds tokens and full payloads and is never returned by any API.
+CREATE TABLE IF NOT EXISTS ewb_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ewb_id TEXT, provider TEXT NOT NULL, operation TEXT NOT NULL,
+  endpoint TEXT NOT NULL DEFAULT '',
+  request_json TEXT NOT NULL DEFAULT '', response_json TEXT NOT NULL DEFAULT '',
+  http_status INTEGER, error_code TEXT NOT NULL DEFAULT '',
+  ok INTEGER NOT NULL DEFAULT 0, at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ewb_requests_bill ON ewb_requests(ewb_id, at);
+`);
+
+/* ============================================================
    CHEQUES
 
    A cheque book belongs to a bank account (bank_accounts already carries the

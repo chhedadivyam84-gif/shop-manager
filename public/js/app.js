@@ -4959,23 +4959,45 @@ function printInvoiceOnePage(){
      first attempt measured 295mm where the arithmetic promised 284. So:
      apply, measure what really happened, correct, repeat. Four passes is
      ample; each one lands much closer than the last. */
+  /* ONE PAGE, ALWAYS.
+
+     There used to be a floor at 0.55: below that the bill was allowed to
+     spill onto a second sheet on the grounds that smaller was unreadable.
+     That is not the trade the shop wants — a bill must come out on one
+     sheet whatever it costs in size, so the floor is gone and the fit
+     keeps converging until it lands.
+
+     Still converged rather than divided once: shrinking reflows the page,
+     text rewraps and rows change height, so a single available/natural
+     division is not what you get. An early attempt asked for 284mm and
+     rendered 295. Passes are raised from four to six because without a
+     floor the search can start much lower and needs the extra room to
+     settle. */
   let note = "";
-  const FLOOR = 0.55;
+  const TINY = 0.45;          // below this the print is legible but small
+  let finalScale = 1;
   if(naturalPx > availablePx + 1){
     let scale = availablePx / naturalPx;
-    for(let pass = 0; pass < 4; pass++){
-      if(scale < FLOOR){ scale = FLOOR; }
+    for(let pass = 0; pass < 6; pass++){
       page.style.zoom = String(Math.floor(scale * 1000) / 1000);
       // Real rendered height, in the same device pixels as availablePx.
       const actualPx = page.getBoundingClientRect().height;
-      if(actualPx <= availablePx || scale <= FLOOR) break;
+      finalScale = scale;
+      if(actualPx <= availablePx) break;
       scale *= availablePx / actualPx;
     }
-    if(page.getBoundingClientRect().height > availablePx + 2){
-      // Held at the floor and still over: too many items to shrink into one
-      // readable page. Say so rather than let it be a surprise at the tray.
-      page.style.zoom = String(FLOOR);
-      note = "This bill has too many items to fit one readable page — it will print on two.";
+    /* A last hard squeeze. Six passes converge on almost anything, but a
+       bill with a very long item list can still be a hair over, and a hair
+       over is a second sheet with three lines on it. */
+    let guard = 0;
+    while(page.getBoundingClientRect().height > availablePx && guard++ < 12){
+      finalScale *= 0.96;
+      page.style.zoom = String(Math.floor(finalScale * 1000) / 1000);
+    }
+    if(finalScale < TINY){
+      // It fits, as asked — but say so, because the operator should learn
+      // it from the screen rather than from squinting at the paper.
+      note = "This bill has a lot of items — it fits one page, but the print is small.";
     }
   }
 

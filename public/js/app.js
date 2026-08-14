@@ -5416,8 +5416,14 @@ function billCellFor(key, it, i, ctx){
     case "cgst":    return ctx.gstEnabled && !ctx.isIGST ? money(tax / 2) : "";
     case "sgst":    return ctx.gstEnabled && !ctx.isIGST ? money(tax / 2) : "";
     case "igst":    return ctx.gstEnabled && ctx.isIGST ? money(tax) : "";
-    case "code":    return escapeHtml(it.code || "");
-    case "hsn":     return escapeHtml(it.hsn_code || "");
+    /* The line's own code wins — a bill must keep printing what it was
+       actually billed under, even if the product is reclassified later.
+       But a BLANK line preserves no history, so it falls back to the
+       product's current code. Without this, setting an HSN on a product
+       would leave every existing invoice still printing an empty column,
+       which reads as the feature being broken. */
+    case "hsn":     return escapeHtml(it.hsn_code || (product && product.hsn_code) || "");
+    case "code":    return escapeHtml(it.code || (product && product.code) || "");
     case "brand":   return escapeHtml(it.brand || (product && product.brand) || "");
     // Category is not stored on the line, so it comes from the product it
     // was billed from; a deleted product simply prints blank.
@@ -5477,7 +5483,8 @@ function tallyMoney(v){
 function tallyHsnSummary(inv, items, ctx){
   const groups = new Map();
   for(const it of items){
-    const hsn = String(it.hsn_code || "").trim() || "—";
+    const prod = (state.products || []).find(p => p.id === it.product_id);
+    const hsn = String(it.hsn_code || (prod && prod.hsn_code) || "").trim() || "—";
     const gross = (Number(it.qty) || 0) * (Number(it.rate) || 0);
     const net = gross * (1 - (Number(it.discount_pct) || 0) / 100);
     const pct = Number(it.gst_rate) || 0;

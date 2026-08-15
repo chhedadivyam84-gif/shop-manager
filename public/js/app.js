@@ -11631,6 +11631,17 @@ async function runPmSearch(){
    search that found a Sales Return ended in a disabled button. Opening the
    real document instead gives the operator everything that document
    supports: edit, void, print, duplicate. */
+/* Where a document is voided. Void, not delete: these are numbered
+   documents, the row survives marked voided and drops out of every report,
+   and the audit trail keeps what happened. */
+const PM_VOID_ENDPOINTS = {
+  sales_invoice:    id => `/invoices/${id}/void`,
+  delivery_challan: id => `/invoices/${id}/void`,
+  purchase_invoice: id => `/purchases/${id}/void`,
+  sales_return:     id => `/sales-returns/${id}/void`,
+  purchase_return:  id => `/purchase-returns/${id}/void`
+};
+
 const PM_DETAIL_OPENERS = {
   sales_invoice:   id => openExistingInvoice(id),
   delivery_challan:id => openExistingInvoice(id),
@@ -11712,7 +11723,10 @@ async function openPmPreview(row){
 
     <div style="display:flex;flex-direction:column;gap:8px;margin-top:16px;">
       <button class="btn btn-gold" id="pm-pv-open">Open Preview</button>
+      ${PM_DETAIL_OPENERS[row.docType] ? `<button class="btn btn-outline" id="pm-pv-detail">Open Document — Edit, Print, Void</button>` : ""}
       <button class="btn btn-outline" id="pm-pv-mark">Mark as Printed</button>
+      ${PM_VOID_ENDPOINTS[row.docType] && isOwner() && !row.cancelled
+        ? `<a href="#" id="pm-pv-void" class="btn-danger-link" style="text-align:center;margin-top:4px;">Void this document</a>` : ""}
     </div>
     <p class="muted" style="font-size:11px;margin-top:10px;line-height:1.6;" id="pm-pv-note"></p>`;
 
@@ -11722,6 +11736,27 @@ async function openPmPreview(row){
     : `A preview for <strong>${escapeHtml(row.docTypeLabel)}</strong> is not built into this screen. Close this and tap <strong>Open</strong> on the row instead — that goes to the document itself, where Print, Edit and Void all live. Its templates above are saved and ready.`;
   document.getElementById("pm-pv-open").disabled = !canPreview;
 
+  const pvDetail = document.getElementById("pm-pv-detail");
+  if(pvDetail) pvDetail.addEventListener("click", ()=>{
+    const open = PM_DETAIL_OPENERS[row.docType];
+    closeAllSheets();
+    if(open) open(row.id);
+  });
+
+  const pvVoid = document.getElementById("pm-pv-void");
+  if(pvVoid) pvVoid.addEventListener("click", async (e)=>{
+    e.preventDefault();
+    if(!confirm(`Void ${row.docNo}?
+
+Stock, the party’s outstanding and GST are reversed. The document stays on file marked voided and drops out of every report.`)) return;
+    try{
+      await api("POST", PM_VOID_ENDPOINTS[row.docType](row.id));
+      await Promise.all([loadProducts(), loadCustomers(), loadSuppliers()]);
+      closeAllSheets();
+      toast(`${row.docNo} voided. Stock and outstanding reversed.`, "ok");
+      renderPmResults();
+    }catch(err){ toast(err.message); }
+  });
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
   document.getElementById("pm-pv-open").addEventListener("click", async ()=>{
     closeAllSheets();

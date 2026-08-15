@@ -1454,6 +1454,19 @@ CREATE INDEX IF NOT EXISTS idx_gstval_invoice ON gst_validation_logs(invoice_id,
 /* IRN, acknowledgement and QR alongside the e-way bill columns already on
    invoices, so the PRINT path needs no join and no change of shape — the
    print engine reads the invoice row it always read. */
+/* How much a return ACTUALLY moved the party ledger.
+
+   Applying a return clamps at zero — a customer who owes 5,000 and returns
+   5,900 of goods ends at zero, not at minus 900. But reversing it used to
+   add back the full 5,900, handing back money that was never taken and
+   leaving the ledger higher than before the return existed. Voiding a
+   return could therefore INCREASE what a customer owed.
+   Storing the applied figure makes the reversal exact instead of assumed.
+   0 on existing rows is the honest default: nothing is known about them,
+   and the fallback below uses the total as it always did. */
+addColumn("sales_returns", "ledger_applied", "REAL NOT NULL DEFAULT 0");
+addColumn("purchase_returns", "ledger_applied", "REAL NOT NULL DEFAULT 0");
+
 addColumn("invoices", "irn", "TEXT NOT NULL DEFAULT ''");
 addColumn("invoices", "irn_ack_no", "TEXT NOT NULL DEFAULT ''");
 addColumn("invoices", "irn_ack_date", "TEXT NOT NULL DEFAULT ''");

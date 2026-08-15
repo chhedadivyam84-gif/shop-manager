@@ -4130,6 +4130,9 @@ function openSettings(){
       <button class="btn btn-primary" id="st-save-themes" style="margin-top:14px;">Save Theme</button>
       <p class="muted" style="font-size:11px;margin-top:8px;">Open any bill and tap Print to see it. Nothing about the figures changes — only the look.</p>
 
+      <div class="section-title">GST Provider (e-Invoice &amp; e-Way Bill)</div>
+      <div id="st-gst-provider"></div>
+
       <div class="section-title">Stock Rules</div>
       <label class="pe-check" style="display:flex;align-items:flex-start;gap:8px;font-size:13px;font-weight:700;">
         <input type="checkbox" id="st-allow-negative" ${(state.settings||{}).allow_negative_stock===1?"checked":""} style="margin-top:2px;">
@@ -4199,6 +4202,7 @@ function openSettings(){
     // Both previews are drawn now and again on every change, so the theme
     // can be judged before Save rather than after opening a bill.
     renderThemePreviews();
+  renderGstProviderPanel();
     invThemeSel.addEventListener("change", renderThemePreviews);
     chThemeSel.addEventListener("change", renderThemePreviews);
     const describe = ()=>{
@@ -12430,6 +12434,94 @@ const GST_BADGE = {
   warn: "background:rgba(255,149,0,.18);color:#8a5300;",
   bad:  "background:rgba(255,59,48,.14);color:#a01810;"
 };
+
+/* ============================================================
+   SETTINGS -> GST PROVIDER
+
+   Shows whether a GST provider is connected, and what is still needed.
+
+   It deliberately offers no box to type an API key into. The settings table
+   is read by the browser, so a secret stored there is a secret published —
+   and a screen with a key field teaches people that pasting one is normal.
+   The screen therefore tells the owner exactly which environment variables
+   to set and where, and reports whether each is SET without ever showing a
+   value.
+   ============================================================ */
+
+async function renderGstProviderPanel(){
+  const host = document.getElementById("st-gst-provider");
+  if(!host) return;
+  if(!isOwner()){
+    host.innerHTML = `<div class="muted" style="font-size:12px;">Only the shop owner can see GST provider settings.</div>`;
+    return;
+  }
+  host.innerHTML = `<div class="muted" style="font-size:12px;">Checking…</div>`;
+
+  let s;
+  try{ s = await api("GET", "/gst/status"); }
+  catch(e){ host.innerHTML = `<div class="muted" style="font-size:12px;">${escapeHtml(e.message)}</div>`; return; }
+
+  const tone = s.connected ? "background:rgba(52,199,89,.16);color:#14612c;"
+             : s.error     ? "background:rgba(255,59,48,.14);color:#a01810;"
+             : "background:rgba(255,149,0,.18);color:#8a5300;";
+  const label = s.connected ? "Connected" : s.error ? "Misconfigured" : "Not connected";
+
+  host.innerHTML = `
+    <div style="margin-bottom:8px;">
+      <span class="pill" style="${tone}">${label}</span>
+      <span class="muted" style="font-size:12px;margin-left:6px;">${escapeHtml(s.providerLabel || s.provider)}</span>
+    </div>
+
+    ${s.error ? `<div class="pm-warn">${escapeHtml(s.error)}</div>` : ""}
+
+    ${s.isMock ? `<div class="pm-warn">
+      <b>No GST provider is connected.</b><br>
+      E-way bills can be created and the whole workflow tried out, but nothing
+      is sent to the government portal and the numbers are not real.
+    </div>` : ""}
+
+    <div class="card" style="padding:12px 14px;">
+      <div class="erp-kv"><span>Provider</span><b>${escapeHtml(s.provider)}</b></div>
+      <div class="erp-kv"><span>Environment</span><b>${escapeHtml(s.environment)}</b></div>
+      ${s.credentials.length ? s.credentials.map(c =>
+        `<div class="erp-kv"><span>${escapeHtml(c.name)}</span><b>${c.set ? "set" : "— not set —"}</b></div>`
+      ).join("") : `<div class="erp-kv"><span>Credentials</span><b>none needed</b></div>`}
+    </div>
+
+    <button class="btn btn-outline" id="gst-test-btn" style="margin-top:10px;">Test connection</button>
+    <div id="gst-test-result" style="margin-top:8px;"></div>
+
+    <div class="section-title" style="margin-top:16px;">How to connect your GSP</div>
+    <div class="card" style="padding:12px 14px;font-size:12px;line-height:1.7;">
+      <b>1.</b> Get from your GSP: the provider name, API credentials, and their
+      sandbox and production URLs.<br>
+      <b>2.</b> Confirm your GSTIN is enabled for e-invoicing / e-way bill on the
+      government portal, and linked to that GSP.<br>
+      <b>3.</b> Add the credentials as <b>environment variables</b> on the server —
+      on Render that is your service's <i>Environment</i> tab. Never in this app,
+      never in a message, never in the code.<br>
+      <b>4.</b> Set <code>EWB_PROVIDER</code> to the provider's name and
+      <code>GST_ENV</code> to <code>sandbox</code> until it is proven.<br>
+      <b>5.</b> Come back here and press <b>Test connection</b>.
+    </div>
+    <p class="muted" style="font-size:11px;margin-top:8px;line-height:1.6;">
+      The app has no field for an API key on purpose. Anything saved in Settings
+      is readable by the browser, so a key here would be a key published.</p>`;
+
+  document.getElementById("gst-test-btn").addEventListener("click", async (ev)=>{
+    const out = document.getElementById("gst-test-result");
+    ev.currentTarget.disabled = true;
+    out.innerHTML = `<div class="muted" style="font-size:12px;">Contacting the provider…</div>`;
+    try{
+      const r = await api("POST", "/gst/test", {});
+      out.innerHTML = `<div class="pm-warn" style="background:rgba(52,199,89,.14);">
+        ${escapeHtml(r.message)}</div>`;
+    }catch(e){
+      out.innerHTML = `<div class="pm-warn"><b>Could not connect.</b><br>${escapeHtml(e.message)}</div>`;
+    }
+    ev.currentTarget.disabled = false;
+  });
+}
 
 function gstBadge(label, tone){
   return `<span class="pill" style="margin-right:6px;${GST_BADGE[tone]}">${escapeHtml(label)}</span>`;

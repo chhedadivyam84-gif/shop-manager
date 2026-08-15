@@ -11626,6 +11626,22 @@ async function runPmSearch(){
   renderPmResults();
 }
 
+/* Which screen can actually ACT on each document. Print Manager could only
+   preview, and preview works for two document types out of eight — so a
+   search that found a Sales Return ended in a disabled button. Opening the
+   real document instead gives the operator everything that document
+   supports: edit, void, print, duplicate. */
+const PM_DETAIL_OPENERS = {
+  sales_invoice:   id => openExistingInvoice(id),
+  delivery_challan:id => openExistingInvoice(id),
+  purchase_invoice:id => openPurchaseDetail(id),
+  sales_quotation: id => openQuotationDetail(id),
+  sales_order:     id => openSoDetail(id),
+  purchase_order:  id => openPoDetail(id),
+  sales_return:    id => openSalesReturnDetail(id),
+  purchase_return: id => openPurchaseReturnDetail(id)
+};
+
 function renderPmResults(){
   const body = document.getElementById("pm-results");
   const rows = pmState.rows;
@@ -11646,10 +11662,18 @@ function renderPmResults(){
           <div class="row-sub">${escapeHtml(r.partyName)}${r.partyPhone ? " · "+escapeHtml(r.partyPhone) : ""}</div>
         </div>
         <div class="row-right" style="display:flex;gap:6px;align-items:center;">
+          ${PM_DETAIL_OPENERS[r.docType] ? `<button class="btn btn-outline pm-mini" data-pm-detail="${i}">Open</button>` : ""}
           <button class="btn btn-outline pm-mini" data-pm-open="${i}">Preview</button>
         </div>
       </div>`).join("");
 
+  body.querySelectorAll("[data-pm-detail]").forEach(b=>{
+    b.addEventListener("click", ()=>{
+      const row = pmState.rows[Number(b.dataset.pmDetail)];
+      const open = PM_DETAIL_OPENERS[row.docType];
+      if(open){ closeAllSheets(); open(row.id); }
+    });
+  });
   body.querySelectorAll("[data-pm-open]").forEach(b=>{
     b.addEventListener("click", ()=>openPmPreview(pmState.rows[Number(b.dataset.pmOpen)]));
   });

@@ -324,6 +324,15 @@ async function initApp(){
   });
 
   document.getElementById("billing-search").addEventListener("input", renderBillingProducts);
+  // Enter in the product box closes the entry loop: type enough of a name,
+  // press Enter, and the line is added with the cursor already in it — no
+  // reaching for the "+" and no Add button between products.
+  document.getElementById("billing-search").addEventListener("keydown", (e)=>{
+    if(e.key !== "Enter") return;
+    e.preventDefault();
+    if(e.shiftKey){ focusLastCartField(); return; }
+    addTopSearchMatch();
+  });
   document.getElementById("billing-customer-search").addEventListener("input", renderBillingCustomers);
   document.querySelectorAll('[data-disc]').forEach(b=>{
     b.addEventListener("click", ()=>{
@@ -1224,12 +1233,58 @@ function renderBillingProducts(){
     });
   });
   wrap.querySelectorAll("[data-quickadd]").forEach(b=>{
-    b.addEventListener("click", (e)=>{ e.stopPropagation(); openProductDetail(b.dataset.quickadd, "billing"); });
+    b.addEventListener("click", (e)=>{
+      e.stopPropagation();
+      const prod = state.products.find(x=>x.id===b.dataset.quickadd);
+      if(prod && prod.sizes && prod.sizes.length === 1){
+        if(addToCart(prod.id, 0)){ renderBillingProducts(); focusNewCartLine(); }
+        else toast("Can't add more — that's all the stock at this location.");
+        return;
+      }
+      openProductDetail(b.dataset.quickadd, "billing");
+    });
   });
 }
 /* A cart line mirrors what the server stores: geometry + pieces + rate, with
    the billed quantity always DERIVED (never typed), so the screen can't drift
    from the invoice. `pieces` is the physical count that leaves stock. */
+/**
+ * Dimensions for a new line.
+ *
+ * The product master is the source of truth. Where it is blank the SIZE
+ * LABEL is read instead — "8 X 4" carries the same two numbers, and a line
+ * with no width silently prices the whole item at zero, which is how a bill
+ * goes out for nothing without anybody noticing.
+ *
+ * A master that already has a figure is never overridden: someone typed it
+ * on purpose, and the label is only ever a fallback.
+ */
+function dimsFromSizeLabel(label){
+  if(!label) return {};
+  // Labels are written the way the trade says them: "8 X 4", "8x4", "8 × 4".
+  // A part carrying a metric unit ("06MM", "1220mm") is a thickness or a
+  // metric sheet, not feet — converting on a guess would price the line
+  // wrongly, so those parts are skipped and the field is left blank instead.
+  const parts = String(label).split(/[x×*]/i)
+    .map(t => t.trim())
+    .filter(t => t && !/\d\s*(mm|cm|m)\b/i.test(t));
+  // 40 ft is well past any board sold over a counter, so anything larger is
+  // a number in some other unit that happened to survive the filter.
+  const nums = parts.map(t => parseFloat(t)).filter(n => n > 0 && n <= 40);
+  if(nums.length < 2) return {};
+  return { lengthFt: nums[0], widthVal: nums[1] };
+}
+
+/** Master dims, with the size label filling only what the master leaves blank. */
+function lineDims(p, size){
+  const fromLabel = dimsFromSizeLabel(size && size.label);
+  return {
+    lengthFt:    p.length_ft   || fromLabel.lengthFt || "",
+    widthVal:    p.width_val   || fromLabel.widthVal || "",
+    thicknessIn: p.thickness_in || ""
+  };
+}
+
 function addToCart(productId, sizeIdx){
   const p = state.products.find(x=>x.id===productId);
   if(!p) return false;
@@ -1259,14 +1314,17 @@ function addToCart(productId, sizeIdx){
       // Pre-fill the size the product master was set up with — counter staff
       // shouldn't retype 8 × 4 on every sale — but leave every field editable.
       mode: Pricing.normaliseMode(p.default_mode),
-      lengthFt: p.length_ft || "",
-      widthVal: p.width_val || "",
-      thicknessIn: p.thickness_in || "",
+      ...lineDims(p, size),
       pieces: 1,
       rate: size.price,
       gstRate: p.gst
     });
   }
+  // Remember which line this add actually touched. Adding a product that is
+  // already on the bill bumps THAT line rather than appending one, so "focus
+  // the last row" would drop the cursor on somebody else's quantity and the
+  // next thing typed would overwrite it.
+  state.lastCartLine = existing ? state.cart.indexOf(existing) : state.cart.length - 1;
   renderCart(); renderTotals();
   return true;
 }
@@ -1626,6 +1684,170 @@ function lineCalc(c){
   const lineDiscount = round2(gross * (pct/100));
   return { ...calc, discountPct: pct, grossAmount: gross, lineDiscount, amount: round2(gross - lineDiscount) };
 }
+/* ============================================================
+   FAST ENTRY — keyboard flow through the bill
+
+   Product -> (dimensions) -> Qty -> Rate -> next Product, without the
+   keyboard closing or the page jumping.
+
+   Two things make this work on a phone, and both are easy to get wrong:
+
+   1. Focus moves SYNCHRONOUSLY inside the same user gesture. A phone keeps
+      the keyboard up only if the new focus lands during the tap or keypress
+      that caused it — focus after an await, a timeout or a re-render and the
+      keyboard drops and the page jumps.
+
+   2. Nothing re-renders the cart mid-flow. The blur handler used to rebuild
+      the whole cart, destroying the element just focused. It now settles
+      only the field it belongs to.
+
+   Desktop Tab is untouched — these are real inputs in document order, so
+   Tab and Shift+Tab already work and nothing here interferes.
+   ============================================================ */
+
+/** Every editable box of one line, in the order they are entered. */
+function lineFields(idx){
+  const row = document.querySelector(`[data-line-row="${idx}"]`);
+  if(!row) return [];
+  return [...row.querySelectorAll("[data-line-field]")];
+}
+
+/**
+ * Brings a field into view without throwing the page around.
+ *
+ * `block:"nearest"` is the whole point: "center" or "start" would scroll on
+ * every single hop, which is the jumping the counter staff complain about.
+ * Nearest moves only when the field is actually out of sight.
+ */
+function keepInView(el){
+  if(!el) return;
+  const r = el.getBoundingClientRect();
+  // A phone keyboard covers roughly the bottom 45% of the viewport, and the
+  // browser does not tell us that, so anything below that line is treated as
+  // hidden even though it is technically on screen.
+  const keyboardTop = window.innerHeight * 0.55;
+  if(r.top < 60 || r.bottom > keyboardTop){
+    el.scrollIntoView({ block: "center", behavior: "auto" });
+  }
+}
+
+/** Focus a field and put the caret at the end, ready to overtype. */
+function focusField(el){
+  if(!el) return false;
+  el.focus({ preventScroll: true });
+  try{ const v = el.value; el.value = ""; el.value = v; }catch(e){ /* number inputs */ }
+  keepInView(el);
+  return true;
+}
+
+/**
+ * Moves from one field to the next in the entry order. At the end of a line
+ * it goes back to the product search, so the next product can be typed
+ * immediately — which is what removes the need to press Add.
+ */
+function advanceFrom(el, back){
+  const idx = Number(el.dataset.line);
+  const fields = lineFields(idx);
+  const at = fields.indexOf(el);
+  if(at === -1) return false;
+
+  if(back){
+    if(at > 0) return focusField(fields[at - 1]);
+    // Before the first field of a line is the previous line's last field.
+    const prev = lineFields(idx - 1);
+    return prev.length ? focusField(prev[prev.length - 1]) : false;
+  }
+
+  if(at < fields.length - 1) return focusField(fields[at + 1]);
+
+  /* Last field of the line. Rather than falling into the next line — which
+     the operator has not created yet — go back to the product box. Typing a
+     name and picking it adds the next line and lands in its first field, so
+     the loop closes without an Add button. */
+  const search = document.getElementById("billing-search");
+  if(search){
+    search.focus({ preventScroll: true });
+    search.select();
+    keepInView(search);
+    return true;
+  }
+  return false;
+}
+
+/** Wires one cart's inputs. Called after every cart render. */
+function wireFastEntry(){
+  document.querySelectorAll("#cart-list [data-line-field]").forEach(inp => {
+    // Tells a phone to show "Next" rather than a newline or "Go".
+    inp.setAttribute("enterkeyhint", "next");
+    if(inp.dataset.fastWired) return;
+    inp.dataset.fastWired = "1";
+
+    inp.addEventListener("keydown", (e) => {
+      if(e.key !== "Enter") return;
+      // Enter in a bill would otherwise submit or do nothing; here it means
+      // "next field", the same as Tab.
+      e.preventDefault();
+      advanceFrom(inp, e.shiftKey);
+    });
+  });
+
+  // The last box of the last line says "done" instead of "next" — there is
+  // no next field, and promising one is a small lie the operator notices.
+  const rows = document.querySelectorAll("#cart-list [data-line-row]");
+  if(rows.length){
+    const last = rows[rows.length - 1].querySelectorAll("[data-line-field]");
+    if(last.length) last[last.length - 1].setAttribute("enterkeyhint", "done");
+  }
+}
+
+/**
+ * After a product is added, land in the first box of its new line.
+ *
+ * Called straight from the tap handler, not from a timeout, so the phone
+ * treats it as the same gesture and keeps the keyboard up.
+ */
+function focusNewCartLine(){
+  const rows = document.querySelectorAll("#cart-list [data-line-row]");
+  if(!rows.length) return;
+  // The line addToCart just touched — which is not always the last one.
+  const idx = typeof state.lastCartLine === "number" && rows[state.lastCartLine]
+    ? state.lastCartLine : rows.length - 1;
+  const fields = rows[idx].querySelectorAll("[data-line-field]");
+  if(fields.length) focusField(fields[0]);
+}
+
+/** Back out of the product box into the line that was being typed. */
+function focusLastCartField(){
+  const rows = document.querySelectorAll("#cart-list [data-line-row]");
+  if(!rows.length) return;
+  const fields = rows[rows.length - 1].querySelectorAll("[data-line-field]");
+  if(fields.length) focusField(fields[fields.length - 1]);
+}
+
+/**
+ * Adds whatever is at the top of the filtered product list.
+ *
+ * This is the step that removes the Add button from the loop: type, Enter,
+ * and the line exists with the cursor in it. A product with more than one
+ * size still opens its sheet — the app cannot know which size was meant, and
+ * silently picking one would put the wrong board on the bill.
+ */
+function addTopSearchMatch(){
+  const first = document.querySelector("#billing-product-list [data-open-product]");
+  if(!first){ toast("No product matches that — check the spelling."); return; }
+
+  const prod = state.products.find(x => x.id === first.dataset.openProduct);
+  if(!prod) return;
+  if(!prod.sizes || prod.sizes.length !== 1){ openProductDetail(prod.id, "billing"); return; }
+
+  if(!addToCart(prod.id, 0)) return;   // addToCart says why it refused
+  const search = document.getElementById("billing-search");
+  // Clear the box so the next name is typed fresh rather than appended.
+  search.value = "";
+  renderBillingProducts();
+  focusNewCartLine();
+}
+
 function renderCart(){
   const wrap = document.getElementById("cart-list");
   if(!state.cart.length){
@@ -1714,9 +1936,28 @@ function renderCart(){
       renderLineCalc(inp.dataset.line);
       renderTotals();
     });
-    // Re-render fully on blur so cleared fields settle back to a real number.
-    inp.addEventListener("blur", ()=>{ renderCart(); renderTotals(); });
+    /* Blur used to call renderCart(), which rebuilds the whole cart DOM.
+       That is what closed the mobile keyboard: moving to the next field
+       blurs this one, the rebuild destroys the element just focused, and
+       the keyboard drops. The intent was only to settle a cleared box back
+       to a real number — which is one field's worth of work, so it is done
+       to that field alone and the DOM around it is left standing. */
+    inp.addEventListener("blur", ()=>{
+      const c = state.cart[inp.dataset.line];
+      if(!c) return;
+      const key = inp.dataset.lineField;
+      if(c[key] === "" || c[key] == null || isNaN(c[key])){
+        // Rate legitimately stays blank on a Without-Rate challan; a blank
+        // quantity is meaningless, so only that one is forced back to 0.
+        c[key] = key === "rate" && isChallanMode() ? "" : 0;
+        inp.value = c[key];
+      }
+      renderLineCalc(inp.dataset.line);
+      renderTotals();
+    });
   });
+
+  wireFastEntry();
 
   // Duplicating a line is the quickest route to "same board, other size" — the
   // copy is inserted directly beneath so the two stay side by side for editing.
@@ -2268,7 +2509,11 @@ function renderProductDetailSheet(context){
   if(addBtn){
     addBtn.addEventListener("click", ()=>{
       const ok = addToCart(p.id, state.ctx.selectedSizeIdx);
-      if(ok){ closeAllSheets(); renderBillingProducts(); }
+      if(ok){
+        closeAllSheets(); renderBillingProducts();
+        // Same gesture, no timeout: that is what keeps the keyboard open.
+        focusNewCartLine();
+      }
       else toast("Can't add more — that's all the stock we have for this size at the selected location.");
     });
   }
@@ -2507,7 +2752,7 @@ function openStockIn(p, editingSi){
     // otherwise the counter staff must say which so it can't land nowhere.
     sizeId: p.sizes.length===1 ? p.sizes[0].id : null,
     mode: Pricing.normaliseMode(p.default_mode),
-    lengthFt: p.length_ft || "", widthVal: p.width_val || "", thicknessIn: p.thickness_in || "",
+    ...lineDims(p, p.sizes.length === 1 ? p.sizes[0] : null),
     pieces: 1, rate: 0, gst: p.gst, transport: 0,
     locationId: warehouseLoc && warehouseLoc.id
   };
@@ -8475,7 +8720,7 @@ function addToPurchaseCart(productId, sizeIdx){
     productId, sizeId: size.id, sizeIdx,
     name: p.name + (p.sizes.length>1 ? " ("+size.label+")" : ""),
     mode: Pricing.normaliseMode(p.default_mode),
-    lengthFt: p.length_ft || "", widthVal: p.width_val || "", thicknessIn: p.thickness_in || "",
+    ...lineDims(p, size),
     pieces: 1, rate: size.price, gstRate: p.gst,
     discountType: "pct", discountValue: 0
   });
@@ -9095,7 +9340,7 @@ function addToPoCart(productId, sizeIdx){
     productId, sizeId: size.id, sizeIdx,
     name: p.name + (p.sizes.length>1 ? " ("+size.label+")" : ""),
     mode: Pricing.normaliseMode(p.default_mode),
-    lengthFt: p.length_ft || "", widthVal: p.width_val || "", thicknessIn: p.thickness_in || "",
+    ...lineDims(p, size),
     pieces: 1, rate: size.price, gstRate: p.gst,
     discountType: "pct", discountValue: 0
   });
@@ -9666,7 +9911,7 @@ function addToQuotationCart(productId, sizeIdx){
     productId, sizeId: size.id, sizeIdx,
     name: p.name + (p.sizes.length>1 ? " ("+size.label+")" : ""),
     mode: Pricing.normaliseMode(p.default_mode),
-    lengthFt: p.length_ft || "", widthVal: p.width_val || "", thicknessIn: p.thickness_in || "",
+    ...lineDims(p, size),
     pieces: 1, rate: size.price, gstRate: p.gst,
     discountType: "pct", discountValue: 0
   });
@@ -10415,7 +10660,7 @@ function addToSoCart(productId, sizeIdx){
     productId, sizeId: size.id, sizeIdx,
     name: p.name + (p.sizes.length>1 ? " ("+size.label+")" : ""),
     mode: Pricing.normaliseMode(p.default_mode),
-    lengthFt: p.length_ft || "", widthVal: p.width_val || "", thicknessIn: p.thickness_in || "",
+    ...lineDims(p, size),
     pieces: 1, rate: size.price, gstRate: p.gst,
     discountType: "pct", discountValue: 0
   });

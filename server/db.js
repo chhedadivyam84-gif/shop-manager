@@ -1399,6 +1399,68 @@ CREATE INDEX IF NOT EXISTS idx_txn_categories_kind ON txn_categories(kind, activ
 })();
 
 /* ============================================================
+   E-INVOICE
+
+   Deliberately single-company. Swagat Ply is one GSTIN, so there is no
+   company_id here or anywhere else: adding one would mean scoping every
+   query in the app, partitioning numbering and backups, and rewriting
+   working code for a second business that does not exist. If one ever
+   does, this is the point to revisit.
+
+   The signed invoice and QR come back as long base64 strings. They are
+   stored because the QR must be reprintable months later and the signed
+   payload is the evidence the invoice was registered — but they are kept
+   OUT of the list query, which would otherwise drag megabytes into a
+   screen that only needs the IRN.
+   ============================================================ */
+db.exec(`
+CREATE TABLE IF NOT EXISTS einvoices (
+  id TEXT PRIMARY KEY,
+  invoice_id TEXT NOT NULL REFERENCES invoices(id),
+  status TEXT NOT NULL DEFAULT 'Draft'
+    CHECK (status IN ('Draft','Ready','Generating','Generated','Cancelled','Failed')),
+  client_ref TEXT UNIQUE,
+
+  irn TEXT NOT NULL DEFAULT '',
+  ack_no TEXT NOT NULL DEFAULT '',
+  ack_date TEXT NOT NULL DEFAULT '',
+  signed_invoice TEXT NOT NULL DEFAULT '',
+  signed_qr TEXT NOT NULL DEFAULT '',
+
+  cancelled_at INTEGER, cancel_reason TEXT NOT NULL DEFAULT '',
+  last_error TEXT NOT NULL DEFAULT '', error_code TEXT NOT NULL DEFAULT '',
+  provider_ref TEXT NOT NULL DEFAULT '',
+  created_by TEXT, created_at INTEGER NOT NULL, updated_at INTEGER
+);
+-- An invoice may only carry one live IRN. A cancelled one does not block a
+-- fresh attempt, which is why the index is partial rather than a plain
+-- UNIQUE on invoice_id.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_einvoice_live
+  ON einvoices(invoice_id) WHERE status <> 'Cancelled';
+CREATE INDEX IF NOT EXISTS idx_einvoice_status ON einvoices(status);
+
+-- What the checklist found, and when. Kept so a rejected invoice can be
+-- answered for later: what was missing at the time, not what is missing now.
+CREATE TABLE IF NOT EXISTS gst_validation_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  invoice_id TEXT, kind TEXT NOT NULL,
+  ok INTEGER NOT NULL DEFAULT 0,
+  problems_json TEXT NOT NULL DEFAULT '[]',
+  staff_id TEXT, at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gstval_invoice ON gst_validation_logs(invoice_id, at);
+`);
+
+/* IRN, acknowledgement and QR alongside the e-way bill columns already on
+   invoices, so the PRINT path needs no join and no change of shape — the
+   print engine reads the invoice row it always read. */
+addColumn("invoices", "irn", "TEXT NOT NULL DEFAULT ''");
+addColumn("invoices", "irn_ack_no", "TEXT NOT NULL DEFAULT ''");
+addColumn("invoices", "irn_ack_date", "TEXT NOT NULL DEFAULT ''");
+addColumn("invoices", "irn_qr", "TEXT NOT NULL DEFAULT ''");
+addColumn("invoices", "einvoice_status", "TEXT NOT NULL DEFAULT ''");
+
+/* ============================================================
    E-WAY BILL
 
    ewb_bills is the record of truth; the eway_* columns already on invoices

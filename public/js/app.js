@@ -5024,6 +5024,7 @@ function openInvoicePreview(existingInvoice){
   // Re-read on every open so a template edited in the Designer shows on the
   // very next bill, then redraw once it lands.
   loadBillTemplates().then(() => { if(lastPreviewInvoice) renderInvoicePageContent(); });
+  setTimeout(renderInvoiceGstPanel, 0);   // after lastPreviewInvoice is set
   /* The shop's saved paper preference SEEDS the session here, once, so it is
      what a preview opens on — while the A4 / A5 buttons and the print panel
      stay free to change it for this bill without the seed fighting back. */
@@ -12404,6 +12405,91 @@ async function renderEwb(){
  * be rejected. Problems are listed with the record to fix them in, because
  * a missing customer PIN code cannot be answered from a transport form.
  */
+/* ============================================================
+   GST PANEL ON THE INVOICE
+
+   One place on a finished bill that answers: is this invoice fit to file,
+   and what has been filed for it. Traffic-light badges, the validation
+   checklist, and the actions.
+
+   Runs the SAME checks the server runs. The screen must never say a bill is
+   ready and then have the server disagree — so this calls the server's
+   readiness endpoint rather than re-implementing the rules in the browser.
+   ============================================================ */
+
+const GST_BADGE = {
+  ok:   "background:rgba(52,199,89,.16);color:#14612c;",
+  warn: "background:rgba(255,149,0,.18);color:#8a5300;",
+  bad:  "background:rgba(255,59,48,.14);color:#a01810;"
+};
+
+function gstBadge(label, tone){
+  return `<span class="pill" style="margin-right:6px;${GST_BADGE[tone]}">${escapeHtml(label)}</span>`;
+}
+
+/**
+ * Draws the GST panel for the bill currently in the preview.
+ *
+ * Silent for a challan or a Non-GST invoice: neither can carry an IRN, and
+ * a panel telling someone their delivery challan is "not GST validated"
+ * would be noise reported as a fault.
+ */
+async function renderInvoiceGstPanel(){
+  const host = document.getElementById("inv-gst-panel");
+  if(!host) return;
+  const inv = lastPreviewInvoice;
+  if(!inv || !inv.id || inv.doc_type === "challan" || inv.gst_enabled === 0){
+    host.innerHTML = ""; host.style.display = "none"; return;
+  }
+  host.style.display = "";
+  host.innerHTML = `<div class="muted" style="font-size:12px;">Checking GST readiness…</div>`;
+
+  let prep = null;
+  try{ prep = await api("POST", `/ewb/prepare/${inv.id}`, {}); }
+  catch(e){ host.innerHTML = `<div class="muted" style="font-size:12px;">${escapeHtml(e.message)}</div>`; return; }
+
+  // Transport gaps are not an invoice fault — they are answered later, on
+  // the e-way bill form, so they must not make the invoice look broken.
+  const transportFields = ["transMode","vehicleNo","distanceKm","transDocNo"];
+  const dataProblems = prep.problems.filter(p => !transportFields.includes(p.field));
+
+  const badges = [
+    dataProblems.length ? gstBadge("GST data incomplete", "bad") : gstBadge("GST validated", "ok"),
+    inv.irn ? gstBadge("IRN generated", "ok") : gstBadge("No IRN", "warn"),
+    inv.eway_bill_no ? gstBadge("E-Way Bill " + inv.eway_bill_no, "ok") : gstBadge("No e-way bill", "warn")
+  ].join("");
+
+  host.innerHTML = `
+    <div class="section-title" style="margin-top:4px;">GST</div>
+    <div style="margin-bottom:8px;">${badges}</div>
+
+    ${dataProblems.length ? `<div class="pm-warn">
+      <b>This invoice cannot be filed yet. Missing:</b><br>
+      ${dataProblems.map(p => "• " + escapeHtml(p.message)).join("<br>")}
+    </div>` : ""}
+
+    ${inv.irn ? `<div class="card" style="padding:10px 12px;">
+      <div class="erp-kv"><span>IRN</span><b style="word-break:break-all;font-size:10px;">${escapeHtml(inv.irn)}</b></div>
+      <div class="erp-kv"><span>Ack No.</span><b>${escapeHtml(inv.irn_ack_no || "—")}</b></div>
+      <div class="erp-kv"><span>Ack Date</span><b>${escapeHtml(inv.irn_ack_date || "—")}</b></div>
+    </div>` : ""}
+
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;">
+      <button class="btn btn-outline btn-sm" id="gst-recheck" style="width:auto;">Re-check</button>
+      <button class="btn btn-outline btn-sm" id="gst-ewb" style="width:auto;"
+        ${dataProblems.length ? "disabled" : ""}>Generate E-Way Bill</button>
+      <button class="btn btn-outline btn-sm" id="gst-einvoice" style="width:auto;" disabled
+        title="Connect your GSP to enable e-invoicing">Generate e-Invoice</button>
+    </div>
+    <p class="muted" style="font-size:11px;margin-top:8px;line-height:1.6;">
+      e-Invoice is disabled until a GSP is connected. Nothing here is filed with the
+      portal yet — the e-way bill numbers are practice only.</p>`;
+
+  document.getElementById("gst-recheck").addEventListener("click", renderInvoiceGstPanel);
+  const ewbBtn = document.getElementById("gst-ewb");
+  if(ewbBtn) ewbBtn.addEventListener("click", ()=>startEwbForInvoice(inv.id));
+}
+
 async function startEwbForInvoice(invoiceId){
   let prep;
   try{ prep = await api("POST", `/ewb/prepare/${invoiceId}`, {}); }

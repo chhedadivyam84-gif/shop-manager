@@ -147,6 +147,7 @@ app.use("/api/reports", requireAuth, require("./routes/reports"));
 app.use("/api/accounting", requireAuth, require("./routes/accounting"));
 app.use("/api/ewaybill", requireAuth, require("./routes/ewaybill"));
 app.use("/api/ewb", requireAuth, require("./routes/ewb"));
+app.use("/api/data-health", requireAuth, require("./routes/dataHealth"));
 app.use("/api/product-query", requireAuth, require("./routes/productQuery"));
 app.use("/api/export", requireAuth, require("./routes/export"));
 app.use("/api/areas", requireAuth, require("./routes/areas"));

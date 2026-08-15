@@ -1401,7 +1401,7 @@ CREATE INDEX IF NOT EXISTS idx_txn_categories_kind ON txn_categories(kind, activ
 /* ============================================================
    E-INVOICE
 
-   Deliberately single-company. Swagat Ply is one GSTIN, so there is no
+   Deliberately single-company. One install serves one GSTIN, so there is no
    company_id here or anywhere else: adding one would mean scoping every
    query in the app, partitioning numbering and backups, and rewriting
    working code for a second business that does not exist. If one ever

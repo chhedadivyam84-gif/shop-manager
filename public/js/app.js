@@ -10857,6 +10857,115 @@ function shareSoWhatsApp(so){
    returnable line and its rate/GST come straight from the invoice, so the
    only inputs are "how many of each" and how the refund is settled.
    ============================================================ */
+/* ============================================================
+   EDIT A RETURN
+
+   One sheet for both kinds. They differ only in wording and which endpoint
+   they call, so writing two near-identical screens would guarantee a fix
+   landing in one and not the other.
+
+   Only quantities, reason and refund method are editable. The party, the
+   original document and the rates come from that document and must not
+   drift away from it — a return that disagrees with the bill it is against
+   is worse than no return.
+   ============================================================ */
+
+/**
+ * @param kind  "sales" or "purchase"
+ * @param ret   the return, already loaded with its items
+ */
+function openReturnEdit(kind, ret){
+  const isSales = kind === "sales";
+  const base = isSales ? "/sales-returns" : "/purchase-returns";
+  const partyWord = isSales ? "Customer" : "Supplier";
+  const itemKey = isSales ? "invoiceItemId" : "purchaseItemId";
+  const srcIdField = isSales ? "invoice_item_id" : "purchase_item_id";
+
+  const sheet = document.getElementById("sheet-return-edit");
+  const lines = ret.items || [];
+
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>&#10005;</button>
+    <div class="sheet-title">Edit ${escapeHtml(ret.return_no || ret.returnNo || "")}</div>
+    <p class="muted" style="font-size:12px;margin-top:-6px;">
+      ${partyWord} and the original bill cannot change — void and raise a new one for that.</p>
+
+    <div class="section-title" style="margin-top:12px;">Quantities</div>
+    <div class="card">
+      ${lines.map((it, i) => `
+        <div class="list-row" style="align-items:flex-start;">
+          <div style="flex:1;min-width:0;">
+            <div class="row-title">${escapeHtml(it.name)}</div>
+            <div class="row-sub">${escapeHtml(it.size_label || "")}${
+              it.qty && Math.abs(it.qty - it.pieces) > 0.001
+                ? ` · ${round2(it.qty)} ${escapeHtml(it.unit_label || "")}` : ""
+            } @ ${fmt(it.rate)}</div>
+          </div>
+          <div class="qty-step" style="text-align:center;">
+            <input type="number" inputmode="decimal" step="any" min="0"
+                   value="${it.pieces}" data-ret-qty="${i}"
+                   data-src-id="${it[srcIdField]}" style="width:70px;">
+            <div class="muted" style="font-size:10px;margin-top:2px;">pieces</div>
+          </div>
+        </div>`).join("")}
+    </div>
+
+    <label class="field-label">Reason</label>
+    <input type="text" id="ret-edit-reason" value="${escapeHtml(ret.reason || "")}" placeholder="e.g. Damaged, wrong size">
+
+    <label class="field-label" style="margin-top:10px;">Date</label>
+    <input type="date" id="ret-edit-date" value="${escapeHtml(ret.date || "")}">
+
+    <div id="ret-edit-error" style="margin-top:10px;"></div>
+
+    <div style="display:flex;flex-direction:column;gap:8px;margin-top:14px;">
+      <button class="btn btn-gold" id="ret-edit-save">Save changes</button>
+      <p class="muted" style="font-size:11px;line-height:1.6;margin:0;">
+        Stock, the ${partyWord.toLowerCase()}'s outstanding, GST and every report are
+        recalculated from the new figures. ${escapeHtml(ret.return_no || "")} keeps its number.</p>
+    </div>`;
+
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+
+  document.getElementById("ret-edit-save").addEventListener("click", async (ev) => {
+    const btn = ev.currentTarget;
+    const err = document.getElementById("ret-edit-error");
+    err.innerHTML = "";
+
+    // Zero means "drop this line", which is how a line is removed without a
+    // separate delete control. Everything at zero is a void, not an edit.
+    const items = [...sheet.querySelectorAll("[data-ret-qty]")]
+      .map(inp => ({ [itemKey]: Number(inp.dataset.srcId), pieces: Number(inp.value) || 0 }))
+      .filter(x => x.pieces > 0);
+
+    if (!items.length){
+      err.innerHTML = `<div class="pm-warn">Every line is zero. Void the return instead of emptying it.</div>`;
+      return;
+    }
+
+    btn.disabled = true; btn.textContent = "Saving…";
+    try{
+      await api("PUT", `${base}/${ret.id}`, {
+        items,
+        reason: document.getElementById("ret-edit-reason").value,
+        date: document.getElementById("ret-edit-date").value,
+        refundMethod: ret.refund_method
+      });
+      await Promise.all([loadProducts(), isSales ? loadCustomers() : loadSuppliers()]);
+      closeAllSheets();
+      toast("Return updated. Stock and outstanding recalculated.", "ok");
+    }catch(e){
+      // The server refuses rather than corrupting stock; show why, and leave
+      // the figures on screen so they can be corrected rather than retyped.
+      err.innerHTML = `<div class="pm-warn">${escapeHtml(e.message)}</div>`;
+      btn.disabled = false; btn.textContent = "Save changes";
+    }
+  });
+
+  showSheet("sheet-return-edit");
+}
+
 async function openSalesReturn(invoice){
   if(invoice.doc_type !== "invoice"){ toast("Returns can only be made against a Tax Invoice, not a Delivery Challan."); return; }
   const sheet = document.getElementById("sheet-sales-return");
@@ -10994,11 +11103,16 @@ async function openSalesReturnDetail(returnId){
       <div class="inv-flex" style="font-weight:800;border-top:1px solid var(--border);padding-top:6px;"><span>Total</span><span>${fmt(sr.total)}</span></div>
       <div class="muted" style="font-size:11.5px;margin-top:6px;">Refund: ${escapeHtml(sr.refund_method)}</div>
     </div>
-    <button class="btn btn-outline" id="print-sales-return-btn" style="margin-top:14px;width:100%;">Print</button>
+    <div style="display:flex;gap:8px;margin-top:14px;">
+      ${!sr.voided && isOwner() ? `<button class="btn btn-gold" id="edit-sales-return-btn" style="flex:1;">Edit</button>` : ""}
+      <button class="btn btn-outline" id="print-sales-return-btn" style="flex:1;">Print</button>
+    </div>
     ${!sr.voided && isOwner() ? `<div style="margin-top:14px;text-align:center;"><a href="#" id="void-sales-return-link" class="btn-danger-link">Void this return</a></div>` : ""}
   `;
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
   sheet.querySelector("#print-sales-return-btn").addEventListener("click", ()=>printSalesReturn(sr));
+  const sEdit = sheet.querySelector("#edit-sales-return-btn");
+  if(sEdit) sEdit.addEventListener("click", ()=>openReturnEdit("sales", sr));
   const voidLink = sheet.querySelector("#void-sales-return-link");
   if(voidLink) voidLink.addEventListener("click", async (e)=>{
     e.preventDefault();
@@ -11185,11 +11299,16 @@ async function openPurchaseReturnDetail(returnId){
       <div class="inv-flex" style="font-weight:800;border-top:1px solid var(--border);padding-top:6px;"><span>Total</span><span>${fmt(pr.total)}</span></div>
       <div class="muted" style="font-size:11.5px;margin-top:6px;">Refund: ${escapeHtml(pr.refund_method)}</div>
     </div>
-    <button class="btn btn-outline" id="print-purchase-return-btn" style="margin-top:14px;width:100%;">Print</button>
+    <div style="display:flex;gap:8px;margin-top:14px;">
+      ${!pr.voided && isOwner() ? `<button class="btn btn-gold" id="edit-purchase-return-btn" style="flex:1;">Edit</button>` : ""}
+      <button class="btn btn-outline" id="print-purchase-return-btn" style="flex:1;">Print</button>
+    </div>
     ${!pr.voided && isOwner() ? `<div style="margin-top:14px;text-align:center;"><a href="#" id="void-purchase-return-link" class="btn-danger-link">Void this return</a></div>` : ""}
   `;
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
   sheet.querySelector("#print-purchase-return-btn").addEventListener("click", ()=>printPurchaseReturn(pr));
+  const pEdit = sheet.querySelector("#edit-purchase-return-btn");
+  if(pEdit) pEdit.addEventListener("click", ()=>openReturnEdit("purchase", pr));
   const voidLink = sheet.querySelector("#void-purchase-return-link");
   if(voidLink) voidLink.addEventListener("click", async (e)=>{
     e.preventDefault();

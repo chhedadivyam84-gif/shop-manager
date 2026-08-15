@@ -11719,7 +11719,7 @@ async function openPmPreview(row){
   const canPreview = row.docType === "sales_invoice" || row.docType === "delivery_challan";
   document.getElementById("pm-pv-note").innerHTML = canPreview
     ? "Preview opens the full bill, where Print, PDF and WhatsApp all live."
-    : `A preview for <strong>${escapeHtml(row.docTypeLabel)}</strong> is not wired to this screen yet — open it from its own screen to print. Its templates above are saved and ready.`;
+    : `A preview for <strong>${escapeHtml(row.docTypeLabel)}</strong> is not built into this screen. Close this and tap <strong>Open</strong> on the row instead — that goes to the document itself, where Print, Edit and Void all live. Its templates above are saved and ready.`;
   document.getElementById("pm-pv-open").disabled = !canPreview;
 
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);

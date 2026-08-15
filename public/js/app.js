@@ -10884,11 +10884,15 @@ async function openSalesReturn(invoice){
         <div class="list-row" style="align-items:flex-start;">
           <div style="flex:1;">
             <div class="row-title">${escapeHtml(it.name)}</div>
-            <div class="row-sub">${escapeHtml(it.size_label||"")} · Sold ${it.pieces} ${escapeHtml(it.unit_label||"")} @ ${fmt(it.rate)}${it.alreadyReturned>0?` · ${it.alreadyReturned} already returned`:""}</div>
+            <div class="row-sub">${escapeHtml(it.size_label||"")} · Sold ${it.pieces} pc${
+              it.qty && Math.abs(it.qty - it.pieces) > 0.001
+                ? ` (${round2(it.qty)} ${escapeHtml(it.unit_label||"")})` : ""
+            } @ ${fmt(it.rate)}${it.alreadyReturned>0?` · ${it.alreadyReturned} pc already returned`:""}</div>
           </div>
-          <div class="qty-step">
+          <div class="qty-step" style="text-align:center;">
             <input type="number" inputmode="decimal" step="any" min="0" max="${remaining}"
                    value="" placeholder="0" data-sr-qty="${idx}" style="width:70px;" ${remaining<=0?"disabled":""}>
+            <div class="muted" style="font-size:10px;margin-top:2px;">pieces</div>
           </div>
         </div>`;
       }).join("")}</div>
@@ -11071,11 +11075,15 @@ async function openPurchaseReturn(purchase){
         <div class="list-row" style="align-items:flex-start;">
           <div style="flex:1;">
             <div class="row-title">${escapeHtml(it.name)}</div>
-            <div class="row-sub">${escapeHtml(it.size_label||"")} · Bought ${it.pieces} ${escapeHtml(it.unit_label||"")} @ ${fmt(it.rate)}${it.alreadyReturned>0?` · ${it.alreadyReturned} already returned`:""}</div>
+            <div class="row-sub">${escapeHtml(it.size_label||"")} · Bought ${it.pieces} pc${
+              it.qty && Math.abs(it.qty - it.pieces) > 0.001
+                ? ` (${round2(it.qty)} ${escapeHtml(it.unit_label||"")})` : ""
+            } @ ${fmt(it.rate)}${it.alreadyReturned>0?` · ${it.alreadyReturned} pc already returned`:""}</div>
           </div>
           <div class="qty-step">
             <input type="number" inputmode="decimal" step="any" min="0" max="${remaining}"
                    value="" placeholder="0" data-pr-qty="${idx}" style="width:70px;" ${remaining<=0?"disabled":""}>
+            <div class="muted" style="font-size:10px;margin-top:2px;">pieces</div>
           </div>
         </div>`;
       }).join("")}</div>

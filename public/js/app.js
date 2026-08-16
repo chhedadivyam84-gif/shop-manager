@@ -42,7 +42,7 @@ let state = {
   // customer's stored default. Reset back to null whenever the customer
   // changes or a new invoice starts, so it never silently leaks between bills.
   taxTypeOverride: null,
-  discountType: "pct", discountValue: 0, advance: 0, paymentMethod: "Cash",
+  discountType: "pct", discountValue: 0, advance: 0, advanceTouched: false, paymentMethod: "Cash",
   // All three compliance switches start OFF, and nothing is validated until
   // one is turned on. GST is added to a bill only when it is asked for.
   transport: 0, loading: 0, roundOff: true, docType: "invoice", challanShowRate: false, gstOnCharges: true,
@@ -376,7 +376,11 @@ async function initApp(){
     state.discountValue = parseFloat(e.target.value)||0; renderTotals();
   });
   document.getElementById("advance-input").addEventListener("input", (e)=>{
-    state.advance = parseFloat(e.target.value)||0; renderTotals();
+    state.advance = parseFloat(e.target.value)||0;
+    // Once a figure is typed it belongs to the operator — a part payment must
+    // never be silently topped back up to the full amount.
+    state.advanceTouched = true;
+    renderTotals();
   });
   document.querySelectorAll("[data-bill-challan-rate]").forEach(b=>{
     b.addEventListener("click", ()=>{
@@ -435,6 +439,11 @@ async function initApp(){
       state.paymentMethod = b.dataset.pay;
       document.querySelectorAll('[data-pay]').forEach(x=>x.classList.remove("selected"));
       b.classList.add("selected");
+      // Picking a paid-now method is the operator saying the money changed
+      // hands. Choosing it and leaving the received box at zero used to book
+      // the whole bill as a debt against the customer. renderTotals re-syncs
+      // the received amount and redraws the balance in one step.
+      renderTotals();
     });
   });
   document.querySelectorAll('[data-doctype]').forEach(b=>{
@@ -1664,7 +1673,7 @@ function renderEditModeBanner(){
     e.preventDefault();
     state.editingInvoiceId = null;
     state.docNo = null;
-    state.cart = []; state.selectedCustomerId = null; state.taxTypeOverride = null; state.advance = 0; state.discountValue = 0;
+    state.cart = []; state.selectedCustomerId = null; state.taxTypeOverride = null; state.advance = 0; state.discountValue = 0; state.advanceTouched = false;
     state.transport = 0; state.loading = 0; state.deliveryMan = "";
     state.vehicleNumber = ""; state.deliveryAddress = ""; state.remarks = "";
     state.transportMode = ""; state.dueDate = ""; state.areaId = null;
@@ -1711,7 +1720,13 @@ async function editExistingInvoice(inv){
   state.docNo = inv.challan_no;
   state.discountType = inv.discount_type || "pct";
   state.discountValue = inv.discount_value || 0;
-  state.advance = 0; // the original advance was already applied at creation time
+  // What was actually received against this bill. It must be carried back in,
+  // not reset: the server recomputes the balance as total - received, so
+  // sending 0 turned a fully paid bill into an unpaid one on any edit and
+  // charged the customer for it a second time. The old balance is reversed
+  // before the new one is applied, so re-sending the true figure is safe.
+  state.advance = inv.advance || 0;
+  state.advanceTouched = true;   // a saved figure is the operator's, never overwrite it
   state.paymentMethod = inv.payment_method || "Cash";
   state.paperSize = inv.paper_size || "A5";
   state.transport = inv.transport || 0;
@@ -1756,7 +1771,7 @@ async function editExistingInvoice(inv){
 
   const set = (id, val) => { const el=document.getElementById(id); if(el) el.value = val; };
   set("discount-value", state.discountValue);
-  set("advance-input", 0);
+  set("advance-input", state.advance);
   set("transport-input", state.transport);
   set("loading-input", state.loading);
   set("delivery-man-input", state.deliveryMan);
@@ -2179,8 +2194,36 @@ function computeTotals(){
   return {subtotal, discount, taxType, cgst, sgst, igst, transport, loading,
           roundOffAmount, total, advance, balanceDue, taxableGoods, effectiveRatePct};
 }
+/**
+ * Keeps "Amount received" in step with a paid-now payment method.
+ *
+ * Cash, UPI and Card mean the money has changed hands, so the received amount
+ * is the whole bill. Credit means it has not. Before this, the method and the
+ * received box were unrelated: the default of Cash with a received amount of
+ * zero booked every counter sale as a debt against the customer, and the
+ * Outstanding list filled up with bills that had in fact been paid.
+ *
+ * A figure the operator has typed is never overwritten, so a part payment
+ * survives — the remainder still goes to the customer's account, which is
+ * what a part payment means.
+ */
+function syncAmountReceived(){
+  if(isChallanMode()) return;        // a challan carries no money
+  if(state.advanceTouched) return;   // the operator's figure wins
+
+  // Credit means nothing has been received — including when the box was
+  // already auto-filled for Cash and the method was then changed.
+  const want = state.paymentMethod === "Credit" ? 0 : computeTotals().total;
+  if(state.advance === want) return;
+  state.advance = want;
+  const inp = document.getElementById("advance-input");
+  if(inp) inp.value = want;
+}
+
 function renderTotals(){
   renderGstTypeChips();
+  // Runs before the card is drawn so the balance shown is the one that saves.
+  syncAmountReceived();
   const t = computeTotals();
   const halfRatePct = Math.round(t.effectiveRatePct/2);
   const row = (label, value, cls) =>
@@ -2213,7 +2256,7 @@ function renderTotals(){
     ${t.roundOffAmount!==0 ? row("Round off", (t.roundOffAmount>0?"+":"")+fmtPaise(t.roundOffAmount)) : ""}
     <div class="inv-flex" style="font-weight:800;border-top:1px solid var(--border);padding-top:6px;font-size:15px;"><span>Grand Total</span><span>${fmtPaise(t.total)}</span></div>
     <div class="amount-words">${Pricing.amountInWords(t.total)}</div>
-    ${t.advance>0?`<div class="inv-flex" style="margin-top:4px;color:var(--ok);"><span>Advance paid</span><span>-${fmtPaise(t.advance)}</span></div>
+    ${t.advance>0?`<div class="inv-flex" style="margin-top:4px;color:var(--ok);"><span>Amount received</span><span>-${fmtPaise(t.advance)}</span></div>
     <div class="inv-flex" style="font-weight:800;color:var(--danger);"><span>Balance due</span><span>${fmtPaise(t.balanceDue)}</span></div>`:""}
   `;
 }
@@ -2289,7 +2332,7 @@ async function completeSale(){
     const invoice = editingId
       ? await api("PUT", `/invoices/${editingId}`, payload)
       : await api("POST", "/invoices", payload);
-    state.cart = []; state.advance = 0; state.discountValue = 0; state.taxTypeOverride = null;
+    state.cart = []; state.advance = 0; state.discountValue = 0; state.taxTypeOverride = null; state.advanceTouched = false;
     state.transport = 0; state.loading = 0; state.deliveryMan = "";
     state.vehicleNumber = ""; state.deliveryAddress = ""; state.remarks = "";
     state.transportMode = ""; state.dueDate = ""; state.areaId = null;

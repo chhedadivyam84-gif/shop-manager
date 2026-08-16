@@ -325,6 +325,7 @@ async function initApp(){
   document.querySelectorAll("[data-close-fs]").forEach(b=>{
     b.addEventListener("click", ()=>closeFullscreen(b.dataset.closeFs));
   });
+  installFullscreenHomeLinks();
 
   document.getElementById("billing-search").addEventListener("input", renderBillingProducts);
   // Enter in the product box closes the entry loop: type enough of a name,
@@ -5178,6 +5179,38 @@ function closeAllSheets(){
 }
 function closeFullscreen(id){ document.getElementById(id).classList.remove("show"); }
 
+/**
+ * Puts a "Back to Home" on every full-screen print layout.
+ *
+ * Every ordinary screen already has one; the print layouts had only a bare
+ * ✕, which closes the layout but leaves you wherever you happened to be —
+ * so getting home from a printed bill meant two guesses instead of one tap.
+ *
+ * Done once over every .fullscreen rather than by editing each layout's
+ * markup, so a print layout added later cannot quietly miss out. The link
+ * sits inside .fs-bar, which the print stylesheet hides, so it can never
+ * reach the paper.
+ */
+function installFullscreenHomeLinks(){
+  document.querySelectorAll(".fullscreen").forEach(fs => {
+    const bar = fs.querySelector(".fs-bar");
+    if(!bar || bar.querySelector(".fs-home")) return;
+
+    const link = document.createElement("button");
+    link.className = "fs-home";
+    link.type = "button";
+    link.innerHTML = "&larr; Home";
+    link.addEventListener("click", ()=>{
+      closeFullscreen(fs.id);
+      // Sheets can be open on top of a preview (Void, Share, E-Way Bill);
+      // leaving one behind would land you on Home with a stray panel up.
+      closeAllSheets();
+      switchTab("home");
+    });
+    bar.prepend(link);
+  });
+}
+
 /* ============================================================
    SUBSCRIPTION
    On an unlicensed build (no vendor public key compiled in) every
@@ -9166,7 +9199,9 @@ async function savePurchase(){
     await Promise.all([loadProducts(), loadSuppliers()]);
     await renderHome();
     toast(`${saved.doc_type==="challan"?"Purchase Challan":"Purchase"} ${saved.purchase_no} ${editingId?"updated":"saved"}${saved.doc_type==="challan"?"":" — Grand Total "+fmt(saved.total)}`, "ok");
-    switchTab("home");
+    // Land on the saved document, ready to print or share, rather than on
+    // Home with the document to be hunted down again.
+    await openPurchaseDetail(saved.id);
   }catch(e){
     toast(e.message);
   }finally{
@@ -9668,7 +9703,9 @@ async function savePo(asDraft){
     renderPoEditBanner();
     await Promise.all([loadProducts(), loadSuppliers()]);
     toast(`Purchase Order ${saved.po_no} ${editingId?"updated":"saved"} (${saved.status})`, "ok");
-    switchTab("home");
+    // Land on the saved document, ready to print or share, rather than on
+    // Home with the document to be hunted down again.
+    await openPoDetail(saved.id);
   }catch(e){
     toast(e.message);
   }finally{
@@ -10267,7 +10304,9 @@ async function saveQuotation(asDraft){
     renderQuotationEditBanner();
     await loadCustomers();
     toast(`Quotation ${saved.quotation_no} ${editingId?"updated":"saved"} (${saved.status})`, "ok");
-    switchTab("home");
+    // Land on the saved document, ready to print or share, rather than on
+    // Home with the document to be hunted down again.
+    await openQuotationDetail(saved.id);
   }catch(e){
     toast(e.message);
   }finally{
@@ -11002,7 +11041,9 @@ async function saveSo(asDraft){
     renderSoEditBanner();
     await loadCustomers();
     toast(`Sales Order ${saved.so_no} ${editingId?"updated":"saved"} (${saved.status})`, "ok");
-    switchTab("home");
+    // Land on the saved document, ready to print or share, rather than on
+    // Home with the document to be hunted down again.
+    await openSoDetail(saved.id);
   }catch(e){
     toast(e.message);
   }finally{

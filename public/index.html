@@ -184,7 +184,11 @@
           </datalist>
           <label class="field-label" style="margin-top:10px;">Payment Due Date <span class="muted" style="font-weight:400;">— optional, for a credit bill</span></label>
           <input type="date" id="due-date-input">
-          <label class="field-label" style="margin-top:10px;">Delivery Address <span class="muted" style="font-weight:400;">— optional, if different from billing address</span></label>
+          <label class="field-label" style="margin-top:10px;">Delivery Address</label>
+          <label class="check-row" id="delivery-same-row">
+            <input type="checkbox" id="delivery-same-as-billing" checked>
+            <span>Same as billing address</span>
+          </label>
           <input type="text" id="delivery-address-input" placeholder="Leave blank to use the customer's address">
           <label class="field-label" style="margin-top:10px;">Remarks <span class="muted" style="font-weight:400;">— optional</span></label>
           <input type="text" id="remarks-input" placeholder="e.g. Handle with care">

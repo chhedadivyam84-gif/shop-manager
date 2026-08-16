@@ -1246,3 +1246,8 @@ table.erp-table tbody td{ height: var(--bill-row-h, auto); }
 .theme-tallyfull .tly-sign{ margin-top:34px; font-weight:700; }
 .theme-tallyfull .tly-bank{ margin-top:6px; }
 .theme-tallyfull .tly-computer{ text-align:center; font-size:8px; margin-top:3px; font-style:italic; }
+
+/* A field the app is filling for you: readable, clearly not yours to type in.
+   readOnly rather than disabled, so the text stays selectable and the box does
+   not read as broken. */
+.input-locked{ background:rgba(127,127,127,.10); color:var(--muted,#6b7280); cursor:default; }

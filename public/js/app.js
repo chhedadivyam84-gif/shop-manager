@@ -44,7 +44,7 @@ let state = {
   taxTypeOverride: null,
   discountType: "pct", discountValue: 0, advance: 0, paymentMethod: "Cash",
   transport: 0, loading: 0, roundOff: true, docType: "invoice", challanShowRate: false, gstOnCharges: true, gstEnabled: true, deliveryMan: "",
-  vehicleNumber: "", deliveryAddress: "", remarks: "",
+  vehicleNumber: "", deliveryAddress: "", deliverySameAsBilling: true, remarks: "",
   invBrandFilter: "All", reportType: "Sales", partyMode: "customer",
   // Reports date range. Empty = All Time, which is the default so a report
   // shows full history until a period is picked. repPeriod remembers which
@@ -397,6 +397,14 @@ async function initApp(){
   });
   document.getElementById("delivery-address-input").addEventListener("input", (e)=>{
     state.deliveryAddress = e.target.value;
+  });
+  document.getElementById("delivery-same-as-billing").addEventListener("change", (e)=>{
+    state.deliverySameAsBilling = e.target.checked;
+    // Unticking hands back an empty box to type the real delivery address in,
+    // rather than leaving the billing address sitting there to be edited into
+    // something that only half differs.
+    if(!state.deliverySameAsBilling) state.deliveryAddress = "";
+    syncDeliveryAddress();
   });
   document.getElementById("remarks-input").addEventListener("input", (e)=>{
     state.remarks = e.target.value;
@@ -1122,6 +1130,7 @@ async function renderBilling(){
   loadBillingNavRows().then(renderBillingBillNav);
   renderBillingBillNav();
   renderBillingCustomers();
+  syncDeliveryAddress();
   renderBillingLocationChips();
   renderAreaPicker("billing-area-picker", state.areaId, id => { state.areaId = id; });
   renderBillingProducts();
@@ -1156,8 +1165,46 @@ function renderBillingCustomers(){
       // silently carry over.
       state.taxTypeOverride = null;
       renderBillingCustomers(); renderTotals();
+      // The delivery address follows the customer while it is set to match.
+      syncDeliveryAddress();
     });
   });
+}
+
+/**
+ * Keeps the delivery address in step with the "Same as billing address" tick.
+ *
+ * When it is ticked the customer's address is copied ONTO the bill rather than
+ * left blank for the printer to fill in. A bill is a record of the day it was
+ * made: if the customer moves next year, this delivery note should still say
+ * where the goods actually went.
+ *
+ * The blank-means-customer-address fallback at print time is untouched — every
+ * bill already saved without a delivery address still prints exactly as before.
+ */
+function syncDeliveryAddress(){
+  const box = document.getElementById("delivery-same-as-billing");
+  const input = document.getElementById("delivery-address-input");
+  if(!box || !input) return;
+
+  box.checked = !!state.deliverySameAsBilling;
+  if(state.deliverySameAsBilling){
+    const cust = state.customers.find(c=>c.id===state.selectedCustomerId);
+    state.deliveryAddress = (cust && cust.address) || "";
+    input.value = state.deliveryAddress;
+    // readOnly, not disabled: the address stays readable and selectable, and a
+    // disabled box reads as broken rather than as "this is being filled for you".
+    input.readOnly = true;
+    input.classList.add("input-locked");
+    input.placeholder = state.selectedCustomerId
+      ? "This customer has no address saved — add one in Customers."
+      : "Walk-in customer — no billing address to copy.";
+  }else{
+    input.readOnly = false;
+    input.classList.remove("input-locked");
+    input.value = state.deliveryAddress || "";
+    input.placeholder = "Where the goods are actually going";
+  }
 }
 /** A sale can only ever draw from Shop — this is that size's Shop-specific
  *  quantity, falling back to the cross-location total if byLocation wasn't
@@ -1583,6 +1630,8 @@ function renderEditModeBanner(){
     set("delivery-man-input", ""); set("vehicle-number-input", ""); set("delivery-address-input", ""); set("remarks-input", "");
     set("transport-mode-input", ""); set("due-date-input", "");
     set("billing-date", isoDate(new Date()));
+    state.deliverySameAsBilling = true;
+    syncDeliveryAddress();
     setGstEnabled(true);
     renderEditModeBanner();
     renderBilling();
@@ -1629,6 +1678,16 @@ async function editExistingInvoice(inv){
   state.areaId = inv.area_id || null;
   state.dueDate = inv.due_date || "";
   state.deliveryAddress = inv.delivery_address || "";
+  // Decide the "Same as billing address" tick HERE, before anything re-renders.
+  // renderBilling() re-syncs the field from this flag, so a stale flag left
+  // ticked from the previous bill would overwrite a genuinely different
+  // delivery address with the customer's before it could be read back.
+  {
+    const cust = state.customers.find(c=>c.id===state.selectedCustomerId);
+    const billing = ((cust && cust.address) || "").trim();
+    state.deliverySameAsBilling = !state.deliveryAddress.trim()
+      || state.deliveryAddress.trim() === billing;
+  }
   state.remarks = inv.remarks || "";
   state.editingInvoiceId = inv.id;
   // Reflect what this invoice actually deducted from, not whatever was last
@@ -1656,6 +1715,7 @@ async function editExistingInvoice(inv){
   set("due-date-input", state.dueDate);
   set("delivery-address-input", state.deliveryAddress);
   set("remarks-input", state.remarks);
+  syncDeliveryAddress();
   document.querySelectorAll('[data-disc]').forEach(b=>b.classList.toggle("selected", b.dataset.disc===state.discountType));
   const gstChargesToggle = document.getElementById("gst-on-charges-toggle");
   if(gstChargesToggle) gstChargesToggle.checked = state.gstOnCharges;
@@ -2193,6 +2253,8 @@ async function completeSale(){
     const vnIn = document.getElementById("vehicle-number-input"); if(vnIn) vnIn.value = "";
     const daIn = document.getElementById("delivery-address-input"); if(daIn) daIn.value = "";
     const rmIn = document.getElementById("remarks-input"); if(rmIn) rmIn.value = "";
+    state.deliverySameAsBilling = true;
+    syncDeliveryAddress();
     setGstEnabled(true);
     renderEditModeBanner();
     await Promise.all([loadProducts(), loadCustomers()]);

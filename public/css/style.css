@@ -16,6 +16,206 @@
   --danger: oklch(0.58 0.19 25);
   --danger-bg: oklch(0.92 0.07 25);
 }
+
+/* ============================================================
+   DEVICE PRESETS  —  the one place UI dimensions are decided
+
+   Every size in this app comes from a token below: widths, spacing, font
+   sizes, button and control heights, radii, table padding, grid columns.
+   Component rules further down never hard-code a pixel value for these; they
+   read the token. To change how the app sizes on a device, change it HERE and
+   it applies everywhere at once.
+
+   Four presets, chosen purely by viewport width so a given screen always gets
+   the same layout — no drifting between devices:
+
+     Mobile    below 768px      phone, one-handed, touch
+     Tablet    768 – 1023px     iPad and similar, touch, two columns
+     Laptop    1024 – 1439px    mouse and keyboard, denser
+     Desktop   1440px and up    large monitor, uses the extra width
+
+   The MOBILE values are the app's existing values, unchanged to the pixel.
+   That is deliberate: the phone layout is the one in daily use at the counter
+   and it already works, so the presets grow the UI for bigger screens rather
+   than redesigning the small one.
+
+   Touch sizing is separate and sits on top of this: the `pointer: coarse`
+   rules further down raise controls to a 44px target and inputs to 16px (below
+   16px, iOS zooms the page when a field is focused). Those follow the INPUT
+   DEVICE, not the screen width, so a touchscreen laptop keeps proper targets.
+   ============================================================ */
+:root{
+  /* ---- shell and rhythm ---- */
+  --app-max:      460px;   /* width the whole app is centred within */
+  --gutter:        16px;   /* main's left/right padding */
+  --gap:            8px;   /* default gap between grid/flex items */
+  --section-mt:    18px;   /* space above a section heading */
+  --section-mb:     8px;
+
+  /* ---- surfaces ---- */
+  --card-pad:      12px;
+  --card-radius:   14px;
+  --row-pad-y:     10px;   /* list row */
+  --row-gap:       10px;
+
+  /* ---- type scale ---- */
+  --fs-title:      14px;   /* section headings */
+  --fs-row-title:  13px;
+  --fs-row-sub:    11px;
+  --fs-label:      11px;   /* field labels */
+  --fs-btn:      13.5px;
+  --fs-btn-sm:   11.5px;
+  --fs-chip:       12px;
+  --fs-input:      13px;
+  --fs-hint:     12.5px;
+  --fs-nav:        10px;
+  --nav-icon:      18px;
+
+  /* ---- controls ---- */
+  --btn-pad-y:     12px;
+  --btn-pad-x:     12px;
+  --btn-radius:    11px;
+  --input-pad-y:    9px;
+  --input-pad-x:   11px;
+  --input-radius:  10px;
+  --input-min-h:   38px;
+  --chip-pad-y:     7px;
+  --chip-pad-x:    14px;
+
+  /* ---- overlays ---- */
+  --sheet-pad:     16px;
+  --sheet-radius:  20px;
+  --fs-bar-pad:    16px;
+
+  /* ---- grids: how many columns each device gets ---- */
+  --stat-cols:      2;              /* dashboard figures */
+  --qa-min:        78px;            /* quick-action tile min width */
+  --dim-min:      120px;            /* billing dimension fields */
+
+  /* ---- tables ---- */
+  --tbl-fs:        12px;
+  --tbl-pad-y:      6px;
+  --tbl-pad-x:      8px;
+}
+
+/* ---------------------------------------------------------- TABLET
+   768–1023. Touch, but with room for two real columns and larger text than a
+   phone needs. Spacing opens up; nothing is redesigned. */
+@media (min-width: 768px){
+  :root{
+    --app-max:      900px;
+    --gutter:        32px;   /* unchanged from the app's existing tablet gutter */
+    --gap:           10px;
+    --section-mt:    20px;
+    --card-pad:      14px;
+    --row-pad-y:     11px;
+    --fs-title:      15px;
+    --fs-row-title:13.5px;
+    --fs-row-sub:  11.5px;
+    --fs-label:    11.5px;
+    --fs-btn:        14px;
+    --fs-btn-sm:     12px;
+    --fs-chip:     12.5px;
+    --fs-input:      14px;
+    --fs-hint:       13px;
+    --fs-nav:        11px;
+    --nav-icon:      20px;
+    --input-pad-y:   10px;
+    --input-pad-x:   12px;
+    --input-min-h:   42px;
+    --chip-pad-y:     8px;
+    --chip-pad-x:    15px;
+    --sheet-pad:     20px;
+    --fs-bar-pad:    18px;
+    --stat-cols:        4;
+    --qa-min:        96px;
+    --dim-min:      140px;
+    --tbl-fs:      12.5px;
+    --tbl-pad-y:      7px;
+    --tbl-pad-x:      9px;
+  }
+}
+
+/* ---------------------------------------------------------- LAPTOP
+   1024–1439. Mouse and keyboard: controls can be a little tighter vertically
+   than a touch target needs, and more rows fit on screen. */
+@media (min-width: 1024px){
+  :root{
+    --app-max:     1180px;
+    --gutter:        36px;
+    --gap:           12px;
+    --section-mt:    22px;
+    --card-pad:      16px;
+    --row-pad-y:     12px;
+    --fs-title:      16px;
+    --fs-row-title:  14px;
+    --fs-row-sub:    12px;
+    --fs-label:      12px;
+    --fs-btn:      14.5px;
+    --fs-btn-sm:   12.5px;
+    --fs-chip:       13px;
+    --fs-input:      14px;
+    --fs-hint:       13px;
+    --fs-nav:        11px;
+    --nav-icon:      20px;
+    --btn-pad-y:     11px;
+    --btn-pad-x:     16px;
+    --input-min-h:   38px;
+    --chip-pad-x:    16px;
+    --sheet-pad:     24px;
+    --sheet-radius:  16px;
+    --qa-min:       112px;
+    --dim-min:      150px;
+    --tbl-fs:        13px;
+    --tbl-pad-y:      8px;
+    --tbl-pad-x:     10px;
+  }
+}
+
+/* ---------------------------------------------------------- DESKTOP
+   1440 and up. The extra width is used rather than left as empty margin, but
+   the column is still capped: text is unreadable at 1900px wide. */
+@media (min-width: 1440px){
+  :root{
+    --app-max:     1440px;
+    --gutter:        48px;
+    --gap:           14px;
+    --section-mt:    24px;
+    --card-pad:      18px;
+    --card-radius:   16px;
+    --fs-title:      17px;
+    --fs-row-title:14.5px;
+    --fs-btn:        15px;
+    --fs-chip:       13px;
+    --fs-input:    14.5px;
+    --fs-nav:      11.5px;
+    --nav-icon:      21px;
+    --btn-pad-y:     12px;
+    --input-pad-y:   11px;
+    --input-pad-x:   14px;
+    --input-min-h:   40px;
+    --chip-pad-y:     9px;
+    --qa-min:       128px;
+    --dim-min:      170px;
+    --tbl-pad-x:     12px;
+  }
+}
+
+/* ---------------------------------------------------------- LAYOUT GUARDS
+   Structural rules that stop the layout breaking at any width. These are not
+   per-device — they hold everywhere. */
+
+/* A flex or grid child will not shrink below its content unless told to, which
+   is what pushes long product names past the right edge instead of ellipsing. */
+.list-row > *, .inv-flex > *, .stat-card > *, .erp-kv > *{ min-width:0; }
+
+/* Nothing may be wider than the screen. */
+img, svg, video, canvas{ max-width:100%; height:auto; }
+
+/* A table too wide to fit scrolls inside its own box rather than dragging the
+   whole page sideways. */
+.table-scroll{ overflow-x:auto; -webkit-overflow-scrolling:touch; max-width:100%; }
+
 *{box-sizing:border-box;}
 html,body{margin:0;padding:0;}
 body{
@@ -27,7 +227,7 @@ body{
 button, input, select{font-family:inherit;}
 
 #shell{
-  max-width:460px;
+  max-width:var(--app-max);
   margin:0 auto;
   min-height:100vh;
   background:var(--bg);
@@ -129,8 +329,8 @@ main{flex:1;padding:14px 16px 90px;overflow-y:auto;}
 .screen.active{display:block;}
 
 /* ---------- Cards / generic ---------- */
-.card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:12px;}
-.section-title{font-size:14px;font-weight:800;margin:18px 0 8px;color:var(--text);}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--card-radius);padding:var(--card-pad);}
+.section-title{font-size:var(--fs-title);font-weight:800;margin:var(--section-mt) 0 var(--section-mb);color:var(--text);}
 .muted{color:var(--muted);}
 .stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px;}
 .stat-card{border-radius:14px;padding:12px;}
@@ -150,7 +350,7 @@ main{flex:1;padding:14px 16px 90px;overflow-y:auto;}
 .bar-chart .bar{width:100%;background:var(--navy);border-radius:4px 4px 0 0;min-height:3px;}
 .bar-chart .bar-lbl{font-size:9.5px;color:var(--muted);font-weight:600;}
 
-.list-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);}
+.list-row{display:flex;align-items:center;gap:var(--row-gap);padding:var(--row-pad-y) 0;border-bottom:1px solid var(--border);}
 .list-row:last-child{border-bottom:none;}
 .swatch{width:38px;height:38px;border-radius:9px;background:repeating-linear-gradient(45deg,var(--bg-outer),var(--bg-outer) 4px,var(--border) 4px,var(--border) 8px);flex-shrink:0;}
 .row-title{font-size:13px;font-weight:700;}
@@ -161,8 +361,8 @@ main{flex:1;padding:14px 16px 90px;overflow-y:auto;}
 .pill.warn{background:var(--warn-bg);color:var(--warn-text);}
 .pill.danger{background:var(--danger-bg);color:var(--danger);}
 
-.chip-row{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;}
-.chip{flex-shrink:0;padding:7px 14px;border-radius:100px;border:1px solid var(--border);background:var(--card);font-size:12px;font-weight:700;color:var(--text);}
+.chip-row{display:flex;gap:var(--gap);overflow-x:auto;padding-bottom:4px;}
+.chip{flex-shrink:0;padding:var(--chip-pad-y) var(--chip-pad-x);border-radius:100px;border:1px solid var(--border);background:var(--card);font-size:var(--fs-chip);font-weight:700;color:var(--text);}
 .chip.selected{background:var(--navy);color:#fff;border-color:var(--navy);}
 
 .searchbar{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--border);border-radius:11px;padding:9px 12px;font-size:13px;}
@@ -177,17 +377,17 @@ main{flex:1;padding:14px 16px 90px;overflow-y:auto;}
 input[type=text], input[type=number], input[type=tel], input[type=date],
 input[type=search], input[type=email], input[type=password], input[type=month],
 select, textarea{
-  width:100%;border:1px solid var(--border);border-radius:10px;padding:9px 11px;font-size:13px;color:var(--text);background:var(--card);
-  min-height:38px;
+  width:100%;border:1px solid var(--border);border-radius:var(--input-radius);padding:var(--input-pad-y) var(--input-pad-x);font-size:var(--fs-input);color:var(--text);background:var(--card);
+  min-height:var(--input-min-h);
 }
-label.field-label{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;display:block;margin:10px 0 5px;}
+label.field-label{font-size:var(--fs-label);font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;display:block;margin:10px 0 5px;}
 
-.btn{border:none;border-radius:11px;padding:12px;font-size:13.5px;font-weight:800;width:100%;cursor:pointer;}
+.btn{border:none;border-radius:var(--btn-radius);padding:var(--btn-pad-y) var(--btn-pad-x);font-size:var(--fs-btn);font-weight:800;width:100%;cursor:pointer;}
 .btn-primary{background:var(--navy);color:#fff;}
 .btn-gold{background:var(--gold);color:var(--navy);}
 .btn-outline{background:var(--card);color:var(--navy);border:1.5px solid var(--navy);}
 .btn-danger-link{color:var(--danger);font-weight:700;font-size:12.5px;background:none;border:none;cursor:pointer;}
-.btn-sm{padding:6px 10px;font-size:11.5px;border-radius:8px;}
+.btn-sm{padding:6px 10px;font-size:var(--fs-btn-sm);border-radius:8px;}
 .btn:disabled{opacity:.5;}
 
 .qty-step{display:flex;align-items:center;gap:6px;}
@@ -199,19 +399,19 @@ nav.bottom{
   position:sticky;bottom:0;left:0;right:0;
   background:var(--card);border-top:1px solid var(--border);
   display:flex;justify-content:space-around;padding:8px 4px 10px;
-  max-width:460px;margin:0 auto;
+  max-width:var(--app-max);margin:0 auto;
 }
-nav.bottom .tab{display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10px;font-weight:700;color:var(--muted);background:none;border:none;padding:4px 6px;}
-nav.bottom .tab .ic{font-size:18px;}
+nav.bottom .tab{display:flex;flex-direction:column;align-items:center;gap:3px;font-size:var(--fs-nav);font-weight:700;color:var(--muted);background:none;border:none;padding:4px 6px;}
+nav.bottom .tab .ic{font-size:var(--nav-icon);}
 nav.bottom .tab.active{color:var(--navy);}
 
 /* Overlays / sheets */
 .scrim{position:fixed;inset:0;background:rgba(15,20,30,.5);z-index:40;display:none;}
 .scrim.show{display:block;}
 .sheet{
-  position:fixed;left:0;right:0;bottom:0;max-width:460px;margin:0 auto;
-  background:var(--card);border-radius:20px 20px 0 0;
-  z-index:41;max-height:88vh;overflow-y:auto;padding:16px 16px 24px;
+  position:fixed;left:0;right:0;bottom:0;max-width:var(--app-max);margin:0 auto;
+  background:var(--card);border-radius:var(--sheet-radius) var(--sheet-radius) 0 0;
+  z-index:41;max-height:88vh;overflow-y:auto;padding:var(--sheet-pad) var(--sheet-pad) calc(var(--sheet-pad) + 8px);
   transform:translateY(100%);transition:transform .25s ease;
 }
 .sheet.show{transform:translateY(0);}
@@ -223,9 +423,9 @@ nav.bottom .tab.active{color:var(--navy);}
    content sizes to itself instead of being forced to fill the screen, a
    long item list needs THIS whole sheet to scroll so the print/download
    buttons at the bottom stay reachable, not just the card's own content. */
-.fullscreen{position:fixed;inset:0;max-width:460px;margin:0 auto;background:var(--navy);z-index:50;display:none;flex-direction:column;color:#fff;overflow-y:auto;}
+.fullscreen{position:fixed;inset:0;max-width:var(--app-max);margin:0 auto;background:var(--navy);z-index:50;display:none;flex-direction:column;color:#fff;overflow-y:auto;}
 .fullscreen.show{display:flex;}
-.fs-bar{display:flex;align-items:center;justify-content:space-between;padding:16px;}
+.fs-bar{display:flex;align-items:center;justify-content:space-between;padding:var(--fs-bar-pad);}
 .fs-bar .fs-title{font-weight:800;font-size:14px;}
 .fs-bar .chip{background:rgba(255,255,255,.15);color:#fff;border:none;padding:5px 10px;font-size:11px;}
 .fs-bar .chip.selected{background:var(--gold);color:var(--navy);}
@@ -436,10 +636,10 @@ table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #178a6e;color:#0
   font-size:11px;font-weight:700;color:var(--muted);line-height:1.4;
 }
 
-.empty-hint{text-align:center;color:var(--muted);font-size:12.5px;padding:24px 8px;}
+.empty-hint{text-align:center;color:var(--muted);font-size:var(--fs-hint);padding:24px 8px;}
 
 #toast{
-  position:fixed;top:0;left:0;right:0;max-width:460px;margin:0 auto;
+  position:fixed;top:0;left:0;right:0;max-width:var(--app-max);margin:0 auto;
   background:var(--danger);color:#fff;font-size:12px;font-weight:700;text-align:center;padding:10px 14px;z-index:100;
 }
 #toast.ok{background:var(--ok);}
@@ -449,7 +649,7 @@ table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #178a6e;color:#0
    absolutely-positioned child inside keeps it from blocking clicks anywhere
    else on the page). z-index sits BELOW .scrim/.sheet (40/41) on purpose —
    it should disappear behind an open sheet, not float on top of one. */
-.wa-fab-wrap{position:fixed;left:0;right:0;bottom:0;max-width:460px;margin:0 auto;height:0;pointer-events:none;z-index:35;}
+.wa-fab-wrap{position:fixed;left:0;right:0;bottom:0;max-width:var(--app-max);margin:0 auto;height:0;pointer-events:none;z-index:35;}
 .wa-fab{
   position:absolute;right:16px;bottom:70px;width:52px;height:52px;border-radius:50%;
   background:#25d366;border:none;display:flex;align-items:center;justify-content:center;
@@ -512,16 +712,14 @@ table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #178a6e;color:#0
    bottom nav) is unchanged; only how much horizontal room it gets
    grows with the viewport, in two steps.
    ============================================================ */
-@media (min-width: 768px){
-  #shell, nav.bottom, .sheet, .fullscreen, #toast, .wa-fab-wrap{ max-width:900px; }
-  main{ padding-left:32px; padding-right:32px; }
-  .stat-grid{ grid-template-columns:repeat(4,1fr); }
-  .dim-grid, .charge-grid{ grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); }
-}
-@media (min-width: 1200px){
-  #shell, nav.bottom, .sheet, .fullscreen, #toast, .wa-fab-wrap{ max-width:1180px; }
-  main{ padding-left:48px; padding-right:48px; }
-}
+/* Widths and gutters come from the presets above; these two blocks used to
+   repeat them and were the reason a laptop and a 27-inch monitor looked
+   identical. What is left is the one thing a token cannot express: which
+   elements share the app's width. */
+#shell, nav.bottom, .sheet, .fullscreen, #toast, .wa-fab-wrap{ max-width:var(--app-max); }
+main{ padding-left:var(--gutter); padding-right:var(--gutter); }
+.stat-grid{ grid-template-columns:repeat(var(--stat-cols),1fr); }
+.dim-grid, .charge-grid{ grid-template-columns:repeat(auto-fit,minmax(var(--dim-min),1fr)); }
 /* A bottom tab bar and slide-up sheets both make sense on a touchscreen
    tablet, but read as mistakes on a mouse-driven laptop this wide — nothing
    about the app requires touch, so this doesn't change behaviour, only

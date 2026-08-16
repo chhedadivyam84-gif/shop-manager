@@ -2115,6 +2115,31 @@ addColumn("invoices", "ack_received_at", "INTEGER");
 addColumn("invoices", "ack_receiver_name", "TEXT DEFAULT ''");
 addColumn("invoices", "ack_remarks", "TEXT DEFAULT ''");
 
+/* Clear floating-point dust out of the stored balances.
+
+   `due` is a REAL, and every bill and payment used to be added to it without
+   rounding. Binary floating point cannot hold 0.01 exactly, so the error
+   accumulates: paying a bill off in instalments left roughly two customers in
+   five owing something like 0.0000000000001. That shows as ₹0.00 on screen but
+   is still greater than zero, and the Outstanding list, the receivable count
+   and the balance sheet all test `due > 0` — so a customer who had paid in
+   full never left the list.
+
+   Every write now rounds (see the routes), and this clears what the old ones
+   left behind. Rounding a rupee figure to paise cannot lose real money: it
+   only removes a fraction of a paisa that was never owed. It rewrites nothing
+   where the value is already clean. */
+const dust = db.prepare(
+  "SELECT COUNT(*) n FROM customers WHERE due <> ROUND(due, 2)"
+).get().n + db.prepare(
+  "SELECT COUNT(*) n FROM suppliers WHERE due <> ROUND(due, 2)"
+).get().n;
+if (dust) {
+  db.exec("UPDATE customers SET due = ROUND(due, 2) WHERE due <> ROUND(due, 2)");
+  db.exec("UPDATE suppliers SET due = ROUND(due, 2) WHERE due <> ROUND(due, 2)");
+  console.log(`Tidied ${dust} account balance(s) that carried floating-point dust.`);
+}
+
 // Where the data lives — the backup module needs the on-disk paths, and this
 // is the single place that knows them.
 db.dataDir = DATA_DIR;

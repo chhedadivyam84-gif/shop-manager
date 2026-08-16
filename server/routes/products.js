@@ -377,7 +377,7 @@ router.post("/:id/stock-in", (req, res) => {
     syncProductStock(p.id);
     // Purchases go on credit by default, mirroring how a sales invoice raises
     // the customer's due — a Purchase Payment is what brings it back down.
-    if (supplierRow) db.prepare("UPDATE suppliers SET due = due + ? WHERE id = ?").run(grandTotal, supplierRow.id);
+    if (supplierRow) db.prepare("UPDATE suppliers SET due = ROUND(due + ?, 2) WHERE id = ?").run(grandTotal, supplierRow.id);
   })();
 
   logAction(req, "product.stock_in", `${p.name}: +${calc.pieces}${supplierName ? " from " + supplierName : ""} — Grand Total ${grandTotal}`);
@@ -517,7 +517,7 @@ router.put("/:id/stock-in/:siId", requireRole("owner"), (req, res) => {
     }
 
     // 2. Reverse the OLD supplier's due.
-    if (si.supplier_id) db.prepare("UPDATE suppliers SET due = MAX(0, due - ?) WHERE id = ?").run(si.grand_total, si.supplier_id);
+    if (si.supplier_id) db.prepare("UPDATE suppliers SET due = MAX(0, ROUND(due - ?, 2)) WHERE id = ?").run(si.grand_total, si.supplier_id);
 
     // 3. Recompute, identical math to POST /:id/stock-in.
     const gstRate = gst !== undefined && gst !== "" ? Number(gst) : si.gst_rate;
@@ -550,7 +550,7 @@ router.put("/:id/stock-in/:siId", requireRole("owner"), (req, res) => {
     syncProductStock(p.id);
 
     // 5. Apply the (possibly new) supplier's due.
-    if (supplierRow) db.prepare("UPDATE suppliers SET due = due + ? WHERE id = ?").run(grandTotal, supplierRow.id);
+    if (supplierRow) db.prepare("UPDATE suppliers SET due = ROUND(due + ?, 2) WHERE id = ?").run(grandTotal, supplierRow.id);
   });
 
   try {
@@ -583,7 +583,7 @@ router.delete("/:id/stock-in/:siId", requireRole("owner"), (req, res) => {
     }
     inventory.addStock(si.size_id, locationId, -si.qty);
     syncProductStock(p.id);
-    if (si.supplier_id) db.prepare("UPDATE suppliers SET due = MAX(0, due - ?) WHERE id = ?").run(si.grand_total, si.supplier_id);
+    if (si.supplier_id) db.prepare("UPDATE suppliers SET due = MAX(0, ROUND(due - ?, 2)) WHERE id = ?").run(si.grand_total, si.supplier_id);
     db.prepare("DELETE FROM stock_ins WHERE id = ?").run(si.id);
   });
 

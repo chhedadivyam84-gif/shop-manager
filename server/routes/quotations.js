@@ -2,6 +2,7 @@ const express = require("express");
 const db = require("../db");
 const { uid, todayStr, round2, logAction, bindId } = require("../util");
 const inventory = require("../inventory");
+const docNumber = require("../docNumber");
 const Pricing = require("../../public/js/pricing.js");
 
 const router = express.Router();
@@ -331,14 +332,15 @@ router.post("/:id/convert", (req, res) => {
     }
   }
 
+  /* The same engine invoices.js allocates from (server/docNumber.js).
+     This used to keep a private "estimate-no" counter that never checked
+     whether the number was already on an invoice, so the two numbering
+     schemes drifted until they collided and the conversion died on the
+     UNIQUE constraint. The engine walks past taken numbers and advances the
+     shared counters, so a converted document gets the next free bill number
+     exactly as a hand-written bill does. */
   function nextDocNo() {
-    const row = db.prepare("SELECT value FROM counters WHERE name = ?").get("estimate-no");
-    const next = row ? row.value + 1 : 1;
-    db.prepare(`
-      INSERT INTO counters (name, value) VALUES (?, ?)
-      ON CONFLICT(name) DO UPDATE SET value = excluded.value
-    `).run("estimate-no", next);
-    return `SP${String(next).padStart(7, "0")}`;
+    return docNumber.allocate("invoice");
   }
 
   const syncProductStockStmt = db.prepare(
@@ -388,7 +390,7 @@ router.post("/:id/convert", (req, res) => {
     });
 
     if (balanceDue > 0 && q.customer_id) {
-      db.prepare("UPDATE customers SET due = due + ? WHERE id = ?").run(balanceDue, q.customer_id);
+      db.prepare("UPDATE customers SET due = ROUND(due + ?, 2) WHERE id = ?").run(balanceDue, q.customer_id);
     }
 
     db.prepare("UPDATE quotations SET status = 'Converted', converted_invoice_id = ? WHERE id = ?").run(invoiceId, q.id);

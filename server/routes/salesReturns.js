@@ -47,7 +47,7 @@ function applyDueReduction(customerId, amount) {
   const row = db.prepare("SELECT due FROM customers WHERE id = ?").get(customerId);
   if (!row) return 0;
   const moved = Math.min(round2(row.due), round2(amount));
-  db.prepare("UPDATE customers SET due = MAX(0, due - ?) WHERE id = ?").run(amount, customerId);
+  db.prepare("UPDATE customers SET due = MAX(0, ROUND(due - ?, 2)) WHERE id = ?").run(amount, customerId);
   return moved;
 }
 
@@ -262,7 +262,7 @@ router.put("/:id", requireRole("owner"), (req, res) => {
         if (it.product_id) touched.add(it.product_id);
       });
       if (sr.refund_method === "AdjustDue" && sr.customer_id) {
-        db.prepare("UPDATE customers SET due = due + ? WHERE id = ?").run(ledgerToReverse(sr), sr.customer_id);
+        db.prepare("UPDATE customers SET due = ROUND(due + ?, 2) WHERE id = ?").run(ledgerToReverse(sr), sr.customer_id);
       }
 
       // 2. apply the new one
@@ -348,7 +348,7 @@ router.post("/:id/void", requireRole("owner"), (req, res) => {
       });
       touchedProducts.forEach(pid => syncProductStockStmt.run(pid));
       if (sr.refund_method === "AdjustDue" && sr.customer_id) {
-        db.prepare("UPDATE customers SET due = due + ? WHERE id = ?").run(ledgerToReverse(sr), sr.customer_id);
+        db.prepare("UPDATE customers SET due = ROUND(due + ?, 2) WHERE id = ?").run(ledgerToReverse(sr), sr.customer_id);
       }
       db.prepare("UPDATE sales_returns SET voided = 1 WHERE id = ?").run(sr.id);
     })();

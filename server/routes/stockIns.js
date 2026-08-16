@@ -38,7 +38,7 @@ router.delete("/:id", requireRole("owner"), (req, res) => {
       // else: this stock has already moved on elsewhere — leave current
       // stock untouched rather than driving it negative.
     }
-    if (si.supplier_id) db.prepare("UPDATE suppliers SET due = MAX(0, due - ?) WHERE id = ?").run(si.grand_total, si.supplier_id);
+    if (si.supplier_id) db.prepare("UPDATE suppliers SET due = MAX(0, ROUND(due - ?, 2)) WHERE id = ?").run(si.grand_total, si.supplier_id);
     db.prepare("DELETE FROM stock_ins WHERE id = ?").run(si.id);
   })();
 

@@ -272,7 +272,7 @@ router.post("/", (req, res) => {
        size_label, pieces, per_piece, unit_label, qty, rate, discount_amount, gst_rate)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const bumpDue = db.prepare("UPDATE suppliers SET due = due + ? WHERE id = ?");
+  const bumpDue = db.prepare("UPDATE suppliers SET due = ROUND(due + ?, 2) WHERE id = ?");
 
   db.transaction(() => {
     insertPurchase.run({
@@ -372,8 +372,8 @@ router.put("/:id", (req, res) => {
        size_label, pieces, per_piece, unit_label, qty, rate, discount_amount, gst_rate)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const bumpDue = db.prepare("UPDATE suppliers SET due = due + ? WHERE id = ?");
-  const reduceDue = db.prepare("UPDATE suppliers SET due = MAX(0, due - ?) WHERE id = ?");
+  const bumpDue = db.prepare("UPDATE suppliers SET due = ROUND(due + ?, 2) WHERE id = ?");
+  const reduceDue = db.prepare("UPDATE suppliers SET due = MAX(0, ROUND(due - ?, 2)) WHERE id = ?");
 
   const runEdit = db.transaction(() => {
     const touchedProducts = new Set();
@@ -510,7 +510,7 @@ router.post("/:id/void", requireRole("owner"), (req, res) => {
   if (p.voided) return res.status(400).json({ error: "Purchase already voided." });
   const items = db.prepare("SELECT * FROM purchase_items WHERE purchase_id = ?").all(p.id);
 
-  const reduceDue = db.prepare("UPDATE suppliers SET due = MAX(0, due - ?) WHERE id = ?");
+  const reduceDue = db.prepare("UPDATE suppliers SET due = MAX(0, ROUND(due - ?, 2)) WHERE id = ?");
   const purchaseLocationId = p.location_id || inventory.getLocationByCode("warehouse").id;
 
   const runVoid = db.transaction(() => {
@@ -556,7 +556,7 @@ router.delete("/:id", requireRole("owner"), (req, res) => {
   const p = db.prepare("SELECT * FROM purchases WHERE id = ?").get(req.params.id);
   if (!p) return res.status(404).json({ error: "Purchase not found." });
   const items = db.prepare("SELECT * FROM purchase_items WHERE purchase_id = ?").all(p.id);
-  const reduceDue = db.prepare("UPDATE suppliers SET due = MAX(0, due - ?) WHERE id = ?");
+  const reduceDue = db.prepare("UPDATE suppliers SET due = MAX(0, ROUND(due - ?, 2)) WHERE id = ?");
   const purchaseLocationId = p.location_id || inventory.getLocationByCode("warehouse").id;
 
   const runDelete = db.transaction(() => {

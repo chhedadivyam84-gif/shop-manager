@@ -124,8 +124,8 @@ router.post("/:id/opening-balance", requireRole("owner"), (req, res) => {
       INSERT INTO supplier_opening_balances (id, supplier_id, date, amount, balance_type, remarks, voided, created_at)
       VALUES (?, ?, ?, ?, ?, ?, 0, ?)
     `).run(id, s.id, date, amount, balanceType, remarks, Date.now());
-    if (balanceType === "Advance") db.prepare("UPDATE suppliers SET due = MAX(0, due - ?) WHERE id = ?").run(amount, s.id);
-    else db.prepare("UPDATE suppliers SET due = due + ? WHERE id = ?").run(amount, s.id);
+    if (balanceType === "Advance") db.prepare("UPDATE suppliers SET due = MAX(0, ROUND(due - ?, 2)) WHERE id = ?").run(amount, s.id);
+    else db.prepare("UPDATE suppliers SET due = ROUND(due + ?, 2) WHERE id = ?").run(amount, s.id);
   })();
 
   logAction(req, "supplier.opening_balance", `${s.name}: ${amount} (${balanceType})`);
@@ -157,7 +157,7 @@ router.put("/:id/opening-balance/:obId", requireRole("owner"), (req, res) => {
     db.prepare(`
       UPDATE supplier_opening_balances SET date=?, amount=?, balance_type=?, remarks=? WHERE id=?
     `).run(date, amount, balanceType, remarks, o.id);
-    if (delta) db.prepare("UPDATE suppliers SET due = MAX(0, due + ?) WHERE id = ?").run(delta, s.id);
+    if (delta) db.prepare("UPDATE suppliers SET due = MAX(0, ROUND(due + ?, 2)) WHERE id = ?").run(delta, s.id);
   })();
 
   logAction(req, "supplier.opening_balance_edit", `${s.name}: ${o.amount} (${o.balance_type}) -> ${amount} (${balanceType})`);
@@ -176,8 +176,8 @@ router.post("/:id/opening-balance/:obId/void", requireRole("owner"), (req, res) 
     // Reverse exactly what it did: a Payable had raised due, so voiding lowers
     // it back (floored at 0, same as every other reversal in this app); an
     // Advance had lowered due, so voiding raises it back.
-    if (o.balance_type === "Advance") db.prepare("UPDATE suppliers SET due = due + ? WHERE id = ?").run(o.amount, s.id);
-    else db.prepare("UPDATE suppliers SET due = MAX(0, due - ?) WHERE id = ?").run(o.amount, s.id);
+    if (o.balance_type === "Advance") db.prepare("UPDATE suppliers SET due = ROUND(due + ?, 2) WHERE id = ?").run(o.amount, s.id);
+    else db.prepare("UPDATE suppliers SET due = MAX(0, ROUND(due - ?, 2)) WHERE id = ?").run(o.amount, s.id);
   })();
 
   logAction(req, "supplier.opening_balance_void", `${s.name}: ${o.amount} (${o.balance_type})`);
@@ -215,7 +215,7 @@ router.post("/:id/payments", (req, res) => {
         INSERT INTO purchase_payments (id, supplier_id, stock_in_id, amount, method, reference_no, bank_name, upi_id, bank_account_id, attachment_path, attachment_name, note, payment_date, voided, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
       `).run(id, s.id, stockInId, amount, method, referenceNo, bankName, upiId, bankAccountId, attachment ? attachment.path : "", attachment ? attachment.name : "", note, paymentDate, Date.now());
-      db.prepare("UPDATE suppliers SET due = MAX(0, due - ?) WHERE id = ?").run(amount, s.id);
+      db.prepare("UPDATE suppliers SET due = MAX(0, ROUND(due - ?, 2)) WHERE id = ?").run(amount, s.id);
       postPaymentToLedger({
         bankAccountId, method, amount, date: paymentDate,
         partyType: "supplier", partyId: s.id, partyName: s.name,
@@ -258,7 +258,7 @@ router.put("/:id/payments/:paymentId", (req, res) => {
       db.prepare(`
         UPDATE purchase_payments SET amount=?, method=?, note=?, reference_no=?, bank_name=?, upi_id=?, bank_account_id=?, attachment_path=?, attachment_name=?, payment_date=? WHERE id=?
       `).run(amount, method, note, referenceNo, bankName, upiId, bankAccountId, attachmentPath, attachmentName, paymentDate, p.id);
-      if (delta) db.prepare("UPDATE suppliers SET due = MAX(0, due - ?) WHERE id = ?").run(delta, s.id);
+      if (delta) db.prepare("UPDATE suppliers SET due = MAX(0, ROUND(due - ?, 2)) WHERE id = ?").run(delta, s.id);
       voidLinkedLedgerEntry("purchase_payment", p.id);
       postPaymentToLedger({
         bankAccountId, method, amount, date: paymentDate,
@@ -283,7 +283,7 @@ router.post("/:id/payments/:paymentId/void", requireRole("owner"), (req, res) =>
 
   db.transaction(() => {
     db.prepare("UPDATE purchase_payments SET voided = 1 WHERE id = ?").run(p.id);
-    db.prepare("UPDATE suppliers SET due = due + ? WHERE id = ?").run(p.amount, s.id);
+    db.prepare("UPDATE suppliers SET due = ROUND(due + ?, 2) WHERE id = ?").run(p.amount, s.id);
     voidLinkedLedgerEntry("purchase_payment", p.id);
   })();
 
@@ -330,8 +330,8 @@ router.post("/", (req, res) => {
         INSERT INTO supplier_opening_balances (id, supplier_id, date, amount, balance_type, remarks, voided, created_at)
         VALUES (?, ?, ?, ?, ?, ?, 0, ?)
       `).run(uid("SOB"), id, date, openingAmount, balanceType, remarks, Date.now());
-      if (balanceType === "Advance") db.prepare("UPDATE suppliers SET due = MAX(0, due - ?) WHERE id = ?").run(openingAmount, id);
-      else db.prepare("UPDATE suppliers SET due = due + ? WHERE id = ?").run(openingAmount, id);
+      if (balanceType === "Advance") db.prepare("UPDATE suppliers SET due = MAX(0, ROUND(due - ?, 2)) WHERE id = ?").run(openingAmount, id);
+      else db.prepare("UPDATE suppliers SET due = ROUND(due + ?, 2) WHERE id = ?").run(openingAmount, id);
     }
   })();
 

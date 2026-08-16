@@ -404,7 +404,7 @@ router.post("/", (req, res) => {
        size_label, pieces, per_piece, unit_label, qty, rate, gst_rate, discount_pct)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const bumpDue = db.prepare("UPDATE customers SET due = due + ? WHERE id = ?");
+  const bumpDue = db.prepare("UPDATE customers SET due = ROUND(due + ?, 2) WHERE id = ?");
 
   db.transaction(() => {
     insertInvoice.run({
@@ -577,7 +577,7 @@ router.put("/:id", (req, res) => {
 
     // 3. Reverse the OLD customer's due (whoever it was originally billed to).
     if (inv.customer_id && inv.balance_due > 0) {
-      db.prepare("UPDATE customers SET due = MAX(0, due - ?) WHERE id = ?").run(inv.balance_due, inv.customer_id);
+      db.prepare("UPDATE customers SET due = MAX(0, ROUND(due - ?, 2)) WHERE id = ?").run(inv.balance_due, inv.customer_id);
     }
 
     // 4. Replace the line items.
@@ -634,7 +634,7 @@ router.put("/:id", (req, res) => {
 
     // 7. Bump the (possibly new) customer's due by the new balance.
     if (customerId && totals.balanceDue > 0) {
-      db.prepare("UPDATE customers SET due = due + ? WHERE id = ?").run(totals.balanceDue, customerId);
+      db.prepare("UPDATE customers SET due = ROUND(due + ?, 2) WHERE id = ?").run(totals.balanceDue, customerId);
     }
   });
 
@@ -770,7 +770,7 @@ router.post("/:id/convert-to-invoice", (req, res) => {
       it.qty, it.rate, it.gst_rate, it.discount_pct || 0
     ));
     if (challan.customer_id && totals.balanceDue > 0) {
-      db.prepare("UPDATE customers SET due = due + ? WHERE id = ?").run(totals.balanceDue, challan.customer_id);
+      db.prepare("UPDATE customers SET due = ROUND(due + ?, 2) WHERE id = ?").run(totals.balanceDue, challan.customer_id);
     }
     db.prepare("UPDATE invoices SET converted_invoice_id = ? WHERE id = ?").run(invoiceId, challan.id);
   })();
@@ -792,7 +792,7 @@ router.post("/:id/void", requireRole("owner"), (req, res) => {
   // those rows have no size_id, so the best that can be done is credit the
   // product's total directly (no location to attribute it to).
   const restoreProduct = db.prepare("UPDATE products SET stock = stock + ? WHERE id = ?");
-  const reduceDue = db.prepare("UPDATE customers SET due = MAX(0, due - ?) WHERE id = ?");
+  const reduceDue = db.prepare("UPDATE customers SET due = MAX(0, ROUND(due - ?, 2)) WHERE id = ?");
   const voidInvoice = db.prepare("UPDATE invoices SET voided = 1 WHERE id = ?");
   const location = inv.location_id || shopLocationId();
 
@@ -831,7 +831,7 @@ router.delete("/:id", requireRole("owner"), (req, res) => {
   if (!inv) return res.status(404).json({ error: "Document not found." });
   const items = db.prepare("SELECT * FROM invoice_items WHERE invoice_id = ?").all(inv.id);
   const restoreProduct = db.prepare("UPDATE products SET stock = stock + ? WHERE id = ?");
-  const reduceDue = db.prepare("UPDATE customers SET due = MAX(0, due - ?) WHERE id = ?");
+  const reduceDue = db.prepare("UPDATE customers SET due = MAX(0, ROUND(due - ?, 2)) WHERE id = ?");
   const location = inv.location_id || shopLocationId();
 
   db.transaction(() => {

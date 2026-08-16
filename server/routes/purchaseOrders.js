@@ -288,7 +288,7 @@ router.post("/:id/convert", (req, res) => {
        size_label, pieces, per_piece, unit_label, qty, rate, discount_amount, gst_rate)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const bumpDue = db.prepare("UPDATE suppliers SET due = due + ? WHERE id = ?");
+  const bumpDue = db.prepare("UPDATE suppliers SET due = ROUND(due + ?, 2) WHERE id = ?");
 
   function nextPurchaseNo() {
     const row = db.prepare("SELECT value FROM counters WHERE name = ?").get("purchase-no");

@@ -43,7 +43,10 @@ let state = {
   // changes or a new invoice starts, so it never silently leaks between bills.
   taxTypeOverride: null,
   discountType: "pct", discountValue: 0, advance: 0, paymentMethod: "Cash",
-  transport: 0, loading: 0, roundOff: true, docType: "invoice", challanShowRate: false, gstOnCharges: true, gstEnabled: true, deliveryMan: "",
+  // All three compliance switches start OFF, and nothing is validated until
+  // one is turned on. GST is added to a bill only when it is asked for.
+  transport: 0, loading: 0, roundOff: true, docType: "invoice", challanShowRate: false, gstOnCharges: true,
+  gstEnabled: false, einvoiceWanted: false, ewbWanted: false, deliveryMan: "",
   vehicleNumber: "", deliveryAddress: "", deliverySameAsBilling: true, remarks: "",
   invBrandFilter: "All", reportType: "Sales", partyMode: "customer",
   // Reports date range. Empty = All Time, which is the default so a report
@@ -353,6 +356,20 @@ async function initApp(){
     b.addEventListener("click", ()=>{
       setGstEnabled(b.dataset.gstenabled === "true");
     });
+  });
+  document.getElementById("gst-applicable-toggle").addEventListener("change", (e)=>{
+    setGstEnabled(e.target.checked);
+  });
+  // These two say what this bill is FOR. They gate every readiness check: with
+  // both off there is nothing to file, so there is nothing to be missing, and
+  // the invoice must not be reported as broken for fields it will never use.
+  document.getElementById("einvoice-wanted-toggle").addEventListener("change", (e)=>{
+    state.einvoiceWanted = e.target.checked;
+    renderInvoiceGstPanel();
+  });
+  document.getElementById("ewb-wanted-toggle").addEventListener("change", (e)=>{
+    state.ewbWanted = e.target.checked;
+    renderInvoiceGstPanel();
   });
   document.getElementById("discount-value").addEventListener("input", (e)=>{
     state.discountValue = parseFloat(e.target.value)||0; renderTotals();
@@ -1131,6 +1148,7 @@ async function renderBilling(){
   renderBillingBillNav();
   renderBillingCustomers();
   syncDeliveryAddress();
+  syncComplianceSwitches();
   renderBillingLocationChips();
   renderAreaPicker("billing-area-picker", state.areaId, id => { state.areaId = id; });
   renderBillingProducts();
@@ -1420,8 +1438,35 @@ function isChallanMode(){ return state.docType === "challan"; }
  * on Transport & Loading" checkbox are moot, so both hide along with them;
  * computeTotals()/renderTotals() do the actual skip of tax calculation.
  */
+/**
+ * Puts the three compliance switches back to OFF for a fresh bill.
+ *
+ * One function rather than three lines repeated at every reset: a bill that
+ * kept the previous bill's e-invoice switch would quietly file something
+ * nobody asked to file.
+ */
+function resetComplianceSwitches(){
+  state.einvoiceWanted = false;
+  state.ewbWanted = false;
+  state.gstEnabled = false;
+  syncComplianceSwitches();
+}
+
+/** Redraws the three switches, and everything their positions govern. */
+function syncComplianceSwitches(){
+  const set = (id, on) => { const el = document.getElementById(id); if(el) el.checked = !!on; };
+  set("einvoice-wanted-toggle", state.einvoiceWanted);
+  set("ewb-wanted-toggle", state.ewbWanted);
+  // Delegated rather than just ticking the box: setGstEnabled also shows or
+  // hides GST Type and the GST-on-charges row, and those have to follow the
+  // switch's position, not only the moment somebody clicks it.
+  setGstEnabled(state.gstEnabled);
+}
+
 function setGstEnabled(on){
   state.gstEnabled = on;
+  const box = document.getElementById("gst-applicable-toggle");
+  if(box) box.checked = on;
   document.querySelectorAll('[data-gstenabled]').forEach(b=>
     b.classList.toggle("selected", (b.dataset.gstenabled === "true") === on));
   const gstTypeSection = document.getElementById("gst-type-section");
@@ -1620,7 +1665,7 @@ function renderEditModeBanner(){
     state.docNo = null;
     state.cart = []; state.selectedCustomerId = null; state.taxTypeOverride = null; state.advance = 0; state.discountValue = 0;
     state.transport = 0; state.loading = 0; state.deliveryMan = "";
-    state.vehicleNumber = ""; state.deliveryAddress = ""; state.remarks = ""; state.gstEnabled = true;
+    state.vehicleNumber = ""; state.deliveryAddress = ""; state.remarks = "";
     state.transportMode = ""; state.dueDate = ""; state.areaId = null;
     // A fresh bill always starts at "Without Rate" — the previous bill's
     // print choice must not carry into an unrelated new challan.
@@ -1632,7 +1677,7 @@ function renderEditModeBanner(){
     set("billing-date", isoDate(new Date()));
     state.deliverySameAsBilling = true;
     syncDeliveryAddress();
-    setGstEnabled(true);
+    resetComplianceSwitches();
     renderEditModeBanner();
     renderBilling();
     toast("Edit cancelled.");
@@ -1672,6 +1717,10 @@ async function editExistingInvoice(inv){
   state.loading = inv.loading || 0;
   state.gstOnCharges = inv.gst_on_charges !== 0;
   state.gstEnabled = inv.gst_enabled !== 0;
+  // What this bill was actually raised for. Older bills have neither column,
+  // which reads as off — correct, since nothing was ever filed for them.
+  state.einvoiceWanted = inv.einvoice_wanted === 1;
+  state.ewbWanted = inv.ewb_wanted === 1;
   state.deliveryMan = inv.delivery_man || "";
   state.vehicleNumber = inv.vehicle_number || "";
   state.transportMode = inv.transport_mode || "";
@@ -1720,6 +1769,7 @@ async function editExistingInvoice(inv){
   const gstChargesToggle = document.getElementById("gst-on-charges-toggle");
   if(gstChargesToggle) gstChargesToggle.checked = state.gstOnCharges;
   setGstEnabled(state.gstEnabled);
+  syncComplianceSwitches();
   // Baseline for the unsaved-changes check, taken once the form is fully
   // populated — anything after this is a real edit by the user.
   state.loadedInvoiceFingerprint = invoiceFingerprint();
@@ -2217,7 +2267,9 @@ async function completeSale(){
       discountType: state.discountType, discountValue: state.discountValue,
       advance: state.advance, paymentMethod: state.paymentMethod, paperSize: state.paperSize,
       transport: state.transport, loading: state.loading, roundOff: state.roundOff,
-      gstOnCharges: state.gstOnCharges, gstEnabled: state.gstEnabled, deliveryMan: state.deliveryMan,
+      gstOnCharges: state.gstOnCharges, gstEnabled: state.gstEnabled,
+      einvoiceWanted: state.einvoiceWanted, ewbWanted: state.ewbWanted,
+      deliveryMan: state.deliveryMan,
       vehicleNumber: state.vehicleNumber, deliveryAddress: state.deliveryAddress, remarks: state.remarks,
       transportMode: state.transportMode || "", dueDate: state.dueDate || "",
       // Blank is honest "not recorded" — the server then falls back to the
@@ -2238,7 +2290,7 @@ async function completeSale(){
       : await api("POST", "/invoices", payload);
     state.cart = []; state.advance = 0; state.discountValue = 0; state.taxTypeOverride = null;
     state.transport = 0; state.loading = 0; state.deliveryMan = "";
-    state.vehicleNumber = ""; state.deliveryAddress = ""; state.remarks = ""; state.gstEnabled = true;
+    state.vehicleNumber = ""; state.deliveryAddress = ""; state.remarks = "";
     state.transportMode = ""; state.dueDate = ""; state.areaId = null;
     // A fresh bill always starts at "Without Rate" — the previous bill's
     // print choice must not carry into an unrelated new challan.
@@ -2255,7 +2307,7 @@ async function completeSale(){
     const rmIn = document.getElementById("remarks-input"); if(rmIn) rmIn.value = "";
     state.deliverySameAsBilling = true;
     syncDeliveryAddress();
-    setGstEnabled(true);
+    resetComplianceSwitches();
     renderEditModeBanner();
     await Promise.all([loadProducts(), loadCustomers()]);
     await renderBilling(); await renderHome();
@@ -13023,11 +13075,26 @@ async function renderInvoiceGstPanel(){
   const host = document.getElementById("inv-gst-panel");
   if(!host) return;
   const inv = lastPreviewInvoice;
-  if(!inv || !inv.id || inv.doc_type === "challan" || inv.gst_enabled === 0){
+  if(!inv || !inv.id){ host.innerHTML = ""; host.style.display = "none"; return; }
+
+  /* Nothing is validated unless this bill was actually raised to be filed.
+     A shop that is not e-invoicing has no PIN code, no customer state and no
+     UQC on file, and telling it so on every single bill is noise about a
+     rule it is not subject to. An already-filed document still reports, so a
+     real IRN or e-way bill number never disappears from view. */
+  const wantsEinvoice = inv.einvoice_wanted === 1;
+  const wantsEwb      = inv.ewb_wanted === 1;
+  const alreadyFiled  = !!(inv.irn || inv.eway_bill_no);
+  if(!wantsEinvoice && !wantsEwb && !alreadyFiled){
     host.innerHTML = ""; host.style.display = "none"; return;
   }
+  // A challan is not an invoice and carries no GST; there is nothing to file.
+  if(inv.doc_type === "challan" && !alreadyFiled){
+    host.innerHTML = ""; host.style.display = "none"; return;
+  }
+
   host.style.display = "";
-  host.innerHTML = `<div class="muted" style="font-size:12px;">Checking GST readiness…</div>`;
+  host.innerHTML = `<div class="muted" style="font-size:12px;">Checking…</div>`;
 
   let prep = null;
   try{ prep = await api("POST", `/ewb/prepare/${inv.id}`, {}); }
@@ -13036,12 +13103,21 @@ async function renderInvoiceGstPanel(){
   // Transport gaps are not an invoice fault — they are answered later, on
   // the e-way bill form, so they must not make the invoice look broken.
   const transportFields = ["transMode","vehicleNo","distanceKm","transDocNo"];
-  const dataProblems = prep.problems.filter(p => !transportFields.includes(p.field));
+  // The buyer's GSTIN is an e-invoice requirement. An e-way bill for a
+  // counter sale is legitimate without one, so it is not a problem here
+  // unless an e-invoice was actually asked for.
+  const einvoiceOnlyFields = ["Customer GSTIN", "GST"];
+  const dataProblems = prep.problems.filter(p =>
+    !transportFields.includes(p.field) &&
+    (wantsEinvoice || !einvoiceOnlyFields.includes(p.field)));
 
   const badges = [
-    dataProblems.length ? gstBadge("GST data incomplete", "bad") : gstBadge("GST validated", "ok"),
-    inv.irn ? gstBadge("IRN generated", "ok") : gstBadge("No IRN", "warn"),
-    inv.eway_bill_no ? gstBadge("E-Way Bill " + inv.eway_bill_no, "ok") : gstBadge("No e-way bill", "warn")
+    dataProblems.length
+      ? gstBadge("Details missing", "bad")
+      : gstBadge(wantsEinvoice && wantsEwb ? "Ready to file"
+               : wantsEinvoice ? "Ready for e-Invoice" : "Ready for e-Way Bill", "ok"),
+    wantsEinvoice ? (inv.irn ? gstBadge("IRN generated", "ok") : gstBadge("No IRN", "warn")) : "",
+    wantsEwb ? (inv.eway_bill_no ? gstBadge("E-Way Bill " + inv.eway_bill_no, "ok") : gstBadge("No e-way bill", "warn")) : ""
   ].join("");
 
   host.innerHTML = `
@@ -13049,8 +13125,10 @@ async function renderInvoiceGstPanel(){
     <div style="margin-bottom:8px;">${badges}</div>
 
     ${dataProblems.length ? `<div class="pm-warn">
-      <b>This invoice cannot be filed yet. Missing:</b><br>
+      <b>Before this can be filed, ${wantsEinvoice && wantsEwb ? "the e-Invoice and e-Way Bill need"
+        : wantsEinvoice ? "the e-Invoice needs" : "the e-Way Bill needs"}:</b><br>
       ${dataProblems.map(p => "• " + escapeHtml(p.message)).join("<br>")}
+      <br><span style="font-weight:400;">Turn the switch off on the bill if you are not filing it.</span>
     </div>` : ""}
 
     ${inv.irn ? `<div class="card" style="padding:10px 12px;">
@@ -13061,14 +13139,14 @@ async function renderInvoiceGstPanel(){
 
     <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;">
       <button class="btn btn-outline btn-sm" id="gst-recheck" style="width:auto;">Re-check</button>
-      <button class="btn btn-outline btn-sm" id="gst-ewb" style="width:auto;"
-        ${dataProblems.length ? "disabled" : ""}>Generate E-Way Bill</button>
-      <button class="btn btn-outline btn-sm" id="gst-einvoice" style="width:auto;" disabled
-        title="Connect your GSP to enable e-invoicing">Generate e-Invoice</button>
+      ${wantsEwb ? `<button class="btn btn-outline btn-sm" id="gst-ewb" style="width:auto;"
+        ${dataProblems.length ? "disabled" : ""}>Generate E-Way Bill</button>` : ""}
+      ${wantsEinvoice ? `<button class="btn btn-outline btn-sm" id="gst-einvoice" style="width:auto;" disabled
+        title="Connect your GSP to enable e-invoicing">Generate e-Invoice</button>` : ""}
     </div>
     <p class="muted" style="font-size:11px;margin-top:8px;line-height:1.6;">
-      e-Invoice is disabled until a GSP is connected. Nothing here is filed with the
-      portal yet — the e-way bill numbers are practice only.</p>`;
+      ${wantsEinvoice ? "e-Invoice is disabled until a GSP is connected. " : ""}Nothing here is
+      filed with the portal yet — the e-way bill numbers are practice only.</p>`;
 
   document.getElementById("gst-recheck").addEventListener("click", renderInvoiceGstPanel);
   const ewbBtn = document.getElementById("gst-ewb");

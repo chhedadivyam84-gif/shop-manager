@@ -392,11 +392,11 @@ router.post("/", (req, res) => {
     INSERT INTO invoices (id, challan_no, doc_type, date, created_at, customer_id, subtotal, discount_type, discount_value,
       discount_amount, tax_type, cgst, sgst, igst, transport, loading, gst_on_charges, gst_enabled, round_off, total, advance, balance_due,
       payment_method, paper_size, delivery_man, vehicle_number, delivery_address, remarks, location_id, area_id,
-      due_date, transport_mode)
+      due_date, transport_mode, einvoice_wanted, ewb_wanted)
     VALUES (@id, @challanNo, @docType, @date, @createdAt, @customerId, @subtotal, @discountType, @discountValue,
       @discountAmount, @taxType, @cgst, @sgst, @igst, @transport, @loading, @gstOnCharges, @gstEnabled, @roundOffAmount, @total, @advance,
       @balanceDue, @paymentMethod, @paperSize, @deliveryMan, @vehicleNumber, @deliveryAddress, @remarks, @locationId, @areaId,
-      @dueDate, @transportMode)
+      @dueDate, @transportMode, @einvoiceWanted, @ewbWanted)
   `);
   const insertItem = db.prepare(`
     INSERT INTO invoice_items
@@ -414,6 +414,9 @@ router.post("/", (req, res) => {
       taxType, cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst,
       transport: totals.transport, loading: totals.loading, gstOnCharges: gstOnCharges ? 1 : 0,
       gstEnabled: gstEnabled ? 1 : 0,
+      // Absent means off. A caller that says nothing is not asking to file.
+      einvoiceWanted: req.body.einvoiceWanted === true ? 1 : 0,
+      ewbWanted: req.body.ewbWanted === true ? 1 : 0,
       roundOffAmount: totals.roundOffAmount,
       total: totals.total, advance: totals.advance, balanceDue: totals.balanceDue,
       // A challan has no tender; store a dash rather than a misleading "Cash".
@@ -600,7 +603,8 @@ router.put("/:id", (req, res) => {
       UPDATE invoices SET customer_id=@customerId, subtotal=@subtotal, discount_type=@discountType,
         discount_value=@discountValue, discount_amount=@discountAmount, tax_type=@taxType,
         cgst=@cgst, sgst=@sgst, igst=@igst, transport=@transport, loading=@loading,
-        gst_on_charges=@gstOnCharges, gst_enabled=@gstEnabled, round_off=@roundOffAmount, total=@total, advance=@advance,
+        gst_on_charges=@gstOnCharges, gst_enabled=@gstEnabled, einvoice_wanted=@einvoiceWanted, ewb_wanted=@ewbWanted,
+        round_off=@roundOffAmount, total=@total, advance=@advance,
         balance_due=@balanceDue, payment_method=@paymentMethod, paper_size=@paperSize,
         delivery_man=@deliveryMan, vehicle_number=@vehicleNumber, delivery_address=@deliveryAddress,
         due_date=@dueDate, transport_mode=@transportMode,
@@ -613,6 +617,9 @@ router.put("/:id", (req, res) => {
       taxType, cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst,
       transport: totals.transport, loading: totals.loading, gstOnCharges: gstOnCharges ? 1 : 0,
       gstEnabled: gstEnabled ? 1 : 0,
+      // Absent means off, the same rule the create path uses.
+      einvoiceWanted: req.body.einvoiceWanted === true ? 1 : 0,
+      ewbWanted: req.body.ewbWanted === true ? 1 : 0,
       roundOffAmount: totals.roundOffAmount, total: totals.total, advance: totals.advance,
       balanceDue: totals.balanceDue,
       paymentMethod: isChallan ? "—" : (paymentMethod || "Cash"),

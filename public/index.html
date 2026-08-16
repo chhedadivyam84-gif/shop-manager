@@ -207,12 +207,28 @@
           <input type="number" id="discount-value" placeholder="0" min="0" value="0">
         </div>
 
-        <div class="section-title">GST</div>
+        <div class="section-title">GST &amp; Compliance</div>
         <div class="card">
-          <div class="chip-row" id="gst-enabled-chips">
-            <button class="chip selected" data-gstenabled="true">GST Invoice</button>
-            <button class="chip" data-gstenabled="false">Non-GST Invoice</button>
-          </div>
+          <label class="check-row" style="margin-top:0;">
+            <input type="checkbox" id="gst-applicable-toggle">
+            <span>GST applicable</span>
+          </label>
+          <div class="switch-hint">Adds CGST + SGST or IGST to this bill.</div>
+
+          <label class="check-row">
+            <input type="checkbox" id="einvoice-wanted-toggle">
+            <span>Generate e-Invoice</span>
+          </label>
+          <div class="switch-hint">Checks everything the GST portal needs for an IRN.</div>
+
+          <label class="check-row">
+            <input type="checkbox" id="ewb-wanted-toggle">
+            <span>Generate e-Way Bill</span>
+          </label>
+          <div class="switch-hint">Checks the details a transport e-way bill needs.</div>
+
+          <p class="muted" style="font-size:11px;line-height:1.6;margin:10px 0 0;">
+            Nothing is checked and nothing is filed unless a switch above is on.</p>
         </div>
 
         <div id="gst-type-section">

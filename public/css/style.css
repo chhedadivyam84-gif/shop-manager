@@ -1251,3 +1251,6 @@ table.erp-table tbody td{ height: var(--bill-row-h, auto); }
    readOnly rather than disabled, so the text stays selectable and the box does
    not read as broken. */
 .input-locked{ background:rgba(127,127,127,.10); color:var(--muted,#6b7280); cursor:default; }
+
+/* Explains a switch without competing with its label. */
+.switch-hint{font-size:11px;color:var(--muted);line-height:1.5;margin:2px 0 0 28px;}

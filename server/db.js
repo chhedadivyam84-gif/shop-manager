@@ -1979,6 +1979,13 @@ if (bankEntryCols.includes("bank_account_id")) {
 addColumn("invoices", "gst_enabled", "INTEGER NOT NULL DEFAULT 1");
 addColumn("purchases", "gst_enabled", "INTEGER NOT NULL DEFAULT 1");
 
+// Whether this bill was raised INTENDING to file an e-invoice or an e-way
+// bill. They default to 0, so every bill already in the book reads as "not
+// for filing" — which is the truth, nothing was ever filed for them. Nothing
+// is validated against the GST portal's rules unless one of these is 1.
+addColumn("invoices", "einvoice_wanted", "INTEGER NOT NULL DEFAULT 0");
+addColumn("invoices", "ewb_wanted", "INTEGER NOT NULL DEFAULT 0");
+
 // Purchase Challan — a goods-received note from a supplier with no GST or
 // pricing, mirroring how invoices.doc_type distinguishes a Tax Invoice from
 // a Delivery Challan. Defaults to 'purchase' so every existing row keeps

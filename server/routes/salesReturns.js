@@ -1,6 +1,6 @@
 const express = require("express");
 const db = require("../db");
-const { uid, todayStr, round2, logAction } = require("../util");
+const { uid, todayStr, round2, logAction, bindId } = require("../util");
 const { requireRole } = require("../auth");
 const inventory = require("../inventory");
 
@@ -109,7 +109,7 @@ router.post("/", (req, res) => {
 
   const items = [];
   for (const raw of rawItems) {
-    const invItem = db.prepare("SELECT * FROM invoice_items WHERE id = ? AND invoice_id = ?").get(raw.invoiceItemId, invoiceId);
+    const invItem = db.prepare("SELECT * FROM invoice_items WHERE id = ? AND invoice_id = ?").get(bindId(raw.invoiceItemId), invoiceId);
     if (!invItem) return res.status(400).json({ error: "One of the selected items doesn't belong to this invoice." });
     const pieces = Number(raw.pieces) || 0;
     if (pieces <= 0) return res.status(400).json({ error: `Enter a quantity to return for ${invItem.name}.` });
@@ -211,7 +211,7 @@ router.put("/:id", requireRole("owner"), (req, res) => {
   const items = [];
   for (const raw of rawItems) {
     const invItem = db.prepare("SELECT * FROM invoice_items WHERE id = ? AND invoice_id = ?")
-      .get(raw.invoiceItemId, sr.invoice_id);
+      .get(bindId(raw.invoiceItemId), sr.invoice_id);
     if (!invItem) return res.status(400).json({ error: "One of the items doesn't belong to the original invoice." });
     const pieces = Number(raw.pieces) || 0;
     if (pieces <= 0) return res.status(400).json({ error: `Enter a quantity for ${invItem.name}, or remove the line.` });

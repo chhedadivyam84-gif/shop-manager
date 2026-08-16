@@ -14,7 +14,7 @@
    ============================================================ */
 const express = require("express");
 const db = require("../db");
-const { uid, logAction } = require("../util");
+const { uid, logAction, bindId } = require("../util");
 const { requireRole } = require("../auth");
 const reg = require("../printRegistry");
 
@@ -96,7 +96,7 @@ router.post("/templates/:docType", requireRole("owner"), (req, res) => {
   if (req.body.copyFrom) {
     const src = db.prepare(
       "SELECT config FROM doc_templates WHERE id = ? AND doc_type = ?"
-    ).get(req.body.copyFrom, doc.key);
+    ).get(bindId(req.body.copyFrom), doc.key);
     if (!src) return res.status(400).json({ error: "The template being copied was not found." });
     config = JSON.parse(src.config);
   } else {

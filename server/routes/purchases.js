@@ -1,6 +1,6 @@
 const express = require("express");
 const db = require("../db");
-const { uid, todayStr, round2, logAction } = require("../util");
+const { uid, todayStr, round2, logAction, bindId } = require("../util");
 const { requireRole } = require("../auth");
 const inventory = require("../inventory");
 const Pricing = require("../../public/js/pricing.js");
@@ -205,10 +205,10 @@ router.post("/", (req, res) => {
   const piecesBySize = {};
   const items = [];
   for (const raw of rawItems) {
-    const product = db.prepare("SELECT * FROM products WHERE id = ?").get(raw.productId);
+    const product = db.prepare("SELECT * FROM products WHERE id = ?").get(bindId(raw.productId));
     if (!product) return res.status(400).json({ error: `Product ${raw.productId} no longer exists.` });
     const size = raw.sizeId != null
-      ? db.prepare("SELECT * FROM product_sizes WHERE id = ? AND product_id = ?").get(raw.sizeId, product.id)
+      ? db.prepare("SELECT * FROM product_sizes WHERE id = ? AND product_id = ?").get(bindId(raw.sizeId), product.id)
       : null;
     if (!size) return res.status(400).json({ error: `Choose a size for ${product.name}.` });
 
@@ -400,10 +400,10 @@ router.put("/:id", (req, res) => {
     const piecesBySize = {};
     const items = [];
     for (const raw of rawItems) {
-      const product = db.prepare("SELECT * FROM products WHERE id = ?").get(raw.productId);
+      const product = db.prepare("SELECT * FROM products WHERE id = ?").get(bindId(raw.productId));
       if (!product) throw { status: 400, error: `Product ${raw.productId} no longer exists.` };
       const size = raw.sizeId != null
-        ? db.prepare("SELECT * FROM product_sizes WHERE id = ? AND product_id = ?").get(raw.sizeId, product.id)
+        ? db.prepare("SELECT * FROM product_sizes WHERE id = ? AND product_id = ?").get(bindId(raw.sizeId), product.id)
         : null;
       if (!size) throw { status: 400, error: `Choose a size for ${product.name}.` };
 

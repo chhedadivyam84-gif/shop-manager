@@ -45,4 +45,20 @@ function round2(n) {
   return Math.round((n + Number.EPSILON) * 100) / 100;
 }
 
-module.exports = { uid, todayStr, localDate, round2, logAction };
+/**
+ * A value from a request on its way into a SQLite bind.
+ *
+ * node:sqlite REFUSES to bind `undefined` — it throws "Provided value cannot
+ * be bound to SQLite parameter 1" rather than simply matching no row. So a
+ * request missing one field (a cart line with no productId, a transfer with
+ * no sizeId) blew up with a bare "Something went wrong on the server" instead
+ * of the clear message the route had ready two lines further down.
+ *
+ * NULL is bindable and matches nothing, which is exactly the intended
+ * meaning, and every one of these lookups already handles "not found".
+ */
+function bindId(value) {
+  return value === undefined ? null : value;
+}
+
+module.exports = { uid, todayStr, localDate, round2, logAction, bindId };

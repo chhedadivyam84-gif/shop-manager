@@ -1,6 +1,6 @@
 const express = require("express");
 const db = require("../db");
-const { uid, logAction, round2, todayStr, localDate } = require("../util");
+const { uid, logAction, round2, todayStr, localDate, bindId } = require("../util");
 const { requireRole } = require("../auth");
 const { saveAttachment } = require("../attachments");
 const { postPaymentToLedger, voidLinkedLedgerEntry } = require("../bankLink");
@@ -199,7 +199,7 @@ router.post("/:id/payments", (req, res) => {
 
   let stockInId = null;
   if (req.body.stockInId) {
-    const si = db.prepare("SELECT id FROM stock_ins WHERE id = ? AND supplier_id = ?").get(req.body.stockInId, s.id);
+    const si = db.prepare("SELECT id FROM stock_ins WHERE id = ? AND supplier_id = ?").get(bindId(req.body.stockInId), s.id);
     if (!si) return res.status(400).json({ error: "Selected purchase invoice no longer exists for this supplier." });
     stockInId = si.id;
   }

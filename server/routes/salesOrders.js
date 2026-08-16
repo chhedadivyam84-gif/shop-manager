@@ -1,6 +1,6 @@
 const express = require("express");
 const db = require("../db");
-const { uid, todayStr, round2, logAction } = require("../util");
+const { uid, todayStr, round2, logAction, bindId } = require("../util");
 const inventory = require("../inventory");
 const Pricing = require("../../public/js/pricing.js");
 
@@ -61,10 +61,10 @@ function computeTotals({ items, discountType, discountValue, taxType, transport,
 function buildItems(rawItems) {
   const items = [];
   for (const raw of rawItems) {
-    const product = db.prepare("SELECT * FROM products WHERE id = ?").get(raw.productId);
+    const product = db.prepare("SELECT * FROM products WHERE id = ?").get(bindId(raw.productId));
     if (!product) throw { status: 400, error: `Product ${raw.productId} no longer exists.` };
     const size = raw.sizeId != null
-      ? db.prepare("SELECT * FROM product_sizes WHERE id = ? AND product_id = ?").get(raw.sizeId, product.id)
+      ? db.prepare("SELECT * FROM product_sizes WHERE id = ? AND product_id = ?").get(bindId(raw.sizeId), product.id)
       : null;
     if (!size) throw { status: 400, error: `Choose a size for ${product.name}.` };
 

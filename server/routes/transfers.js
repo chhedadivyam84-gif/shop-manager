@@ -1,6 +1,6 @@
 const express = require("express");
 const db = require("../db");
-const { uid, logAction, round2 } = require("../util");
+const { uid, logAction, round2, bindId } = require("../util");
 const inventory = require("../inventory");
 
 const router = express.Router();
@@ -39,7 +39,7 @@ router.get("/", (req, res) => {
 router.post("/", (req, res) => {
   const { sizeId, fromLocationId, toLocationId, quantity, reason } = req.body;
 
-  const size = db.prepare("SELECT * FROM product_sizes WHERE id = ?").get(sizeId);
+  const size = db.prepare("SELECT * FROM product_sizes WHERE id = ?").get(bindId(sizeId));
   if (!size) return res.status(400).json({ error: "Product size not found." });
   const product = db.prepare("SELECT * FROM products WHERE id = ?").get(size.product_id);
   if (!product) return res.status(400).json({ error: "Product not found." });

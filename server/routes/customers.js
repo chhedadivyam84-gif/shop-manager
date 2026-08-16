@@ -1,6 +1,6 @@
 const express = require("express");
 const db = require("../db");
-const { uid, logAction, round2, todayStr, localDate } = require("../util");
+const { uid, logAction, round2, todayStr, localDate, bindId } = require("../util");
 const { requireRole } = require("../auth");
 const { saveAttachment } = require("../attachments");
 const { postPaymentToLedger, voidLinkedLedgerEntry } = require("../bankLink");
@@ -191,7 +191,7 @@ router.post("/:id/payments", (req, res) => {
 
   let invoiceId = null;
   if (req.body.invoiceId) {
-    const inv = db.prepare("SELECT id FROM invoices WHERE id = ? AND customer_id = ? AND doc_type = 'invoice'").get(req.body.invoiceId, c.id);
+    const inv = db.prepare("SELECT id FROM invoices WHERE id = ? AND customer_id = ? AND doc_type = 'invoice'").get(bindId(req.body.invoiceId), c.id);
     if (!inv) return res.status(400).json({ error: "Selected invoice no longer exists for this customer." });
     invoiceId = inv.id;
   }

@@ -161,8 +161,17 @@ router.get("/dashboard", (req, res) => {
     GROUP BY c.id ORDER BY total DESC LIMIT 4
   `).all();
 
+  /* goods_value is the worth of what is on the document, summed from the
+     lines. A challan's stored `total` is transport + loading only -- by
+     design, since a challan is not a demand for money -- so the goods it
+     carried had no figure anywhere, and the list could only show a tag.
+     This is additive: nothing about the challan's money changes, no due is
+     raised, no GST is applied. It just lets the list say what went out. */
   const recentInvoices = db.prepare(`
-    SELECT i.*, c.name AS customer_name FROM invoices i
+    SELECT i.*, c.name AS customer_name,
+      (SELECT COALESCE(SUM(ii.qty * ii.rate * (1 - COALESCE(ii.discount_pct,0)/100.0)),0)
+         FROM invoice_items ii WHERE ii.invoice_id = i.id) AS goods_value
+    FROM invoices i
     LEFT JOIN customers c ON c.id = i.customer_id
     WHERE i.voided = 0 ORDER BY i.created_at DESC LIMIT 5
   `).all();

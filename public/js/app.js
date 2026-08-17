@@ -1131,13 +1131,22 @@ async function renderHome(){
     <div class="row-right row-title">${fmt(c.total)}</div></div>`).join("") : `<div class="empty-hint">No customer purchases yet.</div>`;
 
   document.getElementById("recent-invoices").innerHTML = d.recentInvoices.length ? d.recentInvoices.map(inv=>{
-    // A challan carries no money, so it shows a "Challan" tag and no amount
-    // rather than a misleading ₹0 / Paid pill.
+    /* A challan keeps its "Challan" tag rather than a Paid/Due pill — it is
+       not a demand for money, so those would be wrong.
+
+       It DOES show its value when it has one. Rates are optional on a challan,
+       not absent: goods often go out priced, and the owner wants to see what
+       left the shop. Only a challan whose lines were left without rates shows
+       no amount, because ₹0 there would read as "worth nothing" rather than
+       "not priced". */
     const challan = inv.doc_type === "challan";
     const status = challan ? "Challan" : (inv.balance_due<=0 ? "Paid" : (inv.advance>0 ? "Partial":"Due"));
     const cls = challan ? "" : (status==="Paid"?"ok":status==="Partial"?"warn":"danger");
+    // A challan is worth its goods; an invoice is worth its total.
+    const worth = challan ? Number(inv.goods_value) || 0 : Number(inv.total) || 0;
+    const amount = worth > 0 ? fmt(worth) : "";
     return `<div class="list-row" data-open-invoice="${inv.id}" style="cursor:pointer;"><div><div class="row-title">${inv.challan_no}</div><div class="row-sub">${escapeHtml(inv.customer_name||"Walk-in")} · ${inv.date}</div></div>
-    <div class="row-right"><div class="row-title">${challan?"":fmt(inv.total)}</div><span class="pill ${cls}">${status}</span></div></div>`;
+    <div class="row-right"><div class="row-title">${amount}</div><span class="pill ${cls}">${status}</span></div></div>`;
   }).join("") : `<div class="empty-hint">No invoices yet. Tap "New Invoice" to create your first one.</div>`;
   document.querySelectorAll("[data-open-invoice]").forEach(el=>{
     el.addEventListener("click", ()=>openExistingInvoice(el.dataset.openInvoice));

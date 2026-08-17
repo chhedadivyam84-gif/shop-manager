@@ -1488,3 +1488,38 @@ table.erp-table tbody td{ height: var(--bill-row-h, auto); }
 }
 .fs-home:hover{ background:rgba(255,255,255,.26); }
 .fs-home:focus-visible{ outline:2px solid var(--gold); outline-offset:2px; }
+
+/* ---------------------------------------------------------------- Cheque
+   Pre-printed stationery: the bank's paper carries the boxes, this overlays
+   only the words. Every position is in mm because the browser maps mm to real
+   paper at print time — a px layout lands differently on each screen DPI.
+
+   The leaf is a positioning canvas, so it has no border or background of its
+   own on paper; the outline below is screen-only, to show where the cheque
+   edge falls while calibrating. */
+.chq-leaf{ position:relative; background:#fff; color:#000; margin:0 auto; }
+.chq-f{ position:absolute; white-space:nowrap; overflow:hidden; line-height:1; }
+.chq-cross{ position:absolute; font-size:7pt; font-weight:700; transform:rotate(-20deg);
+            border-top:1px solid #000; border-bottom:1px solid #000; padding:1px 3px; }
+
+/* On screen only: the leaf edge and, on the test sheet, a 10mm grid to read
+   the offset straight off a trial print held against a real cheque. */
+.chq-leaf{ outline:1px dashed rgba(0,0,0,.35); }
+.chq-gv{ position:absolute; top:0; bottom:0; width:0; border-left:1px dotted rgba(0,0,0,.28); }
+.chq-gh{ position:absolute; left:0; right:0; height:0; border-top:1px dotted rgba(0,0,0,.28); }
+.chq-test-note{ position:absolute; left:4mm; bottom:2mm; font-size:6pt; color:#444; max-width:170mm; }
+
+@media print{
+  /* The dashed edge is a screen guide, never ink on the customer's cheque. */
+  .chq-leaf{ outline:none !important; }
+  /* Nothing but the leaf may reach the paper, and it must start at the very
+     corner: any app chrome above it would push the whole cheque down. */
+  body.printing-cheque #shell,
+  body.printing-cheque nav.bottom,
+  body.printing-cheque .scrim,
+  body.printing-cheque .sheet{ display:none !important; }
+  body.printing-cheque #cheque-print-area{
+    display:block !important; position:absolute; left:0; top:0; margin:0; padding:0;
+  }
+  @page{ margin:0; }
+}

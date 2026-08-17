@@ -156,6 +156,7 @@ app.use("/api/categories", requireAuth, require("./routes/categories"));
 app.use("/api/cashbook", requireAuth, require("./routes/cashbook"));
 app.use("/api/bankbook", requireAuth, require("./routes/bankbook"));
 app.use("/api/bank-accounts", requireAuth, require("./routes/bankAccounts"));
+app.use("/api/cheques", requireAuth, require("./routes/cheques"));
 app.use("/api/inquiries", requireAuth, require("./routes/inquiries"));
 app.use("/api/purchases", requireAuth, require("./routes/purchases"));
 app.use("/api/purchase-orders", requireAuth, require("./routes/purchaseOrders"));

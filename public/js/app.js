@@ -1152,6 +1152,106 @@ async function renderHome(){
     el.addEventListener("click", ()=>openExistingInvoice(el.dataset.openInvoice));
   });
 }
+/* ============================================================
+   CHEQUE PRINTING
+
+   The cheque is pre-printed stationery. Only the words are overlaid, so this
+   renders a blank 202 x 92mm leaf and places each field at its measured
+   millimetre position. Everything is in `mm` units, never px: at print time
+   the browser maps mm to real paper, and a px layout would land differently
+   on every screen DPI.
+
+   The offsets exist because printers grip paper differently. Two machines fed
+   the same cheque put the same ink 2-3mm apart, and on a cheque 3mm moves the
+   payee onto the line above. Each bank's stationery is calibrated once with
+   the alignment test, and the offset is stored against that account.
+   ============================================================ */
+
+const CHEQUE_STATE = { layout: null, cheque: null, bankAccountId: null };
+
+/** Amount in figures the way a cheque is written: "1,23,456.00 /-".
+    No rupee sign: the box on the leaf already carries one, and the trailing
+    /- is what stops digits being added after it. */
+function chequeFigures(n){
+  const v = round2(Number(n) || 0);
+  return v.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " /-";
+}
+
+/** Ruled-off words, so nothing can be added after them. */
+function chequeWords(n){
+  const words = Pricing.amountInWords(round2(n));
+  // amountInWords already ends "Only"; the trailing rule is what stops a
+  // "...Only" becoming "...Only and Five Hundred" in someone else's pen.
+  return words;
+}
+
+/**
+ * Splits the words over the cheque's two ruled lines at a WORD boundary,
+ * because a cheque broken mid-word reads as tampered with.
+ */
+function splitChequeWords(words, firstLineChars){
+  const parts = String(words).split(/\s+/);
+  let a = "", b = "";
+  for (const w of parts) {
+    if (!b && (a + " " + w).trim().length <= firstLineChars) a = (a + " " + w).trim();
+    else b = (b + " " + w).trim();
+  }
+  return [a, b];
+}
+
+/** One field, positioned in mm from the leaf's top-left, offsets applied. */
+function chequeField(spec, text, cfg, extra){
+  const x = spec.x + (Number(cfg.offsetX) || 0);
+  const y = spec.y + (Number(cfg.offsetY) || 0);
+  return `<div class="chq-f" style="left:${x}mm;top:${y}mm;font-size:${spec.size}pt;${extra||""}">${escapeHtml(text)}</div>`;
+}
+
+/** The date, one digit per pre-printed box. */
+function chequeDateBoxes(spec, iso, cfg){
+  const d = String(iso || "").replace(/-/g, "");           // YYYYMMDD
+  if (d.length !== 8) return "";
+  const digits = d.slice(6, 8) + d.slice(4, 6) + d.slice(0, 4);   // DDMMYYYY
+  const x0 = spec.x + (Number(cfg.offsetX) || 0);
+  const y  = spec.y + (Number(cfg.offsetY) || 0);
+  return [...digits].map((ch, i) =>
+    `<div class="chq-f" style="left:${x0 + i * spec.spacing}mm;top:${y}mm;font-size:${spec.size}pt;">${ch}</div>`
+  ).join("");
+}
+
+/**
+ * The leaf itself. `mode` is "print" for the real thing, or "test" for the
+ * alignment sheet — the test draws the boundary and a 10mm grid so the
+ * offsets can be read straight off a trial print against a real cheque.
+ */
+function renderChequeLeaf(cheque, layout, mode){
+  const t = layout.template, cfg = layout.config, F = t.fields;
+  const payee = cfg.capsPayee ? String(cheque.payee_name).toUpperCase() : cheque.payee_name;
+  const [w1, w2] = splitChequeWords(chequeWords(cheque.amount), 58);
+
+  const grid = mode === "test"
+    ? Array.from({ length: Math.floor(t.width / 10) + 1 }, (_, i) =>
+        `<div class="chq-gv" style="left:${i * 10}mm;"></div>`).join("")
+      + Array.from({ length: Math.floor(t.height / 10) + 1 }, (_, i) =>
+        `<div class="chq-gh" style="top:${i * 10}mm;"></div>`).join("")
+    : "";
+
+  return `
+    <div class="chq-leaf ${mode === "test" ? "chq-test" : ""}"
+         style="width:${t.width}mm;height:${t.height}mm;font-family:${cfg.fontFamily};">
+      ${grid}
+      ${chequeDateBoxes(F.date, cheque.cheque_date, cfg)}
+      ${chequeField(F.payee, payee, cfg, `max-width:${F.payee.maxWidth}mm;`)}
+      ${chequeField(F.words1, w1, cfg, `max-width:${F.words1.maxWidth}mm;`)}
+      ${w2 ? chequeField(F.words2, w2, cfg, `max-width:${F.words2.maxWidth}mm;`) : ""}
+      ${chequeField(F.amount, chequeFigures(cheque.amount), cfg, "font-weight:700;")}
+      ${cheque.crossing === "account_payee"
+        ? `<div class="chq-cross" style="left:${F.acPayee.x + (Number(cfg.offsetX)||0)}mm;top:${F.acPayee.y + (Number(cfg.offsetY)||0)}mm;">A/C PAYEE</div>`
+        : ""}
+      ${mode === "test" ? `<div class="chq-test-note">ALIGNMENT TEST — hold this against a real cheque.
+        Each square is 10mm. If the words sit low by one square, set Down to -10.</div>` : ""}
+    </div>`;
+}
+
 function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }

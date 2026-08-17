@@ -305,6 +305,8 @@ async function initApp(){
   document.getElementById("hdr-main").textContent = greeting();
   document.getElementById("hdr-sub").textContent = isOwner()?"Owner Dashboard":"Staff Dashboard";
   document.getElementById("avatar-btn").addEventListener("click", openSettings);
+  const bizBtn = document.getElementById("biz-switch");
+  if(bizBtn) bizBtn.addEventListener("click", openBusinesses);
   document.getElementById("refresh-btn").addEventListener("click", async ()=>{ await renderAll(); toast("Refreshed", "ok"); });
 
   document.querySelectorAll("nav.bottom .tab").forEach(tab=>{
@@ -885,7 +887,7 @@ async function switchTab(tab){
 }
 
 async function renderAll(){
-  await Promise.all([loadProducts(), loadCustomers(), loadSuppliers(), loadLocations(), loadBankAccounts(), loadStaffNames(), loadCategories(), loadAreas()]);
+  await Promise.all([loadProducts(), loadCustomers(), loadSuppliers(), loadLocations(), loadBankAccounts(), loadStaffNames(), loadCategories(), loadAreas(), loadBusinesses()]);
   await renderHome();
   const activeTab = document.querySelector("nav.bottom .tab.active");
   const tab = activeTab ? activeTab.dataset.tab : "home";
@@ -1445,6 +1447,105 @@ function printChequeSheet(html){
   window.addEventListener("afterprint", done);
   window.print();
   setTimeout(done, 1500);   // some browsers never fire afterprint
+}
+
+
+/* ============================================================
+   BUSINESS SWITCHER
+
+   The header always names the business you are working in. That is not
+   decoration: it decides whose stock a sale takes and whose name goes on the
+   bill, and the cost of noticing late is a bill raised on the wrong company.
+
+   The chip stays hidden while there is only one business, so a shop that
+   never adds a second never sees a control it does not need.
+   ============================================================ */
+const BIZ = { list: [], current: null };
+
+async function loadBusinesses(){
+  try{
+    const r = await api("GET", "/businesses");
+    BIZ.list = r.businesses || [];
+    BIZ.current = r.current;
+  }catch(e){ BIZ.list = []; }
+  paintBusinessChip();
+}
+
+function paintBusinessChip(){
+  const btn = document.getElementById("biz-switch");
+  if(!btn) return;
+  const cur = BIZ.list.find(b => b.id === BIZ.current);
+  // One business is the normal case — no chip, no clutter.
+  if(!cur || BIZ.list.length < 2 && !isOwner()){ btn.style.display = "none"; return; }
+  btn.style.display = "";
+  document.getElementById("biz-name").textContent = cur ? cur.name : "Business";
+}
+
+function openBusinesses(){
+  const sheet = document.getElementById("sheet-businesses");
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>&#10005;</button>
+    <div class="sheet-title">Businesses</div>
+    <p class="muted" style="font-size:12px;margin-top:-6px;">
+      Each business keeps its own products, customers, stock, bills and reports.</p>
+
+    <div class="card" style="margin-top:12px;">
+      ${BIZ.list.map(b => `
+        <div class="biz-row" data-biz="${escapeHtml(b.id)}">
+          <div style="flex:1;min-width:0;">
+            <div class="row-title">${escapeHtml(b.name)}</div>
+            <div class="row-sub">${b.id === BIZ.current ? "You are working in this one" : "Tap to switch"}</div>
+          </div>
+          ${b.id === BIZ.current ? `<span class="tick">&#10003;</span>` : ""}
+        </div>`).join("")}
+    </div>
+
+    ${isOwner() ? `
+      <label class="field-label" style="margin-top:14px;">Add a new business</label>
+      <input type="text" id="biz-new-name" placeholder="e.g. XYZ Enterprises">
+      <button class="btn btn-outline" id="biz-add" style="margin-top:8px;">Add Business</button>
+      <p class="muted" style="font-size:11px;line-height:1.6;margin-top:8px;">
+        It starts completely empty — its own products, customers and numbering.
+        Nothing is copied from ${escapeHtml((BIZ.list.find(b=>b.id===BIZ.current)||{}).name || "this business")}.</p>`
+    : `<p class="muted" style="font-size:11px;margin-top:12px;">Only the owner can add a business.</p>`}
+  `;
+
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+
+  sheet.querySelectorAll("[data-biz]").forEach(row => {
+    row.addEventListener("click", async () => {
+      const id = row.dataset.biz;
+      if(id === BIZ.current) return closeAllSheets();
+      try{
+        const r = await api("POST", "/businesses/switch", { businessId: id });
+        closeAllSheets();
+        toast(`Switched to ${r.name}.`, "ok");
+        /* Everything on screen belongs to the business we just left, so it is
+           all reloaded rather than patched — a stale product list here would
+           be a sale booked against the wrong company. */
+        await loadBusinesses();
+        await renderAll();
+      }catch(e){ toast(e.message); }
+    });
+  });
+
+  const add = document.getElementById("biz-add");
+  if(add) add.addEventListener("click", async () => {
+    const name = (document.getElementById("biz-new-name").value || "").trim();
+    if(!name) return toast("Give the business a name.");
+    add.disabled = true;
+    try{
+      const made = await api("POST", "/businesses", { name });
+      await api("POST", "/businesses/switch", { businessId: made.id });
+      closeAllSheets();
+      toast(`${made.name} created. You are now working in it.`, "ok");
+      await loadBusinesses();
+      await renderAll();
+    }catch(e){ toast(e.message); add.disabled = false; }
+  });
+
+  showSheet("sheet-businesses");
 }
 
 

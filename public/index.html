@@ -42,6 +42,11 @@
         <div>
           <div class="greet-sub" id="hdr-sub">Owner Dashboard</div>
           <div class="greet-main" id="hdr-main">Namaste</div>
+          <!-- Which business you are in must never be a guess: it decides
+               whose stock you sell and whose name goes on the bill. -->
+          <button id="biz-switch" class="biz-switch" style="display:none;">
+            <span id="biz-name">…</span> <span class="biz-caret">&#9662;</span>
+          </button>
         </div>
         <div style="display:flex;align-items:center;gap:8px;">
           <button id="refresh-btn" title="Refresh">&#8635;</button>
@@ -1103,6 +1108,7 @@
   <div class="sheet" id="sheet-outstanding-detail"></div>
   <div class="sheet" id="sheet-ewb"></div>
   <div class="sheet" id="sheet-return-edit"></div>
+  <div class="sheet" id="sheet-businesses"></div>
 
   <!-- ============ FULLSCREEN: STOCK REPORT PRINT ============
        In-page print (not window.open) — a PWA installed to the home screen

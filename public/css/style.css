@@ -1523,3 +1523,15 @@ table.erp-table tbody td{ height: var(--bill-row-h, auto); }
   }
   @page{ margin:0; }
 }
+
+/* The business switcher. Sits under the greeting so it reads as "who you are
+   working as", and is deliberately not a quiet link: billing the wrong
+   business is expensive to undo. */
+.biz-switch{ margin-top:4px; background:rgba(255,255,255,.16); color:#fff; border:none;
+  padding:3px 10px; border-radius:100px; font-size:11px; font-weight:700; cursor:pointer;
+  max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.biz-caret{ opacity:.75; }
+.biz-row{ display:flex; align-items:center; gap:10px; padding:12px 0; border-bottom:1px solid var(--border);
+  cursor:pointer; }
+.biz-row:last-child{ border-bottom:none; }
+.biz-row .tick{ color:var(--ok); font-weight:800; }

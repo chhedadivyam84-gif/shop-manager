@@ -145,8 +145,12 @@ router.get("/dashboard", (req, res) => {
     days.push({ label: d.toLocaleDateString("en-IN", { weekday: "short" }), date: key, total });
   }
 
+  /* `units` is a COUNT OF GOODS, so it sums pieces. Summing qty put the billed
+     area there instead: two 7 x 3 doors read "42 units sold", and anything
+     measured in sq.ft always out-ranked something sold by the piece. Revenue
+     keeps qty x rate — money is charged per selling unit. */
   const soldRows = db.prepare(`
-    SELECT ii.name, SUM(ii.qty) AS units, SUM(ii.qty*ii.rate) AS revenue
+    SELECT ii.name, SUM(ii.pieces) AS units, SUM(ii.qty*ii.rate) AS revenue
     FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
     WHERE i.voided = 0 AND i.doc_type = 'invoice' GROUP BY ii.name ORDER BY units DESC LIMIT 4
   `).all();
@@ -1328,7 +1332,7 @@ function buildReportRows(req) {
     rows = [["Customer", "Product", "Size", "Qty", "Amount"]];
     db.prepare(`
       SELECT c.name AS party, ii.name AS product, ii.size_label AS size,
-             SUM(ii.qty) AS qty, SUM(ii.qty * ii.rate) AS amount
+             SUM(ii.pieces) AS qty, SUM(ii.qty * ii.rate) AS amount
       FROM invoice_items ii
       JOIN invoices i ON i.id = ii.invoice_id
       LEFT JOIN customers c ON c.id = i.customer_id

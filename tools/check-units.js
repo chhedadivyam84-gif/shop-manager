@@ -17,7 +17,13 @@ const BAD = [
   { re: /\bpi\.qty\s*\*\s*(COALESCE\()?\s*ps\.cost_price/,  why: "sq.ft x cost-per-piece — cost must use pieces" },
   { re: /\bpieces\s*\*\s*\w*[Rr]ate\b(?!.*per[_ ]?piece)/,  why: "pieces x per-selling-unit rate — money must use qty" },
   { re: /closing_stock[^;]*\*\s*purchaseRate/,             why: "pieces x per-selling-unit rate for stock value" },
-  { re: /SUM\(\s*ii\.qty\s*\)[^;]*stock/i,                 why: "summing sq.ft as a stock movement" }
+  { re: /SUM\(\s*ii\.qty\s*\)[^;]*stock/i,                 why: "summing sq.ft as a stock movement" },
+  /* A COUNT OF GOODS must sum pieces. This one is easy to miss because the
+     alias reads fine — `SUM(ii.qty) AS units` looks correct until you notice
+     qty is the billed area, which is how "42 units sold" reached the
+     dashboard for two doors. Any qty summed under a counting name is wrong. */
+  { re: /SUM\(\s*\w+\.qty\s*\)\s*AS\s+(units?|qty|pieces|count|sold)\b/i,
+    why: "a count of goods aliased from qty (billed area) — count pieces" }
 ];
 
 const FILES = [];

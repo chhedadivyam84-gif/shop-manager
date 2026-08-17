@@ -6259,11 +6259,19 @@ function renderInvoicePageContent(){
   const bottomLeft = `<div class="erp-bottom-left">
     ${deliveryAddr ? `<div><b>Delivery Address:</b> ${escapeHtml(deliveryAddr)}</div>` : ""}
     ${inv.remarks ? `<div><b>Remarks:</b> ${escapeHtml(inv.remarks)}</div>` : ""}
-    ${challan ? `<div><b>Status:</b> ${inv.converted_invoice_id ? "Billed (Tax Invoice raised)" : "Pending — not yet billed"}</div>` : ""}
-    ${challan ? `<div><b>Acknowledgement:</b> ${inv.ack_status === "Received"
+    ${/* Status and Acknowledgement are for the shop, not the customer. They
+         track what the office still owes itself — raise the tax invoice, chase
+         the signed copy — and printing "not yet billed" on the copy handed over
+         with the goods invites the wrong question at the door.
+
+         They stay on screen and disappear on paper: .screen-only is hidden by
+         the print stylesheet, so the preview shows the full picture and the
+         printed challan does not. */""}
+    ${challan ? `<div class="screen-only"><b>Status:</b> ${inv.converted_invoice_id ? "Billed (Tax Invoice raised)" : "Pending — not yet billed"}</div>` : ""}
+    ${challan ? `<div class="screen-only"><b>Acknowledgement:</b> ${inv.ack_status === "Received"
       ? "Received" + (inv.ack_receiver_name ? " — signed by " + escapeHtml(inv.ack_receiver_name) : "")
       : "Pending — signed copy not yet returned"}</div>` : ""}
-    ${showRate ? `<div><b>Amount in Words:</b> ${Pricing.amountInWords(displayTotal)}</div>` : ""}
+    ${showRate ? `<div class="erp-words"><b>Amount in Words:</b> ${Pricing.amountInWords(displayTotal)}</div>` : ""}
   </div>`;
 
   // The heading the template names, or the wording the bill has always used.

@@ -504,8 +504,29 @@ table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #178a6e;color:#0
 /* Bottom: delivery info / remarks / amount-in-words on the left, the
    bordered totals grid on the right — matching the shop's paper form. */
 .erp-bottom{display:flex;border:1px solid #000;border-top:none;font-size:9.5px;}
-.erp-bottom-left{flex:1;padding:5px 8px;line-height:1.5;border-right:1px solid #000;}
-.erp-totals-box{flex:0 0 42%;font-size:10px;}
+/* A column, so the amount in words can be pinned to the bottom of it. */
+.erp-bottom-left{flex:1;padding:5px 8px;line-height:1.5;border-right:1px solid #000;
+  display:flex;flex-direction:column;align-items:stretch;}
+
+/* Amount in Words sits at the FOOT of the block, always in the same place.
+   It used to follow whatever was above it, so a two-line delivery address
+   put it in one position and a four-line address in another, and hiding the
+   shop-side status notes on paper moved it again. margin-top:auto takes up
+   the slack instead, so the address grows downwards and the words stay put
+   level with the Grand Total. */
+.erp-words{ margin-top:auto; padding-top:4px; }
+/* Working notes that belong to the shop, not to the customer's copy. Visible
+   in the preview, gone on paper. */
+.invoice-page .screen-only{ display:block; }
+
+/* The totals box is pinned to the TOP of the bottom row and given its own
+   height, so it sits in the same place on every document. Before this it was
+   a flex item stretched by its neighbour: the left column carries the
+   delivery address, remarks and amount-in-words, and each line it gained or
+   lost pushed the Grand Total up or down the page. Now the left column grows
+   and the figures stay put. */
+.erp-bottom{ align-items:flex-start; }
+.erp-totals-box{flex:0 0 42%;font-size:10px;align-self:flex-start;}
 .erp-tb-row{display:flex;justify-content:space-between;padding:2px 8px;border-bottom:1px solid #000;}
 .erp-tb-row:last-child{border-bottom:none;}
 .erp-tb-grand{font-weight:800;font-size:12.5px;border-top:1.5px solid #000;}
@@ -657,6 +678,8 @@ table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #178a6e;color:#0
 }
 
 @media print{
+  /* Shop-side notes never reach the paper. */
+  .screen-only{ display:none !important; }
   /* EVERY rule that reveals a print surface below is scoped to .show — the
      class that marks an overlay as actually open. Without that scoping the
      rules fire whether or not the overlay is on screen, so a bill left in

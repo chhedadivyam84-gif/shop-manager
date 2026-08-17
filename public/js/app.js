@@ -4243,11 +4243,47 @@ function openRecordPurchasePayment(supplier, editEntry){
     <label class="field-label">Remarks (optional)</label>
     <input type="text" id="pp-note" value="${escapeHtml(e?e.note||"":"")}" placeholder="e.g. Part payment against May bill">
     <button class="btn btn-primary" id="pp-save" style="margin-top:16px;">${e?"Update Payment":"Save Payment"}</button>
+    <!-- Only meaningful once the mode is Cheque; toggled with the chips below. -->
+    <button class="btn btn-outline" id="pp-print-cheque" style="margin-top:8px;display:none;">Print cheque for this payment</button>
+    <p class="muted" id="pp-cheque-hint" style="font-size:11px;line-height:1.6;margin:6px 0 0;display:none;">
+      Opens the cheque screen with ${escapeHtml(supplier.name)} already filled in as the payee.</p>
   `;
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+
+  /* Carries the payment across rather than making it be retyped: the payee is
+     the supplier being paid, and the amount is the one on this form. The
+     reference field is where a cheque number is normally noted, so it seeds
+     the cheque number too. The payment itself is NOT saved here — writing the
+     cheque and recording the payment are separate acts, and doing both from
+     one tap would record money that has not left yet. */
+  const printChequeBtn = document.getElementById("pp-print-cheque");
+  if(printChequeBtn) printChequeBtn.addEventListener("click", ()=>{
+    const amount = parseFloat(document.getElementById("pp-amount").value) || 0;
+    const ref = (document.getElementById("pp-reference").value || "").trim();
+    CHEQUE_STATE.draft = {
+      chequeNo: ref, payeeName: supplier.name, amount: amount || "",
+      chequeDate: isoDate(new Date()), crossing: "account_payee"
+    };
+    closeAllSheets();
+    switchTab("cheque");
+  });
+
+  /* The cheque button follows the Payment Mode: a cheque is the only mode
+     there is anything to print for. */
+  const syncChequeBtn = () => {
+    const sel = sheet.querySelector("[data-method].selected");
+    const isCheque = !!sel && sel.dataset.method === "Cheque";
+    const btn = document.getElementById("pp-print-cheque");
+    const hint = document.getElementById("pp-cheque-hint");
+    if(btn) btn.style.display = isCheque ? "" : "none";
+    if(hint) hint.style.display = isCheque ? "" : "none";
+  };
+  syncChequeBtn();
+
   sheet.querySelectorAll("[data-method]").forEach(b=>b.addEventListener("click", ()=>{
     sheet.querySelectorAll("[data-method]").forEach(x=>x.classList.remove("selected")); b.classList.add("selected");
     toggleBankAccountChips(sheet, "pp-bankacct", b.dataset.method);
+    syncChequeBtn();
   }));
   toggleBankAccountChips(sheet, "pp-bankacct", sheet.querySelector("[data-method].selected").dataset.method);
   wireBankAccountChips(sheet, "pp-bankacct");

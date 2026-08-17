@@ -881,6 +881,7 @@ async function switchTab(tab){
   if(tab==="otherledger") await renderOtherLedger();
   if(tab==="fyear") await renderFyScreen();
   if(tab==="printmgr") await renderPrintManager();
+  if(tab==="cheque") await renderCheque();
 }
 
 async function renderAll(){
@@ -1251,6 +1252,201 @@ function renderChequeLeaf(cheque, layout, mode){
         Each square is 10mm. If the words sit low by one square, set Down to -10.</div>` : ""}
     </div>`;
 }
+
+/**
+ * The Cheque Print screen.
+ *
+ * Two jobs, and they are deliberately in one place: writing the cheque, and
+ * getting the ink to land on the right part of the paper. The second is the
+ * one that wastes leaves — a cheque printed 3mm out is a cheque destroyed —
+ * so the calibration lives beside the preview rather than in a settings page
+ * nobody visits.
+ */
+async function renderCheque(){
+  const host = document.getElementById("cheque-body");
+  if(!host) return;
+
+  const banks = state.bankAccounts || [];
+  if(!banks.length){
+    host.innerHTML = `<div class="section-title" style="margin-top:10px;">Print a Cheque</div>
+      <div class="empty-hint">Add a bank account first — a cheque is drawn on one.<br>
+      Home &rarr; Bank Book &rarr; Accounts.</div>`;
+    return;
+  }
+  if(!CHEQUE_STATE.bankAccountId) CHEQUE_STATE.bankAccountId = banks[0].id;
+
+  // The calibration for THIS account. Each bank's stationery differs.
+  try{
+    CHEQUE_STATE.layout = await api("GET", `/cheques/layout?bankAccountId=${encodeURIComponent(CHEQUE_STATE.bankAccountId)}`);
+  }catch(e){
+    host.innerHTML = `<div class="pm-warn">Could not load the cheque settings — ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+
+  const d = CHEQUE_STATE.draft || (CHEQUE_STATE.draft = {
+    chequeNo: "", payeeName: "", amount: "", chequeDate: isoDate(new Date()), crossing: "account_payee"
+  });
+
+  host.innerHTML = `
+    <div class="section-title" style="margin-top:10px;">Print a Cheque</div>
+
+    <div class="card">
+      <label class="field-label">Bank account</label>
+      <select id="chq-bank">${banks.map(b=>
+        `<option value="${b.id}" ${b.id===CHEQUE_STATE.bankAccountId?"selected":""}>${escapeHtml(b.name)}</option>`).join("")}</select>
+
+      <div class="dim-grid" style="margin-top:10px;">
+        <label class="pm-field"><span>Cheque No.</span>
+          <input type="text" id="chq-no" inputmode="numeric" value="${escapeHtml(d.chequeNo)}" placeholder="on the leaf"></label>
+        <label class="pm-field"><span>Date on cheque</span>
+          <input type="date" id="chq-date" value="${escapeHtml(d.chequeDate)}"></label>
+      </div>
+
+      <label class="field-label" style="margin-top:10px;">Pay to</label>
+      <input type="text" id="chq-payee" value="${escapeHtml(d.payeeName)}" placeholder="Name exactly as it should read">
+
+      <label class="field-label" style="margin-top:10px;">Amount</label>
+      <input type="number" id="chq-amount" inputmode="decimal" step="any" min="0"
+             value="${escapeHtml(String(d.amount))}" placeholder="0.00">
+
+      <label class="check-row"><input type="checkbox" id="chq-crossing"
+        ${d.crossing==="account_payee"?"checked":""}><span>A/C Payee crossing</span></label>
+    </div>
+
+    <div class="section-title">Preview</div>
+    <p class="muted" style="font-size:11px;margin:-4px 0 8px;line-height:1.6;">
+      Shown at true size. The dashed edge is the cheque's outline — it is a guide
+      on screen and never prints.</p>
+    <div id="chq-preview" style="overflow-x:auto;"></div>
+
+    <div class="section-title">Position on paper</div>
+    <p class="muted" style="font-size:11px;margin:-4px 0 8px;line-height:1.6;">
+      Every printer grips paper slightly differently. Print the alignment sheet,
+      hold it against a real cheque, and nudge until they match. Saved for this
+      bank only, so each cheque book is set once.</p>
+    <div class="card">
+      <div class="erp-kv"><span>Left / right</span><b><span id="chq-ox">0</span> mm</b></div>
+      <div class="chip-row" style="margin-bottom:8px;">
+        <button class="chip" data-nudge="x:-1">&larr; 1mm</button>
+        <button class="chip" data-nudge="x:1">1mm &rarr;</button>
+        <button class="chip" data-nudge="x:-5">&larr; 5mm</button>
+        <button class="chip" data-nudge="x:5">5mm &rarr;</button>
+      </div>
+      <div class="erp-kv"><span>Up / down</span><b><span id="chq-oy">0</span> mm</b></div>
+      <div class="chip-row">
+        <button class="chip" data-nudge="y:-1">&uarr; 1mm</button>
+        <button class="chip" data-nudge="y:1">1mm &darr;</button>
+        <button class="chip" data-nudge="y:-5">&uarr; 5mm</button>
+        <button class="chip" data-nudge="y:5">5mm &darr;</button>
+      </div>
+      <button class="btn btn-outline" id="chq-test" style="margin-top:12px;">Print alignment sheet</button>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:8px;margin:14px 0 24px;">
+      <button class="btn btn-gold" id="chq-print">Print cheque</button>
+      <p class="muted" style="font-size:11px;line-height:1.6;margin:0;">
+        The cheque is recorded when printed. It moves no money — a cheque is a
+        promise until the bank clears it.</p>
+    </div>`;
+
+  const cfg = CHEQUE_STATE.layout.config;
+  document.getElementById("chq-ox").textContent = cfg.offsetX;
+  document.getElementById("chq-oy").textContent = cfg.offsetY;
+
+  const draftCheque = () => ({
+    cheque_no: d.chequeNo, payee_name: d.payeeName || "—",
+    amount: Number(d.amount) || 0, cheque_date: d.chequeDate, crossing: d.crossing
+  });
+  const paint = () => {
+    document.getElementById("chq-preview").innerHTML =
+      renderChequeLeaf(draftCheque(), CHEQUE_STATE.layout, "print");
+  };
+  paint();
+
+  const bind = (id, key, ev) => {
+    const el = document.getElementById(id);
+    el.addEventListener(ev || "input", () => { d[key] = el.value; paint(); });
+  };
+  bind("chq-no", "chequeNo"); bind("chq-payee", "payeeName");
+  bind("chq-amount", "amount"); bind("chq-date", "chequeDate", "change");
+  document.getElementById("chq-crossing").addEventListener("change", e=>{
+    d.crossing = e.target.checked ? "account_payee" : "bearer"; paint();
+  });
+  document.getElementById("chq-bank").addEventListener("change", async e=>{
+    CHEQUE_STATE.bankAccountId = e.target.value; await renderCheque();
+  });
+
+  // Nudges save immediately: a calibration you have to remember to save is a
+  // calibration that gets lost between the test print and the real one.
+  host.querySelectorAll("[data-nudge]").forEach(b=>{
+    b.addEventListener("click", async ()=>{
+      const [axis, step] = b.dataset.nudge.split(":");
+      const c = CHEQUE_STATE.layout.config;
+      const next = { offsetX: c.offsetX, offsetY: c.offsetY,
+                     fontFamily: c.fontFamily, capsPayee: c.capsPayee };
+      if(axis === "x") next.offsetX += Number(step); else next.offsetY += Number(step);
+      try{
+        CHEQUE_STATE.layout = await api("POST", "/cheques/layout",
+          { bankAccountId: CHEQUE_STATE.bankAccountId, ...next });
+        document.getElementById("chq-ox").textContent = CHEQUE_STATE.layout.config.offsetX;
+        document.getElementById("chq-oy").textContent = CHEQUE_STATE.layout.config.offsetY;
+        paint();
+      }catch(e){ toast(e.message); }
+    });
+  });
+
+  document.getElementById("chq-test").addEventListener("click", ()=>
+    printChequeSheet(renderChequeLeaf(draftCheque(), CHEQUE_STATE.layout, "test")));
+
+  document.getElementById("chq-print").addEventListener("click", async (ev)=>{
+    const btn = ev.currentTarget;
+    if(!String(d.chequeNo).trim()) return toast("Enter the cheque number printed on the leaf.");
+    if(!String(d.payeeName).trim()) return toast("Enter who the cheque is payable to.");
+    if(!(Number(d.amount) > 0)) return toast("Enter an amount greater than zero.");
+
+    btn.disabled = true;
+    try{
+      const saved = await api("POST", "/cheques", {
+        bankAccountId: CHEQUE_STATE.bankAccountId, chequeNo: d.chequeNo,
+        payeeName: d.payeeName, amount: Number(d.amount),
+        chequeDate: d.chequeDate, crossing: d.crossing
+      });
+      printChequeSheet(renderChequeLeaf(saved, CHEQUE_STATE.layout, "print"));
+      await api("POST", `/cheques/${saved.id}/printed`, {});
+      toast(`Cheque ${saved.cheque_no} recorded.`, "ok");
+      // Clear the leaf-specific fields; the bank and calibration stay.
+      CHEQUE_STATE.draft = { chequeNo: "", payeeName: "", amount: "",
+                             chequeDate: isoDate(new Date()), crossing: d.crossing };
+      await renderCheque();
+    }catch(e){ toast(e.message); btn.disabled = false; }
+  });
+}
+
+/**
+ * Sends one leaf to the printer.
+ *
+ * The app's own chrome is hidden and the leaf is pinned to the very corner of
+ * the page: anything above it would push the whole cheque down the paper,
+ * which is exactly the error the calibration exists to remove.
+ */
+function printChequeSheet(html){
+  let area = document.getElementById("cheque-print-area");
+  if(!area){
+    area = document.createElement("div");
+    area.id = "cheque-print-area";
+    document.body.appendChild(area);
+  }
+  area.innerHTML = html;
+  document.body.classList.add("printing-cheque");
+  const done = () => {
+    document.body.classList.remove("printing-cheque");
+    window.removeEventListener("afterprint", done);
+  };
+  window.addEventListener("afterprint", done);
+  window.print();
+  setTimeout(done, 1500);   // some browsers never fire afterprint
+}
+
 
 function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -13927,6 +14123,7 @@ function wireFinancialYear(){
 
 function wireAccounts(){
   document.getElementById("acc-back-link").addEventListener("click", e=>{ e.preventDefault(); switchTab("home"); });
+  document.getElementById("chq-back-link").addEventListener("click", e=>{ e.preventDefault(); switchTab("home"); });
   document.getElementById("ol-back-link").addEventListener("click", e=>{ e.preventDefault(); switchTab("accounts"); });
   document.getElementById("acc-fyear").addEventListener("click", ()=>switchTab("fyear"));
   wireFinancialYear();

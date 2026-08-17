@@ -30,6 +30,67 @@ function serialize(p) {
 }
 
 /**
+ * The whole catalogue in three queries instead of three per product.
+ *
+ * serialize() above runs one query for a product's sizes and then one more
+ * for every size's per-location stock. That is fine for one product, but the
+ * list endpoint called it in a loop: a 2,400-product catalogue became roughly
+ * 4,800 queries and took 4.6 seconds — on a request the app makes on almost
+ * every screen. Here the sizes and the location rows are each fetched once
+ * and grouped in memory.
+ *
+ * The output is identical, field for field and order for order, so nothing
+ * downstream changes: same `gst` alias, same size ordering (sort_order then
+ * id), same `byLocation` rows ordered by the location's sort_order, active
+ * locations only.
+ */
+function serializeAll(products) {
+  const sizes = db.prepare(
+    "SELECT id, label, price, stock, cost_price, product_id FROM product_sizes ORDER BY sort_order ASC, id ASC"
+  ).all();
+
+  /* getStockByLocation() calls ensureAllLocationRows() first, so reading the
+     stock is also what CREATES the row for a location a size has never been
+     stocked at. Dropping that would quietly change the answer: a size added
+     before a second location existed would come back with one location
+     instead of two. Done here in one statement for every size at once,
+     rather than one per size. */
+  db.exec(`
+    INSERT INTO size_location_stock (size_id, location_id, quantity, last_updated)
+    SELECT s.id, l.id, 0, 0
+    FROM product_sizes s CROSS JOIN locations l
+    WHERE NOT EXISTS (
+      SELECT 1 FROM size_location_stock x WHERE x.size_id = s.id AND x.location_id = l.id
+    )
+  `);
+
+  const locRows = db.prepare(`
+    SELECT sls.size_id, sls.quantity, sls.min_stock, sls.last_updated,
+           l.id AS location_id, l.code, l.name
+    FROM size_location_stock sls JOIN locations l ON l.id = sls.location_id
+    WHERE l.active = 1
+    ORDER BY l.sort_order ASC
+  `).all();
+
+  const byLoc = new Map();
+  for (const r of locRows) {
+    const { size_id, ...rest } = r;
+    if (!byLoc.has(size_id)) byLoc.set(size_id, []);
+    byLoc.get(size_id).push(rest);
+  }
+
+  const byProduct = new Map();
+  for (const s of sizes) {
+    const { product_id, ...rest } = s;
+    rest.byLocation = byLoc.get(rest.id) || [];
+    if (!byProduct.has(product_id)) byProduct.set(product_id, []);
+    byProduct.get(product_id).push(rest);
+  }
+
+  return products.map(p => ({ ...p, gst: p.gst_rate, sizes: byProduct.get(p.id) || [] }));
+}
+
+/**
  * products.stock is a denormalised total of its sizes' stock, kept in sync
  * here rather than computed on every read — the alternative would be
  * rewriting every report/inventory query that already reads products.stock
@@ -111,7 +172,7 @@ function hasLocationStock(s) {
 
 router.get("/", (req, res) => {
   const products = db.prepare("SELECT * FROM products ORDER BY name ASC").all();
-  res.json(products.map(serialize));
+  res.json(serializeAll(products));
 });
 
 router.post("/", (req, res) => {

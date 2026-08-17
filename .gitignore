@@ -8,3 +8,9 @@ npm-debug.log
 backups/
 print-archive/
 data/tools/
+
+# Per-install business registry: which businesses exist on THIS machine.
+# It must never travel through git, or a deploy would overwrite the
+# server's own list with the developer's.
+data/companies.json
+data/companies/

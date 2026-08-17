@@ -12089,8 +12089,12 @@ const pmState = {
 
 async function renderPrintManager(){
   if(!pmState.docs.length){
-    try{ pmState.docs = await api("GET","/print-manager/documents"); }
-    catch(e){ pmState.docs = []; }
+    /* A failed load used to be swallowed, and an empty list renders exactly
+       like a working one: a Document Type dropdown holding nothing but "All
+       documents", with no hint that anything went wrong. The reason is kept
+       so the form can say so and offer a retry. */
+    try{ pmState.docs = await api("GET","/print-manager/documents"); pmState.docsError = null; }
+    catch(e){ pmState.docs = []; pmState.docsError = e.message || "Could not load the document list."; }
   }
   document.querySelectorAll("[data-pm-tab]").forEach(b=>
     b.classList.toggle("selected", b.dataset.pmTab === pmState.tab));
@@ -12111,7 +12115,13 @@ function renderPmSearchForm(){
   el.dataset.built = "1";
 
   const avail = pmState.docs.filter(d=>d.available);
-  el.innerHTML = `
+  /* Say plainly when the list could not be fetched, rather than showing a
+     dropdown with one entry and letting it look like the answer. */
+  const docsWarning = pmState.docsError
+    ? `<div class="pm-warn">Could not load the document types — ${escapeHtml(pmState.docsError)}
+         <button class="btn btn-outline btn-sm" id="pm-docs-retry" style="width:auto;margin-top:6px;">Try again</button></div>`
+    : "";
+  el.innerHTML = docsWarning + `
     <div class="pm-filter-grid">
       <label class="pm-field"><span>Document Type</span>
         <select data-pm-f="docType">
@@ -12162,6 +12172,12 @@ function renderPmSearchForm(){
     }
   });
   document.getElementById("pm-search-btn").addEventListener("click", runPmSearch);
+  const docsRetry = document.getElementById("pm-docs-retry");
+  if(docsRetry) docsRetry.addEventListener("click", async ()=>{
+    docsRetry.disabled = true; docsRetry.textContent = "Loading…";
+    pmState.docs = []; pmState.docsError = null;
+    await renderPrintManager();
+  });
   document.getElementById("pm-clear-btn").addEventListener("click", ()=>{
     Object.keys(f).forEach(k=>{ f[k] = (k==="docType") ? "all" : (k==="status" ? "active" : ""); });
     el.dataset.built = ""; renderPmSearchForm();

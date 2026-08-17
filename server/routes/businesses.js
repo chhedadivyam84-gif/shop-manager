@@ -17,10 +17,18 @@ const { logAction } = require("../util");
 const router = express.Router();
 const C = db.companies;
 
-/** Businesses this session may see. Today every signed-in user sees them all;
- *  when per-staff access arrives, this is the one place that narrows. */
+/** Businesses this session may see.
+ *
+ *  Only the owner moves between businesses. Staff belong to the one they are
+ *  signed in to — a second business's stock, customers, bills and profit are
+ *  not theirs to read. Narrowing the list here is what enforces that: the
+ *  switch below refuses anything this function did not return, so hiding the
+ *  chip in the browser is a courtesy, not the lock. */
 function visibleTo(req) {
-  return C.list().filter(b => b.active);
+  const active = C.list().filter(b => b.active);
+  if (req.session.role === "owner") return active;
+  const current = req.session.businessId || C.defaultId();
+  return active.filter(b => b.id === current);
 }
 
 router.get("/", (req, res) => {

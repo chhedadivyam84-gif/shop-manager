@@ -203,11 +203,25 @@ function queryRows(query) {
   const rows = db.prepare(sql).all(params);
 
   const out = rows.map(r => {
-    // Purchase Rate prefers what was actually last paid; the typed cost_price is
-    // the fallback for a product that has only ever had an opening balance.
+    /* Purchase Rate is shown PER SELLING UNIT, the way it is quoted and
+       entered: a door is bought at so many rupees per sq.ft. It prefers what
+       was actually last paid, falling back to the typed cost for a product
+       that has only ever had an opening balance. */
     const purchaseRate = r.last_purchase_rate != null && r.last_purchase_rate > 0
       ? r.last_purchase_rate
       : (r.cost_rate || 0);
+
+    /* Stock Value is a different quantity and must not reuse that rate.
+       Closing stock is counted in PIECES, and cost_price is landed cost PER
+       PIECE (rate + transport, divided by pieces — see products.js). Valuing
+       pieces at a per-sq.ft rate is the same unit mix that made Stock Out
+       read 42 for two 7 x 3 doors: it would have priced 8 doors at 8 x the
+       sq.ft rate instead of 8 x the cost of a door.
+
+       This is also the basis the Profit report and the Balance Sheet's
+       closing stock already use, so all three now agree on what the same
+       shelf is worth. */
+    const costPerPiece = r.cost_rate || 0;
     return {
       productId: r.product_id,
       productName: r.product_name,
@@ -228,7 +242,7 @@ function queryRows(query) {
       warehouseStock: r.warehouse_stock || 0,
       purchaseRate: purchaseRate,
       saleRate: r.sale_rate || 0,
-      stockValue: Math.round((r.closing_stock || 0) * purchaseRate * 100) / 100,
+      stockValue: Math.round((r.closing_stock || 0) * costPerPiece * 100) / 100,
       lastPurchaseDate: r.last_purchase_date || "",
       lastSaleDate: r.last_sale_date || ""
     };

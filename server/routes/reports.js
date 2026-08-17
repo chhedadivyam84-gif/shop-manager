@@ -1342,7 +1342,7 @@ function buildReportRows(req) {
     rows = [["Challan No", "Date", "Customer", "Sale Value", "Cost", "Profit"]];
     db.prepare(`
       SELECT i.challan_no, i.date, c.name AS customer_name, i.total,
-             (SELECT COALESCE(SUM(ii.qty * COALESCE(ps.cost_price,0)),0)
+             (SELECT COALESCE(SUM(ii.pieces * COALESCE(ps.cost_price,0)),0)
                 FROM invoice_items ii LEFT JOIN product_sizes ps ON ps.id = ii.size_id
                WHERE ii.invoice_id = i.id) AS cost
       FROM invoices i

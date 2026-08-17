@@ -138,6 +138,17 @@ app.use("/api/auth", require("./routes/auth"));
    untouched — a closed year stays fully visible, printable and exportable. */
 app.use("/api", require("./fyLock").guard);
 app.use("/api/license", requireAuth, require("./routes/license"));
+/* Bind the request to its business BEFORE any route runs, so every
+   db.prepare() inside a handler already speaks to the right database. The id
+   comes from the SESSION, never from the request — anything the browser can
+   send, the browser can forge, and forging this would open another
+   business's books. */
+app.use("/api", (req, res, next) => {
+  const id = (req.session && req.session.businessId) || db.companies.defaultId();
+  db.companies.runAs(id, next);
+});
+
+app.use("/api/businesses", requireAuth, require("./routes/businesses"));
 app.use("/api/settings", requireAuth, require("./routes/settings"));
 app.use("/api/products", requireAuth, require("./routes/products"));
 app.use("/api/customers", requireAuth, require("./routes/customers"));

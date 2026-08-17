@@ -27,6 +27,16 @@ function has(v) {
 // the summary can share one definition of "what counts as a movement" — the
 // commonest way these two screens disagree is by each maintaining its own list.
 //
+/* Every movement reports PIECES, because pieces are what stock is counted in.
+   A bill records two different quantities for one line: `pieces` (3 sheets)
+   and `qty` (96 sq.ft, the figure the customer is charged for). Only `pieces`
+   is ever added to or taken from size_location_stock.
+
+   Stock In / Stock Out used to sum `qty` while Closing Stock came from the
+   stock table, so two adjacent columns were in different units -- a 7 x 3
+   sheet is 21 sq.ft, so 2 pieces showed as 42 in one column and 2 in the
+   next -- and Opening Stock, derived as closing - in + out, mixed the two
+   into a figure that meant nothing. */
 // direction: +1 adds to stock, -1 removes. Voided documents are excluded at the
 // source, not filtered later, so they never reach a total.
 const MOVEMENTS = [
@@ -54,7 +64,7 @@ const MOVEMENTS = [
       SELECT pi.size_id, pi.product_id, p.date,
              COALESCE(NULLIF(p.purchase_no,''), NULLIF(p.supplier_invoice_no,''), 'Purchase') AS voucher,
              COALESCE(s.name,'') AS party,
-             pi.qty, pi.rate, p.location_id, p.created_at AS ord, pi.id AS rid
+             pi.pieces AS qty, pi.rate, p.location_id, p.created_at AS ord, pi.id AS rid
         FROM purchase_items pi
         JOIN purchases p ON p.id = pi.purchase_id
         LEFT JOIN suppliers s ON s.id = p.supplier_id
@@ -67,7 +77,7 @@ const MOVEMENTS = [
       SELECT ii.size_id, ii.product_id, i.date,
              COALESCE(NULLIF(i.challan_no,''), 'Sale') AS voucher,
              COALESCE(c.name,'') AS party,
-             ii.qty, ii.rate, i.location_id, i.created_at AS ord, ii.id AS rid
+             ii.pieces AS qty, ii.rate, i.location_id, i.created_at AS ord, ii.id AS rid
         FROM invoice_items ii
         JOIN invoices i ON i.id = ii.invoice_id
         LEFT JOIN customers c ON c.id = i.customer_id

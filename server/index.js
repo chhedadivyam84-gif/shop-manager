@@ -65,7 +65,11 @@ async function start() {
 
 // Session secret persists across restarts in data/session-secret so logins
 // aren't wiped every time the shop PC reboots the app.
-const SECRET_PATH = path.join(__dirname, "..", "data", "session-secret.txt");
+// Follows DATA_DIR too: on a mounted disk the secret survives the container,
+// so a restart doesn't sign every till in the shop out mid-sale.
+const SECRET_PATH = path.join(
+  process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(__dirname, "..", "data"),
+  "session-secret.txt");
 let sessionSecret;
 if (fs.existsSync(SECRET_PATH)) {
   sessionSecret = fs.readFileSync(SECRET_PATH, "utf8").trim();

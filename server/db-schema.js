@@ -3,7 +3,17 @@ const fs = require("fs");
 const { DatabaseSync } = require("node:sqlite");
 const { hashPin } = require("./auth");
 
-const DATA_DIR = path.join(__dirname, "..", "data");
+/* Everything the shop owns lives here: the databases, backups, uploads and the
+ * licence key. It defaults to the folder beside the code, which is right for a
+ * shop running this on its own PC.
+ *
+ * A host that rebuilds the container on every restart throws that folder away,
+ * taking the shop's invoices and its licence key with it. DATA_DIR points the
+ * app at a mounted disk instead, so the data outlives the container and a key
+ * is entered once rather than every few days. */
+const DATA_DIR = process.env.DATA_DIR
+  ? path.resolve(process.env.DATA_DIR)
+  : path.join(__dirname, "..", "data");
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 /* Opens ONE company's database and brings its schema up to date.

@@ -15,7 +15,10 @@
 const path = require("path");
 const fs = require("fs");
 
-const DATA_DIR = path.join(__dirname, "..", "data");
+// Same folder the rest of the app uses — see db-schema.js.
+const DATA_DIR = process.env.DATA_DIR
+  ? path.resolve(process.env.DATA_DIR)
+  : path.join(__dirname, "..", "data");
 const DB_PATH = path.join(DATA_DIR, "shop.db");
 
 function cloudConfig() {

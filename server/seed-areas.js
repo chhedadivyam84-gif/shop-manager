@@ -71,7 +71,8 @@ const ROUTES = {
   "Route 1": ["Malad", "Kandivali", "Borivali"],
   "Route 2": ["Goregaon", "Andheri", "Jogeshwari"],
   "Route 3": ["Bhandup", "Mulund", "Nahur"],
-  "Route 4": ["Thane", "Kalwa", "Mumbra"]
+  "Route 4": ["Thane", "Kalwa", "Mumbra"],
+  "Route 5": ["Dombivli", "Thakurli", "Kalyan"]
 };
 const LINES = [
   { line: "Western", stations: WESTERN },

@@ -69,7 +69,8 @@ const HARBOUR = ["CSMT", "Masjid", "Sandhurst Road", "Dockyard Road", "Reay Road
    would make that screen useless. */
 const ROUTES = {
   "Route 1": ["Malad", "Kandivali", "Borivali"],
-  "Route 2": ["Goregaon", "Andheri", "Jogeshwari"]
+  "Route 2": ["Goregaon", "Andheri", "Jogeshwari"],
+  "Route 3": ["Bhandup", "Mulund", "Nahur"]
 };
 const LINES = [
   { line: "Western", stations: WESTERN },

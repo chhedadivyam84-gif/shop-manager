@@ -35,7 +35,7 @@ function licensedLimit() {
       key = (row && row.license_key) || "";
     });
   } catch { /* a settings row that predates the column: treat as unlicensed */ }
-  return license.state(key);
+  return license.state(license.resolveKey(key));
 }
 
 /** Whether another business may be created, and the reason if not. */

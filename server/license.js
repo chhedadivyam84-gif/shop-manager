@@ -57,6 +57,27 @@ function enabled() {
   return PUBLIC_KEY.trim().length > 0;
 }
 
+/* Where the key is read from.
+ *
+ * It normally lives in settings.license_key, inside the database. On a host
+ * that hands the app a fresh disk on every restart — a spun-down Render
+ * instance, a new container — that file is gone and the key with it, and the
+ * shop is asked to paste it again. An environment variable survives that,
+ * because the host supplies it at boot rather than the disk.
+ *
+ * LICENSE_KEY therefore WINS over the stored key: on such a host the stored
+ * copy is the unreliable one. Set it and the shop never re-enters a key. */
+function resolveKey(storedKey) {
+  const fromEnv = (process.env.LICENSE_KEY || "").trim();
+  return fromEnv || String(storedKey || "").trim();
+}
+
+/** True when the key is coming from the environment, so the UI can say so
+ *  rather than showing a paste box that would have no effect. */
+function keyIsFromEnv() {
+  return (process.env.LICENSE_KEY || "").trim().length > 0;
+}
+
 function b64urlToBuf(s) {
   return Buffer.from(String(s).replace(/-/g, "+").replace(/_/g, "/"), "base64");
 }
@@ -127,4 +148,7 @@ function state(key) {
   };
 }
 
-module.exports = { enabled, parse, state, WARN_WITHIN_DAYS, DEFAULT_COMPANY_LIMIT };
+module.exports = {
+  enabled, parse, state, resolveKey, keyIsFromEnv,
+  WARN_WITHIN_DAYS, DEFAULT_COMPANY_LIMIT
+};

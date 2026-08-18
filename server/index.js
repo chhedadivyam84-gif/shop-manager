@@ -66,8 +66,9 @@ async function start() {
   /* Keeps the shop's delivery rounds identical on every machine it runs on.
      Insert-only, and limited to this shop by name — see seed-areas.js. */
   try {
-    const added = require("./seed-areas").seedCentralLineAreas(db);
-    if (added) console.log(`[areas] added ${added} Central Line delivery areas`);
+    const { added, moved } = require("./seed-areas").seedCentralLineAreas(db);
+    if (added) console.log(`[areas] added ${added} station delivery areas`);
+    if (moved) console.log(`[areas] reordered ${moved} areas into line order`);
   } catch (err) {
     // Never block start-up over a convenience: billing matters more.
     console.error("[areas] seed skipped:", err.message);

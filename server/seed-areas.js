@@ -48,9 +48,12 @@ const WESTERN = ["Churchgate", "Marine Lines", "Charni Road", "Grant Road",
   "Borivali", "Dahisar", "Mira Road", "Bhayandar", "Naigaon", "Vasai Road",
   "Nalasopara", "Virar"];
 
+/* Western Line first, then Central. That is the order the shop wants to scan
+   in Delivery Dispatch, and the areas list has no other ordering control —
+   sort_order is only ever set when an area is created. */
 function stationAreas() {
   const out = [];
-  for (const line of [MAIN, KASARA, KARJAT, WESTERN]) {
+  for (const line of [WESTERN, MAIN, KASARA, KARJAT]) {
     for (const station of line) {
       out.push(`${station} East`);
       out.push(`${station} West`);
@@ -61,18 +64,20 @@ function stationAreas() {
 }
 
 /**
- * Adds any missing Central Line areas. Returns how many were added — 0 on
- * every boot after the first, and 0 forever on anyone else's install.
+ * Adds any missing station areas and puts them in line order. Returns
+ * { added, moved } — both 0 on every boot after the first, and both 0
+ * forever on anyone else's install.
  */
 function seedCentralLineAreas(db) {
+  const nothing = { added: 0, moved: 0 };
   let shop = "";
   try {
     const row = db.prepare("SELECT business_name FROM settings WHERE id = 1").get();
     shop = (row && row.business_name) || "";
   } catch {
-    return 0;   // a database too old to have settings yet
+    return nothing;   // a database too old to have settings yet
   }
-  if (shop.trim().toLowerCase() !== ONLY_FOR_SHOP.toLowerCase()) return 0;
+  if (shop.trim().toLowerCase() !== ONLY_FOR_SHOP.toLowerCase()) return nothing;
 
   const find = db.prepare("SELECT id FROM areas WHERE state = ? AND city = ? AND area = ?");
   const insert = db.prepare(
@@ -90,7 +95,36 @@ function seedCentralLineAreas(db) {
     }
   });
   run();
-  return added;
+  return { added, moved: orderStationAreas(db) };
+}
+
+/**
+ * Puts the station areas into line order — Western, then Central — leaving
+ * every other area alone and ahead of them, in the order the shop already
+ * had. Only sort_order is touched: no area is added, removed or retired.
+ *
+ * Safe to run on each boot because nothing else ever writes sort_order; the
+ * areas screen can create and retire, but not reorder.
+ */
+function orderStationAreas(db) {
+  const rank = new Map(stationAreas().map((area, i) => [area, i]));
+  const rows = db.prepare(
+    "SELECT id, area, sort_order FROM areas WHERE state = ? AND city = ? ORDER BY sort_order, area"
+  ).all(STATE, CITY);
+
+  const others = rows.filter(r => !rank.has(r.area));
+  const stations = rows.filter(r => rank.has(r.area))
+    .sort((a, b) => rank.get(a.area) - rank.get(b.area));
+
+  const update = db.prepare("UPDATE areas SET sort_order = ? WHERE id = ?");
+  let moved = 0;
+  const run = db.transaction(() => {
+    [...others, ...stations].forEach((row, i) => {
+      if (row.sort_order !== i) { update.run(i, row.id); moved++; }
+    });
+  });
+  run();
+  return moved;
 }
 
 module.exports = { seedCentralLineAreas };

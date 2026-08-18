@@ -78,40 +78,92 @@ function outstandingFor(invoiceId) {
    Bills whose goods have not all gone out yet. This is the queue the
    dispatcher works from, so it deliberately shows partly-sent bills too —
    a bill half delivered is still a delivery waiting to happen. */
-router.get("/pending", (req, res) => {
-  const line = String(req.query.line || "").trim();
-  const areaId = String(req.query.areaId || "").trim();
+/** Bills with goods still owed, filtered. Shared by the flat list and the
+ *  area-wise board, so the two can never disagree about what is pending. */
+function pendingInvoices(q) {
+  const where = ["i.voided = 0"];
+  const args = [];
+  if (q.from)       { where.push("i.date >= ?"); args.push(q.from); }
+  if (q.to)         { where.push("i.date <= ?"); args.push(q.to); }
+  if (q.customerId) { where.push("i.customer_id = ?"); args.push(q.customerId); }
+  if (q.areaId)     { where.push("i.area_id = ?"); args.push(q.areaId); }
+  if (q.route)      { where.push("a.route = ?"); args.push(q.route); }
+  if (q.zone)       { where.push("a.zone = ?"); args.push(q.zone); }
+  if (q.line)       { where.push("EXISTS (SELECT 1 FROM area_lines al WHERE al.area_id = i.area_id AND al.line = ?)"); args.push(q.line); }
 
   const invoices = db.prepare(`
     SELECT i.id, i.challan_no, i.date, i.doc_type, i.customer_id, i.delivery_address,
            i.area_id, c.name AS customer_name, c.phone AS customer_mobile,
            c.gst AS customer_gstin, c.address AS customer_address, c.pin_code AS pincode,
-           a.area AS area_name, a.station, a.side
+           a.area AS area_name, a.station, a.side, a.zone, a.route
       FROM invoices i
       LEFT JOIN customers c ON c.id = i.customer_id
       LEFT JOIN areas a ON a.id = i.area_id
-     WHERE i.voided = 0
+     WHERE ${where.join(" AND ")}
      ORDER BY i.date DESC, i.rowid DESC
-     LIMIT 400`).all();
+     LIMIT 600`).all(...args);
 
   const out = [];
   for (const inv of invoices) {
-    if (areaId && inv.area_id !== areaId) continue;
-    if (line) {
-      const onLine = inv.area_id && db.prepare(
-        "SELECT 1 FROM area_lines WHERE area_id = ? AND line = ?").get(inv.area_id, line);
-      if (!onLine) continue;
-    }
     const items = outstandingFor(inv.id);
     const pending = items.filter(it => it.outstanding > 0.0001);
     if (!pending.length) continue;
-    out.push({
-      ...inv,
-      items: pending,
-      anyDispatched: items.some(it => it.dispatched > 0)
+    out.push({ ...inv, items: pending, anyDispatched: items.some(it => it.dispatched > 0) });
+  }
+  return out;
+}
+
+router.get("/pending", (req, res) => {
+  res.json({ invoices: pendingInvoices(req.query) });
+});
+
+/* ---------------------------------------------------------- planning
+
+   The dispatch board. Everything still owed, grouped by area, so the person
+   loading the van sees "Kandivali 5, Goregaon 5, Malad 5" and sends one
+   vehicle to each — instead of reading forty bills to work out the same thing.
+
+   This is the reason the module exists, so it is a first-class endpoint rather
+   than something the browser assembles by grouping a list it fetched. */
+router.get("/pending/by-area", (req, res) => {
+  const invoices = pendingInvoices(req.query);
+
+  const areas = new Map();
+  for (const inv of invoices) {
+    const key = inv.area_id || "__none";
+    if (!areas.has(key)) {
+      areas.set(key, {
+        areaId: inv.area_id || null,
+        area: inv.area_name || "No area set",
+        station: inv.station || "", side: inv.side || "",
+        zone: inv.zone || "", route: inv.route || "",
+        deliveries: 0, totalItems: 0, totalQty: 0, bills: []
+      });
+    }
+    const g = areas.get(key);
+    g.deliveries++;
+    g.totalItems += inv.items.length;
+    g.totalQty += inv.items.reduce((t, it) => t + (it.outstanding || 0), 0);
+    g.bills.push({
+      invoiceId: inv.id, challanNo: inv.challan_no, date: inv.date,
+      docType: inv.doc_type, customerId: inv.customer_id,
+      customer: inv.customer_name || "", mobile: inv.customer_mobile || "",
+      address: inv.delivery_address || inv.customer_address || "",
+      items: inv.items
     });
   }
-  res.json({ invoices: out });
+
+  /* Busiest area first: that is the one the dispatcher wants to load, and a
+     list sorted alphabetically buries it. */
+  const groups = [...areas.values()].sort((a, b) => b.deliveries - a.deliveries);
+  res.json({
+    groups,
+    totals: {
+      areas: groups.length,
+      deliveries: groups.reduce((t, g) => t + g.deliveries, 0),
+      items: groups.reduce((t, g) => t + g.totalItems, 0)
+    }
+  });
 });
 
 /* ---------------------------------------------------------- read */
@@ -379,6 +431,8 @@ function dropRows(q) {
   if (q.status)     { where.push("dd.status = ?");      args.push(q.status); }
   if (q.route)      { where.push("a.route = ?");        args.push(q.route); }
   if (q.zone)       { where.push("a.zone = ?");         args.push(q.zone); }
+  if (q.driver)     { where.push("d.driver_name = ?");  args.push(q.driver); }
+  if (q.vehicle)    { where.push("d.vehicle_no = ?");   args.push(q.vehicle); }
   if (q.line)       { where.push("EXISTS (SELECT 1 FROM area_lines al WHERE al.area_id = dd.area_id AND al.line = ?)"); args.push(q.line); }
 
   const rows = db.prepare(`
@@ -428,7 +482,11 @@ const REPORTS = {
   "area-wise":     ["Area-wise Dispatch",     r => r.area_name],
   "date-wise":     ["Date-wise Dispatch",     r => new Date(r.dispatch_at).toISOString().slice(0, 10)],
   "customer-wise": ["Customer-wise Dispatch", r => r.customer_name],
-  "route-wise":    ["Route-wise Dispatch",    r => r.route]
+  "route-wise":    ["Route-wise Dispatch",    r => r.route],
+  // Who drove it and what it went in — the two questions asked when something
+  // arrives damaged, or when a round has to be repeated tomorrow.
+  "driver-wise":   ["Driver-wise Dispatch",   r => r.driver_name],
+  "vehicle-wise":  ["Vehicle-wise Dispatch",  r => r.vehicle_no]
 };
 Object.entries(REPORTS).forEach(([path, [title, keyOf]]) => {
   router.get(`/reports/${path}`, (req, res) => {
@@ -461,6 +519,24 @@ router.get("/reports/product-wise", (req, res) => {
   }
   res.json({ report: "Product-wise Dispatch",
     groups: [...byProduct.values()].sort((a, b) => b.qty - a.qty) });
+});
+
+/* Area-wise Pending Delivery: the planning board, reachable from the reports
+   menu as well as the dispatch screen. Same endpoint underneath, so the report
+   and the board can never show different numbers. */
+router.get("/reports/area-wise-pending", (req, res) => {
+  const invoices = pendingInvoices(req.query);
+  const areas = new Map();
+  for (const inv of invoices) {
+    const key = inv.area_name || "No area set";
+    if (!areas.has(key)) areas.set(key, { key, label: key, deliveries: 0, items: 0, qty: 0 });
+    const g = areas.get(key);
+    g.deliveries++;
+    g.items += inv.items.length;
+    g.qty += inv.items.reduce((t, it) => t + (it.outstanding || 0), 0);
+  }
+  res.json({ report: "Area-wise Pending Delivery",
+    groups: [...areas.values()].sort((a, b) => b.deliveries - a.deliveries) });
 });
 
 /** Still to go out: nothing has left for these, or only part has. */

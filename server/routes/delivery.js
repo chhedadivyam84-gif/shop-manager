@@ -58,6 +58,8 @@ function registerRows(q) {
   if (q.status)   { where.push("dl.status = ?");       args.push(q.status); }
   if (q.route)    { where.push("dl.route = ?");        args.push(q.route); }
   if (q.zone)     { where.push("a.zone = ?");          args.push(q.zone); }
+  if (q.driver)   { where.push("dl.driver_name = ?");  args.push(q.driver); }
+  if (q.vehicle)  { where.push("dl.vehicle_no = ?");   args.push(q.vehicle); }
   if (q.line)     { where.push("EXISTS (SELECT 1 FROM area_lines al WHERE al.area_id = dl.area_id AND al.line = ?)"); args.push(q.line); }
 
   return db.prepare(`

@@ -2160,6 +2160,26 @@ if (dust) {
   console.log(`Tidied ${dust} account balance(s) that carried floating-point dust.`);
 }
 
+/* Delivery areas, broken into the parts a dispatch round is planned by.
+   "Bhandup East" is one area, but a driver thinks in station and side, and a
+   dispatcher thinks in line — so the pieces are stored rather than parsed out
+   of the name every time. Left NULL for an area that is not a station, like
+   the shop's own "Local". */
+addColumn("areas", "station", "TEXT");
+addColumn("areas", "side", "TEXT");   // 'East' | 'West' | NULL
+
+/* A station can sit on more than one line — CSMT is Central and Harbour, Bandra
+   is Western and Harbour — so line membership is its own table rather than a
+   column that would force a false choice. */
+db.exec(`
+CREATE TABLE IF NOT EXISTS area_lines (
+  area_id TEXT NOT NULL REFERENCES areas(id) ON DELETE CASCADE,
+  line TEXT NOT NULL,
+  PRIMARY KEY (area_id, line)
+);
+CREATE INDEX IF NOT EXISTS idx_area_lines_line ON area_lines(line);
+`);
+
 // Where the data lives — the backup module needs the on-disk paths, and this
 // is the single place that knows them.
 db.dataDir = DATA_DIR;

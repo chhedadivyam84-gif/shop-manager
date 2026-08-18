@@ -48,19 +48,48 @@ const WESTERN = ["Churchgate", "Marine Lines", "Charni Road", "Grant Road",
   "Borivali", "Dahisar", "Mira Road", "Bhayandar", "Naigaon", "Vasai Road",
   "Nalasopara", "Virar"];
 
-/* Western Line first, then Central. That is the order the shop wants to scan
-   in Delivery Dispatch, and the areas list has no other ordering control —
-   sort_order is only ever set when an area is created. */
+// Harbour Line: CSMT to Panvel, plus the branch that runs up to Goregaon.
+// Several of these stations are shared with Central and Western — Kurla and
+// Bandra carry all the traffic they do precisely because they are junctions.
+const HARBOUR = ["CSMT", "Masjid", "Sandhurst Road", "Dockyard Road", "Reay Road",
+  "Cotton Green", "Sewri", "Vadala Road", "GTB Nagar", "Chunabhatti", "Kurla",
+  "Tilak Nagar", "Chembur", "Govandi", "Mankhurd", "Vashi", "Sanpada",
+  "Juinagar", "Nerul", "Seawoods", "Belapur CBD", "Kharghar", "Mansarovar",
+  "Khandeshwar", "Panvel",
+  // the Goregaon branch — "Khar" spelt as the Western list has it, so the
+  // shop does not end up with both "Khar" and "Khar Road"
+  "Bandra", "Khar", "Santacruz", "Vile Parle", "Andheri", "Ram Mandir", "Goregaon"];
+
+/* Which line each run of stations belongs to. Western first, then Central,
+   then Harbour: that is the order the shop scans in Delivery Dispatch, and the
+   areas list has no other ordering control — sort_order is only ever set when
+   an area is created. */
+const LINES = [
+  { line: "Western", stations: WESTERN },
+  { line: "Central", stations: MAIN },
+  { line: "Central", stations: KASARA },
+  { line: "Central", stations: KARJAT },
+  { line: "Harbour", stations: HARBOUR }
+];
+
+/**
+ * Every station area in list order, each carrying the station, the side and
+ * the lines it sits on. A station on two lines appears ONCE, holding both —
+ * Dadar is not two areas, and CSMT is not a choice between Central and Harbour.
+ */
 function stationAreas() {
-  const out = [];
-  for (const line of [WESTERN, MAIN, KASARA, KARJAT]) {
-    for (const station of line) {
-      out.push(`${station} East`);
-      out.push(`${station} West`);
+  const byArea = new Map();
+  for (const { line, stations } of LINES) {
+    for (const station of stations) {
+      for (const side of ["East", "West"]) {
+        const area = `${station} ${side}`;
+        if (!byArea.has(area)) byArea.set(area, { area, station, side, lines: [] });
+        const entry = byArea.get(area);
+        if (!entry.lines.includes(line)) entry.lines.push(line);
+      }
     }
   }
-  // Dadar is on both lines — one area, not two identical ones.
-  return [...new Set(out)];
+  return [...byArea.values()];
 }
 
 /**
@@ -82,16 +111,30 @@ function seedCentralLineAreas(db) {
   const find = db.prepare("SELECT id FROM areas WHERE state = ? AND city = ? AND area = ?");
   const insert = db.prepare(
     "INSERT INTO areas (id, state, city, area, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?)");
+  const setParts = db.prepare("UPDATE areas SET station = ?, side = ? WHERE id = ?");
+  const linkLine = db.prepare(
+    "INSERT OR IGNORE INTO area_lines (area_id, line) VALUES (?, ?)");
   let sort = db.prepare(
     "SELECT COALESCE(MAX(sort_order), 0) AS n FROM areas WHERE state = ? AND city = ?"
   ).get(STATE, CITY).n;
 
   let added = 0;
   const run = db.transaction(() => {
-    for (const area of stationAreas()) {
-      if (find.get(STATE, CITY, area)) continue;
-      insert.run(uid("AREA"), STATE, CITY, area, ++sort, Date.now());
-      added++;
+    for (const s of stationAreas()) {
+      const existing = find.get(STATE, CITY, s.area);
+      let id;
+      if (existing) {
+        id = existing.id;
+      } else {
+        id = uid("AREA");
+        insert.run(id, STATE, CITY, s.area, ++sort, Date.now());
+        added++;
+      }
+      /* Applied to areas that already existed too: the first ninety were
+         created before these columns did, and an area with no station on it
+         cannot be found by a dispatcher filtering the round by line. */
+      setParts.run(s.station, s.side, id);
+      for (const line of s.lines) linkLine.run(id, line);
     }
   });
   run();
@@ -107,7 +150,7 @@ function seedCentralLineAreas(db) {
  * areas screen can create and retire, but not reorder.
  */
 function orderStationAreas(db) {
-  const rank = new Map(stationAreas().map((area, i) => [area, i]));
+  const rank = new Map(stationAreas().map((s, i) => [s.area, i]));
   const rows = db.prepare(
     "SELECT id, area, sort_order FROM areas WHERE state = ? AND city = ? ORDER BY sort_order, area"
   ).all(STATE, CITY);

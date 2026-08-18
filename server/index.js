@@ -121,8 +121,11 @@ app.use("/api", (req, res, next) => {
   if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return next();
   if (LICENCE_EXEMPT.some(p => req.originalUrl.startsWith(p))) return next();
 
+  // Through resolveKey, so LICENSE_KEY counts here too. This is the gate that
+  // actually holds the app read-only: reading the database directly would keep
+  // a host that wipes its disk locked out however the key was supplied.
   const row = db.prepare("SELECT license_key FROM settings WHERE id = 1").get();
-  const st = license.state(row && row.license_key);
+  const st = license.state(license.resolveKey(row && row.license_key));
   if (!st.expired) return next();
   return res.status(403).json({
     error: `${st.message} The app is read-only until it's renewed — you can still view, print and back up your records.`,

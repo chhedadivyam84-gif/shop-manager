@@ -41,7 +41,9 @@ const REGISTRY = {
   challan:   { table: "invoices",   column: "challan_no",   scope: "doc_type = 'challan'" },
   quotation: { table: "quotations", column: "quotation_no", scope: null },
   purchase:  { table: "purchases",  column: "purchase_no",  scope: null },
-  dispatch:  { table: "dispatches", column: "dispatch_no",  scope: null }
+  dispatch:  { table: "dispatches", column: "dispatch_no",  scope: null },
+  // Separate series from dispatch, deliberately: they are separate registers.
+  delivery:  { table: "deliveries", column: "delivery_no",  scope: null }
 };
 
 function config(docType) {

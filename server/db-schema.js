@@ -1742,7 +1742,8 @@ addColumn("doc_numbering", "auto_enabled", "INTEGER NOT NULL DEFAULT 1");
     ["purchase",  "PU", 7, "purchases",  "purchase_no",  null],
     // Its own series and its own prefix from the start — a dispatch note is
     // not a bill, and nothing else writes to this column.
-    ["dispatch",  "DN", 7, "dispatches", "dispatch_no",  null]
+    ["dispatch",  "DN", 7, "dispatches", "dispatch_no",  null],
+    ["delivery",  "DL", 7, "deliveries", "delivery_no",  null]
   ];
   defs.forEach(([type, prefix, width, table, column, scope]) => {
     seed.run(type, prefix, width, startFor(table, column, scope, prefix), Date.now());
@@ -2283,6 +2284,92 @@ CREATE TABLE IF NOT EXISTS dispatch_status_log (
   note TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_dispatch_log ON dispatch_status_log(dispatch_id, at);
+`);
+
+/* ------------------------------------------------------------
+   DELIVERY
+
+   Dispatch is goods LEAVING; delivery is goods ARRIVING. They are kept in
+   separate tables with separate numbering on purpose: a shop that asks "what
+   went out on Tuesday" and "what reached the customer on Tuesday" is asking
+   two different questions, and one table with a status column answers neither
+   cleanly once a load goes out on Tuesday and lands on Thursday.
+
+   A delivery may be raised from a dispatch drop or entered on its own — a
+   customer collecting from the shop is a delivery with no dispatch behind it.
+
+   Like dispatch, this NEVER touches stock. The invoice already deducted it.
+   ------------------------------------------------------------ */
+db.exec(`
+CREATE TABLE IF NOT EXISTS deliveries (
+  id TEXT PRIMARY KEY,
+  delivery_no TEXT UNIQUE NOT NULL,
+  delivery_at INTEGER NOT NULL,
+
+  -- Where it came from, when it came from anywhere. Both nullable: a walk-in
+  -- collection has neither.
+  dispatch_id TEXT REFERENCES dispatches(id),
+  drop_id TEXT REFERENCES dispatch_drops(id),
+
+  invoice_id TEXT REFERENCES invoices(id),
+  order_id TEXT,
+  customer_id TEXT,
+  -- Copied, not joined: the delivery note records the address the goods went
+  -- to, and editing the customer next year must not rewrite last year's note.
+  customer_name TEXT DEFAULT '',
+  customer_mobile TEXT DEFAULT '',
+  customer_gstin TEXT DEFAULT '',
+  delivery_address TEXT DEFAULT '',
+  landmark TEXT DEFAULT '',
+  pincode TEXT DEFAULT '',
+
+  area_id TEXT REFERENCES areas(id),
+  sub_area TEXT DEFAULT '',
+  route TEXT DEFAULT '',
+
+  transporter TEXT DEFAULT '',
+  vehicle_no TEXT DEFAULT '',
+  driver_name TEXT DEFAULT '',
+  driver_mobile TEXT DEFAULT '',
+
+  -- Pending | Out | Delivered | Partial | Cancelled | Returned
+  status TEXT NOT NULL DEFAULT 'Pending',
+  delivered_at INTEGER,
+  received_by TEXT DEFAULT '',
+  signature TEXT DEFAULT '',
+  remarks TEXT DEFAULT '',
+
+  created_at INTEGER NOT NULL,
+  created_by TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_deliveries_area ON deliveries(area_id);
+CREATE INDEX IF NOT EXISTS idx_deliveries_customer ON deliveries(customer_id);
+CREATE INDEX IF NOT EXISTS idx_deliveries_invoice ON deliveries(invoice_id);
+CREATE INDEX IF NOT EXISTS idx_deliveries_at ON deliveries(delivery_at);
+
+CREATE TABLE IF NOT EXISTS delivery_items (
+  id TEXT PRIMARY KEY,
+  delivery_id TEXT NOT NULL REFERENCES deliveries(id) ON DELETE CASCADE,
+  invoice_item_id INTEGER,          -- INTEGER: invoice_items.id is a rowid
+  product_id TEXT,
+  product_name TEXT DEFAULT '',
+  brand TEXT DEFAULT '',
+  size_label TEXT DEFAULT '',
+  unit TEXT DEFAULT '',
+  qty REAL NOT NULL DEFAULT 0,
+  remarks TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_delivery_items ON delivery_items(delivery_id);
+
+CREATE TABLE IF NOT EXISTS delivery_status_log (
+  id TEXT PRIMARY KEY,
+  delivery_id TEXT NOT NULL REFERENCES deliveries(id) ON DELETE CASCADE,
+  status TEXT NOT NULL,
+  at INTEGER NOT NULL,
+  by TEXT DEFAULT '',
+  note TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_delivery_log ON delivery_status_log(delivery_id, at);
 `);
 
 // Where the data lives — the backup module needs the on-disk paths, and this

@@ -69,12 +69,57 @@ const HARBOUR = ["CSMT", "Masjid", "Sandhurst Road", "Dockyard Road", "Reay Road
    would make that screen useless. */
 const ROUTES = {
   "Route 1": ["Malad", "Kandivali", "Borivali"],
-  "Route 2": ["Goregaon", "Andheri", "Jogeshwari"],
+  // Ram Mandir sits between Jogeshwari and Goregaon, so it rides with the van
+  // that already does both.
+  "Route 2": ["Goregaon", "Andheri", "Jogeshwari", "Ram Mandir"],
   "Route 3": ["Bhandup", "Mulund", "Nahur"],
   "Route 4": ["Thane", "Kalwa", "Mumbra"],
   "Route 5": ["Dombivli", "Thakurli", "Kalyan"],
   "Route 6": ["Diva", "Kopar", "Vitthalwadi"],
-  "Route 7": ["Ulhasnagar", "Ambernath", "Badlapur"]
+  "Route 7": ["Ulhasnagar", "Ambernath", "Badlapur"],
+
+  /* The rest, laid out three neighbouring stations to a van, following each
+     line outward. Grouped by geography rather than by how the shop actually
+     drives — so treat these as a first cut to correct in the Areas screen,
+     which is exactly the case the fill-blanks-only rule exists to protect. */
+
+  // Western, north of Borivali
+  "Route 8":  ["Dahisar", "Mira Road", "Bhayandar"],
+  "Route 9":  ["Naigaon", "Vasai Road", "Nalasopara"],
+  "Route 10": ["Virar"],
+
+  // Western, south of Andheri towards Churchgate
+  "Route 11": ["Vile Parle", "Santacruz", "Khar"],
+  "Route 12": ["Bandra", "Mahim", "Matunga Road"],
+  "Route 13": ["Dadar", "Prabhadevi", "Lower Parel"],
+  "Route 14": ["Mahalaxmi", "Mumbai Central", "Grant Road"],
+  "Route 15": ["Charni Road", "Marine Lines", "Churchgate"],
+
+  // Central, south of Bhandup towards CSMT
+  "Route 16": ["Kanjurmarg", "Vikhroli", "Ghatkopar"],
+  "Route 17": ["Vidyavihar", "Kurla", "Sion"],
+  "Route 18": ["Matunga", "Parel", "Currey Road"],
+  "Route 19": ["Chinchpokli", "Byculla", "Sandhurst Road"],
+  "Route 20": ["Masjid", "CSMT"],
+
+  // Kasara branch
+  "Route 21": ["Shahad", "Ambivli", "Titwala"],
+  "Route 22": ["Khadavli", "Vasind", "Asangaon"],
+  "Route 23": ["Atgaon", "Thansit", "Khardi"],
+  "Route 24": ["Kasara"],
+
+  // Karjat branch, beyond Badlapur
+  "Route 25": ["Vangani", "Shelu", "Neral"],
+  "Route 26": ["Bhivpuri Road", "Karjat"],
+
+  // Harbour, CSMT out to Panvel
+  "Route 27": ["Dockyard Road", "Reay Road", "Cotton Green"],
+  "Route 28": ["Sewri", "Vadala Road", "GTB Nagar"],
+  "Route 29": ["Chunabhatti", "Tilak Nagar", "Chembur"],
+  "Route 30": ["Govandi", "Mankhurd", "Vashi"],
+  "Route 31": ["Sanpada", "Juinagar", "Nerul"],
+  "Route 32": ["Seawoods", "Belapur CBD", "Kharghar"],
+  "Route 33": ["Mansarovar", "Khandeshwar", "Panvel"]
 };
 const LINES = [
   { line: "Western", stations: WESTERN },

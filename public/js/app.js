@@ -1485,11 +1485,13 @@ const DV = {
   from: "", to: "",
   picked: new Set(),
   board: null,
-  report: null            // [module, path] while one report is open
+  report: null,           // [module, path] while one report is open
+  dispatch: null,         // the trip open for marking deliveries
+  areaSearch: ""
 };
 
 function dvSet(mode){
-  DV.mode = mode; DV.area = null; DV.report = null; DV.picked.clear();
+  DV.mode = mode; DV.area = null; DV.report = null; DV.dispatch = null; DV.picked.clear();
   document.querySelectorAll("[data-dv-mode]").forEach(b =>
     b.classList.toggle("selected", b.dataset.dvMode === mode));
   renderDelivery();
@@ -1505,6 +1507,208 @@ async function renderDelivery(){
   if(DV.mode === "dispatches")  return dvRenderDispatches();
   if(DV.mode === "deliveries")  return dvRenderDeliveries();
   if(DV.mode === "reports")     return dvRenderReports();
+  if(DV.mode === "areas")       return dvRenderAreas();
+}
+
+/* ---------------------------------------------------------- closing a round
+
+   The van is out, the goods are handed over, and this is where that gets
+   recorded — from the phone, at the customer's door, which is the only place
+   and moment the signature is worth anything.
+
+   Delivered and Partial are per DROP, never for the whole trip: each customer
+   signs for their own goods, and one refused load must not mark four others
+   as received. */
+async function dvOpenDispatch(id){
+  DV.dispatch = await api("GET", "/dispatch/" + id);
+  dvRenderDispatchDetail();
+}
+
+function dvRenderDispatchDetail(){
+  const d = DV.dispatch;
+  const body = document.getElementById("dv-body");
+  const done = ["Delivered", "Partial", "Cancelled", "Returned"];
+
+  body.innerHTML = `
+    <button class="btn btn-outline" id="dv-dback" style="margin-bottom:10px;">← Dispatches</button>
+    <div class="card" style="margin-top:0;">
+      <div class="row-title">${escapeHtml(d.dispatch_no)} · ${escapeHtml(d.status)}</div>
+      <div class="row-sub">${escapeHtml(d.driver_name || "—")} · ${escapeHtml(d.vehicle_no || "—")}${d.driver_mobile ? " · " + escapeHtml(d.driver_mobile) : ""}</div>
+      <div class="chip-row" style="margin-top:8px;">
+        ${["Ready", "Out"].map(s => `<button class="chip" data-trip="${s}">Whole van: ${s}</button>`).join("")}
+      </div>
+    </div>
+    ${d.drops.map(drop => `
+      <div class="card" style="margin-top:0;margin-bottom:8px;">
+        <div class="row-title">${escapeHtml(drop.customer_name || "—")} · ${escapeHtml(drop.challan_no || "")}</div>
+        <div class="row-sub">${escapeHtml(drop.area_name || "No area")}${drop.delivery_address ? " · " + escapeHtml(drop.delivery_address) : ""}</div>
+        <div class="row-sub">${drop.items.map(i => escapeHtml(i.product_name) + " × " + i.qty_dispatched).join(", ")}</div>
+        <div class="row-sub" style="margin-top:4px;"><b>${escapeHtml(drop.status)}</b>${
+          drop.delivered_at ? " · " + new Date(drop.delivered_at).toLocaleString("en-IN") : ""}${
+          drop.received_by ? " · signed by " + escapeHtml(drop.received_by) : ""}</div>
+        ${done.includes(drop.status) ? "" : `
+        <button class="btn btn-primary dv-deliver" data-drop="${escapeHtml(drop.id)}" style="margin-top:8px;">Mark delivered</button>`}
+      </div>`).join("")}`;
+
+  document.getElementById("dv-dback").addEventListener("click", () => { DV.dispatch = null; dvRenderDispatches(); });
+  body.querySelectorAll("[data-trip]").forEach(b =>
+    b.addEventListener("click", async () => {
+      try{
+        DV.dispatch = await api("POST", `/dispatch/${d.id}/status`, { status: b.dataset.trip });
+        toast(`${d.dispatch_no} → ${b.dataset.trip}.`, "ok");
+        dvRenderDispatchDetail();
+      }catch(e){ toast(e.message); }
+    }));
+  body.querySelectorAll(".dv-deliver").forEach(b =>
+    b.addEventListener("click", () => dvOpenSignature(b.dataset.drop)));
+}
+
+/* A finger-drawn signature, kept as SVG path data — a few hundred bytes, so
+   it rides along in the database and therefore in the backup. A photo on disk
+   would be gone the first time the host rebuilt the container. */
+function dvOpenSignature(dropId){
+  const drop = DV.dispatch.drops.find(x => x.id === dropId);
+  const sheet = document.getElementById("sheet-delivery");
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>&#10005;</button>
+    <div class="sheet-title">Delivered to ${escapeHtml(drop.customer_name || "customer")}</div>
+    <label class="field-label" style="margin-top:10px;">Received by</label>
+    <input type="text" id="dv-recv" placeholder="Name of who signed">
+    <label class="field-label" style="margin-top:10px;">Signature</label>
+    <canvas id="dv-sig" style="width:100%;height:150px;background:#fff;border:1px solid var(--border);border-radius:8px;touch-action:none;"></canvas>
+    <button class="btn btn-outline" id="dv-sig-clear" style="margin-top:6px;">Clear signature</button>
+    <div class="chip-row" style="margin-top:12px;">
+      <button class="chip selected" data-final="Delivered">All received</button>
+      <button class="chip" data-final="Partial">Part received</button>
+    </div>
+    <label class="field-label" style="margin-top:10px;">Remarks</label>
+    <input type="text" id="dv-remark" placeholder="Anything worth recording">
+    <button class="btn btn-primary" id="dv-sig-save" style="margin-top:10px;">Save delivery</button>`;
+
+  let status = "Delivered";
+  sheet.querySelectorAll("[data-final]").forEach(b => b.addEventListener("click", () => {
+    status = b.dataset.final;
+    sheet.querySelectorAll("[data-final]").forEach(x => x.classList.toggle("selected", x === b));
+  }));
+  sheet.querySelectorAll("[data-sheetclose]").forEach(b => b.addEventListener("click", closeAllSheets));
+
+  const cv = document.getElementById("dv-sig");
+  const ctx = cv.getContext("2d");
+  let paths = [], cur = null, drawing = false;
+  function fit(){
+    const r = cv.getBoundingClientRect();
+    cv.width = Math.round(r.width); cv.height = 150;
+    ctx.lineWidth = 2; ctx.lineCap = "round"; ctx.strokeStyle = "#111";
+    redraw();
+  }
+  function redraw(){
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    for(const p of paths){
+      ctx.beginPath();
+      p.forEach((pt, i) => i ? ctx.lineTo(pt[0], pt[1]) : ctx.moveTo(pt[0], pt[1]));
+      ctx.stroke();
+    }
+  }
+  const at = e => {
+    const r = cv.getBoundingClientRect();
+    const t = e.touches ? e.touches[0] : e;
+    return [Math.round(t.clientX - r.left), Math.round(t.clientY - r.top)];
+  };
+  const start = e => { e.preventDefault(); drawing = true; cur = [at(e)]; paths.push(cur); };
+  const move  = e => { if(!drawing) return; e.preventDefault(); cur.push(at(e)); redraw(); };
+  const end   = () => { drawing = false; cur = null; };
+  cv.addEventListener("pointerdown", start); cv.addEventListener("pointermove", move);
+  cv.addEventListener("pointerup", end);     cv.addEventListener("pointerleave", end);
+  document.getElementById("dv-sig-clear").addEventListener("click", () => { paths = []; redraw(); });
+
+  showSheet(sheet.id);
+  setTimeout(fit, 30);
+
+  document.getElementById("dv-sig-save").addEventListener("click", async () => {
+    const svg = paths.filter(p => p.length > 1)
+      .map(p => "M" + p.map(pt => pt[0] + " " + pt[1]).join(" L")).join(" ");
+    try{
+      DV.dispatch = await api("POST", `/dispatch/drops/${dropId}/status`, {
+        status,
+        receivedBy: (document.getElementById("dv-recv").value || "").trim(),
+        signature: svg,
+        remarks: (document.getElementById("dv-remark").value || "").trim()
+      });
+      closeAllSheets();
+      toast(`Recorded as ${status}.`, "ok");
+      dvRenderDispatchDetail();
+    }catch(e){ toast(e.message); }
+  });
+}
+
+/* ---------------------------------------------------------- area master
+
+   Zone, sub-area and route are left blank by the seed on purpose — which
+   areas make up Route 1 is a claim only the shop can make. This is where they
+   make it. The area's own name, state and city are not editable: they identify
+   the area on every bill that already carries it. */
+async function dvRenderAreas(){
+  document.getElementById("dv-filters").innerHTML = "";
+  const body = document.getElementById("dv-body");
+  body.innerHTML = `<p class="muted" style="font-size:13px;">Loading…</p>`;
+  const r = await api("GET", "/areas?all=true");
+  const q = (DV.areaSearch || "").toLowerCase();
+  const list = r.areas.filter(a => !q || a.area.toLowerCase().includes(q));
+
+  body.innerHTML = `
+    <div class="searchbar" style="margin-top:0;">
+      <span>&#128269;</span>
+      <input type="text" id="dv-area-q" placeholder="Find an area" value="${escapeHtml(DV.areaSearch || "")}">
+    </div>
+    <p class="muted" style="font-size:12px;margin:8px 0;">${list.length} area${list.length===1?"":"s"} · tap one to set its zone, sub-area and route.</p>
+    ${list.slice(0, 80).map(a => `
+      <div class="card dv-area-edit" data-id="${escapeHtml(a.id)}" style="margin-top:0;margin-bottom:6px;cursor:pointer;">
+        <div class="row-title">${escapeHtml(a.area)}${a.active ? "" : " · retired"}</div>
+        <div class="row-sub">${[a.zone, a.sub_area, a.route].filter(Boolean).map(escapeHtml).join(" · ") || "Nothing set yet"}</div>
+        ${a.lines && a.lines.length ? `<div class="row-sub">${a.lines.map(escapeHtml).join(", ")} line</div>` : ""}
+      </div>`).join("")}
+    ${list.length > 80 ? `<p class="muted" style="font-size:12px;">Showing the first 80 — search to narrow.</p>` : ""}`;
+
+  const qi = document.getElementById("dv-area-q");
+  qi.addEventListener("input", () => { DV.areaSearch = qi.value; clearTimeout(DV._t); DV._t = setTimeout(dvRenderAreas, 250); });
+  body.querySelectorAll(".dv-area-edit").forEach(el =>
+    el.addEventListener("click", () => dvEditArea(r.areas.find(a => a.id === el.dataset.id))));
+}
+
+function dvEditArea(a){
+  const sheet = document.getElementById("sheet-delivery");
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>&#10005;</button>
+    <div class="sheet-title">${escapeHtml(a.area)}</div>
+    <p class="muted" style="font-size:12px;margin-top:-6px;">${escapeHtml(a.state)} · ${escapeHtml(a.city)}${a.station ? " · " + escapeHtml(a.station) + " " + escapeHtml(a.side || "") : ""}</p>
+    <label class="field-label" style="margin-top:12px;">Zone</label>
+    <input type="text" id="ae-zone" value="${escapeHtml(a.zone || "")}" placeholder="e.g. North Mumbai">
+    <label class="field-label" style="margin-top:10px;">Sub-area</label>
+    <input type="text" id="ae-sub" value="${escapeHtml(a.sub_area || "")}" placeholder="e.g. Mamletdar Wadi">
+    <label class="field-label" style="margin-top:10px;">Route</label>
+    <input type="text" id="ae-route" value="${escapeHtml(a.route || "")}" placeholder="e.g. Route 1">
+    <p class="muted" style="font-size:11px;line-height:1.6;margin-top:8px;">
+      The area's name, state and city are fixed — they identify it on every bill
+      that already carries it. Retire it and add another if the name is wrong.</p>
+    <button class="btn btn-primary" id="ae-save" style="margin-top:10px;">Save</button>`;
+
+  sheet.querySelectorAll("[data-sheetclose]").forEach(b => b.addEventListener("click", closeAllSheets));
+  showSheet(sheet.id);
+  document.getElementById("ae-save").addEventListener("click", async () => {
+    try{
+      await api("PUT", "/areas/" + a.id, {
+        zone: (document.getElementById("ae-zone").value || "").trim(),
+        subArea: (document.getElementById("ae-sub").value || "").trim(),
+        route: (document.getElementById("ae-route").value || "").trim()
+      });
+      closeAllSheets();
+      toast(`${a.area} updated.`, "ok");
+      await loadAreas();
+      dvRenderAreas();
+    }catch(e){ toast(e.message); }
+  });
 }
 
 /** Filters shared by every view, so one habit works across the module. */
@@ -1652,14 +1856,18 @@ async function dvRenderDispatches(){
   dvFilterBar({ dates: true });
   const body = document.getElementById("dv-body");
   body.innerHTML = dvStatusRow() + `<p class="muted" style="font-size:13px;">Loading…</p>`;
+  if(DV.dispatch) return dvRenderDispatchDetail();
+
   const r = await api("GET", "/dispatch/reports/area-wise" + dvQuery());
   body.innerHTML = dvStatusRow() + (r.rows.length ? r.rows.map(d => `
-    <div class="card" style="margin-top:0;margin-bottom:8px;">
+    <div class="card dv-open" data-id="${escapeHtml(d.dispatch_id)}" style="margin-top:0;margin-bottom:8px;cursor:pointer;">
       <div class="row-title">${escapeHtml(d.dispatch_no)} · ${escapeHtml(d.customer_name || "—")}</div>
       <div class="row-sub">${escapeHtml(d.area_name || "No area")} · ${escapeHtml(d.invoice_no || "")} · ${d.totalQty || 0} item(s)</div>
       <div class="row-sub">${escapeHtml(d.driver_name || "—")} · ${escapeHtml(d.vehicle_no || "—")} · <b>${escapeHtml(d.status)}</b></div>
     </div>`).join("") : `<p class="muted" style="font-size:13px;">Nothing matches those filters.</p>`);
   dvBindStatus(body);
+  body.querySelectorAll(".dv-open").forEach(el =>
+    el.addEventListener("click", () => dvOpenDispatch(el.dataset.id)));
 }
 
 async function dvRenderDeliveries(){

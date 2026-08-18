@@ -412,6 +412,7 @@
           <button class="chip" data-dv-mode="dispatches">Dispatches</button>
           <button class="chip" data-dv-mode="deliveries">Deliveries</button>
           <button class="chip" data-dv-mode="reports">Reports</button>
+          <button class="chip" data-dv-mode="areas">Areas</button>
         </div>
         <div id="dv-filters" style="margin-top:10px;"></div>
         <div id="dv-body" style="margin-top:10px;"></div>
@@ -1125,6 +1126,9 @@
   <div class="sheet" id="sheet-ewb"></div>
   <div class="sheet" id="sheet-return-edit"></div>
   <div class="sheet" id="sheet-businesses"></div>
+  <!-- Signature capture and area editing. Its own sheet rather than borrowing
+       another: reusing one would overwrite whatever it was showing. -->
+  <div class="sheet" id="sheet-delivery"></div>
 
   <!-- ============ FULLSCREEN: STOCK REPORT PRINT ============
        In-page print (not window.open) — a PWA installed to the home screen

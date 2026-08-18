@@ -38,15 +38,26 @@ const KASARA = ["Shahad", "Ambivli", "Titwala", "Khadavli", "Vasind", "Asangaon"
 const KARJAT = ["Vitthalwadi", "Ulhasnagar", "Ambernath", "Badlapur", "Vangani",
   "Shelu", "Neral", "Bhivpuri Road", "Karjat"];
 
+// Western Line, Churchgate to Virar. Dadar appears on both lines; the loop
+// below adds each area once, so it is listed here as it really is rather than
+// left out to avoid a clash.
+const WESTERN = ["Churchgate", "Marine Lines", "Charni Road", "Grant Road",
+  "Mumbai Central", "Mahalaxmi", "Lower Parel", "Prabhadevi", "Dadar",
+  "Matunga Road", "Mahim", "Bandra", "Khar", "Santacruz", "Vile Parle",
+  "Andheri", "Jogeshwari", "Ram Mandir", "Goregaon", "Malad", "Kandivali",
+  "Borivali", "Dahisar", "Mira Road", "Bhayandar", "Naigaon", "Vasai Road",
+  "Nalasopara", "Virar"];
+
 function stationAreas() {
   const out = [];
-  for (const line of [MAIN, KASARA, KARJAT]) {
+  for (const line of [MAIN, KASARA, KARJAT, WESTERN]) {
     for (const station of line) {
       out.push(`${station} East`);
       out.push(`${station} West`);
     }
   }
-  return out;
+  // Dadar is on both lines — one area, not two identical ones.
+  return [...new Set(out)];
 }
 
 /**

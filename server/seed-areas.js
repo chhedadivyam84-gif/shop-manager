@@ -85,8 +85,8 @@ const ROUTES = {
 
   // Western, north of Borivali
   "Route 8":  ["Dahisar", "Mira Road", "Bhayandar"],
-  "Route 9":  ["Naigaon", "Vasai Road", "Nalasopara"],
-  "Route 10": ["Virar"],
+  "Route 9":  ["Naigaon"],
+  "Route 10": ["Virar", "Nalasopara", "Vasai Road"],
 
   // Western, south of Andheri towards Churchgate
   "Route 11": ["Vile Parle", "Santacruz", "Khar"],
@@ -195,7 +195,46 @@ function seedCentralLineAreas(db) {
     }
   });
   run();
-  return { added, routed: applyRoutes(db), moved: orderStationAreas(db) };
+  /* Fixes before fills: a station being moved must land on its new round
+     before anything else looks at what is still blank. */
+  const fixed = applyRouteFixes(db);
+  return { added, fixed, routed: applyRoutes(db), moved: orderStationAreas(db) };
+}
+
+/* A round that has to MOVE, not merely be filled in.
+ *
+ * The seed cannot do this on its own: filling blanks is what protects the
+ * shop's own edits, so it must never overwrite a route that is already set.
+ * But when the shop tells us a station belongs on a different van, that has to
+ * reach every copy of the app, not just the machine it was typed on.
+ *
+ * Each correction therefore runs EXACTLY ONCE, recorded by id. After it has
+ * run, the shop can move that station again and the change will stick — which
+ * is the whole point of doing it this way rather than re-asserting the route
+ * on every boot. */
+const ROUTE_FIXES = [
+  { id: "2026-08-19-virar-group", route: "Route 10", stations: ["Nalasopara", "Vasai Road"] }
+];
+
+function applyRouteFixes(db) {
+  db.exec("CREATE TABLE IF NOT EXISTS seed_marks (id TEXT PRIMARY KEY, at INTEGER NOT NULL)");
+  const seen = db.prepare("SELECT 1 FROM seed_marks WHERE id = ?");
+  const mark = db.prepare("INSERT OR IGNORE INTO seed_marks (id, at) VALUES (?, ?)");
+  const move = db.prepare("UPDATE areas SET route = ? WHERE station = ?");
+
+  let fixed = 0;
+  const run = db.transaction(() => {
+    for (const fix of ROUTE_FIXES) {
+      if (seen.get(fix.id)) continue;
+      for (const station of fix.stations) {
+        const r = move.run(fix.route, station);
+        fixed += r.changes || 0;
+      }
+      mark.run(fix.id, Date.now());
+    }
+  });
+  run();
+  return fixed;
 }
 
 /**

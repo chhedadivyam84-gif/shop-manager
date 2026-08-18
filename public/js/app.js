@@ -1460,13 +1460,18 @@ function printChequeSheet(html){
    The chip stays hidden while there is only one business, so a shop that
    never adds a second never sees a control it does not need.
    ============================================================ */
-const BIZ = { list: [], current: null };
+const BIZ = { list: [], current: null, canAdd: true, limit: null, upgradeMessage: "" };
 
 async function loadBusinesses(){
   try{
     const r = await api("GET", "/businesses");
     BIZ.list = r.businesses || [];
     BIZ.current = r.current;
+    /* What the plan allows. Only ever used to WORD the panel — the server
+       re-checks on create, so this is never the thing standing in the way. */
+    BIZ.canAdd = r.canAdd !== false;
+    BIZ.limit = r.companyLimit ?? null;
+    BIZ.upgradeMessage = r.upgradeMessage || "";
   }catch(e){ BIZ.list = []; }
   paintBusinessChip();
 }
@@ -1501,17 +1506,35 @@ function openBusinesses(){
         </div>`).join("")}
     </div>
 
-    ${isOwner() ? `
+    ${!isOwner()
+      ? `<p class="muted" style="font-size:11px;margin-top:12px;">Only the owner can add a business.</p>`
+      : BIZ.canAdd ? `
       <label class="field-label" style="margin-top:14px;">Add a new business</label>
       <input type="text" id="biz-new-name" placeholder="e.g. XYZ Enterprises">
       <button class="btn btn-outline" id="biz-add" style="margin-top:8px;">Add Business</button>
       <p class="muted" style="font-size:11px;line-height:1.6;margin-top:8px;">
         It starts completely empty — its own products, customers and numbering.
         Nothing is copied from ${escapeHtml((BIZ.list.find(b=>b.id===BIZ.current)||{}).name || "this business")}.</p>`
-    : `<p class="muted" style="font-size:11px;margin-top:12px;">Only the owner can add a business.</p>`}
+      /* At the plan's limit. The existing businesses above stay fully usable —
+         this only stops a new one being added. */
+      : `
+      <div class="card" style="margin-top:14px;">
+        <div class="row-title">Multi-Business Access Required</div>
+        <p class="muted" style="font-size:12px;line-height:1.6;margin-top:6px;">
+          ${escapeHtml(BIZ.upgradeMessage)}</p>
+        <button class="btn btn-primary" id="biz-upgrade" style="margin-top:10px;">Activate Multi-Business</button>
+        <button class="btn btn-outline" data-sheetclose style="margin-top:8px;">Cancel</button>
+      </div>`}
   `;
 
-  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  // All of them: the upgrade panel adds a second (Cancel).
+  sheet.querySelectorAll("[data-sheetclose]").forEach(b => b.addEventListener("click", closeAllSheets));
+
+  /* Activation is a real subscription key, entered in Settings. There is no
+     payment step here on purpose — nothing should tell a shopkeeper they have
+     paid until a payment has actually happened. */
+  const up = document.getElementById("biz-upgrade");
+  if(up) up.addEventListener("click", () => { closeAllSheets(); openSettings(); });
 
   sheet.querySelectorAll("[data-biz]").forEach(row => {
     row.addEventListener("click", async () => {

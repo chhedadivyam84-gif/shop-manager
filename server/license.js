@@ -37,6 +37,22 @@ const PUBLIC_KEY = ``;
 // Shown as a warning banner this many days before the expiry date.
 const WARN_WITHIN_DAYS = 14;
 
+/* How many businesses a licence allows.
+ *
+ * `null` means unlimited. A key that predates multi-business carries no
+ * `companies` field at all, so it resolves to ONE — an existing buyer keeps
+ * exactly what they paid for and nothing changes under them. An unlicensed
+ * build (the shop's own copy, PUBLIC_KEY empty) is unlimited: enforcement is
+ * dormant there by design, and a shop must never be blocked from its own
+ * books by a mechanism meant for buyers. */
+const DEFAULT_COMPANY_LIMIT = 1;
+
+function limitFrom(data) {
+  const n = data && data.companies;
+  if (n === "unlimited" || n === 0) return null;
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_COMPANY_LIMIT;
+}
+
 function enabled() {
   return PUBLIC_KEY.trim().length > 0;
 }
@@ -82,12 +98,13 @@ function daysBetween(fromISO, toISO) {
  */
 function state(key) {
   if (!enabled()) {
-    return { enforced: false, status: "unlicensed-build", expired: false };
+    return { enforced: false, status: "unlicensed-build", expired: false, companyLimit: null };
   }
   const data = parse(key);
   if (!data) {
     return {
       enforced: true, status: key ? "invalid" : "missing", expired: true,
+      companyLimit: DEFAULT_COMPANY_LIMIT,
       message: key
         ? "This licence key isn't valid for this app."
         : "No licence key entered yet."
@@ -103,10 +120,11 @@ function state(key) {
     daysLeft,
     expiresOn: data.expires,
     licensedTo: data.shop || "",
+    companyLimit: limitFrom(data),
     message: expired
       ? `Subscription expired on ${data.expires}.`
       : `Subscription active until ${data.expires} (${daysLeft} day${daysLeft === 1 ? "" : "s"} left).`
   };
 }
 
-module.exports = { enabled, parse, state, WARN_WITHIN_DAYS };
+module.exports = { enabled, parse, state, WARN_WITHIN_DAYS, DEFAULT_COMPANY_LIMIT };

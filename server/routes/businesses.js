@@ -13,9 +13,52 @@ const express = require("express");
 const db = require("../db");
 const { requireRole } = require("../auth");
 const { logAction } = require("../util");
+const license = require("../license");
 
 const router = express.Router();
 const C = db.companies;
+
+/* ---------------------------------------------------------- the licence gate
+
+   How many businesses this installation may hold. The licence belongs to the
+   INSTALLATION, not to a business, so the key is always read from the default
+   business — otherwise a buyer could create a business and drop a fresh key
+   into it to raise their own limit.
+
+   An unlicensed build (the shop's own copy, PUBLIC_KEY empty) reports an
+   unlimited allowance and nothing below ever blocks. */
+function licensedLimit() {
+  let key = "";
+  try {
+    C.runAs(C.defaultId(), () => {
+      const row = db.prepare("SELECT license_key FROM settings WHERE id = 1").get();
+      key = (row && row.license_key) || "";
+    });
+  } catch { /* a settings row that predates the column: treat as unlicensed */ }
+  return license.state(key);
+}
+
+/** Whether another business may be created, and the reason if not. */
+function canAddBusiness() {
+  const lic = licensedLimit();
+  if (lic.companyLimit === null) return { ok: true, limit: null };
+
+  const used = C.list().filter(b => b.active).length;
+
+  /* An expired subscription stops NEW businesses. It never touches the ones
+     that exist — their data, stock and ledgers stay exactly as they are. */
+  if (lic.enforced && lic.expired) {
+    return { ok: false, limit: lic.companyLimit, used, upgrade: true,
+      error: "Your subscription needs renewing before you can add another business. Your existing businesses and their data are unaffected." };
+  }
+  if (used >= lic.companyLimit) {
+    return { ok: false, limit: lic.companyLimit, used, upgrade: true,
+      error: lic.companyLimit === 1
+        ? "Your current plan allows only 1 business. Please activate Multi-Business Access to add another."
+        : `Your current plan allows ${lic.companyLimit} businesses. Please upgrade to add another.` };
+  }
+  return { ok: true, limit: lic.companyLimit, used };
+}
 
 /** Businesses this session may see.
  *
@@ -33,9 +76,15 @@ function visibleTo(req) {
 
 router.get("/", (req, res) => {
   const current = req.session.businessId || C.defaultId();
+  const gate = canAddBusiness();
   res.json({
     current,
-    businesses: visibleTo(req).map(b => ({ ...b, isCurrent: b.id === current }))
+    businesses: visibleTo(req).map(b => ({ ...b, isCurrent: b.id === current })),
+    /* The browser uses these to word the Add panel. It is not the control —
+       the POST below re-checks, so a forged request gains nothing. */
+    canAdd: gate.ok,
+    companyLimit: gate.limit,
+    upgradeMessage: gate.ok ? "" : gate.error
   });
 });
 
@@ -53,6 +102,10 @@ router.post("/switch", (req, res) => {
 /** A new business is an empty database with the schema applied. Owner only:
  *  it creates books that will hold real money. */
 router.post("/", requireRole("owner"), (req, res) => {
+  /* Checked HERE, on the server, before anything is written. Hiding the
+     button is a courtesy; this is the rule. */
+  const gate = canAddBusiness();
+  if (!gate.ok) return res.status(403).json({ error: gate.error, upgrade: true });
   try {
     const created = C.create({ name: req.body.name });
     logAction(req, "business.create", created.name);

@@ -358,4 +358,130 @@ router.post("/drops/:dropId/status", requireRole("owner", "manager", "staff"), (
   res.json(loadDispatch(drop.dispatch_id));
 });
 
+/* ---------------------------------------------------------- reports
+
+   Eight named reports, all reading DISPATCH data only — never a delivery row.
+   Every one of them is the same drop-level query filtered and grouped a
+   different way, so they cannot contradict each other.
+
+   The grain is the DROP, not the trip: "what went to Malad on Tuesday" is a
+   question about customers, and one van visiting five of them is five answers.
+
+   Filters: from, to, areaId, customerId, status, route, zone, line.
+*/
+function dropRows(q) {
+  const where = ["1=1"];
+  const args = [];
+  if (q.from)       { where.push("d.dispatch_at >= ?"); args.push(Date.parse(q.from + "T00:00:00")); }
+  if (q.to)         { where.push("d.dispatch_at <= ?"); args.push(Date.parse(q.to + "T23:59:59")); }
+  if (q.areaId)     { where.push("dd.area_id = ?");     args.push(q.areaId); }
+  if (q.customerId) { where.push("dd.customer_id = ?"); args.push(q.customerId); }
+  if (q.status)     { where.push("dd.status = ?");      args.push(q.status); }
+  if (q.route)      { where.push("a.route = ?");        args.push(q.route); }
+  if (q.zone)       { where.push("a.zone = ?");         args.push(q.zone); }
+  if (q.line)       { where.push("EXISTS (SELECT 1 FROM area_lines al WHERE al.area_id = dd.area_id AND al.line = ?)"); args.push(q.line); }
+
+  const rows = db.prepare(`
+    SELECT dd.id AS drop_id, dd.customer_name, dd.customer_mobile, dd.delivery_address,
+           dd.status, dd.delivered_at, dd.received_by, dd.area_id,
+           d.id AS dispatch_id, d.dispatch_no, d.dispatch_at, d.vehicle_no,
+           d.driver_name, d.driver_mobile,
+           a.area AS area_name, a.station, a.side, a.zone, a.route,
+           i.challan_no AS invoice_no
+      FROM dispatch_drops dd
+      JOIN dispatches d ON d.id = dd.dispatch_id
+      LEFT JOIN areas a ON a.id = dd.area_id
+      LEFT JOIN invoices i ON i.id = dd.invoice_id
+     WHERE ${where.join(" AND ")}
+     ORDER BY d.dispatch_at DESC, dd.seq
+     LIMIT 1000`).all(...args);
+
+  // Quantity actually loaded, per drop, in one pass rather than per row.
+  if (rows.length) {
+    const ids = rows.map(r => r.drop_id);
+    const qty = new Map();
+    for (let i = 0; i < ids.length; i += 400) {
+      const slice = ids.slice(i, i + 400);
+      db.prepare(`SELECT drop_id, SUM(qty_dispatched) AS q FROM dispatch_items
+                   WHERE drop_id IN (${slice.map(() => "?").join(",")}) GROUP BY drop_id`)
+        .all(...slice).forEach(r => qty.set(r.drop_id, r.q || 0));
+    }
+    rows.forEach(r => { r.totalQty = qty.get(r.drop_id) || 0; });
+  }
+  return rows;
+}
+
+function group(rows, keyOf) {
+  const out = new Map();
+  for (const r of rows) {
+    const key = keyOf(r) || "—";
+    if (!out.has(key)) out.set(key, { key, label: key, drops: 0, qty: 0, statuses: {} });
+    const g = out.get(key);
+    g.drops++;
+    g.qty += r.totalQty || 0;
+    g.statuses[r.status] = (g.statuses[r.status] || 0) + 1;
+  }
+  return [...out.values()].sort((a, b) => b.drops - a.drops);
+}
+
+const REPORTS = {
+  "area-wise":     ["Area-wise Dispatch",     r => r.area_name],
+  "date-wise":     ["Date-wise Dispatch",     r => new Date(r.dispatch_at).toISOString().slice(0, 10)],
+  "customer-wise": ["Customer-wise Dispatch", r => r.customer_name],
+  "route-wise":    ["Route-wise Dispatch",    r => r.route]
+};
+Object.entries(REPORTS).forEach(([path, [title, keyOf]]) => {
+  router.get(`/reports/${path}`, (req, res) => {
+    const rows = dropRows(req.query);
+    res.json({ report: title, rows, groups: group(rows, keyOf) });
+  });
+});
+
+/* Product-wise counts GOODS, so it groups item lines rather than drops — one
+   drop of three products is three rows, which is the point of the report. */
+router.get("/reports/product-wise", (req, res) => {
+  const rows = dropRows(req.query);
+  const byProduct = new Map();
+  if (rows.length) {
+    const ids = rows.map(r => r.drop_id);
+    for (let i = 0; i < ids.length; i += 400) {
+      const slice = ids.slice(i, i + 400);
+      db.prepare(`SELECT product_name, size_label, unit,
+                         SUM(qty_dispatched) AS qty, COUNT(*) AS lines
+                    FROM dispatch_items
+                   WHERE drop_id IN (${slice.map(() => "?").join(",")}) AND qty_dispatched > 0
+                   GROUP BY product_name, size_label, unit`).all(...slice)
+        .forEach(r => {
+          const key = [r.product_name, r.size_label].join("|");
+          const cur = byProduct.get(key) || { ...r, qty: 0, lines: 0 };
+          cur.qty += r.qty || 0; cur.lines += r.lines || 0;
+          byProduct.set(key, cur);
+        });
+    }
+  }
+  res.json({ report: "Product-wise Dispatch",
+    groups: [...byProduct.values()].sort((a, b) => b.qty - a.qty) });
+});
+
+/** Still to go out: nothing has left for these, or only part has. */
+router.get("/reports/pending", (req, res) => {
+  const rows = dropRows({ ...req.query, status: "" })
+    .filter(r => r.status === "Pending" || r.status === "Ready");
+  res.json({ report: "Pending Dispatch", rows, count: rows.length });
+});
+
+/** Gone out — on the van or already handed over. */
+router.get("/reports/dispatched", (req, res) => {
+  const rows = dropRows({ ...req.query, status: "" })
+    .filter(r => ["Out", "Delivered", "Partial"].includes(r.status));
+  res.json({ report: "Dispatched", rows, count: rows.length });
+});
+
+/** Signed for. Distinct from the Delivery module's own Delivered report:
+ *  this is what the DISPATCH register knows, not the delivery register. */
+router.get("/reports/delivered", (req, res) => {
+  const rows = dropRows({ ...req.query, status: "Delivered" });
+  res.json({ report: "Delivered (Dispatch register)", rows, count: rows.length });
+});
+
 module.exports = router;

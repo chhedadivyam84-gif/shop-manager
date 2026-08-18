@@ -862,7 +862,11 @@ async function switchTab(tab){
   document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));
   document.getElementById("screen-"+tab).classList.add("active");
   document.querySelectorAll("nav.bottom .tab").forEach(t=>t.classList.toggle("active", t.dataset.tab===tab));
-  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",quotation:"Quotation",so:"Sales Order",pquery:"Product Query",accounts:"Accounts",otherledger:(state.olKind==="income"?"Other Income":"Other Expenses"),fyear:"Financial Year",fyclose:"Financial Year",printmgr:"Print Management",outstanding:"Outstanding",ewb:"E-Way Bill"};
+  // The bar scrolls on a phone (see style.css), so the tab just chosen must be
+  // brought into view — otherwise switching from a tile leaves it off-screen.
+  const activeBtn = document.querySelector(`nav.bottom .tab[data-tab="${tab}"]`);
+  if(activeBtn && activeBtn.scrollIntoView) activeBtn.scrollIntoView({ block:"nearest", inline:"nearest" });
+  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",quotation:"Quotation",so:"Sales Order",pquery:"Product Query",accounts:"Accounts",otherledger:(state.olKind==="income"?"Other Income":"Other Expenses"),fyear:"Financial Year",fyclose:"Financial Year",printmgr:"Print Management",outstanding:"Outstanding",ewb:"E-Way Bill",delivery:"Delivery & Dispatch"};
   document.getElementById("hdr-sub").textContent = subMap[tab];
   document.getElementById("hdr-main").textContent = tab==="home" ? greeting() : subMap[tab];
   if(tab==="billing") await renderBilling();
@@ -884,6 +888,7 @@ async function switchTab(tab){
   if(tab==="fyear") await renderFyScreen();
   if(tab==="printmgr") await renderPrintManager();
   if(tab==="cheque") await renderCheque();
+  if(tab==="delivery") await renderDelivery();
 }
 
 async function renderAll(){
@@ -1460,6 +1465,274 @@ function printChequeSheet(html){
    The chip stays hidden while there is only one business, so a shop that
    never adds a second never sees a control it does not need.
    ============================================================ */
+/* ============================================================
+   DELIVERY & DISPATCH
+
+   The board is the landing screen because it answers the question the
+   dispatcher actually opens the app with: how many deliveries are going to
+   each area today. Reading forty bills to work that out is the job this
+   screen exists to remove.
+
+   Delivery and dispatch stay separate registers throughout — separate
+   numbers, separate lists, separate reports — and neither moves stock: the
+   invoice already did that at the sale.
+   ============================================================ */
+const DV = {
+  mode: "board",          // board | dispatches | deliveries | reports
+  area: null,             // the area opened on the board
+  line: "",               // Western | Central | Harbour filter
+  status: "",
+  from: "", to: "",
+  picked: new Set(),
+  board: null,
+  report: null            // [module, path] while one report is open
+};
+
+function dvSet(mode){
+  DV.mode = mode; DV.area = null; DV.report = null; DV.picked.clear();
+  document.querySelectorAll("[data-dv-mode]").forEach(b =>
+    b.classList.toggle("selected", b.dataset.dvMode === mode));
+  renderDelivery();
+}
+
+async function renderDelivery(){
+  document.querySelectorAll("[data-dv-mode]").forEach(b => {
+    if(b.dataset.dvBound) return;
+    b.dataset.dvBound = "1";
+    b.addEventListener("click", () => dvSet(b.dataset.dvMode));
+  });
+  if(DV.mode === "board")       return dvRenderBoard();
+  if(DV.mode === "dispatches")  return dvRenderDispatches();
+  if(DV.mode === "deliveries")  return dvRenderDeliveries();
+  if(DV.mode === "reports")     return dvRenderReports();
+}
+
+/** Filters shared by every view, so one habit works across the module. */
+function dvFilterBar(opts){
+  const el = document.getElementById("dv-filters");
+  const lines = ["", "Western", "Central", "Harbour"];
+  el.innerHTML = `
+    <div class="chip-row" style="overflow-x:auto;">
+      ${lines.map(l => `<button class="chip ${DV.line===l?"selected":""}" data-dv-line="${l}">${l||"All lines"}</button>`).join("")}
+    </div>
+    ${opts && opts.dates ? `
+    <div class="row2" style="margin-top:8px;">
+      <div><label class="field-label">From</label><input type="date" id="dv-from" value="${DV.from}"></div>
+      <div><label class="field-label">To</label><input type="date" id="dv-to" value="${DV.to}"></div>
+    </div>` : ""}`;
+  el.querySelectorAll("[data-dv-line]").forEach(b =>
+    b.addEventListener("click", () => { DV.line = b.dataset.dvLine; renderDelivery(); }));
+  const f = document.getElementById("dv-from"), t = document.getElementById("dv-to");
+  if(f) f.addEventListener("change", () => { DV.from = f.value; renderDelivery(); });
+  if(t) t.addEventListener("change", () => { DV.to = t.value; renderDelivery(); });
+}
+
+function dvQuery(extra){
+  const q = new URLSearchParams();
+  if(DV.line)   q.set("line", DV.line);
+  if(DV.from)   q.set("from", DV.from);
+  if(DV.to)     q.set("to", DV.to);
+  if(DV.status) q.set("status", DV.status);
+  Object.entries(extra || {}).forEach(([k, v]) => v && q.set(k, v));
+  const s = q.toString();
+  return s ? "?" + s : "";
+}
+
+/* ---------------------------------------------------------- the board */
+
+async function dvRenderBoard(){
+  dvFilterBar();
+  const body = document.getElementById("dv-body");
+  body.innerHTML = `<p class="muted" style="font-size:13px;">Loading…</p>`;
+  try{
+    DV.board = await api("GET", "/dispatch/pending/by-area" + dvQuery());
+  }catch(e){
+    body.innerHTML = `<p class="muted" style="font-size:13px;">Couldn't load the board: ${escapeHtml(e.message)}</p>`;
+    return;
+  }
+  if(DV.area) return dvRenderArea();
+
+  const g = DV.board.groups || [];
+  const t = DV.board.totals || { deliveries: 0, areas: 0 };
+  body.innerHTML = `
+    <div class="card" style="margin-top:0;">
+      <div class="row-title">${t.deliveries} pending across ${t.areas} area${t.areas===1?"":"s"}</div>
+      <div class="row-sub">Busiest first — that is the van being loaded now.</div>
+    </div>
+    ${g.length ? g.map(a => `
+      <div class="card dv-area" data-area="${escapeHtml(a.areaId || "")}" style="display:flex;align-items:center;gap:12px;cursor:pointer;">
+        <div style="flex:1;min-width:0;">
+          <div class="row-title">${escapeHtml(a.area)}</div>
+          <div class="row-sub">${[a.route, a.zone].filter(Boolean).map(escapeHtml).join(" · ") || "No route set"} · ${a.totalItems} item${a.totalItems===1?"":"s"}</div>
+        </div>
+        <span class="tick" style="background:var(--navy);color:#fff;border-radius:999px;padding:3px 10px;font-weight:700;">${a.deliveries}</span>
+      </div>`).join("")
+    : `<p class="muted" style="font-size:13px;margin-top:12px;">Nothing pending. Everything has gone out.</p>`}`;
+
+  body.querySelectorAll(".dv-area").forEach(el =>
+    el.addEventListener("click", () => { DV.area = el.dataset.area; DV.picked.clear(); dvRenderArea(); }));
+}
+
+function dvRenderArea(){
+  const g = (DV.board.groups || []).find(x => (x.areaId || "") === DV.area);
+  const body = document.getElementById("dv-body");
+  if(!g){ DV.area = null; return dvRenderBoard(); }
+
+  body.innerHTML = `
+    <button class="btn btn-outline" id="dv-back" style="margin-bottom:10px;">← All areas</button>
+    <div class="card" style="margin-top:0;">
+      <div class="row-title">${escapeHtml(g.area)} — ${g.deliveries} deliver${g.deliveries===1?"y":"ies"}</div>
+      <div class="row-sub">Tick what goes on this trip.</div>
+    </div>
+    ${g.bills.map(b => `
+      <label class="card dv-bill" style="display:flex;gap:11px;align-items:flex-start;cursor:pointer;">
+        <input type="checkbox" data-bill="${escapeHtml(b.invoiceId)}" style="margin-top:3px;width:18px;height:18px;flex:none;">
+        <span style="min-width:0;">
+          <span class="row-title">${escapeHtml(b.challanNo)} · ${escapeHtml(b.customer || "—")}</span>
+          <span class="row-sub">${b.items.map(i => escapeHtml(i.name) + " × " + i.outstanding).join(", ")}</span>
+          ${b.address ? `<span class="row-sub">${escapeHtml(b.address)}</span>` : ""}
+        </span>
+      </label>`).join("")}
+    <div class="card">
+      <div class="row2">
+        <div><label class="field-label">Driver</label><input type="text" id="dv-driver" placeholder="Suresh"></div>
+        <div><label class="field-label">Vehicle</label><input type="text" id="dv-vehicle" placeholder="MH-04-AB-1234"></div>
+      </div>
+      <label class="field-label" style="margin-top:8px;">Driver mobile</label>
+      <input type="tel" id="dv-mobile" placeholder="9000011111">
+      <button class="btn btn-primary" id="dv-go" style="margin-top:10px;">Dispatch selected</button>
+    </div>`;
+
+  document.getElementById("dv-back").addEventListener("click", () => { DV.area = null; dvRenderBoard(); });
+  body.querySelectorAll("[data-bill]").forEach(c =>
+    c.addEventListener("change", () => {
+      if(c.checked) DV.picked.add(c.dataset.bill); else DV.picked.delete(c.dataset.bill);
+    }));
+  document.getElementById("dv-go").addEventListener("click", dvCreateDispatch);
+}
+
+async function dvCreateDispatch(){
+  const btn = document.getElementById("dv-go");
+  const ids = [...DV.picked];
+  if(!ids.length) return toast("Tick at least one delivery.");
+  const driver = (document.getElementById("dv-driver").value || "").trim();
+  const vehicle = (document.getElementById("dv-vehicle").value || "").trim();
+  if(!driver || !vehicle) return toast("Enter a driver and a vehicle number.");
+
+  btn.disabled = true;
+  try{
+    const d = await api("POST", "/dispatch", {
+      invoiceIds: ids, driverName: driver, vehicleNo: vehicle,
+      driverMobile: (document.getElementById("dv-mobile").value || "").trim()
+    });
+    toast(`${d.dispatch_no} created — ${d.drops.length} drop${d.drops.length===1?"":"s"}.`, "ok");
+    DV.area = null; DV.picked.clear();
+    await dvRenderBoard();
+  }catch(e){
+    toast(e.message);
+    btn.disabled = false;
+  }
+}
+
+/* ---------------------------------------------------------- registers */
+
+const DV_STATUS = ["", "Pending", "Ready", "Out", "Delivered", "Partial", "Cancelled", "Returned"];
+
+function dvStatusRow(){
+  return `<div class="chip-row" style="overflow-x:auto;margin-bottom:8px;">
+    ${DV_STATUS.map(s => `<button class="chip ${DV.status===s?"selected":""}" data-dv-status="${s}">${s||"All"}</button>`).join("")}
+  </div>`;
+}
+function dvBindStatus(root){
+  root.querySelectorAll("[data-dv-status]").forEach(b =>
+    b.addEventListener("click", () => { DV.status = b.dataset.dvStatus; renderDelivery(); }));
+}
+
+async function dvRenderDispatches(){
+  dvFilterBar({ dates: true });
+  const body = document.getElementById("dv-body");
+  body.innerHTML = dvStatusRow() + `<p class="muted" style="font-size:13px;">Loading…</p>`;
+  const r = await api("GET", "/dispatch/reports/area-wise" + dvQuery());
+  body.innerHTML = dvStatusRow() + (r.rows.length ? r.rows.map(d => `
+    <div class="card" style="margin-top:0;margin-bottom:8px;">
+      <div class="row-title">${escapeHtml(d.dispatch_no)} · ${escapeHtml(d.customer_name || "—")}</div>
+      <div class="row-sub">${escapeHtml(d.area_name || "No area")} · ${escapeHtml(d.invoice_no || "")} · ${d.totalQty || 0} item(s)</div>
+      <div class="row-sub">${escapeHtml(d.driver_name || "—")} · ${escapeHtml(d.vehicle_no || "—")} · <b>${escapeHtml(d.status)}</b></div>
+    </div>`).join("") : `<p class="muted" style="font-size:13px;">Nothing matches those filters.</p>`);
+  dvBindStatus(body);
+}
+
+async function dvRenderDeliveries(){
+  dvFilterBar({ dates: true });
+  const body = document.getElementById("dv-body");
+  body.innerHTML = dvStatusRow() + `<p class="muted" style="font-size:13px;">Loading…</p>`;
+  const r = await api("GET", "/delivery" + dvQuery());
+  body.innerHTML = dvStatusRow() + (r.deliveries.length ? r.deliveries.map(d => `
+    <div class="card" style="margin-top:0;margin-bottom:8px;">
+      <div class="row-title">${escapeHtml(d.delivery_no)} · ${escapeHtml(d.customer_name || "—")}</div>
+      <div class="row-sub">${escapeHtml(d.area_name || "No area")} · ${escapeHtml(d.invoice_no || "")}</div>
+      <div class="row-sub">${escapeHtml(d.driver_name || "—")} · ${escapeHtml(d.vehicle_no || "—")} · <b>${escapeHtml(d.status)}</b></div>
+    </div>`).join("") : `<p class="muted" style="font-size:13px;">No deliveries recorded yet.</p>`);
+  dvBindStatus(body);
+}
+
+/* ---------------------------------------------------------- reports */
+
+const DV_REPORTS = [
+  ["Area-wise Pending", "dispatch", "area-wise-pending"],
+  ["Area-wise Dispatch", "dispatch", "area-wise"],
+  ["Date-wise Dispatch", "dispatch", "date-wise"],
+  ["Driver-wise Dispatch", "dispatch", "driver-wise"],
+  ["Vehicle-wise Dispatch", "dispatch", "vehicle-wise"],
+  ["Customer-wise Dispatch", "dispatch", "customer-wise"],
+  ["Route-wise Dispatch", "dispatch", "route-wise"],
+  ["Product-wise Dispatch", "dispatch", "product-wise"],
+  ["Pending Dispatch", "dispatch", "pending"],
+  ["Dispatched", "dispatch", "dispatched"],
+  ["Area-wise Delivery", "delivery", "area-wise"],
+  ["Date-wise Delivery", "delivery", "date-wise"],
+  ["Customer-wise Delivery", "delivery", "customer-wise"],
+  ["Route-wise Delivery", "delivery", "route-wise"],
+  ["Product-wise Delivery", "delivery", "product-wise"],
+  ["Pending Delivery", "delivery", "pending"],
+  ["Delivered", "delivery", "delivered"]
+];
+
+async function dvRenderReports(){
+  dvFilterBar({ dates: true });
+  const body = document.getElementById("dv-body");
+  if(!DV.report){
+    body.innerHTML = DV_REPORTS.map(([label, mod, path]) => `
+      <div class="card dv-report" data-mod="${mod}" data-path="${path}" style="margin-top:0;margin-bottom:8px;cursor:pointer;">
+        <div class="row-title">${label}</div>
+        <div class="row-sub">${mod === "dispatch" ? "Dispatch register" : "Delivery register"}</div>
+      </div>`).join("");
+    body.querySelectorAll(".dv-report").forEach(el =>
+      el.addEventListener("click", () => { DV.report = [el.dataset.mod, el.dataset.path]; dvRenderReports(); }));
+    return;
+  }
+
+  const [mod, path] = DV.report;
+  body.innerHTML = `<p class="muted" style="font-size:13px;">Loading…</p>`;
+  const r = await api("GET", `/${mod}/reports/${path}` + dvQuery());
+  const groups = r.groups || [];
+  const rows = r.rows || [];
+  body.innerHTML = `
+    <button class="btn btn-outline" id="dv-rback" style="margin-bottom:10px;">← All reports</button>
+    <div class="card" style="margin-top:0;"><div class="row-title">${escapeHtml(r.report || path)}</div></div>
+    ${groups.length ? groups.map(g => `
+      <div class="card" style="margin-top:0;margin-bottom:6px;display:flex;align-items:center;gap:10px;">
+        <div style="flex:1;min-width:0;">
+          <div class="row-title">${escapeHtml(String(g.label || g.key || g.product_name || "—"))}</div>
+          ${g.qty !== undefined ? `<div class="row-sub">${g.qty} item(s)</div>` : ""}
+        </div>
+        <span class="tick">${g.drops !== undefined ? g.drops : (g.deliveries !== undefined ? g.deliveries : g.qty)}</span>
+      </div>`).join("")
+    : rows.length ? `<div class="card"><div class="row-title">${rows.length} record(s)</div></div>`
+    : `<p class="muted" style="font-size:13px;">Nothing to show for those filters.</p>`}`;
+  document.getElementById("dv-rback").addEventListener("click", () => { DV.report = null; dvRenderReports(); });
+}
+
 const BIZ = { list: [], current: null, canAdd: true, limit: null, upgradeMessage: "" };
 
 async function loadBusinesses(){

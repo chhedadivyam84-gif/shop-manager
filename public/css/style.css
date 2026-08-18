@@ -405,6 +405,26 @@ nav.bottom .tab{display:flex;flex-direction:column;align-items:center;gap:3px;fo
 nav.bottom .tab .ic{font-size:var(--nav-icon);}
 nav.bottom .tab.active{color:var(--navy);}
 
+/* Seven tabs do not fit a 375px phone: at ~52px each, "Cash Book" alone is
+   wider than its slot before padding, so the labels would wrap or spill.
+   The bar scrolls instead of crushing them — every tab keeps a finger-sized
+   target, and the active one is scrolled into view on switch. Wider screens
+   have the room and are left exactly as they were. */
+@media (max-width: 520px){
+  nav.bottom{
+    justify-content:flex-start;
+    overflow-x:auto;
+    scrollbar-width:none;
+    -webkit-overflow-scrolling:touch;
+  }
+  nav.bottom::-webkit-scrollbar{display:none;}
+  nav.bottom .tab{
+    flex:0 0 auto;
+    min-width:60px;
+    white-space:nowrap;
+  }
+}
+
 /* Overlays / sheets */
 .scrim{position:fixed;inset:0;background:rgba(15,20,30,.5);z-index:40;display:none;}
 .scrim.show{display:block;}

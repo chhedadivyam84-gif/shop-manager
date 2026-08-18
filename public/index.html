@@ -402,6 +402,21 @@
       </div>
 
       <!-- CASH BOOK -->
+      <!-- Delivery & Dispatch. Lands on the area-wise board because that is
+           the question the dispatcher opens the app to answer: how many
+           deliveries are going where today. Everything else in the module
+           hangs off the buttons at the top. -->
+      <div class="screen" id="screen-delivery">
+        <div class="chip-row" id="dv-modes" style="margin-top:0;">
+          <button class="chip selected" data-dv-mode="board">Dispatch Board</button>
+          <button class="chip" data-dv-mode="dispatches">Dispatches</button>
+          <button class="chip" data-dv-mode="deliveries">Deliveries</button>
+          <button class="chip" data-dv-mode="reports">Reports</button>
+        </div>
+        <div id="dv-filters" style="margin-top:10px;"></div>
+        <div id="dv-body" style="margin-top:10px;"></div>
+      </div>
+
       <div class="screen" id="screen-cashbook">
         <div class="card" id="cashbook-summary" style="margin-top:0;"></div>
 
@@ -1062,6 +1077,7 @@
       <button class="tab" data-tab="customers"><span class="ic">&#128100;</span>Customers</button>
       <button class="tab" data-tab="reports"><span class="ic">&#128202;</span>Reports</button>
       <button class="tab" data-tab="cashbook"><span class="ic">&#128181;</span>Cash Book</button>
+      <button class="tab" data-tab="delivery"><span class="ic">&#128666;</span>Delivery</button>
     </nav>
 
     <div class="wa-fab-wrap"><button class="wa-fab" id="wa-fab-btn" title="Open WhatsApp">

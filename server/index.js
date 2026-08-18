@@ -63,6 +63,16 @@ async function start() {
   const backup = require("./backup");
   const { requireAuth, requireRole } = require("./auth");
 
+  /* Keeps the shop's delivery rounds identical on every machine it runs on.
+     Insert-only, and limited to this shop by name — see seed-areas.js. */
+  try {
+    const added = require("./seed-areas").seedCentralLineAreas(db);
+    if (added) console.log(`[areas] added ${added} Central Line delivery areas`);
+  } catch (err) {
+    // Never block start-up over a convenience: billing matters more.
+    console.error("[areas] seed skipped:", err.message);
+  }
+
   const app = express();
   const PORT = process.env.PORT || 3000;
 

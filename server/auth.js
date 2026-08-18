@@ -21,10 +21,18 @@ function requireAuth(req, res, next) {
   return res.status(401).json({ error: "Not logged in" });
 }
 
-function requireRole(role) {
+/* Accepts one role or several. Called with a single role it behaves exactly as
+   it always has — every existing owner-only route is unchanged. Several roles
+   exist for work the shop floor genuinely does: a delivery is marked by whoever
+   took the van out, not by the owner from a desk. */
+function requireRole(...roles) {
   return function (req, res, next) {
-    if (req.session && req.session.loggedIn && req.session.role === role) return next();
-    return res.status(403).json({ error: "Only the shop owner can do this." });
+    if (req.session && req.session.loggedIn && roles.includes(req.session.role)) return next();
+    return res.status(403).json({
+      error: roles.length === 1 && roles[0] === "owner"
+        ? "Only the shop owner can do this."
+        : "You don't have permission to do this."
+    });
   };
 }
 

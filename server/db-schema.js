@@ -1739,7 +1739,10 @@ addColumn("doc_numbering", "auto_enabled", "INTEGER NOT NULL DEFAULT 1");
     ["invoice",   "SP", 7, "invoices",   "challan_no",   "doc_type = 'invoice'"],
     ["challan",   "SP", 7, "invoices",   "challan_no",   "doc_type = 'challan'"],
     ["quotation", "SQ", 7, "quotations", "quotation_no", null],
-    ["purchase",  "PU", 7, "purchases",  "purchase_no",  null]
+    ["purchase",  "PU", 7, "purchases",  "purchase_no",  null],
+    // Its own series and its own prefix from the start — a dispatch note is
+    // not a bill, and nothing else writes to this column.
+    ["dispatch",  "DN", 7, "dispatches", "dispatch_no",  null]
   ];
   defs.forEach(([type, prefix, width, table, column, scope]) => {
     seed.run(type, prefix, width, startFor(table, column, scope, prefix), Date.now());
@@ -2178,6 +2181,95 @@ CREATE TABLE IF NOT EXISTS area_lines (
   PRIMARY KEY (area_id, line)
 );
 CREATE INDEX IF NOT EXISTS idx_area_lines_line ON area_lines(line);
+`);
+
+/* ------------------------------------------------------------
+   DELIVERY DISPATCH
+
+   A dispatch is one VEHICLE TRIP, not one bill. A van leaving with five
+   customers' goods is one dispatch carrying five drops, so the vehicle and
+   driver are recorded once and each customer still gets their own status,
+   signature and delivery time.
+
+   Dispatch NEVER touches stock. The invoice already deducted it when the sale
+   was made; deducting again here would take the goods out of stock twice.
+   ------------------------------------------------------------ */
+db.exec(`
+CREATE TABLE IF NOT EXISTS dispatches (
+  id TEXT PRIMARY KEY,
+  dispatch_no TEXT UNIQUE NOT NULL,
+  dispatch_at INTEGER NOT NULL,
+  vehicle_no TEXT DEFAULT '',
+  driver_name TEXT DEFAULT '',
+  driver_mobile TEXT DEFAULT '',
+  -- Pending | Ready | Out | Delivered | Partial | Cancelled | Returned
+  status TEXT NOT NULL DEFAULT 'Pending',
+  notes TEXT DEFAULT '',
+  created_at INTEGER NOT NULL,
+  created_by TEXT DEFAULT ''
+);
+
+-- One stop: this customer, this bill, this address.
+CREATE TABLE IF NOT EXISTS dispatch_drops (
+  id TEXT PRIMARY KEY,
+  dispatch_id TEXT NOT NULL REFERENCES dispatches(id) ON DELETE CASCADE,
+  seq INTEGER NOT NULL DEFAULT 0,           -- order of drops on the round
+  invoice_id TEXT REFERENCES invoices(id),
+  order_id TEXT,
+  customer_id TEXT,
+  -- Copied at dispatch time: the van carries the address as it was printed,
+  -- and editing the customer months later must not rewrite delivery history.
+  customer_name TEXT DEFAULT '',
+  customer_mobile TEXT DEFAULT '',
+  customer_gstin TEXT DEFAULT '',
+  delivery_address TEXT DEFAULT '',
+  landmark TEXT DEFAULT '',
+  pincode TEXT DEFAULT '',
+  area_id TEXT REFERENCES areas(id),
+  status TEXT NOT NULL DEFAULT 'Pending',
+  delivered_at INTEGER,
+  received_by TEXT DEFAULT '',
+  -- Proof of delivery: the finger-drawn signature, as SVG path data. Kept in
+  -- the database so the existing backup carries it; a file on disk would be
+  -- lost on any host that resets its filesystem.
+  signature TEXT DEFAULT '',
+  remarks TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_drops_dispatch ON dispatch_drops(dispatch_id);
+CREATE INDEX IF NOT EXISTS idx_drops_invoice ON dispatch_drops(invoice_id);
+
+/* What actually went on the van. qty_ordered is what the bill says;
+   qty_dispatched is what was loaded. The difference IS the outstanding
+   quantity — which is what makes "Partial" mean something a shop can act on
+   rather than a label someone has to remember the meaning of. */
+CREATE TABLE IF NOT EXISTS dispatch_items (
+  id TEXT PRIMARY KEY,
+  drop_id TEXT NOT NULL REFERENCES dispatch_drops(id) ON DELETE CASCADE,
+  -- INTEGER, matching invoice_items.id, which is a rowid. Declared TEXT this
+  -- would store 1 as "1" and never match the number it points at, so every
+  -- delivered quantity would silently fail to count against the bill.
+  invoice_item_id INTEGER,
+  product_id TEXT,
+  product_name TEXT DEFAULT '',
+  size_label TEXT DEFAULT '',
+  unit TEXT DEFAULT '',
+  qty_ordered REAL NOT NULL DEFAULT 0,
+  qty_dispatched REAL NOT NULL DEFAULT 0,
+  remarks TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_dispatch_items_drop ON dispatch_items(drop_id);
+
+-- Every status change, so "when did it actually leave" has an answer.
+CREATE TABLE IF NOT EXISTS dispatch_status_log (
+  id TEXT PRIMARY KEY,
+  dispatch_id TEXT NOT NULL REFERENCES dispatches(id) ON DELETE CASCADE,
+  drop_id TEXT REFERENCES dispatch_drops(id) ON DELETE CASCADE,
+  status TEXT NOT NULL,
+  at INTEGER NOT NULL,
+  by TEXT DEFAULT '',
+  note TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_dispatch_log ON dispatch_status_log(dispatch_id, at);
 `);
 
 // Where the data lives — the backup module needs the on-disk paths, and this

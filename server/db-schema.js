@@ -2171,6 +2171,19 @@ if (dust) {
 addColumn("areas", "station", "TEXT");
 addColumn("areas", "side", "TEXT");   // 'East' | 'West' | NULL
 
+/* Zone, sub-area and route: the coarser and finer cuts a delivery round is
+   actually planned by. A zone groups areas ("North Mumbai"), a sub-area names
+   the pocket within one ("Mamletdar Wadi"), and a route is the run a van does
+   on a given day — which is not the same as geography, because two adjacent
+   areas can sit on different days' rounds.
+
+   Left blank on the 193 areas already seeded. Blank, not guessed: inventing a
+   zone for Kasara would be a claim about how this shop organises its rounds
+   that only the shop can make. */
+addColumn("areas", "zone", "TEXT DEFAULT ''");
+addColumn("areas", "sub_area", "TEXT DEFAULT ''");
+addColumn("areas", "route", "TEXT DEFAULT ''");
+
 /* A station can sit on more than one line — CSMT is Central and Harbour, Bandra
    is Western and Harbour — so line membership is its own table rather than a
    column that would force a false choice. */

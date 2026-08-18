@@ -23,13 +23,38 @@ function rowsFor(includeInactive) {
    dropdowns can be built without the browser regrouping the list itself. */
 router.get("/", (req, res) => {
   const rows = rowsFor(req.query.all === "true");
+
+  /* Which lines each area sits on, fetched in ONE query and stitched on.
+     Asked per area this would be a query per row — 193 of them on a screen
+     that opens constantly. */
+  const lines = new Map();
+  db.prepare("SELECT area_id, line FROM area_lines").all().forEach(r => {
+    if (!lines.has(r.area_id)) lines.set(r.area_id, []);
+    lines.get(r.area_id).push(r.line);
+  });
+  rows.forEach(r => { r.lines = lines.get(r.id) || []; });
+
   const tree = {};
   rows.forEach(r => {
     tree[r.state] = tree[r.state] || {};
     tree[r.state][r.city] = tree[r.state][r.city] || [];
     tree[r.state][r.city].push({ id: r.id, area: r.area });
   });
-  res.json({ areas: rows, tree });
+
+  /* The distinct values already in use, so the Delivery and Dispatch screens
+     can offer them as a picker instead of asking the shop to retype "Malad
+     Route 2" and spell it differently the second time. */
+  const distinct = col => db.prepare(
+    `SELECT DISTINCT ${col} AS v FROM areas WHERE ${col} IS NOT NULL AND ${col} <> '' ORDER BY v`
+  ).all().map(r => r.v);
+
+  res.json({
+    areas: rows, tree,
+    zones: distinct("zone"),
+    routes: distinct("route"),
+    subAreas: distinct("sub_area"),
+    lines: db.prepare("SELECT DISTINCT line AS v FROM area_lines ORDER BY v").all().map(r => r.v)
+  });
 });
 
 router.post("/", requireRole("owner"), (req, res) => {
@@ -56,11 +81,47 @@ router.post("/", requireRole("owner"), (req, res) => {
   const maxSort = db.prepare(
     "SELECT COALESCE(MAX(sort_order), 0) AS n FROM areas WHERE state = ? AND city = ?"
   ).get(state, city).n;
-  db.prepare(
-    "INSERT INTO areas (id, state, city, area, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?)"
-  ).run(id, state, city, area, maxSort + 1, Date.now());
+  db.prepare(`INSERT INTO areas
+      (id, state, city, area, station, side, zone, sub_area, route, sort_order, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(id, state, city, area,
+    String(req.body.station || "").trim() || null,
+    String(req.body.side || "").trim() || null,
+    String(req.body.zone || "").trim(),
+    String(req.body.subArea || "").trim(),
+    String(req.body.route || "").trim(),
+    maxSort + 1, Date.now());
+  setLines(id, req.body.lines);
   logAction(req, "area.create", `${state} / ${city} / ${area}`);
   res.status(201).json(db.prepare("SELECT * FROM areas WHERE id = ?").get(id));
+});
+
+/** Replaces an area's line membership. Absent leaves it untouched. */
+function setLines(areaId, lines) {
+  if (!Array.isArray(lines)) return;
+  db.prepare("DELETE FROM area_lines WHERE area_id = ?").run(areaId);
+  const add = db.prepare("INSERT OR IGNORE INTO area_lines (area_id, line) VALUES (?, ?)");
+  lines.map(l => String(l).trim()).filter(Boolean).forEach(l => add.run(areaId, l));
+}
+
+/* Edit the round-planning fields. The area's own name, state and city are NOT
+   editable here: they identify the area on every bill that already carries it,
+   and renaming one would rewrite history. Retire it and add the right one. */
+router.put("/:id", requireRole("owner"), (req, res) => {
+  const a = db.prepare("SELECT * FROM areas WHERE id = ?").get(req.params.id);
+  if (!a) return res.status(404).json({ error: "Area not found." });
+
+  const val = (key, current) =>
+    req.body[key] === undefined ? current : String(req.body[key]).trim();
+
+  db.prepare(`UPDATE areas SET zone = ?, sub_area = ?, route = ?, station = ?, side = ?
+              WHERE id = ?`).run(
+    val("zone", a.zone), val("subArea", a.sub_area), val("route", a.route),
+    val("station", a.station) || null, val("side", a.side) || null, a.id);
+  setLines(a.id, req.body.lines);
+
+  logAction(req, "area.update", `${a.area} — zone/route`);
+  res.json(db.prepare("SELECT * FROM areas WHERE id = ?").get(a.id));
 });
 
 /* Retired, never deleted — an area sits on historical bills, and removing it

@@ -66,9 +66,10 @@ async function start() {
   /* Keeps the shop's delivery rounds identical on every machine it runs on.
      Insert-only, and limited to this shop by name — see seed-areas.js. */
   try {
-    const { added, moved } = require("./seed-areas").seedCentralLineAreas(db);
-    if (added) console.log(`[areas] added ${added} station delivery areas`);
-    if (moved) console.log(`[areas] reordered ${moved} areas into line order`);
+    const { added, routed, moved } = require("./seed-areas").seedCentralLineAreas(db);
+    if (added)  console.log(`[areas] added ${added} station delivery areas`);
+    if (routed) console.log(`[areas] set the round on ${routed} area(s)`);
+    if (moved)  console.log(`[areas] reordered ${moved} areas into line order`);
   } catch (err) {
     /* The file is absent by design in a build for sale — one shop's delivery
        rounds are not a buyer's data. That is not a fault, so it is silent;

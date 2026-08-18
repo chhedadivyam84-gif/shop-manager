@@ -60,10 +60,16 @@ const HARBOUR = ["CSMT", "Masjid", "Sandhurst Road", "Dockyard Road", "Reay Road
   // shop does not end up with both "Khar" and "Khar Road"
   "Bandra", "Khar", "Santacruz", "Vile Parle", "Andheri", "Ram Mandir", "Goregaon"];
 
-/* Which line each run of stations belongs to. Western first, then Central,
-   then Harbour: that is the order the shop scans in Delivery Dispatch, and the
-   areas list has no other ordering control — sort_order is only ever set when
-   an area is created. */
+/* The shop's own delivery rounds, by station. Both copies of the app hold
+   their own database, so a round typed into one would not exist in the other —
+   seeding them keeps the PC and the cloud copy showing the same rounds.
+
+   Applied ONLY where the route is still blank. A round the shop re-plans in
+   the Areas screen must survive the next restart; overwriting it every boot
+   would make that screen useless. */
+const ROUTES = {
+  "Route 1": ["Malad", "Kandivali", "Borivali"]
+};
 const LINES = [
   { line: "Western", stations: WESTERN },
   { line: "Central", stations: MAIN },
@@ -138,7 +144,34 @@ function seedCentralLineAreas(db) {
     }
   });
   run();
-  return { added, moved: orderStationAreas(db) };
+  return { added, routed: applyRoutes(db), moved: orderStationAreas(db) };
+}
+
+/**
+ * Fills in the shop's rounds, matching on station so "Malad", "Malad East" and
+ * "Malad West" all land on the same round — the older bills booked against the
+ * plain name belong to that van too.
+ *
+ * Only ever writes over a BLANK route. Anything the shop has set stands.
+ */
+function applyRoutes(db) {
+  const rows = db.prepare(
+    "SELECT id, area, station, route FROM areas WHERE route IS NULL OR route = ''").all();
+  const update = db.prepare("UPDATE areas SET route = ? WHERE id = ?");
+
+  let routed = 0;
+  const run = db.transaction(() => {
+    for (const [route, stations] of Object.entries(ROUTES)) {
+      for (const row of rows) {
+        if (stations.includes(row.station) || stations.includes(row.area)) {
+          update.run(route, row.id);
+          routed++;
+        }
+      }
+    }
+  });
+  run();
+  return routed;
 }
 
 /**

@@ -70,8 +70,10 @@ async function start() {
     if (added) console.log(`[areas] added ${added} station delivery areas`);
     if (moved) console.log(`[areas] reordered ${moved} areas into line order`);
   } catch (err) {
-    // Never block start-up over a convenience: billing matters more.
-    console.error("[areas] seed skipped:", err.message);
+    /* The file is absent by design in a build for sale — one shop's delivery
+       rounds are not a buyer's data. That is not a fault, so it is silent;
+       anything else is worth seeing, but never worth blocking billing over. */
+    if (err.code !== "MODULE_NOT_FOUND") console.error("[areas] seed skipped:", err.message);
   }
 
   const app = express();

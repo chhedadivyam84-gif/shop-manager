@@ -21,6 +21,34 @@ const path = require("path");
 const fs = require("fs");
 const db = require("./db");
 
+/* Captured here, at import, while the default company's connection is the
+   active one. Reading db.companies later from inside runAs() would resolve
+   against a different connection. */
+const C = db.companies;
+
+/* One run writes one file per business, plus the registry naming them, all
+   sharing a timestamp:
+
+     shop-<stamp>.db                 the first business (this name predates
+                                     multi-business and is kept, so older
+                                     backups still restore)
+     shop-<stamp>--<id>.db           every other business
+     shop-<stamp>--registry.json     which businesses exist
+
+   Sharing the stamp is what makes a run restorable as a set: a registry
+   naming a business whose file came from a different run would restore a
+   business pointing at the wrong books. */
+const REGISTRY_SUFFIX = "--registry.json";
+function partName(stamp, companyId) {
+  return companyId === C.defaultId()
+    ? `shop-${stamp}.db`
+    : `shop-${stamp}--${companyId}.db`;
+}
+function stampOf(fileName) {
+  const m = /^shop-(.+?)(?:--.*)?\.(?:db|json)$/.exec(fileName);
+  return m ? m[1] : null;
+}
+
 const BACKUP_DIR = path.join(db.dataDir, "backups");
 if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
 
@@ -44,20 +72,26 @@ function stamp(d = new Date()) {
  * string LITERAL (it cannot be a bound parameter), so the path is quote-escaped
  * by hand. Forward slashes work on every OS SQLite runs on, Windows included.
  */
-function snapshotTo(destPath) {
+function snapshotTo(destPath, companyId) {
   if (fs.existsSync(destPath)) {
     // VACUUM INTO refuses to overwrite; never reuse a name.
     throw new Error("Backup target already exists: " + destPath);
   }
   const sqlPath = destPath.replace(/\\/g, "/").replace(/'/g, "''");
-  db.exec(`VACUUM INTO '${sqlPath}'`);
+  // Bound to one business, or the handle would snapshot whichever database
+  // happened to be active — which is how every business but the first went
+  // unbacked-up.
+  const take = () => db.exec(`VACUUM INTO '${sqlPath}'`);
+  if (companyId) C.runAs(companyId, take); else take();
   return destPath;
 }
 
 /** Newest-first list of local snapshot files with size and time. */
 function listLocal() {
+  // The first business's file stands for its run, so the Settings screen shows
+  // one row per backup rather than one per business.
   return fs.readdirSync(BACKUP_DIR)
-    .filter(f => f.startsWith("shop-") && f.endsWith(".db"))
+    .filter(f => f.startsWith("shop-") && f.endsWith(".db") && !f.includes("--"))
     .map(f => {
       const full = path.join(BACKUP_DIR, f);
       const st = fs.statSync(full);
@@ -66,12 +100,24 @@ function listLocal() {
     .sort((a, b) => b.at - a.at);
 }
 
+/** Every file belonging to one run, the other businesses and registry included. */
+function partsOfRun(stamp) {
+  return fs.readdirSync(BACKUP_DIR)
+    .filter(f => f.startsWith("shop-") && stampOf(f) === stamp)
+    .map(f => path.join(BACKUP_DIR, f));
+}
+
+/* Rotation counts RUNS, not files. Counting files would silently keep fewer
+   and fewer days of history as businesses are added. */
 function rotateLocal(keep = KEEP_LOCAL) {
-  const extra = listLocal().slice(keep);
-  for (const b of extra) {
-    try { fs.unlinkSync(b.path); } catch (_) { /* best effort */ }
+  const staleStamps = listLocal().slice(keep).map(b => stampOf(b.file)).filter(Boolean);
+  let removed = 0;
+  for (const stamp of staleStamps) {
+    for (const p of partsOfRun(stamp)) {
+      try { fs.unlinkSync(p); removed++; } catch (_) { /* best effort */ }
+    }
   }
-  return extra.length;
+  return removed;
 }
 
 /* ------------------------------------------------------------
@@ -125,18 +171,46 @@ async function uploadToCloud(filePath, objectName) {
  * failure is captured in the result, not thrown.
  */
 async function runBackup(trigger = "manual") {
-  const name = `shop-${stamp()}.db`;
-  const dest = path.join(BACKUP_DIR, name);
-  snapshotTo(dest);
-  const size = fs.statSync(dest).size;
-  const removed = rotateLocal();
-  const cloud = await uploadToCloud(dest, name);
+  const s = stamp();
+  const companies = C.list();
+  const written = [];
 
+  /* Every business, and the registry that names them. A backup missing one
+     business is a business that cannot be brought back. */
+  for (const company of companies) {
+    const name = partName(s, company.id);
+    const dest = path.join(BACKUP_DIR, name);
+    snapshotTo(dest, company.id);
+    written.push({ name, path: dest, size: fs.statSync(dest).size });
+  }
+
+  const regName = `shop-${s}${REGISTRY_SUFFIX}`;
+  const regPath = path.join(BACKUP_DIR, regName);
+  fs.writeFileSync(regPath, JSON.stringify({
+    companies, defaultId: C.defaultId()
+  }, null, 2));
+  written.push({ name: regName, path: regPath, size: fs.statSync(regPath).size });
+
+  const removed = rotateLocal();
+
+  /* Uploaded after all of them exist locally, so a run that fails part-way
+     never puts a half-set in the bucket for restore to find. */
+  let cloud = { attempted: false };
+  for (const part of written) {
+    const r = await uploadToCloud(part.path, part.name);
+    if (!r.attempted) { cloud = r; break; }
+    // One failure fails the run's cloud copy: a partial set is not a backup.
+    if (!r.ok) { cloud = r; break; }
+    cloud = r;
+  }
+
+  const primary = written[0];
   lastRun = {
     at: Date.now(),
     trigger,
-    file: name,
-    size,
+    file: primary.name,
+    size: written.reduce((t, p) => t + p.size, 0),
+    businesses: companies.length,
     rotatedAway: removed,
     cloud
   };

@@ -43,20 +43,63 @@ async function restoreIfNeeded() {
   });
   if (!listRes.ok) return { restored: false, reason: `could not list backups: ${listRes.status}` };
 
-  const files = (await listRes.json())
-    .filter(f => f.name.startsWith("shop-") && f.name.endsWith(".db"))
-    .sort((a, b) => b.name.localeCompare(a.name)); // filenames are timestamp-sortable
-  if (!files.length) return { restored: false, reason: "no backups found in bucket yet" };
+  const all = (await listRes.json()).map(f => f.name).filter(n => n.startsWith("shop-"));
 
-  const latest = files[0].name;
-  const dlRes = await fetch(`${cfg.url}/storage/v1/object/${cfg.bucket}/${latest}`, {
-    headers: { Authorization: `Bearer ${cfg.key}`, apikey: cfg.key }
-  });
-  if (!dlRes.ok) return { restored: false, reason: `download failed: ${dlRes.status}` };
+  /* The first business's file identifies a run; "--" marks the other parts. */
+  const primaries = all
+    .filter(n => n.endsWith(".db") && !n.includes("--"))
+    .sort((a, b) => b.localeCompare(a)); // filenames are timestamp-sortable
+  if (!primaries.length) return { restored: false, reason: "no backups found in bucket yet" };
 
-  const buf = Buffer.from(await dlRes.arrayBuffer());
+  const latest = primaries[0];
+  const stamp = /^shop-(.+)\.db$/.exec(latest)[1];
+
+  const download = async name => {
+    const res = await fetch(`${cfg.url}/storage/v1/object/${cfg.bucket}/${name}`, {
+      headers: { Authorization: `Bearer ${cfg.key}`, apikey: cfg.key }
+    });
+    if (!res.ok) throw new Error(`download failed for ${name}: ${res.status}`);
+    return Buffer.from(await res.arrayBuffer());
+  };
+
+  let buf;
+  try { buf = await download(latest); }
+  catch (e) { return { restored: false, reason: e.message }; }
   fs.writeFileSync(DB_PATH, buf);
-  return { restored: true, file: latest, size: buf.length };
+
+  /* Everything else from the SAME run: the other businesses, then the registry
+     that names them. The registry is written last so it never lists a business
+     whose file has not landed — a registry entry with no database behind it
+     would fail at the first query rather than at start-up. */
+  const others = all.filter(n => n.startsWith(`shop-${stamp}--`) && n.endsWith(".db"));
+  const restoredCompanies = [];
+  for (const name of others) {
+    const id = /--(.+)\.db$/.exec(name)[1];
+    const dir = path.join(DATA_DIR, "companies", id);
+    try {
+      const b = await download(name);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "shop.db"), b);
+      restoredCompanies.push(id);
+    } catch (e) {
+      return { restored: true, file: latest, size: buf.length,
+        partial: `business ${id} could not be restored: ${e.message}` };
+    }
+  }
+
+  const regName = `shop-${stamp}--registry.json`;
+  if (all.includes(regName)) {
+    try { fs.writeFileSync(path.join(DATA_DIR, "companies.json"), await download(regName)); }
+    catch (e) {
+      return { restored: true, file: latest, size: buf.length,
+        partial: `the business list could not be restored: ${e.message}` };
+    }
+  }
+
+  return {
+    restored: true, file: latest, size: buf.length,
+    businesses: 1 + restoredCompanies.length
+  };
 }
 
 module.exports = { restoreIfNeeded };

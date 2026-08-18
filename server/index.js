@@ -49,7 +49,10 @@ async function start() {
   // database module opens (and would otherwise create empty) the file.
   const restore = await require("./restore").restoreIfNeeded();
   if (restore.restored) {
-    console.log(`[restore] Restored database from cloud backup: ${restore.file} (${restore.size} bytes)`);
+    const many = restore.businesses > 1 ? `, ${restore.businesses} businesses` : "";
+    console.log(`[restore] Restored database from cloud backup: ${restore.file} (${restore.size} bytes${many})`);
+    // Loud: the app is up but not everything came back with it.
+    if (restore.partial) console.error(`[restore] INCOMPLETE — ${restore.partial}`);
   } else {
     console.log(`[restore] Skipped: ${restore.reason}`);
   }

@@ -70,7 +70,8 @@ const HARBOUR = ["CSMT", "Masjid", "Sandhurst Road", "Dockyard Road", "Reay Road
 const ROUTES = {
   "Route 1": ["Malad", "Kandivali", "Borivali"],
   "Route 2": ["Goregaon", "Andheri", "Jogeshwari"],
-  "Route 3": ["Bhandup", "Mulund", "Nahur"]
+  "Route 3": ["Bhandup", "Mulund", "Nahur"],
+  "Route 4": ["Thane", "Kalwa", "Mumbra"]
 };
 const LINES = [
   { line: "Western", stations: WESTERN },

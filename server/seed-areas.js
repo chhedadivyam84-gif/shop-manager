@@ -68,7 +68,8 @@ const HARBOUR = ["CSMT", "Masjid", "Sandhurst Road", "Dockyard Road", "Reay Road
    the Areas screen must survive the next restart; overwriting it every boot
    would make that screen useless. */
 const ROUTES = {
-  "Route 1": ["Malad", "Kandivali", "Borivali"]
+  "Route 1": ["Malad", "Kandivali", "Borivali"],
+  "Route 2": ["Goregaon", "Andheri", "Jogeshwari"]
 };
 const LINES = [
   { line: "Western", stations: WESTERN },

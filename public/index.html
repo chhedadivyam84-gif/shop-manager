@@ -1210,6 +1210,12 @@
   </div>
 
   <div class="fullscreen" id="fs-invoice">
+    <!-- Stays put while the bill scrolls. On a phone the bill is taller than
+         the screen, so a header that scrolls away takes the paper size, the
+         way out, and the With/Without Rate choice with it — leaving the one
+         control that changes what prints unreachable exactly when you are
+         looking at the print. -->
+    <div class="fs-stick">
     <div class="fs-bar">
       <div class="fs-title">Invoice Preview</div>
       <div style="display:flex;align-items:center;gap:8px;">
@@ -1223,6 +1229,13 @@
         <button class="fs-close" data-close-fs="fs-invoice">&#10005;</button>
       </div>
     </div>
+    <!-- Sits with the header, not above the paper: this is the control that
+         decides what the customer sees on the printed challan. -->
+    <div class="chip-row" id="challan-rate-toggle-row" style="display:none;">
+      <button class="chip selected" data-challan-rate="true">Print With Rate</button>
+      <button class="chip" data-challan-rate="false">Print Without Rate</button>
+    </div>
+    </div>
 
     <!-- Bill Print Settings. Slides in beside the bill on a wide screen and
          sits above it on a phone. Every change redraws the bill immediately,
@@ -1234,10 +1247,6 @@
     <!-- Previous / Next bill stepper. Filled by renderInvoicePageContent() only
          when the bill was opened from a list; empty otherwise. -->
     <div id="invoice-bill-nav" style="margin:0 16px;"></div>
-    <div class="chip-row" id="challan-rate-toggle-row" style="display:none;margin:0 16px 8px;">
-      <button class="chip selected" data-challan-rate="true">Print With Rate</button>
-      <button class="chip" data-challan-rate="false">Print Without Rate</button>
-    </div>
     <div class="invoice-page" id="invoice-page-content"></div>
     <div class="print-status-row" id="print-status-row" style="display:none;"></div>
     <div class="inv-actions">

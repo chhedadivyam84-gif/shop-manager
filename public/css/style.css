@@ -425,6 +425,13 @@ nav.bottom .tab.active{color:var(--navy);}
    buttons at the bottom stay reachable, not just the card's own content. */
 .fullscreen{position:fixed;inset:0;max-width:var(--app-max);margin:0 auto;background:var(--navy);z-index:50;display:none;flex-direction:column;color:#fff;overflow-y:auto;}
 .fullscreen.show{display:flex;}
+/* The fullscreen scrolls as one block, so anything at the top leaves with it.
+   This group stays. Only the invoice preview opts in — every other fullscreen
+   keeps the behaviour it had. Screen only: print takes the paper, not the
+   app's chrome. */
+.fs-stick{position:sticky;top:0;z-index:4;background:var(--navy);}
+.fs-stick #challan-rate-toggle-row{padding:0 16px 8px;}
+@media print{ .fs-stick{position:static;} }
 .fs-bar{display:flex;align-items:center;justify-content:space-between;padding:var(--fs-bar-pad);}
 .fs-bar .fs-title{font-weight:800;font-size:14px;}
 .fs-bar .chip{background:rgba(255,255,255,.15);color:#fff;border:none;padding:5px 10px;font-size:11px;}

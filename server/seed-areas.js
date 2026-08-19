@@ -84,8 +84,8 @@ const ROUTES = {
      which is exactly the case the fill-blanks-only rule exists to protect. */
 
   // Western, north of Borivali
-  "Route 8":  ["Dahisar", "Mira Road"],
-  "Route 9":  ["Naigaon", "Bhayandar"],
+  "Route 8":  ["Dahisar", "Mira Road", "Bhayandar"],
+  "Route 9":  ["Naigaon"],
   "Route 10": ["Virar", "Nalasopara", "Vasai Road"],
 
   // Western, south of Andheri towards Churchgate
@@ -214,7 +214,10 @@ function seedCentralLineAreas(db) {
  * on every boot. */
 const ROUTE_FIXES = [
   { id: "2026-08-19-virar-group", route: "Route 10", stations: ["Nalasopara", "Vasai Road"] },
-  { id: "2026-08-19-bhayandar", route: "Route 9", stations: ["Bhayandar"] }
+  { id: "2026-08-19-bhayandar", route: "Route 9", stations: ["Bhayandar"] },
+  // Reversed the same day: Bhayandar goes back to Route 8 with Dahisar and
+  // Mira Road. A new id, so it runs once more rather than being ignored.
+  { id: "2026-08-19-bhayandar-back", route: "Route 8", stations: ["Bhayandar"] }
 ];
 
 function applyRouteFixes(db) {

@@ -84,8 +84,8 @@ const ROUTES = {
      which is exactly the case the fill-blanks-only rule exists to protect. */
 
   // Western, north of Borivali
-  "Route 8":  ["Dahisar", "Mira Road", "Bhayandar"],
-  "Route 9":  ["Naigaon"],
+  "Route 8":  ["Dahisar", "Mira Road"],
+  "Route 9":  ["Naigaon", "Bhayandar"],
   "Route 10": ["Virar", "Nalasopara", "Vasai Road"],
 
   // Western, south of Andheri towards Churchgate
@@ -213,7 +213,8 @@ function seedCentralLineAreas(db) {
  * is the whole point of doing it this way rather than re-asserting the route
  * on every boot. */
 const ROUTE_FIXES = [
-  { id: "2026-08-19-virar-group", route: "Route 10", stations: ["Nalasopara", "Vasai Road"] }
+  { id: "2026-08-19-virar-group", route: "Route 10", stations: ["Nalasopara", "Vasai Road"] },
+  { id: "2026-08-19-bhayandar", route: "Route 9", stations: ["Bhayandar"] }
 ];
 
 function applyRouteFixes(db) {

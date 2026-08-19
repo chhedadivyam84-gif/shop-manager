@@ -2,8 +2,17 @@ const express = require("express");
 const db = require("../db");
 const { todayStr, localDate, round2 } = require("../util");
 const { buildXlsx } = require("../xlsx");
+const { requireRole } = require("../auth");
 
 const router = express.Router();
+
+/* Reports that reveal margin. Guarded on the SERVER, not just hidden in the
+   browser: a staff login can call these endpoints directly, and hiding a
+   button changes nothing about what the endpoint will hand out. */
+const ownerOnly = requireRole("owner");
+
+/** Report types under /export that expose cost or margin. */
+const OWNER_ONLY_TYPES = new Set(["Profit", "ProfitByInvoice", "ProfitLoss", "BalanceSheet"]);
 
 /**
  * A product's most recent purchase cost, whichever of the two purchase
@@ -176,8 +185,18 @@ router.get("/dashboard", (req, res) => {
     WHERE i.voided = 0 ORDER BY i.created_at DESC LIMIT 5
   `).all();
 
+  /* Profit is the owner's business. Staff take the till, raise the bills and
+     load the van; what the shop makes on each sheet is not part of that, and
+     a margin figure on a shared counter screen is read by whoever walks past.
+
+     Omitted rather than zeroed: a zero is a claim, and a wrong one. Absent is
+     honest, and the browser hides the tile when it is missing. */
+  const forOwner = req.session && req.session.role === "owner";
+
   res.json({
-    todaysSales, todaysProfit, outstandingTotal, outstandingCount, payableTotal, payableCount, lowStockCount,
+    todaysSales,
+    ...(forOwner ? { todaysProfit } : {}),
+    outstandingTotal, outstandingCount, payableTotal, payableCount, lowStockCount,
     cashBalance, bankBalance,
     revenueChart: days, bestSellers: soldRows, topCustomers, recentInvoices
   });
@@ -719,7 +738,7 @@ function groupByParty(rows) {
  * no cost on file — its purchase side is 0 and the row is flagged (hasCost)
  * rather than silently guessing a number.
  */
-router.get("/profit", (req, res) => {
+router.get("/profit", ownerOnly, (req, res) => {
   const range = dateRange(req);
   const items = db.prepare(`
     SELECT ii.product_id, ii.name, ii.pieces, ii.qty, ii.rate, ii.gst_rate AS sales_gst_rate,
@@ -772,7 +791,7 @@ router.get("/profit", (req, res) => {
 // instead of per line — "how much did this one sale actually make", which
 // per-line is too granular for and the plain sales report has no cost data
 // to answer at all.
-router.get("/profit-by-invoice", (req, res) => {
+router.get("/profit-by-invoice", ownerOnly, (req, res) => {
   const range = dateRange(req);
   const invoices = db.prepare(`
     SELECT i.id, i.challan_no, i.date, i.created_at, i.customer_id, c.name AS customer_name
@@ -1008,7 +1027,7 @@ function computePnl(range) {
   };
 }
 
-router.get("/pnl", (req, res) => res.json(computePnl(dateRange(req))));
+router.get("/pnl", ownerOnly, (req, res) => res.json(computePnl(dateRange(req))));
 
 /** Output GST (collected on sales) vs input GST (paid on purchases). Whichever
  *  side is larger decides whether GST sits on the asset or liability side. */
@@ -1156,7 +1175,7 @@ function computeBalanceSheet() {
   };
 }
 
-router.get("/balance-sheet", (req, res) => res.json(computeBalanceSheet()));
+router.get("/balance-sheet", ownerOnly, (req, res) => res.json(computeBalanceSheet()));
 
 /* Row data for a report, as a header row followed by data rows.
    The Excel download, the CSV, the PDF and the printed sheet all come from
@@ -1447,6 +1466,13 @@ router.get("/data", (req, res) => {
 });
 
 router.get("/export", (req, res) => {
+  /* The same guard as the on-screen reports. Without it the margin is one
+     download away for anyone signed in — the spreadsheet does not care that
+     the button was hidden. */
+  if (OWNER_ONLY_TYPES.has(req.query.type) &&
+      !(req.session && req.session.role === "owner")) {
+    return res.status(403).json({ error: "Only the shop owner can download this report." });
+  }
   let out;
   try { out = buildReportRows(req); }
   catch (e) { return res.status(500).json({ error: "Could not build this report: " + e.message }); }

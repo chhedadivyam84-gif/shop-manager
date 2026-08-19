@@ -328,6 +328,7 @@ async function initApp(){
     b.addEventListener("click", ()=>closeFullscreen(b.dataset.closeFs));
   });
   installFullscreenHomeLinks();
+  applyOwnerOnlyVisibility();
 
   document.getElementById("billing-search").addEventListener("input", renderBillingProducts);
   // Enter in the product box closes the entry loop: type enough of a name,
@@ -1114,7 +1115,16 @@ async function renderHome(){
   state.dashboard = d;
 
   document.getElementById("stat-sales").textContent = fmt(d.todaysSales);
-  document.getElementById("stat-profit").textContent = fmt(d.todaysProfit);
+  /* The server sends no profit to a staff login, so the tile has nothing to
+     show and is removed rather than left reading ₹0 — a zero on the counter
+     screen is a claim about the day's trading, and a false one. */
+  const profitCard = document.getElementById("stat-profit").closest(".stat-card");
+  if(d.todaysProfit === undefined){
+    if(profitCard) profitCard.style.display = "none";
+  }else{
+    if(profitCard) profitCard.style.display = "";
+    document.getElementById("stat-profit").textContent = fmt(d.todaysProfit);
+  }
   document.getElementById("stat-outstanding").textContent = fmt(d.outstandingTotal) + (d.outstandingCount? " · "+d.outstandingCount+" cust.":"");
   document.getElementById("stat-payable").textContent = fmt(d.payableTotal) + (d.payableCount? " · "+d.payableCount+" supp.":"");
   document.getElementById("stat-cash").textContent = fmt(d.cashBalance);
@@ -6390,6 +6400,20 @@ function openPrintWindow(html, opts){
   w.document.write(withBar);
   w.document.close();
   return w;
+}
+
+/**
+ * Hides what only the owner should see — the margin reports.
+ *
+ * This is tidiness, not security. Every one of these endpoints refuses a
+ * staff login on the server, so removing the button only saves someone from
+ * pressing something that would say no.
+ */
+function applyOwnerOnlyVisibility(){
+  const owner = isOwner();
+  document.querySelectorAll(".owner-only").forEach(el => {
+    el.style.display = owner ? "" : "none";
+  });
 }
 
 function installFullscreenHomeLinks(){

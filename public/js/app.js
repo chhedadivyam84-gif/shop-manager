@@ -4611,9 +4611,7 @@ function printPartyLedger(detail, partyLabel){
     </div>
     <script>window.onload=()=>window.print();</script>
     </body></html>`;
-  const w = window.open("", "_blank");
-  w.document.write(html);
-  w.document.close();
+  openPrintWindow(html, { title: "Ledger" });
 }
 
 /** Reads a <input type=file> into {filename, mimeType, dataBase64} for the payment attachment field, or null if empty. */
@@ -6350,6 +6348,50 @@ function closeFullscreen(id){ document.getElementById(id).classList.remove("show
  * sits inside .fs-bar, which the print stylesheet hides, so it can never
  * reach the paper.
  */
+/**
+ * Opens a printable document in its own tab, with a way back.
+ *
+ * These documents are written into a blank tab, so none of the app is around
+ * them — on a phone that leaves you stranded on a sheet of paper with no
+ * Home, no Back, and only the browser's tab switcher to escape with. The bar
+ * added here is the way out, and it is screen-only: it never reaches paper.
+ *
+ * Closing works because the tab was opened by script, which is what permits
+ * window.close(). If a browser ever refuses, the button falls back to going
+ * back in history rather than doing nothing.
+ */
+function openPrintWindow(html, opts){
+  const label = (opts && opts.title) || "Document";
+  const bar = `
+    <style>
+      .pw-bar{position:sticky;top:0;z-index:99;display:flex;gap:8px;align-items:center;
+        background:#1b2a4a;color:#fff;padding:10px 12px;font:600 13px -apple-system,
+        BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;}
+      .pw-bar button{font:inherit;border:0;border-radius:999px;padding:7px 13px;cursor:pointer;}
+      .pw-back{background:rgba(255,255,255,.18);color:#fff;}
+      .pw-print{background:#e8b530;color:#1b2a4a;}
+      .pw-ttl{opacity:.75;font-weight:500;margin-left:2px;}
+      @media print{ .pw-bar{display:none !important;} }
+    </style>
+    <div class="pw-bar">
+      <button class="pw-back" onclick="window.close();setTimeout(function(){history.back();},120)">&larr; Back</button>
+      <button class="pw-print" onclick="window.print()">Print</button>
+      <span class="pw-ttl">${label}</span>
+    </div>`;
+
+  /* Inserted right after <body> so it is the first thing on screen. If the
+     document has no body tag for any reason, it simply goes in front. */
+  const withBar = /<body[^>]*>/i.test(html)
+    ? html.replace(/(<body[^>]*>)/i, "$1" + bar)
+    : bar + html;
+
+  const w = window.open("", "_blank");
+  if(!w){ toast("Your browser blocked the print window. Allow pop-ups for this app."); return null; }
+  w.document.write(withBar);
+  w.document.close();
+  return w;
+}
+
 function installFullscreenHomeLinks(){
   document.querySelectorAll(".fullscreen").forEach(fs => {
     /* The Print Engine's bar is two stacked rows — a title row and a row of
@@ -9102,9 +9144,7 @@ function printCashBook(){
       <td class="num">${e.type==="in"?fmt(e.amount):""}</td><td class="num">${e.type==="out"?fmt(e.amount):""}</td><td class="num">${fmt(e.runningBalance)}</td></tr>`).join("")}</tbody></table>
     <script>window.onload=()=>window.print();</script>
     </body></html>`;
-  const w = window.open("", "_blank");
-  w.document.write(html);
-  w.document.close();
+  openPrintWindow(html, { title: "Cash Book" });
 }
 
 /* ============================================================
@@ -9659,9 +9699,7 @@ function printBankBook(){
       <td class="num">${e.type==="in"?fmt(e.amount):""}</td><td class="num">${e.type==="out"?fmt(e.amount):""}</td><td class="num">${fmt(e.runningBalance)}</td></tr>`).join("")}</tbody></table>
     <script>window.onload=()=>window.print();</script>
     </body></html>`;
-  const w = window.open("", "_blank");
-  w.document.write(html);
-  w.document.close();
+  openPrintWindow(html, { title: "Bank Book" });
 }
 
 /* ============================================================
@@ -11069,9 +11107,7 @@ function printPurchaseOrder(po){
     ${po.remarks?`<div class="sub">Remarks: ${escapeHtml(po.remarks)}</div>`:""}
     <script>window.onload=()=>window.print();</script>
     </body></html>`;
-  const w = window.open("", "_blank");
-  w.document.write(html);
-  w.document.close();
+  openPrintWindow(html, { title: "Purchase Order" });
 }
 /** Same share-as-text-link pattern as an invoice's WhatsApp share — there is no real email/SMTP integration in this app. */
 function sharePoWhatsApp(po){
@@ -11846,9 +11882,7 @@ function printQuotation(q){
     <div class="q2-page">${bodyHtml}</div>
     <script>window.onload=()=>window.print();</script>
     </body></html>`;
-  const w = window.open("", "_blank");
-  w.document.write(html);
-  w.document.close();
+  openPrintWindow(html, { title: "Quotation" });
 }
 function shareQuotationWhatsApp(q){
   const cust = state.customers.find(c=>c.id===q.customer_id);
@@ -12405,9 +12439,7 @@ function printSalesOrder(so){
     ${so.remarks?`<div class="sub" style="margin-top:10px;">Remarks: ${escapeHtml(so.remarks)}</div>`:""}
     <script>window.onload=()=>window.print();</script>
     </body></html>`;
-  const w = window.open("", "_blank");
-  w.document.write(html);
-  w.document.close();
+  openPrintWindow(html, { title: "Sales Order" });
 }
 function shareSoWhatsApp(so){
   const cust = state.customers.find(c=>c.id===so.customer_id);
@@ -12725,9 +12757,7 @@ function printSalesReturn(sr){
     </div>
     <script>window.onload=()=>window.print();</script>
     </body></html>`;
-  const w = window.open("", "_blank");
-  w.document.write(html);
-  w.document.close();
+  openPrintWindow(html, { title: "Sales Return" });
 }
 
 /* ============================================================
@@ -12921,9 +12951,7 @@ function printPurchaseReturn(pr){
     </div>
     <script>window.onload=()=>window.print();</script>
     </body></html>`;
-  const w = window.open("", "_blank");
-  w.document.write(html);
-  w.document.close();
+  openPrintWindow(html, { title: "Purchase Return" });
 }
 
 /* ============================================================

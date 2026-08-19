@@ -244,8 +244,14 @@ router.post("/", requireRole("owner", "manager", "staff"), (req, res) => {
 
       let seq = 0;
       for (const invId of invoiceIds) {
+        /* The area follows the same fallback the board groups by — bill first,
+           then the customer's. Copying only the bill's would store a drop with
+           no area whenever the bill was raised without one, which is most of
+           them, and every area-wise report would then show a dash where the
+           board had just shown Malad West. */
         const inv = db.prepare(`
-          SELECT i.*, c.name AS cname, c.phone AS cphone, c.gst AS cgstin,
+          SELECT i.*, COALESCE(i.area_id, c.area_id) AS area_id,
+                 c.name AS cname, c.phone AS cphone, c.gst AS cgstin,
                  c.address AS caddr, c.pin_code AS cpin
             FROM invoices i LEFT JOIN customers c ON c.id = i.customer_id
            WHERE i.id = ?`).get(bindId(invId));

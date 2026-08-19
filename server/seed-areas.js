@@ -85,8 +85,8 @@ const ROUTES = {
 
   // Western, north of Borivali
   "Route 8":  ["Dahisar", "Mira Road", "Bhayandar"],
-  "Route 9":  ["Naigaon"],
-  "Route 10": ["Virar", "Nalasopara", "Vasai Road"],
+  "Route 9":  ["Naigaon", "Vasai Road"],
+  "Route 10": ["Nalasopara", "Virar"],
 
   // Western, south of Andheri towards Churchgate
   "Route 11": ["Vile Parle", "Santacruz", "Khar"],
@@ -217,7 +217,8 @@ const ROUTE_FIXES = [
   { id: "2026-08-19-bhayandar", route: "Route 9", stations: ["Bhayandar"] },
   // Reversed the same day: Bhayandar goes back to Route 8 with Dahisar and
   // Mira Road. A new id, so it runs once more rather than being ignored.
-  { id: "2026-08-19-bhayandar-back", route: "Route 8", stations: ["Bhayandar"] }
+  { id: "2026-08-19-bhayandar-back", route: "Route 8", stations: ["Bhayandar"] },
+  { id: "2026-08-19-vasai-to-9", route: "Route 9", stations: ["Vasai Road"] }
 ];
 
 function applyRouteFixes(db) {

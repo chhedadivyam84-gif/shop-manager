@@ -1491,7 +1491,8 @@ const DV = {
 };
 
 function dvSet(mode){
-  DV.mode = mode; DV.area = null; DV.report = null; DV.dispatch = null; DV.picked.clear();
+  DV.mode = mode; DV.area = null; DV.report = null; DV.dispatch = null;
+  DV.route = null; DV.picked.clear();
   document.querySelectorAll("[data-dv-mode]").forEach(b =>
     b.classList.toggle("selected", b.dataset.dvMode === mode));
   renderDelivery();
@@ -1508,6 +1509,107 @@ async function renderDelivery(){
   if(DV.mode === "deliveries")  return dvRenderDeliveries();
   if(DV.mode === "reports")     return dvRenderReports();
   if(DV.mode === "areas")       return dvRenderAreas();
+  if(DV.mode === "routes")      return dvRenderRoutes();
+}
+
+/* ---------------------------------------------------------- routes
+
+   The rounds themselves, seen as rounds rather than as 193 separate areas.
+   A dispatcher plans by asking "what is on Route 1", not by opening Malad
+   West and reading a field — so this lists each round with its stations, and
+   moving a station is one tap from there.
+
+   Stations, not areas: East and West always travel on the same van, and
+   asking someone to move them one at a time would be busywork that invites
+   the two halves of a suburb to drift onto different rounds. */
+async function dvRenderRoutes(){
+  document.getElementById("dv-filters").innerHTML = "";
+  const body = document.getElementById("dv-body");
+  body.innerHTML = `<p class="muted" style="font-size:13px;">Loading…</p>`;
+  const r = await api("GET", "/areas?all=true");
+
+  // Group by round, then by station within it.
+  const rounds = new Map();
+  for(const a of r.areas){
+    const key = a.route || "";
+    if(!rounds.has(key)) rounds.set(key, { route: key, stations: new Map(), areas: 0 });
+    const g = rounds.get(key);
+    g.areas++;
+    const st = a.station || a.area;
+    if(!g.stations.has(st)) g.stations.set(st, []);
+    g.stations.get(st).push(a);
+  }
+  const list = [...rounds.values()].sort((a, b) => {
+    if(!a.route) return 1;
+    if(!b.route) return -1;
+    const na = parseInt(String(a.route).replace(/\D/g, ""), 10);
+    const nb = parseInt(String(b.route).replace(/\D/g, ""), 10);
+    return (isNaN(na) ? 9999 : na) - (isNaN(nb) ? 9999 : nb);
+  });
+
+  if(DV.route !== null && DV.route !== undefined){
+    const g = list.find(x => x.route === DV.route);
+    if(g) return dvRenderOneRoute(g, list);
+  }
+
+  body.innerHTML = `
+    <p class="muted" style="font-size:12px;margin:0 0 8px;">
+      ${list.filter(g => g.route).length} round${list.filter(g=>g.route).length===1?"":"s"} ·
+      tap one to see its stations and move any of them.</p>
+    ${list.map(g => `
+      <div class="card dv-route" data-route="${escapeHtml(g.route)}" style="margin-top:0;margin-bottom:6px;display:flex;align-items:center;gap:10px;cursor:pointer;">
+        <div style="flex:1;min-width:0;">
+          <div class="row-title">${g.route ? escapeHtml(g.route) : "No round set"}</div>
+          <div class="row-sub">${[...g.stations.keys()].slice(0, 4).map(escapeHtml).join(", ")}${g.stations.size > 4 ? " +" + (g.stations.size - 4) + " more" : ""}</div>
+        </div>
+        <span class="tick">${g.stations.size}</span>
+      </div>`).join("")}`;
+
+  body.querySelectorAll(".dv-route").forEach(el =>
+    el.addEventListener("click", () => { DV.route = el.dataset.route; dvRenderRoutes(); }));
+}
+
+function dvRenderOneRoute(g, all){
+  const body = document.getElementById("dv-body");
+  const targets = all.map(x => x.route).filter(x => x !== g.route);
+  body.innerHTML = `
+    <button class="btn btn-outline" id="dv-rt-back" style="margin-bottom:10px;">← All rounds</button>
+    <div class="card" style="margin-top:0;">
+      <div class="row-title">${g.route ? escapeHtml(g.route) : "No round set"}</div>
+      <div class="row-sub">${g.stations.size} station${g.stations.size===1?"":"s"} · ${g.areas} area${g.areas===1?"":"s"}</div>
+    </div>
+    ${[...g.stations.entries()].map(([station, areas]) => `
+      <div class="card" style="margin-top:0;margin-bottom:6px;">
+        <div class="row-title">${escapeHtml(station)}</div>
+        <div class="row-sub">${areas.map(a => escapeHtml(a.area)).join(", ")}</div>
+        <div style="display:flex;gap:8px;margin-top:8px;align-items:center;">
+          <select data-move="${escapeHtml(station)}" style="flex:1;">
+            <option value="">Move to…</option>
+            ${targets.map(t => `<option value="${escapeHtml(t)}">${t ? escapeHtml(t) : "No round"}</option>`).join("")}
+            <option value="__new">New round…</option>
+          </select>
+        </div>
+      </div>`).join("")}`;
+
+  document.getElementById("dv-rt-back").addEventListener("click", () => { DV.route = null; dvRenderRoutes(); });
+  body.querySelectorAll("[data-move]").forEach(sel =>
+    sel.addEventListener("change", async () => {
+      let target = sel.value;
+      if(!target && target !== "") return;
+      if(target === "__new"){
+        target = (prompt("Name the new round", "Route " + (all.length + 1)) || "").trim();
+        if(!target){ sel.value = ""; return; }
+      }
+      const station = sel.dataset.move;
+      const areas = g.stations.get(station) || [];
+      try{
+        for(const a of areas) await api("PUT", "/areas/" + a.id, { route: target });
+        toast(`${station} moved to ${target || "no round"}.`, "ok");
+        await loadAreas();
+        DV.route = null;
+        dvRenderRoutes();
+      }catch(e){ toast(e.message); sel.value = ""; }
+    }));
 }
 
 /* ---------------------------------------------------------- closing a round

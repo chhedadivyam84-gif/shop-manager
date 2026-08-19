@@ -1657,6 +1657,9 @@ async function dvRenderAreas(){
   const list = r.areas.filter(a => !q || a.area.toLowerCase().includes(q));
 
   body.innerHTML = `
+    <button class="btn btn-primary" id="dv-suggest" style="margin-bottom:10px;">
+      Set customer areas from their addresses
+    </button>
     <div class="searchbar" style="margin-top:0;">
       <span>&#128269;</span>
       <input type="text" id="dv-area-q" placeholder="Find an area" value="${escapeHtml(DV.areaSearch || "")}">
@@ -1670,10 +1673,75 @@ async function dvRenderAreas(){
       </div>`).join("")}
     ${list.length > 80 ? `<p class="muted" style="font-size:12px;">Showing the first 80 — search to narrow.</p>` : ""}`;
 
+  document.getElementById("dv-suggest").addEventListener("click", dvSuggestAreas);
   const qi = document.getElementById("dv-area-q");
   qi.addEventListener("input", () => { DV.areaSearch = qi.value; clearTimeout(DV._t); DV._t = setTimeout(dvRenderAreas, 250); });
   body.querySelectorAll(".dv-area-edit").forEach(el =>
     el.addEventListener("click", () => dvEditArea(r.areas.find(a => a.id === el.dataset.id))));
+}
+
+/* Reads each customer's address, proposes the area it names, and applies only
+   what is ticked. Nothing is written without a person agreeing to it: a wrong
+   guess here sends a van to the wrong suburb, and only the shop can tell one
+   Malad customer from another. */
+async function dvSuggestAreas(){
+  const body = document.getElementById("dv-body");
+  body.innerHTML = `<p class="muted" style="font-size:13px;">Reading addresses…</p>`;
+  let r;
+  try{ r = await api("GET", "/areas/suggest"); }
+  catch(e){ body.innerHTML = `<p class="muted" style="font-size:13px;">${escapeHtml(e.message)}</p>`; return; }
+
+  if(!r.suggestions.length){
+    body.innerHTML = `
+      <button class="btn btn-outline" id="dv-sug-back" style="margin-bottom:10px;">← Areas</button>
+      <p class="muted" style="font-size:13px;">
+        Nothing to suggest. ${r.customersWithoutArea} customer(s) have no area, and none of
+        their addresses names a station I recognise.</p>`;
+    document.getElementById("dv-sug-back").addEventListener("click", dvRenderAreas);
+    return;
+  }
+
+  body.innerHTML = `
+    <button class="btn btn-outline" id="dv-sug-back" style="margin-bottom:10px;">← Areas</button>
+    <div class="card" style="margin-top:0;">
+      <div class="row-title">${r.matched} of ${r.customersWithoutArea} matched</div>
+      <div class="row-sub">Untick anything wrong. Nothing is saved until you press Apply.</div>
+    </div>
+    ${r.suggestions.map((s, i) => `
+      <label class="card" style="display:flex;gap:11px;align-items:flex-start;margin-top:0;margin-bottom:6px;">
+        <input type="checkbox" data-sug="${i}" ${s.areaId ? "checked" : ""} style="margin-top:3px;width:18px;height:18px;flex:none;">
+        <span style="min-width:0;flex:1;">
+          <span class="row-title">${escapeHtml(s.customer)}</span>
+          <span class="row-sub">${escapeHtml(s.address)}</span>
+          ${s.areaId
+            ? `<span class="row-sub" style="color:var(--navy);"><b>→ ${escapeHtml(s.area)}</b></span>`
+            : `<span class="row-sub">Which side of ${escapeHtml(s.station)}?</span>
+               <select data-side="${i}" style="margin-top:4px;">
+                 <option value="">— choose —</option>
+                 ${s.options.map(o => `<option value="${escapeHtml(o.id)}">${escapeHtml(o.area)}</option>`).join("")}
+               </select>`}
+        </span>
+      </label>`).join("")}
+    <button class="btn btn-primary" id="dv-sug-apply" style="margin-top:6px;">Apply ticked</button>`;
+
+  document.getElementById("dv-sug-back").addEventListener("click", dvRenderAreas);
+  document.getElementById("dv-sug-apply").addEventListener("click", async () => {
+    const picks = [];
+    body.querySelectorAll("[data-sug]").forEach(c => {
+      if(!c.checked) return;
+      const i = +c.dataset.sug, s = r.suggestions[i];
+      const sel = body.querySelector(`[data-side="${i}"]`);
+      const areaId = s.areaId || (sel ? sel.value : "");
+      if(areaId) picks.push({ customerId: s.customerId, areaId });
+    });
+    if(!picks.length) return toast("Nothing ticked with an area chosen.");
+    try{
+      const out = await api("POST", "/areas/suggest/apply", { picks });
+      toast(`${out.applied} customer(s) updated.`, "ok");
+      await loadCustomers();
+      dvRenderAreas();
+    }catch(e){ toast(e.message); }
+  });
 }
 
 function dvEditArea(a){

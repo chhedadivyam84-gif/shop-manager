@@ -124,6 +124,93 @@ router.put("/:id", requireRole("owner"), (req, res) => {
   res.json(db.prepare("SELECT * FROM areas WHERE id = ?").get(a.id));
 });
 
+/* ---------------------------------------------------------- suggestions
+
+   A customer's address already names their area — "1005 Pratap Cress,
+   Mamletdar Ext. Road, Malad (w) 400064" is a Malad West delivery, and the
+   shop wrote that down months ago.
+
+   So the addresses are read and matched against the station list. Nothing is
+   ever written from this: a wrong guess sends a van to the wrong suburb, and
+   the shop is the only one who can tell Malad from Malad. Suggestions are
+   returned for a person to accept.
+*/
+function normalise(s) {
+  return " " + String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() + " ";
+}
+
+/** East or West, if the address says so. "(w)", "w.", "west" all count. */
+function sideIn(text) {
+  if (/\b(w|west)\b/.test(text)) return "West";
+  if (/\b(e|east)\b/.test(text)) return "East";
+  return null;
+}
+
+router.get("/suggest", (req, res) => {
+  const areas = db.prepare(
+    "SELECT id, area, station, side FROM areas WHERE active = 1 AND station IS NOT NULL").all();
+
+  /* Longest station name first, so "Mira Road" is tested before "Mira" would
+     be, and "Vasai Road" before "Vasai". Otherwise the shorter name matches
+     first and wins the wrong area. */
+  const stations = [...new Set(areas.map(a => a.station))]
+    .sort((a, b) => b.length - a.length);
+
+  const customers = db.prepare(`
+    SELECT id, name, address, pin_code FROM customers
+     WHERE (area_id IS NULL OR area_id = '')
+       AND COALESCE(address, '') <> ''
+     ORDER BY name`).all();
+
+  const suggestions = [];
+  for (const c of customers) {
+    const text = normalise(c.address);
+    const station = stations.find(s => text.includes(normalise(s)));
+    if (!station) continue;
+
+    /* The side is read from what FOLLOWS the station name, not the whole
+       address: a road name earlier in the line can easily contain a stray
+       "e" or "w" as a word. */
+    const after = text.slice(text.indexOf(normalise(station)) + normalise(station).length - 1);
+    const side = sideIn(after);
+
+    const exact = areas.find(a => a.station === station && a.side === side);
+    const anyOfStation = areas.filter(a => a.station === station);
+    const pick = exact || (anyOfStation.length === 1 ? anyOfStation[0] : null);
+
+    suggestions.push({
+      customerId: c.id, customer: c.name, address: c.address,
+      station, side: side || null,
+      areaId: pick ? pick.id : null,
+      area: pick ? pick.area : null,
+      // No side in the address and the station has both — the shop must say.
+      needsSide: !pick,
+      options: pick ? [] : anyOfStation.map(a => ({ id: a.id, area: a.area }))
+    });
+  }
+
+  res.json({
+    suggestions,
+    customersWithoutArea: customers.length,
+    matched: suggestions.filter(s => s.areaId).length
+  });
+});
+
+/** Applies only what the shop accepted. Nothing else is touched. */
+router.post("/suggest/apply", requireRole("owner", "manager", "staff"), (req, res) => {
+  const picks = Array.isArray(req.body.picks) ? req.body.picks : [];
+  const set = db.prepare("UPDATE customers SET area_id = ? WHERE id = ? AND (area_id IS NULL OR area_id = '')");
+  let applied = 0;
+  db.transaction(() => {
+    for (const p of picks) {
+      if (!p || !p.customerId || !p.areaId) continue;
+      applied += set.run(String(p.areaId), String(p.customerId)).changes || 0;
+    }
+  })();
+  logAction(req, "area.suggest.apply", `${applied} customer(s)`);
+  res.json({ applied });
+});
+
 /* Retired, never deleted — an area sits on historical bills, and removing it
    would blank the area on last year's sales. Same rule as customers,
    suppliers and products. */

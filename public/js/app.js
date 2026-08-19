@@ -6352,7 +6352,10 @@ function closeFullscreen(id){ document.getElementById(id).classList.remove("show
  */
 function installFullscreenHomeLinks(){
   document.querySelectorAll(".fullscreen").forEach(fs => {
-    const bar = fs.querySelector(".fs-bar");
+    /* The Print Engine's bar is two stacked rows — a title row and a row of
+       controls. The link belongs beside the title, not above both, so the
+       inner row is preferred where there is one. */
+    const bar = fs.querySelector(".pe-bar-top") || fs.querySelector(".fs-bar");
     if(!bar || bar.querySelector(".fs-home")) return;
 
     const link = document.createElement("button");

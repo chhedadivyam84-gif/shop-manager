@@ -86,19 +86,28 @@ function pendingInvoices(q) {
   if (q.from)       { where.push("i.date >= ?"); args.push(q.from); }
   if (q.to)         { where.push("i.date <= ?"); args.push(q.to); }
   if (q.customerId) { where.push("i.customer_id = ?"); args.push(q.customerId); }
-  if (q.areaId)     { where.push("i.area_id = ?"); args.push(q.areaId); }
+  // Filters follow the same fallback, or a bill grouped under the customer's
+  // area would vanish the moment you filtered by that area.
+  if (q.areaId)     { where.push("COALESCE(i.area_id, c.area_id) = ?"); args.push(q.areaId); }
   if (q.route)      { where.push("a.route = ?"); args.push(q.route); }
   if (q.zone)       { where.push("a.zone = ?"); args.push(q.zone); }
-  if (q.line)       { where.push("EXISTS (SELECT 1 FROM area_lines al WHERE al.area_id = i.area_id AND al.line = ?)"); args.push(q.line); }
+  if (q.line)       { where.push("EXISTS (SELECT 1 FROM area_lines al WHERE al.area_id = COALESCE(i.area_id, c.area_id) AND al.line = ?)"); args.push(q.line); }
 
+  /* The area is taken from the BILL, falling back to the CUSTOMER's.
+     Most bills are raised without an area — it is one more field on a busy
+     counter — but a customer's area rarely changes, so setting it once puts
+     every future bill for them on the right van. Without this, the board
+     shows one "No area set" heap, which is no more use than the bill list. */
   const invoices = db.prepare(`
     SELECT i.id, i.challan_no, i.date, i.doc_type, i.customer_id, i.delivery_address,
-           i.area_id, c.name AS customer_name, c.phone AS customer_mobile,
+           COALESCE(i.area_id, c.area_id) AS area_id,
+           i.area_id IS NULL AND c.area_id IS NOT NULL AS area_from_customer,
+           c.name AS customer_name, c.phone AS customer_mobile,
            c.gst AS customer_gstin, c.address AS customer_address, c.pin_code AS pincode,
            a.area AS area_name, a.station, a.side, a.zone, a.route
       FROM invoices i
       LEFT JOIN customers c ON c.id = i.customer_id
-      LEFT JOIN areas a ON a.id = i.area_id
+      LEFT JOIN areas a ON a.id = COALESCE(i.area_id, c.area_id)
      WHERE ${where.join(" AND ")}
      ORDER BY i.date DESC, i.rowid DESC
      LIMIT 600`).all(...args);

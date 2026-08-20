@@ -305,7 +305,6 @@ async function initApp(){
   document.getElementById("hdr-main").textContent = greeting();
   document.getElementById("hdr-sub").textContent = isOwner()?"Owner Dashboard":"Staff Dashboard";
   document.getElementById("avatar-btn").addEventListener("click", openSettings);
-  document.getElementById("qa-settings").addEventListener("click", openSettings);
   document.getElementById("menu-btn").addEventListener("click", openMenu);
   const bizBtn = document.getElementById("biz-switch");
   if(bizBtn) bizBtn.addEventListener("click", openBusinesses);

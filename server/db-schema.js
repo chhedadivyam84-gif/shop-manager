@@ -2181,6 +2181,13 @@ addColumn("areas", "side", "TEXT");   // 'East' | 'West' | NULL
    Left blank on the 193 areas already seeded. Blank, not guessed: inventing a
    zone for Kasara would be a claim about how this shop organises its rounds
    that only the shop can make. */
+/* Which Purchase Invoice a Cash/Kachha purchase challan became.
+ *
+ * The mirror of invoices.converted_invoice_id on the sales side. Set once and
+ * never cleared: it is what stops the same goods being billed twice, and what
+ * lets either document open the other. */
+addColumn("purchases", "converted_purchase_id", "TEXT");
+
 addColumn("areas", "zone", "TEXT DEFAULT ''");
 addColumn("areas", "sub_area", "TEXT DEFAULT ''");
 addColumn("areas", "route", "TEXT DEFAULT ''");

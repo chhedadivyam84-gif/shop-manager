@@ -122,6 +122,10 @@ function computeTotals({ items, taxType, transport, loading, otherCharges, round
  */
 function derivePurchaseStatus(p) {
   if (p.voided) return "Cancelled";
+  /* A Cash/Kachha purchase challan is goods received against no supplier
+     bill yet. It is Pending until one is raised — which is a document
+     question, not a payment one, so it is answered before payment method. */
+  if (p.doc_type === "challan") return p.converted_purchase_id ? "Billed" : "Pending";
   return p.payment_method === "Credit" ? "Pending" : "Completed";
 }
 function withStatus(p) { return { ...p, status: derivePurchaseStatus(p) }; }
@@ -496,6 +500,131 @@ router.put("/:id", (req, res) => {
   const updated = db.prepare("SELECT * FROM purchases WHERE id = ?").get(p.id);
   const savedItems = db.prepare("SELECT * FROM purchase_items WHERE purchase_id = ?").all(p.id);
   res.json({ ...withStatus(updated), items: savedItems });
+});
+
+/* ------------------------------------------------------------
+   CASH/KACHHA PURCHASE  ->  BILLING/WHITE PURCHASE INVOICE
+
+   The mirror of the sales side's convert-to-invoice, and it obeys the same
+   rule: converting is a DOCUMENT change, not a second delivery.
+
+     - Stock is NOT added again. The challan already took the goods in when
+       they arrived; this only raises the bill for goods already on the racks.
+     - The payable IS created here, because the challan deliberately carried
+       none — a Cash/Kachha receipt owes nothing until a supplier bill exists.
+     - converted_purchase_id blocks a second conversion, so the same goods
+       can never be billed twice.
+
+   The review-and-edit step in the brief happens in the browser BEFORE this is
+   called: whatever the user confirms arrives in the body and is used in place
+   of the challan's own figures. Anything omitted falls back to the challan.
+   ------------------------------------------------------------ */
+router.post("/:id/convert-to-invoice", (req, res) => {
+  const challan = db.prepare("SELECT * FROM purchases WHERE id = ?").get(req.params.id);
+  if (!challan) return res.status(404).json({ error: "Purchase challan not found." });
+  if (challan.doc_type !== "challan") {
+    return res.status(400).json({ error: "Only a Cash/Kachha purchase challan can be converted." });
+  }
+  if (challan.voided) return res.status(400).json({ error: "This challan has been voided." });
+  if (challan.converted_purchase_id) {
+    return res.status(400).json({ error: "This challan has already been converted to a purchase invoice." });
+  }
+
+  const challanItems = db.prepare("SELECT * FROM purchase_items WHERE purchase_id = ?").all(challan.id);
+  if (!challanItems.length) return res.status(400).json({ error: "This challan has no items." });
+
+  const b = req.body || {};
+  const supplierId = b.supplierId || challan.supplier_id;
+  const supplier = db.prepare("SELECT * FROM suppliers WHERE id = ?").get(supplierId);
+  if (!supplier) return res.status(400).json({ error: "Choose a supplier for the invoice." });
+
+  const taxType = (b.taxType === "IGST" || b.taxType === "CGST_SGST") ? b.taxType : challan.tax_type;
+  const gstEnabled = b.gstEnabled !== undefined ? !!b.gstEnabled : !!challan.gst_enabled;
+  const paymentMethod = (b.paymentMethod || "Credit");
+
+  /* Recomputed from the challan's own lines, so the invoice can never claim a
+     different quantity than the goods that actually arrived. Rates and GST
+     may be edited on review; quantities are what the racks received. */
+  const items = challanItems.map(it => ({
+    productId: it.product_id, sizeId: it.size_id, name: it.name, brand: it.brand,
+    category: it.category, mode: it.mode, lengthFt: it.length_ft, widthVal: it.width_val,
+    thicknessIn: it.thickness_in, sizeLabel: it.size_label, pieces: it.pieces,
+    perPiece: it.per_piece, unit: it.unit_label, billedQty: it.qty,
+    rate: it.rate, discountAmount: it.discount_amount || 0, gstRate: it.gst_rate,
+    /* computeTotals sums `amount`, which purchase_items does not store — the
+       line value is qty x rate, and rebuilding it here keeps the invoice's
+       figures derived from the challan's own lines rather than re-entered. */
+    amount: round2((Number(it.qty) || 0) * (Number(it.rate) || 0))
+  }));
+
+  const totals = computeTotals({
+    items, taxType,
+    transport: b.transport !== undefined ? b.transport : challan.transport,
+    loading: b.loading !== undefined ? b.loading : challan.loading,
+    otherCharges: b.otherCharges !== undefined ? b.otherCharges : challan.other_charges,
+    roundOff: b.roundOff !== undefined ? b.roundOff : challan.round_off,
+    gstEnabled
+  });
+
+  const purchaseNo = nextPurchaseNo();
+  const newId = uid("PUR");
+
+  try {
+    db.transaction(() => {
+      db.prepare(`
+        INSERT INTO purchases (id, purchase_no, doc_type, date, created_at, supplier_id,
+          supplier_invoice_no, purchase_type, tax_type, subtotal, discount_amount, cgst, sgst, igst,
+          transport, loading, other_charges, round_off, total, payment_method, due_date,
+          vehicle_number, transport_name, lr_number, remarks, voided, location_id, area_id, gst_enabled)
+        VALUES (?, ?, 'purchase', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+      `).run(
+        newId, purchaseNo,
+        (b.date && /^\d{4}-\d{2}-\d{2}$/.test(b.date)) ? b.date : challan.date,
+        Date.now(), supplierId,
+        String(b.supplierInvoiceNo || "").trim(),
+        challan.purchase_type, taxType,
+        totals.subtotal, totals.discountAmount, totals.cgst, totals.sgst, totals.igst,
+        totals.transport, totals.loading, totals.otherCharges, totals.roundOffAmount, totals.total,
+        paymentMethod, String(b.dueDate || "").trim(),
+        challan.vehicle_number, challan.transport_name, challan.lr_number,
+        `Converted from ${challan.purchase_no}${b.remarks ? " — " + String(b.remarks).trim() : ""}`,
+        challan.location_id, challan.area_id, gstEnabled ? 1 : 0
+      );
+
+      const insertItem = db.prepare(`
+        INSERT INTO purchase_items
+          (purchase_id, product_id, size_id, name, brand, category, mode, length_ft, width_val,
+           thickness_in, size_label, pieces, per_piece, unit_label, qty, rate, discount_amount, gst_rate)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      challanItems.forEach(it => insertItem.run(
+        newId, it.product_id, it.size_id, it.name, it.brand, it.category, it.mode,
+        it.length_ft, it.width_val, it.thickness_in, it.size_label, it.pieces, it.per_piece,
+        it.unit_label, it.qty, it.rate, it.discount_amount, it.gst_rate
+      ));
+
+      /* NO addStock here. The goods came in on the challan; billing them does
+         not deliver them a second time. This is the rule the whole feature
+         rests on — see the sales side, which does the same. */
+
+      // The payable the challan deliberately did not create.
+      if (paymentMethod === "Credit") {
+        db.prepare("UPDATE suppliers SET due = ROUND(due + ?, 2) WHERE id = ?")
+          .run(totals.total, supplierId);
+      }
+
+      db.prepare("UPDATE purchases SET converted_purchase_id = ? WHERE id = ?").run(newId, challan.id);
+    })();
+  } catch (e) {
+    return res.status(400).json({ error: "Could not convert: " + e.message });
+  }
+
+  logAction(req, "purchase_challan.convert", `${challan.purchase_no} -> ${purchaseNo}`);
+  res.status(201).json({
+    challan: withStatus(db.prepare("SELECT * FROM purchases WHERE id = ?").get(challan.id)),
+    purchase: withStatus(db.prepare("SELECT * FROM purchases WHERE id = ?").get(newId)),
+    items: db.prepare("SELECT * FROM purchase_items WHERE purchase_id = ?").all(newId)
+  });
 });
 
 /**

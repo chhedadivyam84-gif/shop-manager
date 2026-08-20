@@ -39,7 +39,11 @@
   <div id="app" style="display:none;">
     <header class="topbar">
       <div class="row">
-        <div>
+        <!-- Every screen has a route from here. The bottom bar carries the
+             seven used all day; this carries the rest, which otherwise exist
+             only as tiles on Home. -->
+        <button id="menu-btn" class="menu-btn" title="Menu" aria-label="Menu">&#9776;</button>
+        <div style="flex:1;min-width:0;">
           <div class="greet-sub" id="hdr-sub">Owner Dashboard</div>
           <div class="greet-main" id="hdr-main">Namaste</div>
           <!-- Which business you are in must never be a guess: it decides
@@ -1165,6 +1169,7 @@
        another: reusing one would overwrite whatever it was showing. -->
   <div class="sheet" id="sheet-delivery"></div>
   <div class="sheet" id="sheet-note"></div>
+  <div class="sheet" id="sheet-menu"></div>
 
   <!-- ============ FULLSCREEN: STOCK REPORT PRINT ============
        In-page print (not window.open) — a PWA installed to the home screen

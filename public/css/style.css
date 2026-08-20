@@ -1611,3 +1611,21 @@ table.erp-table tbody td{ height: var(--bill-row-h, auto); }
   background:var(--bad);color:#fff;border-radius:999px;
   font-size:10px;font-weight:800;line-height:16px;text-align:center;vertical-align:top;
 }
+
+/* Menu, at the far left of the header where a thumb reaches on a phone. */
+.menu-btn{
+  background:rgba(255,255,255,.15);border:none;color:#fff;
+  width:34px;height:34px;border-radius:10px;font-size:16px;line-height:1;
+  margin-right:10px;flex:none;
+}
+.menu-btn:focus-visible{outline:2px solid var(--gold);outline-offset:2px;}
+.topbar .row{align-items:center;}
+
+/* Menu contents: dense rows, not cards — this is a list to scan, not to read. */
+.menu-group{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--muted);margin:14px 0 6px;}
+.menu-item{display:flex;align-items:center;gap:10px;width:100%;text-align:left;
+  background:none;border:none;border-bottom:1px solid var(--border);
+  padding:11px 2px;font-size:14px;color:var(--ink);font-weight:600;}
+.menu-item .ic{font-size:16px;width:22px;text-align:center;flex:none;}
+.menu-item:active{background:var(--bg);}

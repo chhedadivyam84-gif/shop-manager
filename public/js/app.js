@@ -306,6 +306,7 @@ async function initApp(){
   document.getElementById("hdr-sub").textContent = isOwner()?"Owner Dashboard":"Staff Dashboard";
   document.getElementById("avatar-btn").addEventListener("click", openSettings);
   document.getElementById("qa-settings").addEventListener("click", openSettings);
+  document.getElementById("menu-btn").addEventListener("click", openMenu);
   const bizBtn = document.getElementById("biz-switch");
   if(bizBtn) bizBtn.addEventListener("click", openBusinesses);
   document.getElementById("refresh-btn").addEventListener("click", async ()=>{ await renderAll(); toast("Refreshed", "ok"); });
@@ -1482,6 +1483,80 @@ function printChequeSheet(html){
    The chip stays hidden while there is only one business, so a shop that
    never adds a second never sees a control it does not need.
    ============================================================ */
+/* ============================================================
+   MENU
+
+   Every screen has a route from here. The bottom bar carries the seven used
+   all day and Home carries the common jobs; this carries everything,
+   including the screens that had become tiles-only — and the ones that were
+   never on Home at all, like Financial Year and E-Way Bill.
+   ============================================================ */
+const MENU = [
+  ["Sell", [
+    ["billing",     "&#128220;", "New Invoice"],
+    ["quotation",   "&#128203;", "Quotation"],
+    ["so",          "&#128197;", "Sales Order"],
+    ["delivery",    "&#128666;", "Delivery &amp; Dispatch"],
+    ["outstanding", "&#9203;",   "Outstanding"]
+  ]],
+  ["Buy", [
+    ["purchase",    "&#128722;", "New Purchase"],
+    ["po",          "&#128203;", "Purchase Order"],
+    ["accounts",    "&#129534;", "Accounts"]
+  ]],
+  ["Stock", [
+    ["inventory",   "&#128230;", "Inventory"],
+    ["pquery",      "&#128269;", "Product Query"]
+  ]],
+  ["Money", [
+    ["cashbook",    "&#128181;", "Cash Book"],
+    ["bankbook",    "&#127974;", "Bank Book"],
+    ["cheque",      "&#128179;", "Print Cheque"],
+    ["otherledger", "&#128220;", "Other Income / Expenses"]
+  ]],
+  ["People", [
+    ["customers",   "&#128100;", "Customers"],
+    ["inquiries",   "&#128222;", "Inquiries"]
+  ]],
+  ["Look at", [
+    ["reports",     "&#128202;", "Reports"],
+    ["ewb",         "&#128739;", "E-Way Bill"],
+    ["printmgr",    "&#128424;", "Print Manager"],
+    ["fyear",       "&#128198;", "Financial Year"]
+  ]],
+  ["Tools", [
+    ["alerts",      "&#128276;", "Reminders"],
+    ["notes",       "&#128221;", "Notepad"]
+  ]]
+];
+
+function openMenu(){
+  const sheet = document.getElementById("sheet-menu");
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>&#10005;</button>
+    <div class="sheet-title">Menu</div>
+    ${MENU.map(([group, items]) => `
+      <div class="menu-group">${group}</div>
+      ${items.map(([tab, icon, label]) =>
+        `<button class="menu-item" data-menu="${tab}"><span class="ic">${icon}</span>${label}</button>`
+      ).join("")}`).join("")}
+    <div class="menu-group">Shop</div>
+    <button class="menu-item" id="menu-settings"><span class="ic">&#9881;</span>Settings</button>`;
+
+  sheet.querySelectorAll("[data-sheetclose]").forEach(b => b.addEventListener("click", closeAllSheets));
+  sheet.querySelectorAll("[data-menu]").forEach(b =>
+    b.addEventListener("click", async () => {
+      closeAllSheets();
+      await switchTab(b.dataset.menu);
+    }));
+  document.getElementById("menu-settings").addEventListener("click", () => {
+    closeAllSheets();
+    openSettings();
+  });
+  showSheet("sheet-menu");
+}
+
 /* ============================================================
    REMINDERS
 

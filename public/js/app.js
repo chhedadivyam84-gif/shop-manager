@@ -308,6 +308,7 @@ async function initApp(){
   const bizBtn = document.getElementById("biz-switch");
   if(bizBtn) bizBtn.addEventListener("click", openBusinesses);
   document.getElementById("refresh-btn").addEventListener("click", async ()=>{ await renderAll(); toast("Refreshed", "ok"); });
+  document.getElementById("bell-btn").addEventListener("click", ()=>switchTab("alerts"));
 
   document.querySelectorAll("nav.bottom .tab").forEach(tab=>{
     tab.addEventListener("click", ()=>switchTab(tab.dataset.tab));
@@ -897,6 +898,9 @@ async function switchTab(tab){
 async function renderAll(){
   await Promise.all([loadProducts(), loadCustomers(), loadSuppliers(), loadLocations(), loadBankAccounts(), loadStaffNames(), loadCategories(), loadAreas(), loadBusinesses()]);
   await renderHome();
+  /* Not awaited: the bell is worth having but never worth holding up the
+     screen for, and a slow count must not delay billing. */
+  refreshAlertCount();
   const activeTab = document.querySelector("nav.bottom .tab.active");
   const tab = activeTab ? activeTab.dataset.tab : "home";
   if(tab==="billing") await renderBilling();
@@ -1520,12 +1524,15 @@ async function renderAlerts(){
     }));
 }
 
-/** The count on the Home tile, so what is waiting is visible without opening it. */
+/** The count, on the header bell and the Home tile both. */
 function paintAlertCount(n){
-  const el = document.getElementById("alert-count");
-  if(!el) return;
-  el.textContent = n > 99 ? "99+" : String(n);
-  el.style.display = n ? "" : "none";
+  const shown = n > 99 ? "99+" : String(n);
+  ["alert-count", "bell-count"].forEach(id => {
+    const el = document.getElementById(id);
+    if(!el) return;
+    el.textContent = shown;
+    el.style.display = n ? "" : "none";
+  });
 }
 
 async function refreshAlertCount(){

@@ -324,6 +324,20 @@ header.topbar .greet-main{font-size:19px;font-weight:800;margin-top:2px;}
 }
 #refresh-btn{background:rgba(255,255,255,.15);border:none;color:#fff;width:34px;height:34px;border-radius:50%;font-size:15px;}
 
+/* Reminders, in the header so what is waiting is visible from every screen.
+   The count sits on the bell rather than beside it — the header is tight on a
+   phone, and a number tucked into the corner reads at a glance. */
+.bell{
+  position:relative;background:rgba(255,255,255,.15);border:none;color:#fff;
+  width:34px;height:34px;border-radius:50%;font-size:15px;line-height:1;padding:0;
+}
+.bell-count{
+  position:absolute;top:-3px;right:-3px;min-width:17px;height:17px;padding:0 4px;
+  background:var(--bad);color:#fff;border-radius:999px;
+  font-size:10px;font-weight:800;line-height:17px;text-align:center;
+}
+.bell:focus-visible{outline:2px solid var(--gold);outline-offset:2px;}
+
 main{flex:1;padding:14px 16px 90px;overflow-y:auto;}
 .screen{display:none;}
 .screen.active{display:block;}

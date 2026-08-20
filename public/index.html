@@ -49,6 +49,11 @@
           </button>
         </div>
         <div style="display:flex;align-items:center;gap:8px;">
+          <!-- What is still waiting, on every screen rather than only on Home:
+               an unbilled challan is worth seeing while you are billing. -->
+          <button id="bell-btn" class="bell" title="Reminders">
+            &#128276;<span id="bell-count" class="bell-count" style="display:none;">0</span>
+          </button>
           <button id="refresh-btn" title="Refresh">&#8635;</button>
           <button class="avatar" id="avatar-btn">SP</button>
         </div>

@@ -9064,7 +9064,13 @@ function cashBookQuery(){
    ============================================================ */
 const CB_CAL = { month: null, days: new Set(), loading: false };
 
-function cbMonthOf(dateStr){ return String(dateStr || "").slice(0, 7); }
+/* Only a real YYYY-MM comes back. Slicing blindly turned undefined into
+   "undefi", which is truthy, so it was taken for a month and produced an
+   Invalid Date and an empty grid. */
+function cbMonthOf(dateStr){
+  const m = /^(\d{4}-\d{2})/.exec(String(dateStr || ""));
+  return m ? m[1] : "";
+}
 function cbToday(){
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
@@ -9087,8 +9093,11 @@ async function loadCashCalendar(month){
 function renderCashCalendar(){
   const el = document.getElementById("cb-calendar");
   if(!el) return;
-  const month = CB_CAL.month || cbMonthOf(cbToday());
+  // Never draw from a month that is not a month: this is what puts an empty
+  // card on screen instead of a calendar.
+  const month = cbMonthOf(CB_CAL.month + "-01") || cbMonthOf(cbToday());
   const [y, m] = month.split("-").map(Number);
+  if(!Number.isFinite(y) || !Number.isFinite(m)) return;
   const first = new Date(y, m - 1, 1);
   const daysInMonth = new Date(y, m, 0).getDate();
   const lead = first.getDay();                    // 0 = Sunday

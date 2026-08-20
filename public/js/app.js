@@ -867,7 +867,7 @@ async function switchTab(tab){
   // brought into view — otherwise switching from a tile leaves it off-screen.
   const activeBtn = document.querySelector(`nav.bottom .tab[data-tab="${tab}"]`);
   if(activeBtn && activeBtn.scrollIntoView) activeBtn.scrollIntoView({ block:"nearest", inline:"nearest" });
-  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",quotation:"Quotation",so:"Sales Order",pquery:"Product Query",accounts:"Accounts",otherledger:(state.olKind==="income"?"Other Income":"Other Expenses"),fyear:"Financial Year",fyclose:"Financial Year",printmgr:"Print Management",outstanding:"Outstanding",ewb:"E-Way Bill",delivery:"Delivery & Dispatch"};
+  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",quotation:"Quotation",so:"Sales Order",pquery:"Product Query",accounts:"Accounts",otherledger:(state.olKind==="income"?"Other Income":"Other Expenses"),fyear:"Financial Year",fyclose:"Financial Year",printmgr:"Print Management",outstanding:"Outstanding",ewb:"E-Way Bill",delivery:"Delivery & Dispatch",alerts:"Reminders",notes:"Notepad"};
   document.getElementById("hdr-sub").textContent = subMap[tab];
   document.getElementById("hdr-main").textContent = tab==="home" ? greeting() : subMap[tab];
   if(tab==="billing") await renderBilling();
@@ -890,6 +890,8 @@ async function switchTab(tab){
   if(tab==="printmgr") await renderPrintManager();
   if(tab==="cheque") await renderCheque();
   if(tab==="delivery") await renderDelivery();
+  if(tab==="alerts") await renderAlerts();
+  if(tab==="notes") await renderNotes();
 }
 
 async function renderAll(){
@@ -1475,6 +1477,216 @@ function printChequeSheet(html){
    The chip stays hidden while there is only one business, so a shop that
    never adds a second never sees a control it does not need.
    ============================================================ */
+/* ============================================================
+   REMINDERS
+
+   Worked out from the books, never stored. Bill the challan and the line
+   goes; deliver the goods and the line goes. Nothing to tick off, so nothing
+   to fall out of step with the ledger.
+   ============================================================ */
+async function renderAlerts(){
+  const body = document.getElementById("alerts-body");
+  body.innerHTML = `<p class="muted" style="font-size:13px;">Checking…</p>`;
+  let r;
+  try{ r = await api("GET", "/alerts"); }
+  catch(e){ body.innerHTML = `<p class="muted" style="font-size:13px;">${escapeHtml(e.message)}</p>`; return; }
+
+  paintAlertCount(r.total);
+
+  if(!r.total){
+    body.innerHTML = `<div class="card" style="margin-top:0;">
+      <div class="row-title">Nothing waiting</div>
+      <div class="row-sub">No unbilled challans, nothing overdue, nothing left on a van.</div>
+    </div>`;
+    return;
+  }
+
+  const tone = t => t === "bad" ? "var(--bad)" : t === "warn" ? "var(--gold)" : "var(--navy)";
+  body.innerHTML = r.groups.map(g => `
+    <div class="section-title" style="display:flex;align-items:center;gap:8px;">
+      <span style="width:8px;height:8px;border-radius:50%;background:${tone(g.tone)};display:inline-block;"></span>
+      ${escapeHtml(g.title)} <span class="muted" style="font-weight:400;">· ${g.count}</span>
+    </div>
+    ${g.items.map(it => `
+      <div class="card alert-row" data-goto-tab="${escapeHtml(it.goto || "")}" style="margin-top:0;margin-bottom:6px;cursor:pointer;">
+        <div class="row-title">${escapeHtml(it.line)}</div>
+        <div class="row-sub">${escapeHtml(it.sub || "")}</div>
+      </div>`).join("")}`).join("");
+
+  body.querySelectorAll(".alert-row").forEach(el =>
+    el.addEventListener("click", () => {
+      const t = el.dataset.gotoTab;
+      if(t) switchTab(t);
+    }));
+}
+
+/** The count on the Home tile, so what is waiting is visible without opening it. */
+function paintAlertCount(n){
+  const el = document.getElementById("alert-count");
+  if(!el) return;
+  el.textContent = n > 99 ? "99+" : String(n);
+  el.style.display = n ? "" : "none";
+}
+
+async function refreshAlertCount(){
+  try{ paintAlertCount((await api("GET", "/alerts")).total); }
+  catch(e){ /* a badge is never worth an error on the counter screen */ }
+}
+
+/* ============================================================
+   NOTEPAD
+
+   Typed text and pen strokes in the same note, because the shop writes both —
+   a measurement scribbled while on the phone, a name typed properly after.
+   ============================================================ */
+const NOTES = { q: "", editing: null, paths: [], height: 180 };
+
+async function renderNotes(){
+  const body = document.getElementById("notes-body");
+  const search = document.getElementById("notes-q");
+  if(search && !search.dataset.bound){
+    search.dataset.bound = "1";
+    search.addEventListener("input", () => {
+      NOTES.q = search.value;
+      clearTimeout(NOTES._t); NOTES._t = setTimeout(renderNotes, 250);
+    });
+  }
+  const btn = document.getElementById("note-new");
+  if(btn && !btn.dataset.bound){
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", () => openNote(null));
+  }
+
+  body.innerHTML = `<p class="muted" style="font-size:13px;">Loading…</p>`;
+  const r = await api("GET", "/notes" + (NOTES.q ? "?q=" + encodeURIComponent(NOTES.q) : ""));
+  if(!r.notes.length){
+    body.innerHTML = `<p class="muted" style="font-size:13px;">${NOTES.q ? "No note matches that." : "No notes yet."}</p>`;
+    return;
+  }
+  body.innerHTML = r.notes.map(n => `
+    <div class="card note-row" data-id="${escapeHtml(n.id)}" style="margin-top:0;margin-bottom:6px;cursor:pointer;">
+      <div class="row-title">${n.pinned ? "&#128204; " : ""}${escapeHtml(n.title || "(untitled)")}</div>
+      ${n.body ? `<div class="row-sub" style="white-space:pre-wrap;">${escapeHtml(n.body.slice(0, 140))}${n.body.length > 140 ? "…" : ""}</div>` : ""}
+      ${n.ink ? `<div class="row-sub">&#9997; handwritten</div>` : ""}
+      <div class="row-sub muted">${new Date(n.updated_at).toLocaleString("en-IN")}</div>
+    </div>`).join("");
+  body.querySelectorAll(".note-row").forEach(el =>
+    el.addEventListener("click", () => openNote(el.dataset.id)));
+}
+
+async function openNote(id){
+  const note = id ? await api("GET", "/notes/" + id) : { title:"", body:"", ink:"", ink_height:180, pinned:0 };
+  NOTES.editing = id;
+  NOTES.paths = [];
+  NOTES.height = note.ink_height || 180;
+
+  const sheet = document.getElementById("sheet-note");
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>&#10005;</button>
+    <div class="sheet-title">${id ? "Note" : "New note"}</div>
+    <input type="text" id="note-title" placeholder="Title" value="${escapeHtml(note.title || "")}" style="margin-top:10px;">
+    <textarea id="note-body" rows="5" placeholder="Type here" style="margin-top:8px;width:100%;">${escapeHtml(note.body || "")}</textarea>
+
+    <label class="field-label" style="margin-top:12px;">Write with your finger or pen</label>
+    <canvas id="note-ink" style="width:100%;height:${NOTES.height}px;background:#fff;border:1px solid var(--border);border-radius:8px;touch-action:none;"></canvas>
+    <div class="chip-row" style="margin-top:6px;">
+      <button class="chip" id="note-undo">Undo stroke</button>
+      <button class="chip" id="note-clear">Clear ink</button>
+      <button class="chip ${note.pinned ? "selected" : ""}" id="note-pin">&#128204; Pin</button>
+    </div>
+
+    <button class="btn btn-primary" id="note-save" style="margin-top:12px;">Save note</button>
+    ${id && isOwner() ? `<button class="btn btn-outline" id="note-del" style="margin-top:8px;color:var(--bad);">Delete note</button>` : ""}`;
+
+  sheet.querySelectorAll("[data-sheetclose]").forEach(b => b.addEventListener("click", closeAllSheets));
+  showSheet("sheet-note");
+
+  let pinned = !!note.pinned;
+  document.getElementById("note-pin").addEventListener("click", (e) => {
+    pinned = !pinned;
+    e.currentTarget.classList.toggle("selected", pinned);
+  });
+
+  /* The pen. Strokes are kept as points and written out as SVG path data —
+     a few hundred bytes, so the note travels in the backup like any row. */
+  const cv = document.getElementById("note-ink");
+  const ctx = cv.getContext("2d");
+  let drawing = false, cur = null;
+
+  function fit(){
+    const rect = cv.getBoundingClientRect();
+    cv.width = Math.round(rect.width);
+    cv.height = NOTES.height;
+    ctx.lineWidth = 2.2; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.strokeStyle = "#111";
+    redraw();
+  }
+  function redraw(){
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    // What was saved before, then whatever is being drawn now.
+    if(note.ink) strokePathData(ctx, note.ink);
+    for(const p of NOTES.paths){
+      ctx.beginPath();
+      p.forEach((pt, i) => i ? ctx.lineTo(pt[0], pt[1]) : ctx.moveTo(pt[0], pt[1]));
+      ctx.stroke();
+    }
+  }
+  const at = e => {
+    const r = cv.getBoundingClientRect();
+    return [Math.round(e.clientX - r.left), Math.round(e.clientY - r.top)];
+  };
+  cv.addEventListener("pointerdown", e => { e.preventDefault(); drawing = true; cur = [at(e)]; NOTES.paths.push(cur); });
+  cv.addEventListener("pointermove", e => { if(!drawing) return; e.preventDefault(); cur.push(at(e)); redraw(); });
+  cv.addEventListener("pointerup", () => { drawing = false; cur = null; });
+  cv.addEventListener("pointerleave", () => { drawing = false; cur = null; });
+
+  document.getElementById("note-undo").addEventListener("click", () => { NOTES.paths.pop(); redraw(); });
+  document.getElementById("note-clear").addEventListener("click", () => { NOTES.paths = []; note.ink = ""; redraw(); });
+  setTimeout(fit, 30);
+
+  document.getElementById("note-save").addEventListener("click", async () => {
+    const fresh = NOTES.paths.filter(p => p.length > 1)
+      .map(p => "M" + p.map(pt => pt[0] + " " + pt[1]).join(" L")).join(" ");
+    // New strokes are appended to what was already there, not replacing it.
+    const ink = [note.ink, fresh].filter(Boolean).join(" ");
+    const payload = {
+      title: document.getElementById("note-title").value,
+      body: document.getElementById("note-body").value,
+      ink, inkHeight: NOTES.height, pinned
+    };
+    try{
+      if(NOTES.editing) await api("PUT", "/notes/" + NOTES.editing, payload);
+      else await api("POST", "/notes", payload);
+      closeAllSheets();
+      toast("Note saved.", "ok");
+      renderNotes();
+    }catch(e){ toast(e.message); }
+  });
+
+  const del = document.getElementById("note-del");
+  if(del) del.addEventListener("click", async () => {
+    if(!confirm("Delete this note? It cannot be brought back.")) return;
+    try{
+      await api("DELETE", "/notes/" + NOTES.editing);
+      closeAllSheets();
+      toast("Note deleted.", "ok");
+      renderNotes();
+    }catch(e){ toast(e.message); }
+  });
+}
+
+/** Draws saved SVG path data ("M x y L x y …") back onto a canvas. */
+function strokePathData(ctx, d){
+  for(const seg of String(d).split("M").filter(Boolean)){
+    const pts = seg.trim().split("L").map(s => s.trim().split(/\s+/).map(Number))
+      .filter(p => p.length === 2 && p.every(n => !isNaN(n)));
+    if(pts.length < 2) continue;
+    ctx.beginPath();
+    pts.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]));
+    ctx.stroke();
+  }
+}
+
 /* ============================================================
    DELIVERY & DISPATCH
 

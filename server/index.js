@@ -190,6 +190,8 @@ app.use("/api/export", requireAuth, require("./routes/export"));
 app.use("/api/areas", requireAuth, require("./routes/areas"));
 app.use("/api/dispatch", requireAuth, require("./routes/dispatch"));
 app.use("/api/delivery", requireAuth, require("./routes/delivery"));
+app.use("/api/alerts", requireAuth, require("./routes/alerts"));
+app.use("/api/notes", requireAuth, require("./routes/notes"));
 app.use("/api/categories", requireAuth, require("./routes/categories"));
 app.use("/api/cashbook", requireAuth, require("./routes/cashbook"));
 app.use("/api/bankbook", requireAuth, require("./routes/bankbook"));

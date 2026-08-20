@@ -90,6 +90,8 @@
                phone where a thumb reaches least. Everything else on this
                screen has a tile; this had none. -->
           <button class="qa-btn" data-goto="delivery"><span class="ic">&#128666;</span>Delivery</button>
+          <button class="qa-btn" data-goto="alerts"><span class="ic">&#128276;</span>Reminders<span id="alert-count" class="alert-dot" style="display:none;">0</span></button>
+          <button class="qa-btn" data-goto="notes"><span class="ic">&#128221;</span>Notepad</button>
         </div>
 
         <div class="section-title">7-Day Revenue</div>
@@ -406,6 +408,22 @@
       </div>
 
       <!-- CASH BOOK -->
+      <!-- Reminders: nothing stored, all worked out from the books. Bill it or
+           deliver it and the line goes on its own. -->
+      <div class="screen" id="screen-alerts">
+        <div id="alerts-body"></div>
+      </div>
+
+      <!-- Notepad: typed text and pen strokes in the same note. -->
+      <div class="screen" id="screen-notes">
+        <div class="searchbar" style="margin-top:0;">
+          <span>&#128269;</span>
+          <input type="text" id="notes-q" placeholder="Search notes">
+        </div>
+        <button class="btn btn-primary" id="note-new" style="margin-top:10px;">+ New note</button>
+        <div id="notes-body" style="margin-top:10px;"></div>
+      </div>
+
       <!-- Delivery & Dispatch. Lands on the area-wise board because that is
            the question the dispatcher opens the app to answer: how many
            deliveries are going where today. Everything else in the module
@@ -1138,6 +1156,7 @@
   <!-- Signature capture and area editing. Its own sheet rather than borrowing
        another: reusing one would overwrite whatever it was showing. -->
   <div class="sheet" id="sheet-delivery"></div>
+  <div class="sheet" id="sheet-note"></div>
 
   <!-- ============ FULLSCREEN: STOCK REPORT PRINT ============
        In-page print (not window.open) — a PWA installed to the home screen

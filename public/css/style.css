@@ -1589,3 +1589,11 @@ table.erp-table tbody td{ height: var(--bill-row-h, auto); }
   cursor:pointer; }
 .biz-row:last-child{ border-bottom:none; }
 .biz-row .tick{ color:var(--ok); font-weight:800; }
+
+/* Count of what is waiting, on the Reminders tile. Sits on the tile rather
+   than in a bar, so it is visible from Home without opening anything. */
+.alert-dot{
+  display:inline-block;min-width:18px;padding:1px 5px;margin-left:6px;
+  background:var(--bad);color:#fff;border-radius:999px;
+  font-size:10px;font-weight:800;line-height:16px;text-align:center;vertical-align:top;
+}

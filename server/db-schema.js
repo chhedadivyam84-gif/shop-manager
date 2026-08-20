@@ -2188,6 +2188,31 @@ addColumn("areas", "side", "TEXT");   // 'East' | 'West' | NULL
  * lets either document open the other. */
 addColumn("purchases", "converted_purchase_id", "TEXT");
 
+/* ------------------------------------------------------------
+   NOTEPAD
+
+   Typed text and pen strokes in the same note, because the shop writes both:
+   a measurement scribbled while on the phone, a name typed properly after.
+
+   The ink is SVG path data, not an image — a few hundred bytes a note, so it
+   sits in the database and rides along in the backup like everything else. A
+   PNG on disk would be gone the first time the host rebuilt its container.
+   ------------------------------------------------------------ */
+db.exec(`
+CREATE TABLE IF NOT EXISTS notes (
+  id TEXT PRIMARY KEY,
+  title TEXT DEFAULT '',
+  body TEXT DEFAULT '',
+  ink TEXT DEFAULT '',           -- SVG path data, '' when nothing was drawn
+  ink_height INTEGER DEFAULT 0,  -- the canvas it was drawn on, so it redraws true
+  pinned INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  created_by TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(pinned DESC, updated_at DESC);
+`);
+
 addColumn("areas", "zone", "TEXT DEFAULT ''");
 addColumn("areas", "sub_area", "TEXT DEFAULT ''");
 addColumn("areas", "route", "TEXT DEFAULT ''");

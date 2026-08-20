@@ -425,6 +425,33 @@ nav.bottom .tab.active{color:var(--navy);}
   }
 }
 
+/* Cash Book calendar — a month at a glance, one dot per day that has entries.
+   Screen only: the printed cash book is the ledger, not the picker. */
+.cb-cal-head{display:flex;align-items:center;justify-content:space-between;gap:8px;}
+.cb-cal-title{font-weight:800;font-size:13px;}
+.cb-dow{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;margin-top:8px;}
+.cb-dow div{text-align:center;font-size:10px;font-weight:700;color:var(--muted);}
+.cb-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;margin-top:2px;}
+.cb-cell{
+  position:relative;background:none;border:1px solid transparent;border-radius:8px;
+  padding:5px 0 9px;font:inherit;color:var(--text);cursor:pointer;
+  display:flex;flex-direction:column;align-items:center;gap:2px;
+  min-height:38px;                     /* a finger-sized target on a phone */
+}
+.cb-cell.cb-blank{visibility:hidden;cursor:default;}
+.cb-cell[data-empty]{cursor:default;}
+.cb-num{font-size:12px;font-variant-numeric:tabular-nums;}
+.cb-dot{width:5px;height:5px;border-radius:50%;background:var(--navy);}
+/* Kept in the layout rather than removed, so numbers do not shift row to row. */
+.cb-dot-off{background:transparent;}
+.cb-cell.cb-today{border-color:var(--gold);}
+.cb-cell.cb-today .cb-num{font-weight:800;}
+.cb-cell.cb-sel{background:var(--navy);}
+.cb-cell.cb-sel .cb-num{color:#fff;font-weight:800;}
+.cb-cell.cb-sel .cb-dot{background:var(--gold);}
+.cb-cell:focus-visible{outline:2px solid var(--gold);outline-offset:1px;}
+@media print{ .cb-cal{display:none !important;} }
+
 /* Overlays / sheets */
 .scrim{position:fixed;inset:0;background:rgba(15,20,30,.5);z-index:40;display:none;}
 .scrim.show{display:block;}

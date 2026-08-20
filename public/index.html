@@ -424,6 +424,10 @@
       </div>
 
       <div class="screen" id="screen-cashbook">
+        <!-- A month at a glance: a dot marks every day that has entries, so
+             the days worth opening are visible without paging through. Drawn
+             by renderCashCalendar(); everything below it is unchanged. -->
+        <div class="card cb-cal" id="cb-calendar" style="margin-top:0;"></div>
         <div class="card" id="cashbook-summary" style="margin-top:0;"></div>
 
         <!-- Searching looks across EVERY date, not just the range below —

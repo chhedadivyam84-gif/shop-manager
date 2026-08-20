@@ -55,6 +55,24 @@ router.get("/", (req, res) => {
  * separate "start of day" bookkeeping is needed; it falls out of one
  * chronological scan.
  */
+/* Which days of a month have any entry at all.
+ *
+ * Just the dates, not the entries: the calendar only needs to know where to
+ * put a dot, and a month of full rows to draw thirty dots would be the whole
+ * ledger fetched twice over. Voided entries do not count — a day whose only
+ * entry was cancelled has nothing on it. */
+router.get("/days", (req, res) => {
+  const month = String(req.query.month || "").trim();
+  if (!/^\d{4}-\d{2}$/.test(month)) {
+    return res.status(400).json({ error: "Give the month as YYYY-MM." });
+  }
+  const days = db.prepare(`
+    SELECT DISTINCT date FROM cash_entries
+     WHERE voided = 0 AND date LIKE ?
+     ORDER BY date`).all(month + "-%").map(r => r.date);
+  res.json({ month, days });
+});
+
 router.get("/summary", (req, res) => {
   const { from, to } = req.query;
   const date = req.query.date || todayStr();

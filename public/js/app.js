@@ -7222,6 +7222,9 @@ function renderTallyInvoiceHtml(inv, cust, cols, rowsHtml, ctx){
   ].filter(Boolean);
 
   const shipTo = inv.delivery_address || (cust && cust.address) || "";
+  /* Same rule as the classic layout: the consignee address stays on screen for
+     the office and off the paper unless "Print delivery address" is ticked. */
+  const printShipTo = billPrefs().printDeliveryAddress === true;
   const eway = inv.eway_bill_no
     ? kv("E-Way Bill No.", escapeHtml(inv.eway_bill_no) +
         (inv.eway_valid_until ? ` <span style="font-weight:400;">(valid to ${escapeHtml(fyDay(inv.eway_valid_until))})</span>` : ""))
@@ -7247,7 +7250,7 @@ function renderTallyInvoiceHtml(inv, cust, cols, rowsHtml, ctx){
           ${cust && cust.state ? `<div>State Name: ${escapeHtml(cust.state)}</div>` : ""}
           ${cust && cust.phone ? `<div>Mobile: ${escapeHtml(cust.phone)}</div>` : ""}
         </div>
-        ${shipTo ? `<div class="tly-party">
+        ${shipTo ? `<div class="tly-party${printShipTo ? "" : " screen-only"}">
           <div class="tly-lbl">Consignee (Ship to)</div>
           <div>${escapeHtml(shipTo)}</div>
         </div>` : ""}
@@ -7432,8 +7435,12 @@ function renderInvoicePageContent(){
   </div>`;
 
   const deliveryAddr = inv.delivery_address || (cust && cust.address) || "";
+  /* Where the goods went is the shop's own record. It stays visible in the
+     preview so the office can check it, and is kept off the paper unless
+     "Print Delivery Address" is ticked in Bill Print Settings. */
+  const printAddr = billPrefs().printDeliveryAddress === true;
   const bottomLeft = `<div class="erp-bottom-left">
-    ${deliveryAddr ? `<div><b>Delivery Address:</b> ${escapeHtml(deliveryAddr)}</div>` : ""}
+    ${deliveryAddr ? `<div${printAddr ? "" : ` class="screen-only"`}><b>Delivery Address:</b> ${escapeHtml(deliveryAddr)}</div>` : ""}
     ${inv.remarks ? `<div><b>Remarks:</b> ${escapeHtml(inv.remarks)}</div>` : ""}
     ${/* Status and Acknowledgement are for the shop, not the customer. They
          track what the office still owes itself — raise the tax invoice, chase
@@ -7817,6 +7824,10 @@ function fitBillToPage(colCount){
 const BILL_PREF_DEFAULTS = {
   paper: "A4",
   showRate: true,
+  /* The delivery address is office information, not something the customer
+     needs on the sheet handed over with the goods, so it stays on screen and
+     off paper unless the shop deliberately turns it on. */
+  printDeliveryAddress: false,
   cols: {
     sn: 1, name: 1, size: 1, qty: 1, unit: 1, rate: 1, disc: 1, amount: 1,
     taxable: 0, cgst: 0, sgst: 0, igst: 0,
@@ -7859,6 +7870,9 @@ function billPrefs(){
   return {
     paper: stored.paper === "A5" ? "A5" : "A4",
     showRate: stored.showRate !== false,
+    // Off unless explicitly saved on, so an older stored preference that
+    // predates this setting keeps the address off the printed sheet.
+    printDeliveryAddress: stored.printDeliveryAddress === true,
     cols: { ...BILL_PREF_DEFAULTS.cols, ...(stored.cols || {}) }
   };
 }
@@ -7931,6 +7945,16 @@ function renderBillPanel(){
     </div>
 
     <div class="bp-group">
+      <div class="bp-label">Delivery Address</div>
+      <label class="bp-check">
+        <input type="checkbox" id="bp-delivery-addr"${p.printDeliveryAddress ? " checked" : ""}>
+        <span>Print delivery address on the bill</span>
+      </label>
+      <div class="bp-hint bp-hint-block">Off by default. The address always shows here on
+      screen for the office; tick this to include it on the printed sheet as well.</div>
+    </div>
+
+    <div class="bp-group">
       <div class="bp-label">Rate Display Option</div>
       ${radio("bp-rate","with","With Rate", p.showRate)}
       ${radio("bp-rate","without","Without Rate", !p.showRate)}
@@ -7984,6 +8008,12 @@ function renderBillPanel(){
       if(challan) state.challanShowRate = billPanelPrefs.showRate;
       renderInvoicePageContent();
     });
+  });
+
+  const addrBox = document.getElementById("bp-delivery-addr");
+  if(addrBox) addrBox.addEventListener("change", ()=>{
+    panelPrefs().printDeliveryAddress = addrBox.checked;
+    renderInvoicePageContent();
   });
 
   const editLink = document.getElementById("bp-edit-gst");
@@ -9021,6 +9051,104 @@ function cashBookQuery(){
   if(state.cbTo) p.set("to", state.cbTo);
   return p.toString();
 }
+/* ============================================================
+   CASH BOOK CALENDAR
+
+   A dot under every day that has entries. The point is to answer "which days
+   did we actually take cash" without scrolling the ledger — so the dot means
+   only that, one per day however many entries sit behind it.
+
+   Tapping a day filters the ledger to it, which is the same From/To filter
+   the screen already had; the calendar is a faster way to reach it, not a
+   second mechanism that could disagree with the first.
+   ============================================================ */
+const CB_CAL = { month: null, days: new Set(), loading: false };
+
+function cbMonthOf(dateStr){ return String(dateStr || "").slice(0, 7); }
+function cbToday(){
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+
+/** Reloads the dots for whichever month is on screen. */
+async function loadCashCalendar(month){
+  CB_CAL.month = month || CB_CAL.month || cbMonthOf(state.cbFrom) || cbMonthOf(cbToday());
+  CB_CAL.loading = true;
+  try{
+    const r = await api("GET", "/cashbook/days?month=" + encodeURIComponent(CB_CAL.month));
+    CB_CAL.days = new Set(r.days || []);
+  }catch(e){
+    CB_CAL.days = new Set();      // a failed fetch shows no dots, never wrong ones
+  }
+  CB_CAL.loading = false;
+  renderCashCalendar();
+}
+
+function renderCashCalendar(){
+  const el = document.getElementById("cb-calendar");
+  if(!el) return;
+  const month = CB_CAL.month || cbMonthOf(cbToday());
+  const [y, m] = month.split("-").map(Number);
+  const first = new Date(y, m - 1, 1);
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const lead = first.getDay();                    // 0 = Sunday
+  const today = cbToday();
+  // A day is "selected" only when the range is exactly that one day.
+  const selected = (state.cbFrom && state.cbFrom === state.cbTo) ? state.cbFrom : null;
+
+  const cells = [];
+  for(let i = 0; i < lead; i++) cells.push(`<div class="cb-cell cb-blank"></div>`);
+  for(let d = 1; d <= daysInMonth; d++){
+    const iso = `${y}-${String(m).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+    const has = CB_CAL.days.has(iso);
+    cells.push(`
+      <button type="button" class="cb-cell${iso===today?" cb-today":""}${iso===selected?" cb-sel":""}"
+              data-cb-day="${iso}"${has?"":" data-empty=\"1\""}>
+        <span class="cb-num">${d}</span>
+        <span class="cb-dot${has?"":" cb-dot-off"}"></span>
+      </button>`);
+  }
+
+  el.innerHTML = `
+    <div class="cb-cal-head">
+      <button type="button" class="chip" data-cb-mon="-1" aria-label="Previous month">&lsaquo;</button>
+      <div class="cb-cal-title">${first.toLocaleDateString("en-IN",{month:"long",year:"numeric"})}</div>
+      <button type="button" class="chip" data-cb-mon="1" aria-label="Next month">&rsaquo;</button>
+    </div>
+    <div class="cb-dow">${["S","M","T","W","T","F","S"].map(d=>`<div>${d}</div>`).join("")}</div>
+    <div class="cb-grid">${cells.join("")}</div>
+    ${selected ? `<button type="button" class="btn btn-outline" id="cb-cal-clear" style="margin-top:8px;">Show all days</button>` : ""}`;
+
+  el.querySelectorAll("[data-cb-mon]").forEach(b =>
+    b.addEventListener("click", () => {
+      const step = Number(b.dataset.cbMon);
+      const d = new Date(y, m - 1 + step, 1);
+      loadCashCalendar(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`);
+    }));
+
+  el.querySelectorAll("[data-cb-day]").forEach(b =>
+    b.addEventListener("click", async () => {
+      const iso = b.dataset.cbDay;
+      /* Tapping the day already showing clears back to the month, so the same
+         tap that filtered can undo it. */
+      if(state.cbFrom === iso && state.cbTo === iso){
+        state.cbFrom = `${month}-01`;
+        state.cbTo = `${month}-${String(daysInMonth).padStart(2,"0")}`;
+      }else{
+        state.cbFrom = iso; state.cbTo = iso;
+      }
+      state.cbSearch = "";
+      await renderCashBook();
+    }));
+
+  const clear = document.getElementById("cb-cal-clear");
+  if(clear) clear.addEventListener("click", async () => {
+    state.cbFrom = `${month}-01`;
+    state.cbTo = `${month}-${String(daysInMonth).padStart(2,"0")}`;
+    await renderCashBook();
+  });
+}
+
 async function renderCashBook(){
   const fromEl = document.getElementById("cb-filter-from");
   const toEl = document.getElementById("cb-filter-to");
@@ -9028,6 +9156,13 @@ async function renderCashBook(){
   if(toEl) toEl.value = state.cbTo;
   const searchEl = document.getElementById("cb-search");
   if(searchEl && searchEl.value !== (state.cbSearch||"")) searchEl.value = state.cbSearch||"";
+
+  /* Keep the calendar on the month being looked at, and reload its dots only
+     when the month actually changes — paging a day at a time inside one month
+     should not refetch thirty dots each tap. */
+  const wantMonth = cbMonthOf(state.cbFrom) || cbMonthOf(cbToday());
+  if(CB_CAL.month !== wantMonth) loadCashCalendar(wantMonth);
+  else renderCashCalendar();
 
   const search = (state.cbSearch||"").trim();
   try{
@@ -9133,6 +9268,9 @@ function openCashEntry(type, editEntry){
       else await api("POST", "/cashbook", payload);
       closeAllSheets();
       await renderCashBook();
+      // The month has not changed, so the dots would not otherwise reload —
+      // and a day that just got its first entry needs its dot now.
+      await loadCashCalendar(CB_CAL.month);
       toast(editEntry ? "Entry updated." : "Entry saved.", "ok");
     }catch(err){ toast(err.message); }
     finally{ btn.disabled = false; }
@@ -9145,6 +9283,8 @@ function openCashEntry(type, editEntry){
         await api("POST", `/cashbook/${editEntry.id}/void`);
         closeAllSheets();
         await renderCashBook();
+        // Deleting the day's last entry must take its dot with it.
+        await loadCashCalendar(CB_CAL.month);
         toast("Entry deleted.", "ok");
       }catch(err){ toast(err.message); }
     }

@@ -1577,8 +1577,12 @@ async function renderNotes(){
 async function openNote(id){
   const note = id ? await api("GET", "/notes/" + id) : { title:"", body:"", ink:"", ink_height:180, pinned:0 };
   NOTES.editing = id;
-  NOTES.paths = [];
+  /* Saved ink is parsed back into strokes rather than kept as a fixed blob,
+     so the eraser and Undo reach what was written last week, not only what
+     was written since the sheet opened. */
+  NOTES.paths = parsePathData(note.ink);
   NOTES.height = note.ink_height || 180;
+  NOTES.tool = "pen";
 
   const sheet = document.getElementById("sheet-note");
   sheet.innerHTML = `
@@ -1589,6 +1593,10 @@ async function openNote(id){
     <textarea id="note-body" rows="5" placeholder="Type here" style="margin-top:8px;width:100%;">${escapeHtml(note.body || "")}</textarea>
 
     <label class="field-label" style="margin-top:12px;">Write with your finger or pen</label>
+    <div class="chip-row" style="margin-bottom:6px;">
+      <button class="chip selected" data-tool="pen">&#9997; Pen</button>
+      <button class="chip" data-tool="eraser">&#9003; Eraser</button>
+    </div>
     <canvas id="note-ink" style="width:100%;height:${NOTES.height}px;background:#fff;border:1px solid var(--border);border-radius:8px;touch-action:none;"></canvas>
     <div class="chip-row" style="margin-top:6px;">
       <button class="chip" id="note-undo">Undo stroke</button>
@@ -1623,8 +1631,6 @@ async function openNote(id){
   }
   function redraw(){
     ctx.clearRect(0, 0, cv.width, cv.height);
-    // What was saved before, then whatever is being drawn now.
-    if(note.ink) strokePathData(ctx, note.ink);
     for(const p of NOTES.paths){
       ctx.beginPath();
       p.forEach((pt, i) => i ? ctx.lineTo(pt[0], pt[1]) : ctx.moveTo(pt[0], pt[1]));
@@ -1635,20 +1641,49 @@ async function openNote(id){
     const r = cv.getBoundingClientRect();
     return [Math.round(e.clientX - r.left), Math.round(e.clientY - r.top)];
   };
-  cv.addEventListener("pointerdown", e => { e.preventDefault(); drawing = true; cur = [at(e)]; NOTES.paths.push(cur); });
-  cv.addEventListener("pointermove", e => { if(!drawing) return; e.preventDefault(); cur.push(at(e)); redraw(); });
-  cv.addEventListener("pointerup", () => { drawing = false; cur = null; });
-  cv.addEventListener("pointerleave", () => { drawing = false; cur = null; });
+
+  /* The eraser takes out whole strokes rather than nibbling pixels. On a
+     phone a fingertip covers a wide area, so rubbing at a letter to remove
+     part of it lands nowhere near precise — and a stroke is what the ink
+     actually is, so removing one leaves nothing ragged behind. */
+  const REACH = 14;
+  function eraseAt(pt){
+    const before = NOTES.paths.length;
+    NOTES.paths = NOTES.paths.filter(path => !strokeNear(path, pt, REACH));
+    return NOTES.paths.length !== before;
+  }
+
+  cv.addEventListener("pointerdown", e => {
+    e.preventDefault(); drawing = true;
+    if(NOTES.tool === "eraser"){ if(eraseAt(at(e))) redraw(); return; }
+    cur = [at(e)]; NOTES.paths.push(cur);
+  });
+  cv.addEventListener("pointermove", e => {
+    if(!drawing) return;
+    e.preventDefault();
+    if(NOTES.tool === "eraser"){ if(eraseAt(at(e))) redraw(); return; }
+    cur.push(at(e)); redraw();
+  });
+  const stop = () => { drawing = false; cur = null; };
+  cv.addEventListener("pointerup", stop);
+  cv.addEventListener("pointerleave", stop);
+
+  sheet.querySelectorAll("[data-tool]").forEach(b => b.addEventListener("click", () => {
+    NOTES.tool = b.dataset.tool;
+    sheet.querySelectorAll("[data-tool]").forEach(x => x.classList.toggle("selected", x === b));
+    // The cursor says which tool is in hand on a laptop; touch has the chip.
+    cv.style.cursor = NOTES.tool === "eraser" ? "cell" : "crosshair";
+  }));
 
   document.getElementById("note-undo").addEventListener("click", () => { NOTES.paths.pop(); redraw(); });
-  document.getElementById("note-clear").addEventListener("click", () => { NOTES.paths = []; note.ink = ""; redraw(); });
+  document.getElementById("note-clear").addEventListener("click", () => { NOTES.paths = []; redraw(); });
   setTimeout(fit, 30);
 
   document.getElementById("note-save").addEventListener("click", async () => {
-    const fresh = NOTES.paths.filter(p => p.length > 1)
+    /* Every stroke still on the canvas, replacing what was stored — appending
+       instead would bring erased ink straight back on the next open. */
+    const ink = NOTES.paths.filter(p => p.length > 1)
       .map(p => "M" + p.map(pt => pt[0] + " " + pt[1]).join(" L")).join(" ");
-    // New strokes are appended to what was already there, not replacing it.
-    const ink = [note.ink, fresh].filter(Boolean).join(" ");
     const payload = {
       title: document.getElementById("note-title").value,
       body: document.getElementById("note-body").value,
@@ -1673,6 +1708,45 @@ async function openNote(id){
       renderNotes();
     }catch(e){ toast(e.message); }
   });
+}
+
+/**
+ * Is any part of this stroke within `reach` of the point?
+ *
+ * Measured against the LINE between recorded points, not the points
+ * themselves. A stroke is sampled while the finger moves, so a quick flick
+ * leaves its points far apart — testing only those would let the eraser pass
+ * straight through the middle of a letter and remove nothing.
+ */
+function strokeNear(path, pt, reach){
+  const r2 = reach * reach;
+  for(let i = 1; i < path.length; i++){
+    const [ax, ay] = path[i - 1], [bx, by] = path[i];
+    const dx = bx - ax, dy = by - ay;
+    const len2 = dx * dx + dy * dy;
+    // How far along the segment the nearest point lies, clamped to its ends.
+    let t = len2 ? ((pt[0] - ax) * dx + (pt[1] - ay) * dy) / len2 : 0;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const px = ax + t * dx - pt[0], py = ay + t * dy - pt[1];
+    if(px * px + py * py <= r2) return true;
+  }
+  // A single-point stroke has no segment — a dot still deserves erasing.
+  if(path.length === 1){
+    const px = path[0][0] - pt[0], py = path[0][1] - pt[1];
+    return px * px + py * py <= r2;
+  }
+  return false;
+}
+
+/** Saved SVG path data back into editable strokes — the inverse of the save
+ *  above, so ink written last week can be undone or erased today. */
+function parsePathData(d){
+  if(!d) return [];
+  return String(d).split("M").filter(s => s.trim()).map(seg =>
+    seg.trim().split("L")
+      .map(s => s.trim().split(/\s+/).map(Number))
+      .filter(p => p.length === 2 && p.every(n => !isNaN(n)))
+  ).filter(p => p.length > 1);
 }
 
 /** Draws saved SVG path data ("M x y L x y …") back onto a canvas. */

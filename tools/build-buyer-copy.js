@@ -221,17 +221,97 @@ if (problems.length) {
   process.exit(1);
 }
 
-// ------------------------------------------------- 6. a note for the buyer
+/* ------------------------------------------------- 6. two files to click
+
+   A shopkeeper is not going to open a terminal, and should not have to. So
+   the buyer gets two things they can double-click, and the installer solves
+   the problem that would otherwise bring them back to you: the app stops
+   when the PC restarts.
+
+   Windows is assumed — that is what is on the counter. */
+fs.writeFileSync(path.join(OUT, "Install (run once).bat"),
+`@echo off
+title ${buyerName} - Shop Manager Setup
+cd /d "%~dp0"
+
+echo.
+echo   Setting up Shop Manager. This takes a minute.
+echo.
+
+where node >nul 2>&1
+if errorlevel 1 (
+  echo   Node is not installed on this computer.
+  echo.
+  echo   Install it from  https://nodejs.org  ^(choose the LTS version^),
+  echo   then run this file again.
+  echo.
+  pause
+  exit /b 1
+)
+
+echo   Installing...
+call npm ci --omit=dev
+if errorlevel 1 (
+  echo.
+  echo   Installation failed. Check the internet connection and try again.
+  pause
+  exit /b 1
+)
+
+rem  Start again by itself whenever this user logs in, so a restart of the
+rem  computer does not quietly leave the shop without billing.
+schtasks /create /tn "Shop Manager" /tr "\\"%~dp0Start Shop Manager.bat\\"" /sc onlogon /rl highest /f >nul 2>&1
+
+echo.
+echo   Done. Shop Manager will now start by itself when this
+echo   computer is switched on.
+echo.
+echo   Opening it now...
+start "" "%~dp0Start Shop Manager.bat"
+timeout /t 6 >nul
+start "" "http://localhost:3000"
+echo.
+pause
+`);
+
+fs.writeFileSync(path.join(OUT, "Start Shop Manager.bat"),
+`@echo off
+title ${buyerName} - Shop Manager
+cd /d "%~dp0"
+
+rem  Already running? Then just open it rather than starting a second one.
+netstat -ano | findstr ":3000 " | findstr "LISTENING" >nul 2>&1
+if not errorlevel 1 (
+  start "" "http://localhost:3000"
+  exit /b 0
+)
+
+echo.
+echo   Shop Manager is running.
+echo.
+echo   On this computer:      http://localhost:3000
+echo   On phones and tablets: use this computer's IP address, same WiFi
+echo.
+echo   Keep this window open while you are using it.
+echo   Closing it stops the app.
+echo.
+node --no-warnings server/index.js
+pause
+`);
+
+// ------------------------------------------------- 7. a note for the buyer
 fs.writeFileSync(path.join(OUT, "READ ME FIRST.txt"),
 `${buyerName} — Shop Manager
 ${"=".repeat(buyerName.length + 15)}
 
 TO START
-  1. Install Node 24 or newer from nodejs.org
-  2. Open this folder in a terminal
-  3. Run:  npm ci --omit=dev
-  4. Run:  npm start
-  5. Open http://localhost:3000 in a browser
+  1. Install Node from  https://nodejs.org  (choose LTS)
+  2. Double-click  "Install (run once).bat"
+
+  That is all. It sets everything up and opens the app.
+
+  From then on Shop Manager starts by itself whenever the computer is
+  switched on. To open it any time, double-click "Start Shop Manager.bat".
 
   On the phones and tablets in your shop, use this computer's local IP
   address instead of "localhost" — they must be on the same WiFi.

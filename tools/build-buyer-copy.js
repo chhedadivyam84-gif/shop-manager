@@ -28,7 +28,69 @@ const { execFileSync } = require("child_process");
 const ROOT = path.join(__dirname, "..");
 const VENDOR_KEY = "C:/Users/prafu/shop-manager-vendor-keys/private-key.pem";
 
+/* ---------------------------------------------------------- verify mode
+
+   The checks below run at BUILD time, but the dangerous moment is later:
+   you build a copy, run it once to make sure it works, and running it
+   creates a data folder with a database in it. Ship that folder now and the
+   buyer receives a database — the exact thing the build refused to include.
+
+   So the same checks can be pointed at a finished folder, to be run in the
+   minute before it is sent. */
+function verifyFolder(dir) {
+  if (!fs.existsSync(dir)) { console.error("No such folder: " + dir); process.exit(1); }
+  const walk = d => fs.readdirSync(d, { withFileTypes: true }).flatMap(e => {
+    const p = path.join(d, e.name);
+    return e.isDirectory() ? (e.name === "node_modules" ? [] : walk(p)) : [p];
+  });
+  const files = walk(dir);
+  const bad = [];
+
+  const dbs = files.filter(f => /\.(db|db-wal|db-shm|sqlite)$/i.test(f));
+  if (dbs.length) bad.push(`${dbs.length} database file(s) — probably from running it: ${path.relative(dir, dbs[0])}`);
+
+  const dataDir = path.join(dir, "data");
+  if (fs.existsSync(dataDir) && fs.readdirSync(dataDir).length)
+    bad.push(`data/ is not empty — delete it before sending`);
+
+  const pk = files.filter(f => /private.*\.pem$/i.test(f));
+  if (pk.length) bad.push(`the PRIVATE signing key is here: ${path.relative(dir, pk[0])}`);
+
+  if (fs.existsSync(path.join(dir, "tools"))) bad.push("tools/ is here — that includes the minting tool");
+  if (fs.existsSync(path.join(dir, "server", "seed-areas.js"))) bad.push("seed-areas.js is here");
+
+  const traces = files.filter(f => {
+    if (!/\.(js|html|css|json|md|txt)$/i.test(f)) return false;
+    try { return /swagat/i.test(fs.readFileSync(f, "utf8")); } catch { return false; }
+  });
+  if (traces.length) bad.push(`"Swagat" appears in ${traces.length} file(s): ${path.relative(dir, traces[0])}`);
+
+  const licFile = path.join(dir, "server", "license.js");
+  if (!fs.existsSync(licFile) || !/const PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----/.test(fs.readFileSync(licFile, "utf8")))
+    bad.push("licence enforcement is NOT on");
+
+  const logs = files.filter(f => /\.log$/i.test(f));
+  if (logs.length) bad.push(`${logs.length} log file(s) — tidy: ${path.relative(dir, logs[0])}`);
+
+  console.log(`\nChecking: ${dir}\n`);
+  if (bad.length) {
+    console.error("DO NOT SEND THIS:\n");
+    bad.forEach(b => console.error("  - " + b));
+    console.error("");
+    process.exit(1);
+  }
+  console.log("  no database, no private key, no minting tool, no other shop's");
+  console.log("  data, no stray logs, enforcement on.\n");
+  console.log("  Safe to send.\n");
+  process.exit(0);
+}
+
 const [, , buyerName, expires, businessesArg] = process.argv;
+
+if (buyerName === "--verify") {
+  if (!expires) { console.error("Usage: node tools/build-buyer-copy.js --verify <folder>"); process.exit(1); }
+  verifyFolder(path.resolve(expires));
+}
 
 if (!buyerName || !expires) {
   console.error('Usage: node tools/build-buyer-copy.js "<Shop Name>" <YYYY-MM-DD> [businesses|unlimited]');

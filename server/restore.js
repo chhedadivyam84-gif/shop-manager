@@ -28,7 +28,37 @@ function cloudConfig() {
   return { enabled: !!(url && key), url, key, bucket };
 }
 
+/* Nothing here may hang.
+ *
+ * start() waits for this before the server listens, so a fetch with no
+ * timeout is not a slow restore — it is a shop that never comes back. The
+ * host accepts the connection, nothing behind it ever answers, and the only
+ * symptom is a page that spins.
+ *
+ * A single request gets PER_REQUEST_MS; the whole restore gets OVERALL_MS.
+ * Past either, the app starts anyway. An empty database the shopkeeper can
+ * see is recoverable; an app that never starts is not. */
+const PER_REQUEST_MS = 20000;
+const OVERALL_MS = 90000;
+
+const fetchWithTimeout = (url, opts) =>
+  fetch(url, { ...opts, signal: AbortSignal.timeout(PER_REQUEST_MS) });
+
 async function restoreIfNeeded() {
+  try {
+    return await Promise.race([
+      doRestore(),
+      new Promise(resolve => setTimeout(
+        () => resolve({ restored: false, reason: `gave up after ${OVERALL_MS / 1000}s — starting without it` }),
+        OVERALL_MS))
+    ]);
+  } catch (e) {
+    // Unreachable, wrong key, bad URL — all the same answer: start anyway.
+    return { restored: false, reason: `could not reach the backup store: ${e.message}` };
+  }
+}
+
+async function doRestore() {
   if (fs.existsSync(DB_PATH)) return { restored: false, reason: "shop.db already present" };
 
   const cfg = cloudConfig();
@@ -36,7 +66,7 @@ async function restoreIfNeeded() {
 
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
-  const listRes = await fetch(`${cfg.url}/storage/v1/object/list/${cfg.bucket}`, {
+  const listRes = await fetchWithTimeout(`${cfg.url}/storage/v1/object/list/${cfg.bucket}`, {
     method: "POST",
     headers: { Authorization: `Bearer ${cfg.key}`, apikey: cfg.key, "Content-Type": "application/json" },
     body: JSON.stringify({ prefix: "", limit: 1000, sortBy: { column: "name", order: "desc" } })
@@ -55,7 +85,7 @@ async function restoreIfNeeded() {
   const stamp = /^shop-(.+)\.db$/.exec(latest)[1];
 
   const download = async name => {
-    const res = await fetch(`${cfg.url}/storage/v1/object/${cfg.bucket}/${name}`, {
+    const res = await fetchWithTimeout(`${cfg.url}/storage/v1/object/${cfg.bucket}/${name}`, {
       headers: { Authorization: `Bearer ${cfg.key}`, apikey: cfg.key }
     });
     if (!res.ok) throw new Error(`download failed for ${name}: ${res.status}`);

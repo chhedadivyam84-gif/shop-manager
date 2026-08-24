@@ -204,6 +204,9 @@ async function runBackup(trigger = "manual") {
     cloud = r;
   }
 
+  // Old runs are cleared from the bucket AFTER the new one is safely in it.
+  const cloudRemoved = cloud.ok ? await rotateCloud() : 0;
+
   const primary = written[0];
   lastRun = {
     at: Date.now(),
@@ -212,9 +215,76 @@ async function runBackup(trigger = "manual") {
     size: written.reduce((t, p) => t + p.size, 0),
     businesses: companies.length,
     rotatedAway: removed,
+    cloudRotatedAway: cloudRemoved,
     cloud
   };
   return lastRun;
+}
+
+/* ------------------------------------------------------------
+   CLEARING OLD BACKUPS OUT OF THE BUCKET
+
+   Local snapshots have always rotated. Cloud ones never did — every upload
+   stayed forever. At a backup every fifteen minutes that is ninety-six a day,
+   around eighty megabytes, which fills a free Supabase bucket in under a
+   fortnight. Then uploads start failing, the restore cannot read it either,
+   and the shop finds out when the app will not start.
+
+   So the bucket keeps the same number of RUNS the disk does, and the newest
+   is never a candidate: if deleting were ever to go wrong, it must not be
+   able to take today's backup with it.
+   ------------------------------------------------------------ */
+/* A full day of history, not a handful of hours.
+ *
+ * At a backup every fifteen minutes, ninety-six runs is twenty-four hours —
+ * which is what a shop actually needs, because trouble is usually noticed the
+ * next morning rather than the same minute. That is roughly 165 MB, about a
+ * sixth of a free Supabase bucket, leaving plenty of room to spare.
+ *
+ * Keeping only thirty would be seven and a half hours: enough to survive a
+ * restart, not enough to survive a night. */
+const KEEP_CLOUD = 96;
+
+async function rotateCloud() {
+  const cfg = cloudConfig();
+  if (!cfg.enabled) return 0;
+
+  try {
+    const res = await fetch(`${cfg.url}/storage/v1/object/list/${cfg.bucket}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${cfg.key}`, apikey: cfg.key, "Content-Type": "application/json" },
+      body: JSON.stringify({ prefix: "", limit: 2000, sortBy: { column: "name", order: "desc" } }),
+      signal: AbortSignal.timeout(20000)
+    });
+    if (!res.ok) return 0;
+
+    const names = (await res.json()).map(f => f.name).filter(n => n && n.startsWith("shop-"));
+
+    // Newest run first — filenames carry a sortable timestamp.
+    const stamps = [...new Set(names.map(stampOf).filter(Boolean))].sort().reverse();
+    const stale = stamps.slice(KEEP_CLOUD);
+    if (!stale.length) return 0;
+
+    const doomed = names.filter(n => stale.includes(stampOf(n)));
+    if (!doomed.length) return 0;
+
+    const del = await fetch(`${cfg.url}/storage/v1/object/${cfg.bucket}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${cfg.key}`, apikey: cfg.key, "Content-Type": "application/json" },
+      body: JSON.stringify({ prefixes: doomed }),
+      signal: AbortSignal.timeout(30000)
+    });
+    if (!del.ok) return 0;
+
+    console.log(`[backup] cleared ${doomed.length} old file(s) from the cloud bucket`);
+    return doomed.length;
+  } catch (e) {
+    /* Never let tidying up break a backup. The snapshot is already uploaded;
+       a bucket that is too full is tomorrow's problem, a crashed backup is
+       today's. */
+    console.error("[backup] could not clear old cloud backups:", e.message);
+    return 0;
+  }
 }
 
 /** Status for the Settings screen: last run + what's on disk + cloud on/off. */

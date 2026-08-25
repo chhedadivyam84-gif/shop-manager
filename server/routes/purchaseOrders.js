@@ -332,6 +332,153 @@ router.put("/:id", (req, res) => {
 });
 
 /** Draft or Pending -> Approved. The owner's sign-off that this order is real. */
+/* ============================================================
+   THE WHOLE CHAIN, FOLLOWED
+
+   Salesman -> party -> sales order -> purchase order -> supplier -> goods
+   received -> sales bill -> dispatch -> delivered, signed for.
+
+   Every one of those links already existed as its own foreign key. What did
+   not exist was anything that walked them, so answering "did ABC actually
+   get the material we bought for them?" meant opening four screens and
+   holding the answer in your head.
+
+   Followed, never guessed. Where a purchase order names a sales order the
+   trail is exact: that sales order became that bill, and that bill went out
+   on that van. Where it names only a party, the trail honestly stops at
+   "received" — matching a bill to a purchase order by customer and product
+   would look like an answer and sometimes be the wrong one, and a delivery
+   report that is sometimes wrong is worse than one that says it does not
+   know.
+   ============================================================ */
+router.get("/:id/chain", (req, res) => {
+  const po = db.prepare("SELECT * FROM purchase_orders WHERE id = ?").get(req.params.id);
+  if (!po) return res.status(404).json({ error: "Purchase Order not found." });
+
+  const items = db.prepare(`
+    SELECT poi.*,
+           COALESCE(NULLIF(TRIM(poi.size_label),''), ps.label, '') AS size_label
+      FROM purchase_order_items poi
+      LEFT JOIN product_sizes ps ON ps.id = poi.size_id
+     WHERE poi.po_id = ?
+     ORDER BY CASE WHEN COALESCE(poi.brand,'') = '' THEN 1 ELSE 0 END,
+              poi.brand COLLATE NOCASE, poi.id`).all(po.id);
+
+  const customerName = id => {
+    if (!id) return null;
+    const c = db.prepare("SELECT name FROM customers WHERE id = ?").get(bindId(id));
+    return c ? c.name : null;
+  };
+  const supplier = po.supplier_id
+    ? db.prepare("SELECT name, phone FROM suppliers WHERE id = ?").get(bindId(po.supplier_id))
+    : null;
+
+  /* ---- the sales side, where there is one ----------------------------- */
+  const so = po.so_id
+    ? db.prepare("SELECT * FROM sales_orders WHERE id = ?").get(bindId(po.so_id))
+    : null;
+
+  const invoice = so && so.converted_invoice_id
+    ? db.prepare("SELECT * FROM invoices WHERE id = ? AND voided = 0").get(bindId(so.converted_invoice_id))
+    : null;
+
+  let invoiceItems = [];
+  let drops = [];
+  if (invoice) {
+    invoiceItems = db.prepare("SELECT * FROM invoice_items WHERE invoice_id = ?").all(invoice.id);
+
+    /* What has physically left, per bill line. Cancelled rounds never
+       counted — those goods did not go anywhere. */
+    const sent = new Map();
+    try {
+      db.prepare(`
+        SELECT di.invoice_item_id AS item_id, SUM(di.qty_dispatched) AS qty
+          FROM dispatch_items di
+          JOIN dispatch_drops dd ON dd.id = di.drop_id
+          JOIN dispatches d ON d.id = dd.dispatch_id
+         WHERE dd.invoice_id = ?
+           AND d.status <> 'Cancelled' AND dd.status <> 'Cancelled'
+         GROUP BY di.invoice_item_id`).all(invoice.id)
+        .forEach(r => sent.set(String(r.item_id), r.qty || 0));
+
+      drops = db.prepare(`
+        SELECT dd.id, dd.status, dd.delivered_at, dd.received_by,
+               dd.signature <> '' AS signed,
+               d.dispatch_no, d.dispatch_at, d.vehicle_no, d.driver_name,
+               a.area AS area
+          FROM dispatch_drops dd
+          JOIN dispatches d ON d.id = dd.dispatch_id
+          LEFT JOIN areas a ON a.id = dd.area_id
+         WHERE dd.invoice_id = ? AND d.status <> 'Cancelled' AND dd.status <> 'Cancelled'
+         ORDER BY d.dispatch_at ASC`).all(invoice.id);
+    } catch (e) {
+      /* A copy of the app without the delivery module still answers the rest
+         of the chain rather than failing the whole request. */
+      drops = [];
+    }
+
+    invoiceItems = invoiceItems.map(it => ({
+      ...it,
+      delivered_qty: round2(sent.get(String(it.id)) || 0),
+      pending_qty: round2(Math.max(0, (it.qty || 0) - (sent.get(String(it.id)) || 0)))
+    }));
+  }
+
+  /* ---- one row per stage, so the screen draws rather than decides ----- */
+  const orderedQty = round2(items.reduce((t, it) => t + (it.qty || 0), 0));
+  const receivedQty = round2(items.reduce((t, it) => t + (it.received_qty || 0), 0));
+  const soQty = so
+    ? round2(db.prepare("SELECT COALESCE(SUM(qty),0) q FROM sales_order_items WHERE so_id = ?").get(so.id).q)
+    : null;
+  const billedQty = invoice ? round2(invoiceItems.reduce((t, it) => t + (it.qty || 0), 0)) : null;
+  const deliveredQty = invoice ? round2(invoiceItems.reduce((t, it) => t + it.delivered_qty, 0)) : null;
+
+  res.json({
+    po: {
+      id: po.id, po_no: po.po_no, date: po.date, status: po.status,
+      po_type: po.po_type, salesman: po.salesman,
+      party: customerName(po.against_customer_id),
+      supplier: supplier ? supplier.name : null,
+      required_delivery_date: po.required_delivery_date,
+      ordered_qty: orderedQty, received_qty: receivedQty,
+      pending_qty: round2(Math.max(0, orderedQty - receivedQty)),
+      converted_purchase_id: po.converted_purchase_id
+    },
+    items: items.map(it => ({
+      id: it.id, name: it.name, brand: it.brand, size_label: it.size_label,
+      unit_label: it.unit_label, mode: it.mode,
+      party: customerName(it.against_customer_id) || customerName(po.against_customer_id),
+      qty: it.qty, received_qty: it.received_qty,
+      pending_qty: round2(Math.max(0, (it.qty || 0) - (it.received_qty || 0)))
+    })),
+    salesOrder: so ? { id: so.id, so_no: so.so_no, date: so.date, status: so.status, qty: soQty } : null,
+    invoice: invoice
+      ? { id: invoice.id, no: invoice.challan_no, date: invoice.date,
+          doc_type: invoice.doc_type, qty: billedQty, delivered_qty: deliveredQty,
+          pending_qty: round2(Math.max(0, (billedQty || 0) - (deliveredQty || 0))),
+          items: invoiceItems.map(it => ({
+            id: it.id, name: it.name, size_label: it.size_label, unit_label: it.unit_label,
+            mode: it.mode, qty: it.qty, delivered_qty: it.delivered_qty, pending_qty: it.pending_qty
+          })) }
+      : null,
+    deliveries: drops.map(d => ({
+      dispatch_no: d.dispatch_no, at: d.dispatch_at, status: d.status,
+      delivered_at: d.delivered_at, received_by: d.received_by,
+      signed: !!d.signed, vehicle: d.vehicle_no, driver: d.driver_name, area: d.area
+    })),
+
+    /* Why the trail stops where it does, in words the screen can print
+       rather than leaving a blank nobody can interpret. */
+    stopsBecause: !so
+      ? "no-sales-order"
+      : !invoice
+        ? "sales-order-not-billed"
+        : !drops.length
+          ? "not-dispatched"
+          : null
+  });
+});
+
 router.post("/:id/approve", (req, res) => {
   const po = db.prepare("SELECT * FROM purchase_orders WHERE id = ?").get(req.params.id);
   if (!po) return res.status(404).json({ error: "Purchase Order not found." });

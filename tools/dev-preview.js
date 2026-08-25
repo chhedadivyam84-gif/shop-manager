@@ -71,6 +71,18 @@ if (!seeded) {
               VALUES ('SO-PREVIEW','PV1',(SELECT id FROM product_sizes WHERE product_id='PV1'),
                       '18mm Plywood','Swagat','UNIT','8x4',20,1,'Sheet',20,1250)`).run();
   console.log("[preview] seeded 3 parties and sales order SO0000542");
+
+  /* Stock lives per location, and the till sells from Shop. Seeding only
+     product_sizes.stock leaves the counter unable to raise a single bill,
+     which makes the preview useless for anything downstream of a sale. */
+  const inventory = require("../server/inventory");
+  const shopId = inventory.getLocationByCode("shop").id;
+  const whId = inventory.getLocationByCode("warehouse").id;
+  for (const row of db.prepare("SELECT id FROM product_sizes").all()) {
+    inventory.addStock(row.id, shopId, 200);
+    inventory.addStock(row.id, whId, 300);
+  }
+  console.log("[preview] stocked Shop and Warehouse");
   console.log(`[preview] seeded ${rows.length} products across 4 companies`);
 }
 

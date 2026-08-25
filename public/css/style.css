@@ -1712,3 +1712,44 @@ select.po-line-brand:focus-visible{ outline:2px solid var(--gold); outline-offse
 /* What a line still owes. Coloured, because it is the number someone is
    ringing up about. */
 .po-pending-note{ color:var(--danger); font-weight:700; }
+
+/* ============================================================
+   THE PURCHASE ORDER TRACE
+
+   A ladder, not a table: the shop reads it top to bottom and stops at the
+   first rung that is short, so the shape has to make "where did it stop"
+   the obvious question. The rail is drawn on the dots rather than as a
+   separate element, so it cannot drift out of line with them.
+   ============================================================ */
+.po-ladder{ margin:0 0 4px; }
+.po-rung{ display:flex; gap:12px; align-items:flex-start; position:relative; padding-bottom:14px; }
+.po-rung:last-child{ padding-bottom:0; }
+
+/* The rail: a line from this dot down to the next one. Drawn on every
+   rung but the last, so it never hangs past the bottom. */
+.po-rung:not(:last-child)::before{
+  content:""; position:absolute; left:6px; top:16px; bottom:0;
+  width:2px; background:var(--border);
+}
+.po-rung-dot{
+  flex:none; width:14px; height:14px; border-radius:50%;
+  margin-top:2px; position:relative; z-index:1;
+  border:2px solid var(--card); box-shadow:0 0 0 2px var(--border);
+  background:var(--border);
+}
+.po-rung.done  .po-rung-dot{ background:var(--ok);     box-shadow:0 0 0 2px var(--ok); }
+.po-rung.part  .po-rung-dot{ background:var(--gold);   box-shadow:0 0 0 2px var(--gold); }
+.po-rung.open  .po-rung-dot{ background:var(--card);   box-shadow:0 0 0 2px var(--muted); }
+
+.po-rung-body{ min-width:0; flex:1; }
+.po-rung-title{
+  font-size:10.5px; font-weight:800; letter-spacing:.06em; text-transform:uppercase;
+  color:var(--muted); margin-bottom:2px;
+}
+.po-rung-line{ font-size:13.5px; font-weight:700; overflow-wrap:anywhere; }
+.po-rung-sub{ font-size:11.5px; color:var(--muted); margin-top:1px; overflow-wrap:anywhere; }
+.po-rung.part .po-rung-sub b, .po-rung.open .po-rung-sub b{ color:var(--danger); }
+
+/* Where the records run out. Stated, not left as a blank the shop has to
+   interpret as either 'nothing happened' or 'the app does not know'. */
+.po-trace-stop{ margin-top:10px; border-style:dashed; }

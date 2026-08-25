@@ -12192,8 +12192,11 @@ async function openPoDetail(poId){
       ${canConvert ? `<button class="btn btn-gold" id="convert-po-btn">Convert to Purchase Entry</button>` : ""}
       ${["Cancelled"].includes(po.status) || po.converted_purchase_id ? ""
         : `<button class="btn btn-outline" id="receive-po-btn">📦 Record delivery</button>`}
+      ${po.po_type === "AgainstCustomer"
+        ? `<button class="btn btn-outline" id="trace-po-btn">🔗 Full trace</button>`
+        : ""}
       <button class="btn btn-outline" id="print-po-btn">Print</button>
-      <button class="btn btn-outline" id="share-po-btn">💬 Send / Share</button>
+      <button class="btn btn-outline" id="share-po-btn">📱 Send on WhatsApp</button>
     </div>
     ${canClose ? `<div style="margin-top:12px;text-align:center;"><a href="#" id="close-po-link" class="btn-danger-link">Close / Cancel this order</a></div>` : ""}
     ${canDelete ? `<div style="margin-top:8px;text-align:center;"><a href="#" id="delete-po-link" class="btn-danger-link">Delete this draft</a></div>` : ""}
@@ -12229,6 +12232,8 @@ async function openPoDetail(poId){
   });
   const receiveBtn = sheet.querySelector("#receive-po-btn");
   if(receiveBtn) receiveBtn.addEventListener("click", ()=>{ closeAllSheets(); openPoReceive(po); });
+  const traceBtn = sheet.querySelector("#trace-po-btn");
+  if(traceBtn) traceBtn.addEventListener("click", ()=>{ closeAllSheets(); openPoTrace(po); });
   sheet.querySelector("#print-po-btn").addEventListener("click", ()=>printPurchaseOrder(po));
   sheet.querySelector("#share-po-btn").addEventListener("click", ()=>{ closeAllSheets(); openPoSend(po); });
   const closeLink = sheet.querySelector("#close-po-link");
@@ -12321,6 +12326,150 @@ function editExistingPo(po){
    The sheet says so out loud, because "Record delivery" reasonably sounds
    like it would.
    ============================================================ */
+/* ============================================================
+   THE FULL TRACE
+
+   One screen answering the question the whole chain exists for: did the
+   customer actually get the material we bought for them?
+
+   Drawn as a ladder of stages rather than a table, because the shop reads
+   it in order and stops at the first rung that is short. Each rung says
+   what was promised and what happened, and the ladder ends honestly where
+   the records end rather than implying a delivery nobody recorded.
+   ============================================================ */
+const PO_TRACE_STOPS = {
+  "no-sales-order":
+    "This order names a party but no sales order, so there is nothing linking it to a particular bill. Raise it against a sales order to follow it all the way to delivery.",
+  "sales-order-not-billed":
+    "The sales order has not been billed yet, so nothing has left the shop against it.",
+  "not-dispatched":
+    "The bill is raised but nothing has gone on a van yet."
+};
+
+async function openPoTrace(po){
+  const sheet = document.getElementById("sheet-po-trace");
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">Full trace — ${escapeHtml(po.po_no)}</div>
+    <p class="muted" style="font-size:13px;">Following it…</p>`;
+  showSheet("sheet-po-trace");
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", ()=>{
+    closeAllSheets(); openPoDetail(po.id);
+  });
+
+  let c;
+  try{ c = await api("GET", `/purchase-orders/${po.id}/chain`); }
+  catch(e){
+    sheet.querySelector("p").innerHTML = escapeHtml(e.message);
+    return;
+  }
+
+  const qty = (n, mode) => Pricing.formatQty(round2(Number(n) || 0), mode || "UNIT");
+  const mode = (c.items[0] || {}).mode || "UNIT";
+
+  /* done  — this rung is complete
+     part  — it happened, but not in full
+     open  — it has not happened yet
+     none  — there is no record to show, and the reason is printed below */
+  const rung = (state, title, line, sub) => `
+    <div class="po-rung ${state}">
+      <div class="po-rung-dot"></div>
+      <div class="po-rung-body">
+        <div class="po-rung-title">${title}</div>
+        <div class="po-rung-line">${line}</div>
+        ${sub ? `<div class="po-rung-sub">${sub}</div>` : ""}
+      </div>
+    </div>`;
+
+  const rungs = [];
+
+  rungs.push(rung("done", "Salesman",
+    escapeHtml(c.po.salesman || "—"),
+    c.po.party ? "for " + escapeHtml(c.po.party) : "stock purchase"));
+
+  if(c.salesOrder){
+    rungs.push(rung("done", "Customer ordered",
+      `${escapeHtml(c.salesOrder.so_no)} · ${qty(c.salesOrder.qty, mode)}`,
+      `${c.salesOrder.date} · ${escapeHtml(c.salesOrder.status)}`));
+  }
+
+  rungs.push(rung("done", "Purchase order",
+    `${escapeHtml(c.po.po_no)} · ${qty(c.po.ordered_qty, mode)}`,
+    `${c.po.date}${c.po.supplier ? " · to " + escapeHtml(c.po.supplier) : ""}` +
+    (c.po.required_delivery_date ? " · promised by " + c.po.required_delivery_date : "")));
+
+  const received = c.po.received_qty;
+  rungs.push(rung(
+    received <= 0 ? "open" : c.po.pending_qty > 0 ? "part" : "done",
+    "Material received",
+    received <= 0 ? "Nothing in yet" : qty(received, mode) + " of " + qty(c.po.ordered_qty, mode),
+    c.po.pending_qty > 0 ? `<b>${qty(c.po.pending_qty, mode)} still due from the supplier</b>` : "complete"));
+
+  if(c.invoice){
+    rungs.push(rung("done", "Billed to the customer",
+      `${escapeHtml(c.invoice.no)} · ${qty(c.invoice.qty, mode)}`,
+      `${c.invoice.date} · ${c.invoice.doc_type === "challan" ? "Delivery Challan" : "Tax Invoice"}`));
+
+    const del = c.invoice.delivered_qty;
+    rungs.push(rung(
+      del <= 0 ? "open" : c.invoice.pending_qty > 0 ? "part" : "done",
+      "Delivered to the customer",
+      del <= 0 ? "Nothing gone out yet" : qty(del, mode) + " of " + qty(c.invoice.qty, mode),
+      c.invoice.pending_qty > 0
+        ? `<b>${qty(c.invoice.pending_qty, mode)} still owed to ${escapeHtml(c.po.party || "the customer")}</b>`
+        : "complete"));
+  }
+
+  const deliveries = c.deliveries.length ? `
+    <div class="section-title">Rounds</div>
+    ${c.deliveries.map(d => `
+      <div class="card" style="margin-top:0;margin-bottom:6px;">
+        <div class="row-title">${escapeHtml(d.dispatch_no)} <span class="pill ${d.status==="Delivered"?"ok":d.status==="Cancelled"?"danger":"warn"}">${escapeHtml(d.status)}</span></div>
+        <div class="row-sub">
+          ${d.at ? new Date(d.at).toLocaleString("en-IN") : ""}
+          ${d.vehicle ? " · " + escapeHtml(d.vehicle) : ""}
+          ${d.driver ? " · " + escapeHtml(d.driver) : ""}
+          ${d.area ? " · " + escapeHtml(d.area) : ""}
+        </div>
+        ${d.delivered_at ? `<div class="row-sub">Signed for ${d.received_by ? "by " + escapeHtml(d.received_by) : ""} on ${new Date(d.delivered_at).toLocaleString("en-IN")}${d.signed ? " · signature on file" : ""}</div>` : ""}
+      </div>`).join("")}` : "";
+
+  /* Lines whose party differs from the order's, so a consolidated PO shows
+     whose share is whose without opening the order itself. */
+  const parties = [...new Set(c.items.map(i => i.party).filter(Boolean))];
+  const byParty = parties.length > 1 ? `
+    <div class="section-title">Whose material</div>
+    ${parties.map(p => {
+      const mine = c.items.filter(i => i.party === p);
+      const ord = round2(mine.reduce((t,i)=>t+(i.qty||0),0));
+      const got = round2(mine.reduce((t,i)=>t+(i.received_qty||0),0));
+      return `<div class="card" style="margin-top:0;margin-bottom:6px;">
+        <div class="row-title">${escapeHtml(p)}</div>
+        <div class="row-sub">${qty(ord, mode)} ordered · ${qty(got, mode)} received${ord-got > 0.0001 ? ` · <b style="color:var(--danger);">${qty(ord-got, mode)} pending</b>` : ""}</div>
+      </div>`;
+    }).join("")}` : "";
+
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">Full trace — ${escapeHtml(po.po_no)}</div>
+    <div class="muted" style="font-size:12px;margin-bottom:12px;">
+      Followed through the records, not guessed at.
+    </div>
+    <div class="po-ladder">${rungs.join("")}</div>
+    ${c.stopsBecause ? `<div class="card po-trace-stop">
+      <div class="row-title">The trail ends here</div>
+      <div class="row-sub">${escapeHtml(PO_TRACE_STOPS[c.stopsBecause] || "")}</div>
+    </div>` : ""}
+    ${byParty}
+    ${deliveries}`;
+
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", ()=>{
+    closeAllSheets(); openPoDetail(po.id);
+  });
+}
+
 function openPoReceive(po){
   const sheet = document.getElementById("sheet-po-receive");
   const draft = new Map(po.items.map(it => [String(it.id), Number(it.received_qty) || 0]));
@@ -12605,7 +12754,11 @@ function poCompleteMessage(po){
 /** One company's part of the order — its lines, its total, the same PO number. */
 function poBrandMessage(po, group){
   const parts = [
-    poWaHeader(po), "",
+    poWaHeader(po),
+    /* Named here as well as below: the mill reading this IS the brand,
+       and inferring it from a heading is a step more than needed. */
+    "Brand: " + group.brand,
+    "",
     "*" + group.brand.toUpperCase() + "*",
     ...group.items.map(poWaLine), "",
     "Total Quantity: " + poWaTotalQty(group.items),

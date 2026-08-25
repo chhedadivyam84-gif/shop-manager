@@ -12126,6 +12126,15 @@ async function savePo(asDraft){
 /* ============================================================
    SHEET: Purchase Order Detail (view + status-driven actions)
    ============================================================ */
+/* Why an order cannot be edited, in the shop's own terms. A hidden button
+   with no explanation reads as the app being broken; the shopkeeper needs
+   to know it is a rule and what to do about it. */
+const PO_NO_EDIT_BECAUSE = {
+  "Approved": "This order has been approved. Cancel the approval to change it, or raise a fresh order.",
+  "Completed": "Everything on this order has arrived, so it is closed. Raise a fresh order for anything more.",
+  "Cancelled": "This order was cancelled."
+};
+
 const PO_STATUS_PILL = {
   Draft: "", Pending: "warn", Approved: "ok", "Partially Completed": "warn", Completed: "ok", Cancelled: "danger"
 };
@@ -12136,7 +12145,10 @@ async function openPoDetail(poId){
     const taxable = round2(it.qty*it.rate - it.discount_amount);
     return round2(taxable + taxable*(it.gst_rate/100));
   };
-  const canEdit = ["Draft","Pending"].includes(po.status);
+  /* Partially Completed belongs here: goods arriving against an order is
+     the commonest reason to need to correct it. What has already arrived
+     is preserved through the save. */
+  const canEdit = ["Draft","Pending","Partially Completed"].includes(po.status);
   const canApprove = ["Draft","Pending"].includes(po.status);
   const canConvert = po.status === "Approved";
   const canClose = !["Completed","Cancelled"].includes(po.status);
@@ -12198,6 +12210,10 @@ async function openPoDetail(poId){
       <button class="btn btn-outline" id="print-po-btn">Print</button>
       <button class="btn btn-outline" id="share-po-btn">📱 Send on WhatsApp</button>
     </div>
+    ${canEdit || !PO_NO_EDIT_BECAUSE[po.status] ? "" : `
+    <div class="muted" style="font-size:11.5px;margin-top:8px;text-align:center;">
+      ${escapeHtml(PO_NO_EDIT_BECAUSE[po.status])}
+    </div>`}
     ${canClose ? `<div style="margin-top:12px;text-align:center;"><a href="#" id="close-po-link" class="btn-danger-link">Close / Cancel this order</a></div>` : ""}
     ${canDelete ? `<div style="margin-top:8px;text-align:center;"><a href="#" id="delete-po-link" class="btn-danger-link">Delete this draft</a></div>` : ""}
   `;

@@ -258,6 +258,10 @@ router.post("/", (req, res) => {
 router.put("/:id", (req, res) => {
   const po = db.prepare("SELECT * FROM purchase_orders WHERE id = ?").get(req.params.id);
   if (!po) return res.status(404).json({ error: "Purchase Order not found." });
+  /* Partially Completed is deliberately NOT here. Goods turning up against
+     an order is the commonest reason to need to correct it — a rate the
+     mill revised, a line they cannot supply, a quantity to top up. What
+     has already arrived is preserved through the rewrite above. */
   if (["Approved", "Completed", "Cancelled"].includes(po.status)) {
     return res.status(400).json({ error: `Can't edit a Purchase Order that's already ${po.status}.` });
   }
@@ -298,12 +302,40 @@ router.put("/:id", (req, res) => {
   `);
 
   db.transaction(() => {
+    /* What has already arrived, kept across the rewrite.
+
+       Matched on the GOODS — product and size — not on the row id, because
+       the rows are about to be deleted and re-created with new ids. Match
+       a line to itself by what it is for, and a line that was removed
+       correctly takes its receipt with it. */
+    const receiptsByGoods = new Map();
+    db.prepare("SELECT product_id, size_id, received_qty FROM purchase_order_items WHERE po_id = ?")
+      .all(po.id)
+      .forEach(r => {
+        if (!r.received_qty) return;
+        const key = String(r.product_id) + "|" + String(r.size_id);
+        receiptsByGoods.set(key, (receiptsByGoods.get(key) || 0) + r.received_qty);
+      });
+
     db.prepare("DELETE FROM purchase_order_items WHERE po_id = ?").run(po.id);
     items.forEach(it => insertItem.run(
       po.id, it.productId, it.sizeId, it.name, it.brand, it.category, it.mode,
       it.lengthFt || null, it.widthVal || null, it.thicknessIn || null,
       it.sizeLabel, it.pieces, it.perPiece, it.unit, it.billedQty, it.rate, it.discountAmount, it.gstRate, it.remark, it.againstCustomerId
     ));
+
+    /* Put the receipts back on the lines they belong to, never above what
+       the line now asks for: an order edited DOWN to 5 cannot have 8
+       received against it, and a pending figure must never go negative. */
+    for (const row of db.prepare(
+      "SELECT id, product_id, size_id, qty FROM purchase_order_items WHERE po_id = ? ORDER BY id").all(po.id)) {
+      const key = String(row.product_id) + "|" + String(row.size_id);
+      const left = receiptsByGoods.get(key);
+      if (!left) continue;
+      const give = round2(Math.min(left, row.qty));
+      db.prepare("UPDATE purchase_order_items SET received_qty = ? WHERE id = ?").run(give, row.id);
+      receiptsByGoods.set(key, round2(left - give));
+    }
     db.prepare(`
       UPDATE purchase_orders SET supplier_id=@supplierId, date=@date, delivery_address=@deliveryAddress,
         expected_delivery_date=@expectedDeliveryDate, purchase_type=@purchaseType, tax_type=@taxType,
@@ -325,6 +357,20 @@ router.put("/:id", (req, res) => {
       againstCustomerId: against.againstCustomerId, soId: against.soId,
       requiredDeliveryDate: against.requiredDeliveryDate
     });
+
+    /* Quantities just changed, so what counted as complete may not any
+       more. Recomputed here rather than left to the next delivery, which
+       might never come. A draft stays a draft: it has not been submitted,
+       and arriving goods do not submit it. */
+    if (status !== "Draft") {
+      const after = db.prepare("SELECT qty, received_qty FROM purchase_order_items WHERE po_id = ?").all(po.id);
+      const anything = after.some(r => (r.received_qty || 0) > 0);
+      const everything = after.length && after.every(r => (r.received_qty || 0) >= (r.qty || 0) - 0.0001);
+      if (anything) {
+        db.prepare("UPDATE purchase_orders SET status = ? WHERE id = ?")
+          .run(everything ? "Completed" : "Partially Completed", po.id);
+      }
+    }
   })();
 
   logAction(req, "po.edit", `${po.po_no}`);

@@ -43,7 +43,7 @@ function computeTotals({ items, taxType, freight, otherCharges, roundOff }) {
 }
 
 /** Shared item-build/validate — identical shape to purchases.js, no stock/due side effects here. */
-function buildItems(rawItems) {
+function buildItems(rawItems, headerCustomerId) {
   const items = [];
   for (const raw of rawItems) {
     const product = db.prepare("SELECT * FROM products WHERE id = ?").get(bindId(raw.productId));
@@ -72,10 +72,63 @@ function buildItems(rawItems) {
       brand: product.brand || "", category: product.category || "",
       gstRate: raw.gstRate != null ? Number(raw.gstRate) : product.gst_rate,
       remark: String(raw.remark || "").trim().slice(0, 200),
+      againstCustomerId: lineCustomerId(raw, headerCustomerId),
       discountAmount, ...calc
     });
   }
   return items;
+}
+
+/* ============================================================
+   WHO THE ORDER IS FOR
+
+   Takes the raw header fields off the request and turns them into what
+   the table stores, refusing anything that would leave a dangling
+   reference. A PO pointing at a customer who no longer exists is worse
+   than one pointing at nobody: the report still counts it and the name
+   comes back blank.
+   ============================================================ */
+function resolveAgainst(body) {
+  const poType = body.poType === "AgainstCustomer" ? "AgainstCustomer" : "General";
+
+  /* A General purchase carries no party chain at all. Keeping stale values
+     "just in case they switch back" is how a report ends up attributing
+     stock-replenishment orders to a customer who never asked for them. */
+  if (poType !== "AgainstCustomer") {
+    return { poType, salesman: "", againstCustomerId: null, soId: null,
+             requiredDeliveryDate: String(body.requiredDeliveryDate || "").trim() };
+  }
+
+  let againstCustomerId = body.againstCustomerId || null;
+  if (againstCustomerId) {
+    const c = db.prepare("SELECT id FROM customers WHERE id = ?").get(bindId(againstCustomerId));
+    if (!c) throw { status: 400, error: "That customer no longer exists." };
+  }
+
+  let soId = body.soId || null;
+  if (soId) {
+    const so = db.prepare("SELECT id, customer_id FROM sales_orders WHERE id = ?").get(bindId(soId));
+    if (!so) throw { status: 400, error: "That Sales Order no longer exists." };
+    /* The sales order already knows whose it is. Taking the party from it
+       rather than trusting a second dropdown means the two can never
+       disagree on screen. */
+    if (so.customer_id) againstCustomerId = so.customer_id;
+  }
+
+  return {
+    poType,
+    salesman: String(body.salesman || "").trim().slice(0, 80),
+    againstCustomerId,
+    soId,
+    requiredDeliveryDate: String(body.requiredDeliveryDate || "").trim()
+  };
+}
+
+/** A line's own party, falling back to the order's. */
+function lineCustomerId(raw, headerCustomerId) {
+  if (!raw.againstCustomerId) return headerCustomerId || null;
+  const c = db.prepare("SELECT id FROM customers WHERE id = ?").get(bindId(raw.againstCustomerId));
+  return c ? c.id : (headerCustomerId || null);
 }
 
 function serialize(po) {
@@ -83,7 +136,28 @@ function serialize(po) {
     SELECT * FROM purchase_order_items WHERE po_id = ?
      ORDER BY CASE WHEN COALESCE(brand,'') = '' THEN 1 ELSE 0 END,
               brand COLLATE NOCASE, id`).all(po.id);
-  return { ...po, items };
+
+  /* Names, not just ids. Every screen and both WhatsApp messages need
+     them, and four of them re-querying is four chances to disagree. */
+  const nameOf = id => {
+    if (!id) return null;
+    const c = db.prepare("SELECT name FROM customers WHERE id = ?").get(bindId(id));
+    return c ? c.name : null;
+  };
+  const so = po.so_id
+    ? db.prepare("SELECT so_no FROM sales_orders WHERE id = ?").get(bindId(po.so_id))
+    : null;
+
+  return {
+    ...po,
+    against_customer_name: nameOf(po.against_customer_id),
+    so_no: so ? so.so_no : null,
+    items: items.map(it => ({
+      ...it,
+      against_customer_name: nameOf(it.against_customer_id),
+      pending_qty: round2(Math.max(0, (it.qty || 0) - (it.received_qty || 0)))
+    }))
+  };
 }
 
 router.get("/", (req, res) => {
@@ -118,7 +192,11 @@ router.post("/", (req, res) => {
   const taxType = purchaseTypeVal === "Interstate" ? "IGST" : "CGST_SGST";
 
   let items;
-  try { items = buildItems(rawItems); }
+  let against;
+  try { against = resolveAgainst(req.body); }
+  catch (err) { if (err && err.status) return res.status(err.status).json({ error: err.error }); throw err; }
+
+  try { items = buildItems(rawItems, against.againstCustomerId); }
   catch (err) { if (err && err.status) return res.status(err.status).json({ error: err.error }); throw err; }
 
   const totals = computeTotals({ items, taxType, freight, otherCharges, roundOff });
@@ -133,16 +211,18 @@ router.post("/", (req, res) => {
   const insertPo = db.prepare(`
     INSERT INTO purchase_orders (id, po_no, date, created_at, supplier_id, delivery_address, expected_delivery_date,
       purchase_type, tax_type, subtotal, discount_amount, cgst, sgst, igst, freight, other_charges, round_off, total,
-      payment_terms, delivery_terms, remarks, status)
+      payment_terms, delivery_terms, remarks, status,
+      po_type, salesman, against_customer_id, so_id, required_delivery_date)
     VALUES (@id, @poNo, @date, @createdAt, @supplierId, @deliveryAddress, @expectedDeliveryDate,
       @purchaseType, @taxType, @subtotal, @discountAmount, @cgst, @sgst, @igst, @freight, @otherCharges, @roundOffAmount, @total,
-      @paymentTerms, @deliveryTerms, @remarks, @status)
+      @paymentTerms, @deliveryTerms, @remarks, @status,
+      @poType, @salesman, @againstCustomerId, @soId, @requiredDeliveryDate)
   `);
   const insertItem = db.prepare(`
     INSERT INTO purchase_order_items
       (po_id, product_id, size_id, name, brand, category, mode, length_ft, width_val, thickness_in,
-       size_label, pieces, per_piece, unit_label, qty, rate, discount_amount, gst_rate, remark)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       size_label, pieces, per_piece, unit_label, qty, rate, discount_amount, gst_rate, remark, against_customer_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   db.transaction(() => {
@@ -154,12 +234,15 @@ router.post("/", (req, res) => {
       cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst,
       freight: totals.freight, otherCharges: totals.otherCharges, roundOffAmount: totals.roundOffAmount, total: totals.total,
       paymentTerms: (paymentTerms || "").trim(), deliveryTerms: (deliveryTerms || "").trim(), remarks: (remarks || "").trim(),
-      status
+      status,
+      poType: against.poType, salesman: against.salesman,
+      againstCustomerId: against.againstCustomerId, soId: against.soId,
+      requiredDeliveryDate: against.requiredDeliveryDate
     });
     items.forEach(it => insertItem.run(
       id, it.productId, it.sizeId, it.name, it.brand, it.category, it.mode,
       it.lengthFt || null, it.widthVal || null, it.thicknessIn || null,
-      it.sizeLabel, it.pieces, it.perPiece, it.unit, it.billedQty, it.rate, it.discountAmount, it.gstRate, it.remark
+      it.sizeLabel, it.pieces, it.perPiece, it.unit, it.billedQty, it.rate, it.discountAmount, it.gstRate, it.remark, it.againstCustomerId
     ));
   })();
 
@@ -191,7 +274,11 @@ router.put("/:id", (req, res) => {
   const taxType = purchaseTypeVal === "Interstate" ? "IGST" : "CGST_SGST";
 
   let items;
-  try { items = buildItems(rawItems); }
+  let against;
+  try { against = resolveAgainst(req.body); }
+  catch (err) { if (err && err.status) return res.status(err.status).json({ error: err.error }); throw err; }
+
+  try { items = buildItems(rawItems, against.againstCustomerId); }
   catch (err) { if (err && err.status) return res.status(err.status).json({ error: err.error }); throw err; }
 
   const totals = computeTotals({ items, taxType, freight, otherCharges, roundOff });
@@ -201,8 +288,8 @@ router.put("/:id", (req, res) => {
   const insertItem = db.prepare(`
     INSERT INTO purchase_order_items
       (po_id, product_id, size_id, name, brand, category, mode, length_ft, width_val, thickness_in,
-       size_label, pieces, per_piece, unit_label, qty, rate, discount_amount, gst_rate, remark)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       size_label, pieces, per_piece, unit_label, qty, rate, discount_amount, gst_rate, remark, against_customer_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   db.transaction(() => {
@@ -210,14 +297,16 @@ router.put("/:id", (req, res) => {
     items.forEach(it => insertItem.run(
       po.id, it.productId, it.sizeId, it.name, it.brand, it.category, it.mode,
       it.lengthFt || null, it.widthVal || null, it.thicknessIn || null,
-      it.sizeLabel, it.pieces, it.perPiece, it.unit, it.billedQty, it.rate, it.discountAmount, it.gstRate, it.remark
+      it.sizeLabel, it.pieces, it.perPiece, it.unit, it.billedQty, it.rate, it.discountAmount, it.gstRate, it.remark, it.againstCustomerId
     ));
     db.prepare(`
       UPDATE purchase_orders SET supplier_id=@supplierId, date=@date, delivery_address=@deliveryAddress,
         expected_delivery_date=@expectedDeliveryDate, purchase_type=@purchaseType, tax_type=@taxType,
         subtotal=@subtotal, discount_amount=@discountAmount, cgst=@cgst, sgst=@sgst, igst=@igst,
         freight=@freight, other_charges=@otherCharges, round_off=@roundOffAmount, total=@total,
-        payment_terms=@paymentTerms, delivery_terms=@deliveryTerms, remarks=@remarks, status=@status
+        payment_terms=@paymentTerms, delivery_terms=@deliveryTerms, remarks=@remarks, status=@status,
+        po_type=@poType, salesman=@salesman, against_customer_id=@againstCustomerId,
+        so_id=@soId, required_delivery_date=@requiredDeliveryDate
       WHERE id=@id
     `).run({
       id: po.id, supplierId, date: poDate, deliveryAddress: (deliveryAddress || "").trim(),
@@ -226,7 +315,10 @@ router.put("/:id", (req, res) => {
       cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst,
       freight: totals.freight, otherCharges: totals.otherCharges, roundOffAmount: totals.roundOffAmount, total: totals.total,
       paymentTerms: (paymentTerms || "").trim(), deliveryTerms: (deliveryTerms || "").trim(), remarks: (remarks || "").trim(),
-      status
+      status,
+      poType: against.poType, salesman: against.salesman,
+      againstCustomerId: against.againstCustomerId, soId: against.soId,
+      requiredDeliveryDate: against.requiredDeliveryDate
     });
   })();
 
@@ -337,6 +429,10 @@ router.post("/:id/convert", (req, res) => {
     touchedProducts.forEach(pid => syncProductStockStmt.run(pid));
     if ((paymentMethod || "Credit") === "Credit") bumpDue.run(po.total, po.supplier_id);
 
+    /* Converting takes the whole order in one go, so every line has now
+       arrived. Saying so here is what stops a converted PO still reading
+       as "40 pending" on the customer's side. */
+    db.prepare("UPDATE purchase_order_items SET received_qty = qty WHERE po_id = ?").run(po.id);
     db.prepare("UPDATE purchase_orders SET status = 'Completed', converted_purchase_id = ? WHERE id = ?").run(purchaseId, po.id);
   })();
 
@@ -348,6 +444,70 @@ router.post("/:id/convert", (req, res) => {
 });
 
 /** A Draft (never submitted) can be deleted outright — nothing depends on it yet. */
+
+/* ============================================================
+   WHAT ACTUALLY TURNED UP
+
+   A mill sending 60 of 100 sheets is the normal case, not the exception,
+   and until now the order had nowhere to say so: it was either untouched
+   or converted in full. That left the 40 sheets still owed to the
+   customer as a number nobody held.
+
+   This records a delivery against the lines it arrived for. It does NOT
+   touch stock or the supplier's due — those move when the supplier's bill
+   is entered, which is Convert to Purchase Entry's job. Two engines for
+   one event would double the stock.
+   ============================================================ */
+router.post("/:id/receive", (req, res) => {
+  const po = db.prepare("SELECT * FROM purchase_orders WHERE id = ?").get(req.params.id);
+  if (!po) return res.status(404).json({ error: "Purchase Order not found." });
+  if (["Cancelled"].includes(po.status)) {
+    return res.status(400).json({ error: "This Purchase Order is cancelled." });
+  }
+
+  const lines = Array.isArray(req.body.lines) ? req.body.lines : [];
+  if (!lines.length) return res.status(400).json({ error: "Nothing to record." });
+
+  const items = db.prepare("SELECT * FROM purchase_order_items WHERE po_id = ?").all(po.id);
+  const byId = new Map(items.map(it => [String(it.id), it]));
+
+  /* Validate every line before writing any of them: a half-applied
+     delivery is harder to explain than a rejected one. */
+  const updates = [];
+  for (const raw of lines) {
+    const it = byId.get(String(raw.id));
+    if (!it) return res.status(400).json({ error: "That line is not on this order." });
+    const qty = Number(raw.receivedQty);
+    if (!Number.isFinite(qty) || qty < 0) {
+      return res.status(400).json({ error: `Received quantity for ${it.name} must be zero or more.` });
+    }
+    /* More than ordered is allowed — mills do send a few extra — but it
+       is capped so a typo cannot make the pending figure negative. */
+    updates.push({ id: it.id, qty: round2(Math.min(qty, it.qty)) });
+  }
+
+  const setQty = db.prepare("UPDATE purchase_order_items SET received_qty = ? WHERE id = ? AND po_id = ?");
+  db.transaction(() => {
+    updates.forEach(u => setQty.run(u.qty, u.id, po.id));
+
+    const after = db.prepare("SELECT qty, received_qty FROM purchase_order_items WHERE po_id = ?").all(po.id);
+    const anything = after.some(r => (r.received_qty || 0) > 0);
+    const everything = after.every(r => (r.received_qty || 0) >= (r.qty || 0) - 0.0001);
+
+    /* A converted order keeps its Completed status: the goods and the
+       bill are both in, and re-deriving status from quantities would
+       quietly undo that. */
+    if (!po.converted_purchase_id) {
+      const next = everything ? "Completed" : anything ? "Partially Completed" : po.status;
+      if (next !== po.status) db.prepare("UPDATE purchase_orders SET status = ? WHERE id = ?").run(next, po.id);
+    }
+  })();
+
+  const fresh = db.prepare("SELECT * FROM purchase_orders WHERE id = ?").get(po.id);
+  logAction(req, "po.receive", `${po.po_no}: ${updates.length} line(s) updated`);
+  res.json(serialize(fresh));
+});
+
 router.delete("/:id", (req, res) => {
   const po = db.prepare("SELECT * FROM purchase_orders WHERE id = ?").get(req.params.id);
   if (!po) return res.status(404).json({ error: "Purchase Order not found." });

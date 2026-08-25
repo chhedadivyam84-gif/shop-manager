@@ -2226,6 +2226,51 @@ addColumn("areas", "route", "TEXT DEFAULT ''");
    where the supplier reads only their own few lines. */
 addColumn("purchase_order_items", "remark", "TEXT DEFAULT ''");
 
+/* ============================================================
+   WHO A PURCHASE ORDER IS FOR
+
+   A PO already recorded who the goods come FROM. It records nothing about
+   who they are for, so the moment a salesman orders 20 sheets against a
+   customer's requirement, the link between that requirement and this order
+   lives only in his head.
+
+   These columns hold the chain the owner actually wants to follow:
+
+     salesman -> customer -> sales order -> PO -> supplier -> goods
+
+   Both a header party and an item party, because both happen: a PO raised
+   for one customer's job, and a PO consolidating three customers' needs
+   into one order to the mill. The item column wins where it is set; the
+   header is the default for lines that name nobody.
+
+   Salesman is free text rather than a new master table. Sales already
+   records it that way (invoices.delivery_man, which the salesman-wise
+   report reads), and a second list of names to keep in step would drift
+   from the first within a month. The screen offers the names already in
+   use so they stay spelled the same.
+   ============================================================ */
+addColumn("purchase_orders", "po_type", "TEXT NOT NULL DEFAULT 'General'");
+addColumn("purchase_orders", "salesman", "TEXT DEFAULT ''");
+addColumn("purchase_orders", "against_customer_id", "TEXT");
+addColumn("purchase_orders", "so_id", "TEXT");
+addColumn("purchase_orders", "required_delivery_date", "TEXT DEFAULT ''");
+addColumn("purchase_order_items", "against_customer_id", "TEXT");
+
+/* How much of each line has actually turned up.
+
+   Converting a PO used to be all-or-nothing, so a mill sending 60 of 100
+   sheets left the order looking either untouched or complete, and the 40
+   still owed to the customer were nobody's number. Received quantity per
+   line is what makes "40 pending against ABC Traders" answerable. */
+addColumn("purchase_order_items", "received_qty", "REAL NOT NULL DEFAULT 0");
+
+/* Indexes for the party- and salesman-wise reports: without them every
+   report scans every PO line the shop has ever raised. */
+db.exec("CREATE INDEX IF NOT EXISTS idx_po_customer ON purchase_orders(against_customer_id)");
+db.exec("CREATE INDEX IF NOT EXISTS idx_po_salesman ON purchase_orders(salesman)");
+db.exec("CREATE INDEX IF NOT EXISTS idx_po_so ON purchase_orders(so_id)");
+db.exec("CREATE INDEX IF NOT EXISTS idx_poi_customer ON purchase_order_items(against_customer_id)");
+
 /* A station can sit on more than one line — CSMT is Central and Harbour, Bandra
    is Western and Harbour — so line membership is its own table rather than a
    column that would force a false choice. */

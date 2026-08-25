@@ -1450,6 +1450,245 @@ function buildReportRows(req) {
 }
 
 /* JSON for the print engine — the same rows the .xlsx download contains. */
+/* ============================================================
+   PURCHASE ORDER REPORTS
+
+   Every one of these answers a question about the same chain:
+
+     salesman -> customer -> sales order -> PO -> supplier -> goods
+
+   They read purchase_order_items rather than purchase_orders wherever the
+   answer is per-line, because one order can carry three customers' material
+   and three mills' brands. Summing at the header would credit all of it to
+   whoever happens to be named on top.
+
+   Cancelled orders are excluded throughout: they are a record of something
+   that did not happen, and counting them makes every pending figure wrong.
+   ============================================================ */
+
+/* Lines with their order's chain attached, since almost every report below
+   needs the same join. `party` prefers the line's own customer and falls
+   back to the order's, which is exactly the precedence the entry screen
+   uses — a consolidated PO names parties per line, a single-party PO names
+   one at the top and leaves the lines blank. */
+const PO_LINE_SOURCE = `
+  FROM purchase_order_items poi
+  JOIN purchase_orders po ON po.id = poi.po_id
+  LEFT JOIN suppliers s ON s.id = po.supplier_id
+  LEFT JOIN customers c ON c.id = COALESCE(poi.against_customer_id, po.against_customer_id)
+  LEFT JOIN sales_orders so ON so.id = po.so_id
+  WHERE po.status <> 'Cancelled'`;
+
+const poValue = "poi.qty * poi.rate - poi.discount_amount";
+
+/** Purchase orders raised for each customer. */
+router.get("/po-party-wise", (req, res) => {
+  const range = dateRange(req);
+  const rows = db.prepare(`
+    SELECT COALESCE(NULLIF(TRIM(c.name),''), '(No party)') AS label,
+           COUNT(DISTINCT po.id) AS orders,
+           COUNT(*) AS lines,
+           COALESCE(SUM(poi.qty),0) AS qty,
+           COALESCE(SUM(poi.received_qty),0) AS received,
+           COALESCE(SUM(MAX(0, poi.qty - poi.received_qty)),0) AS pending,
+           COALESCE(SUM(${poValue}),0) AS value
+    ${PO_LINE_SOURCE}${range.sql("po.date")}
+    GROUP BY label ORDER BY value DESC
+  `).all(...range.params());
+  res.json(rows);
+});
+
+/** Every salesman's purchase-order activity. */
+router.get("/po-salesman-wise", (req, res) => {
+  const range = dateRange(req);
+  const rows = db.prepare(`
+    SELECT COALESCE(NULLIF(TRIM(po.salesman),''), 'Unassigned') AS label,
+           COUNT(DISTINCT po.id) AS orders,
+           COUNT(DISTINCT COALESCE(poi.against_customer_id, po.against_customer_id)) AS parties,
+           COALESCE(SUM(poi.qty),0) AS qty,
+           COALESCE(SUM(MAX(0, poi.qty - poi.received_qty)),0) AS pending,
+           COALESCE(SUM(${poValue}),0) AS value
+    ${PO_LINE_SOURCE}${range.sql("po.date")}
+    GROUP BY label ORDER BY value DESC
+  `).all(...range.params());
+  res.json(rows);
+});
+
+/** One salesman's orders, named — what the owner opens after the summary. */
+router.get("/po-salesman-detail", (req, res) => {
+  const range = dateRange(req);
+  const who = String(req.query.salesman || "").trim();
+  const rows = db.prepare(`
+    SELECT po.id, po.po_no, po.date, po.status,
+           COALESCE(NULLIF(TRIM(c.name),''),'') AS party,
+           COALESCE(NULLIF(TRIM(s.name),''),'') AS supplier,
+           COALESCE(so.so_no,'') AS so_no,
+           po.total AS value
+      FROM purchase_orders po
+      LEFT JOIN suppliers s ON s.id = po.supplier_id
+      LEFT JOIN customers c ON c.id = po.against_customer_id
+      LEFT JOIN sales_orders so ON so.id = po.so_id
+     WHERE po.status <> 'Cancelled'
+       AND COALESCE(NULLIF(TRIM(po.salesman),''),'Unassigned') = ?${range.sql("po.date")}
+     ORDER BY po.date DESC, po.po_no DESC
+  `).all(who || "Unassigned", ...range.params());
+  res.json(rows);
+});
+
+/** Purchase orders by the supplier they went to. */
+router.get("/po-supplier-wise", (req, res) => {
+  const range = dateRange(req);
+  const rows = db.prepare(`
+    SELECT COALESCE(NULLIF(TRIM(s.name),''), '(No supplier)') AS label,
+           COUNT(DISTINCT po.id) AS orders,
+           COALESCE(SUM(poi.qty),0) AS qty,
+           COALESCE(SUM(MAX(0, poi.qty - poi.received_qty)),0) AS pending,
+           COALESCE(SUM(${poValue}),0) AS value
+    ${PO_LINE_SOURCE}${range.sql("po.date")}
+    GROUP BY label ORDER BY value DESC
+  `).all(...range.params());
+  res.json(rows);
+});
+
+/** Ordered by brand — which mill the shop is actually buying from. */
+router.get("/po-brand-wise", (req, res) => {
+  const range = dateRange(req);
+  const rows = db.prepare(`
+    SELECT COALESCE(NULLIF(TRIM(poi.brand),''), '(No brand)') AS label,
+           COUNT(DISTINCT po.id) AS orders,
+           COALESCE(SUM(poi.qty),0) AS qty,
+           COALESCE(SUM(MAX(0, poi.qty - poi.received_qty)),0) AS pending,
+           COALESCE(SUM(${poValue}),0) AS value
+    ${PO_LINE_SOURCE}${range.sql("po.date")}
+    GROUP BY label ORDER BY value DESC
+  `).all(...range.params());
+  res.json(rows);
+});
+
+/** Ordered by product, brand kept separate — 18mm Swagat is not 18mm Ganga. */
+router.get("/po-product-wise", (req, res) => {
+  const range = dateRange(req);
+  const rows = db.prepare(`
+    SELECT poi.name AS label,
+           COALESCE(NULLIF(TRIM(poi.brand),''),'') AS brand,
+           COALESCE(NULLIF(TRIM(poi.size_label),''),'') AS size,
+           COUNT(DISTINCT po.id) AS orders,
+           COALESCE(SUM(poi.qty),0) AS qty,
+           COALESCE(SUM(poi.received_qty),0) AS received,
+           COALESCE(SUM(MAX(0, poi.qty - poi.received_qty)),0) AS pending,
+           COALESCE(SUM(${poValue}),0) AS value
+    ${PO_LINE_SOURCE}${range.sql("po.date")}
+    GROUP BY poi.name, brand, size ORDER BY qty DESC
+  `).all(...range.params());
+  res.json(rows);
+});
+
+/* What is still owed, line by line.
+ *
+ * The report the shop opens when a customer rings up asking where their
+ * material is, so it names the party and the salesman rather than making
+ * anyone cross-reference the PO afterwards. */
+router.get("/po-pending", (req, res) => {
+  const range = dateRange(req);
+  const rows = db.prepare(`
+    SELECT po.id AS po_id, po.po_no, po.date, po.status,
+           COALESCE(NULLIF(TRIM(po.salesman),''),'') AS salesman,
+           COALESCE(NULLIF(TRIM(c.name),''),'') AS party,
+           COALESCE(NULLIF(TRIM(s.name),''),'') AS supplier,
+           COALESCE(so.so_no,'') AS so_no,
+           poi.name, poi.brand, poi.size_label, poi.unit_label,
+           poi.qty, poi.received_qty,
+           ROUND(poi.qty - poi.received_qty, 2) AS pending,
+           po.required_delivery_date, po.expected_delivery_date
+    ${PO_LINE_SOURCE}
+      AND po.status <> 'Completed'
+      AND poi.qty - poi.received_qty > 0.0001${range.sql("po.date")}
+     ORDER BY COALESCE(NULLIF(po.required_delivery_date,''), po.expected_delivery_date, po.date) ASC,
+              po.po_no ASC
+  `).all(...range.params());
+  res.json(rows);
+});
+
+/** Orders that are fully in. */
+router.get("/po-completed", (req, res) => {
+  const range = dateRange(req);
+  const rows = db.prepare(`
+    SELECT po.id, po.po_no, po.date, po.status,
+           COALESCE(NULLIF(TRIM(po.salesman),''),'') AS salesman,
+           COALESCE(NULLIF(TRIM(c.name),''),'') AS party,
+           COALESCE(NULLIF(TRIM(s.name),''),'') AS supplier,
+           po.total AS value
+      FROM purchase_orders po
+      LEFT JOIN suppliers s ON s.id = po.supplier_id
+      LEFT JOIN customers c ON c.id = po.against_customer_id
+     WHERE po.status = 'Completed'${range.sql("po.date")}
+     ORDER BY po.date DESC, po.po_no DESC
+  `).all(...range.params());
+  res.json(rows);
+});
+
+/** Purchase orders day by day. */
+router.get("/po-date-wise", (req, res) => {
+  const range = dateRange(req);
+  const rows = db.prepare(`
+    SELECT po.date AS label,
+           COUNT(*) AS orders,
+           COALESCE(SUM(po.total),0) AS value
+      FROM purchase_orders po
+     WHERE po.status <> 'Cancelled'${range.sql("po.date")}
+     GROUP BY po.date ORDER BY po.date DESC
+  `).all(...range.params());
+  res.json(rows);
+});
+
+/* Customer order against purchase order.
+ *
+ * Answers "we promised this, did we order it?" — the question that catches
+ * a sales order nobody bought material for, which is the failure this whole
+ * chain exists to prevent. Compared per sales order rather than per party,
+ * because a party with two jobs running needs them told apart. */
+router.get("/po-so-vs-po", (req, res) => {
+  const range = dateRange(req);
+  const rows = db.prepare(`
+    SELECT so.id AS so_id, so.so_no, so.date, so.status AS so_status,
+           COALESCE(NULLIF(TRIM(c.name),''),'') AS party,
+           COALESCE((SELECT SUM(soi.qty) FROM sales_order_items soi WHERE soi.so_id = so.id), 0) AS ordered_qty,
+           so.total AS ordered_value,
+           COALESCE((SELECT SUM(poi.qty) FROM purchase_order_items poi
+                       JOIN purchase_orders po ON po.id = poi.po_id
+                      WHERE po.so_id = so.id AND po.status <> 'Cancelled'), 0) AS po_qty,
+           COALESCE((SELECT SUM(poi.received_qty) FROM purchase_order_items poi
+                       JOIN purchase_orders po ON po.id = poi.po_id
+                      WHERE po.so_id = so.id AND po.status <> 'Cancelled'), 0) AS received_qty,
+           (SELECT GROUP_CONCAT(po.po_no, ', ') FROM purchase_orders po
+             WHERE po.so_id = so.id AND po.status <> 'Cancelled') AS po_nos
+      FROM sales_orders so
+      LEFT JOIN customers c ON c.id = so.customer_id
+     WHERE so.status <> 'Cancelled'${range.sql("so.date")}
+     ORDER BY so.date DESC, so.so_no DESC
+  `).all(...range.params());
+  res.json(rows);
+});
+
+/* Salesman names already in use, so the entry screen can suggest them.
+ *
+ * Drawn from both books: a salesman who has raised POs and one who has only
+ * ever been named on an invoice are the same person, and offering only half
+ * the names is how "Rahul" and "rahul " become two people in the report. */
+router.get("/salesman-names", (req, res) => {
+  const rows = db.prepare(`
+    SELECT DISTINCT TRIM(salesman) AS name FROM purchase_orders
+     WHERE TRIM(COALESCE(salesman,'')) <> ''
+    UNION
+    SELECT DISTINCT TRIM(delivery_man) FROM invoices
+     WHERE TRIM(COALESCE(delivery_man,'')) <> ''
+    UNION
+    SELECT DISTINCT TRIM(name) FROM staff WHERE active = 1
+     ORDER BY name
+  `).all();
+  res.json(rows.map(r => r.name).filter(Boolean));
+});
+
 router.get("/data", (req, res) => {
   try {
     const out = buildReportRows(req);

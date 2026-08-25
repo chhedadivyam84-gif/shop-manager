@@ -2264,6 +2264,11 @@ addColumn("purchase_order_items", "against_customer_id", "TEXT");
    line is what makes "40 pending against ABC Traders" answerable. */
 addColumn("purchase_order_items", "received_qty", "REAL NOT NULL DEFAULT 0");
 
+/* The shop's own covering note above a purchase order on WhatsApp.
+   The order itself is generated and stays generated; only the greeting
+   around it is theirs to word. Blank means use the built-in wording. */
+addColumn("settings", "po_wa_template", "TEXT DEFAULT ''");
+
 /* Indexes for the party- and salesman-wise reports: without them every
    report scans every PO line the shop has ever raised. */
 db.exec("CREATE INDEX IF NOT EXISTS idx_po_customer ON purchase_orders(against_customer_id)");

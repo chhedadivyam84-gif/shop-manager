@@ -12013,10 +12013,7 @@ async function openPoDetail(poId){
       ${["Cancelled"].includes(po.status) || po.converted_purchase_id ? ""
         : `<button class="btn btn-outline" id="receive-po-btn">📦 Record delivery</button>`}
       <button class="btn btn-outline" id="print-po-btn">Print</button>
-      <button class="btn btn-outline" id="share-po-btn">💬 WhatsApp — whole PO</button>
-      ${poItemsByBrand(po).length > 1
-        ? `<button class="btn btn-outline" id="share-po-brand-btn">💬 WhatsApp — company-wise</button>`
-        : ""}
+      <button class="btn btn-outline" id="share-po-btn">💬 Send / Share</button>
     </div>
     ${canClose ? `<div style="margin-top:12px;text-align:center;"><a href="#" id="close-po-link" class="btn-danger-link">Close / Cancel this order</a></div>` : ""}
     ${canDelete ? `<div style="margin-top:8px;text-align:center;"><a href="#" id="delete-po-link" class="btn-danger-link">Delete this draft</a></div>` : ""}
@@ -12053,9 +12050,7 @@ async function openPoDetail(poId){
   const receiveBtn = sheet.querySelector("#receive-po-btn");
   if(receiveBtn) receiveBtn.addEventListener("click", ()=>{ closeAllSheets(); openPoReceive(po); });
   sheet.querySelector("#print-po-btn").addEventListener("click", ()=>printPurchaseOrder(po));
-  sheet.querySelector("#share-po-btn").addEventListener("click", ()=>sharePoWhatsApp(po));
-  const brandShareBtn = sheet.querySelector("#share-po-brand-btn");
-  if(brandShareBtn) brandShareBtn.addEventListener("click", ()=>{ closeAllSheets(); openPoBrandShare(po); });
+  sheet.querySelector("#share-po-btn").addEventListener("click", ()=>{ closeAllSheets(); openPoSend(po); });
   const closeLink = sheet.querySelector("#close-po-link");
   if(closeLink) closeLink.addEventListener("click", async (e)=>{
     e.preventDefault();
@@ -12278,6 +12273,70 @@ function printPurchaseOrder(po){
    order with one number, and these are two views of it.
    ============================================================ */
 
+/* ============================================================
+   THE COVERING NOTE
+
+   What goes above the order in a WhatsApp message. The order itself is
+   generated and must not be editable — a supplier reading numbers the shop
+   typed by hand rather than the ones on the PO is exactly the confusion
+   this module exists to prevent. The greeting around it is the shop's own
+   voice, so that part is theirs.
+
+   Placeholders are filled from the saved order. An unknown one is left
+   alone rather than blanked, so a typo shows itself instead of silently
+   deleting a line of the message.
+   ============================================================ */
+const PO_WA_PLACEHOLDERS = [
+  ["{po_no}",       "Purchase order number"],
+  ["{date}",        "Order date"],
+  ["{supplier}",    "Supplier the order goes to"],
+  ["{brand}",       "Company, on a company-wise message"],
+  ["{salesman}",    "Salesman who took the order"],
+  ["{party}",       "Customer the material is for"],
+  ["{so_no}",       "Sales order number"],
+  ["{required}",    "Date the customer was promised"],
+  ["{total_qty}",   "Total quantity on the message"],
+  ["{shop}",        "Your shop's name"]
+];
+
+const PO_WA_DEFAULT_TEMPLATE =
+  "Dear Sir,\nPlease find our Purchase Order {po_no}{party_clause}.\n{salesman_line}Kindly confirm availability and expected delivery date.\nThank you.";
+
+function poWaTemplate(){
+  const t = (state.settings || {}).po_wa_template;
+  return (typeof t === "string" && t.trim()) ? t : PO_WA_DEFAULT_TEMPLATE;
+}
+
+/** Fill a template against one order, optionally narrowed to one company. */
+function poWaFill(template, po, group){
+  const sup = state.suppliers.find(s => s.id === po.supplier_id);
+  const items = group ? group.items : po.items;
+
+  const values = {
+    "{po_no}": po.po_no || "",
+    "{date}": po.date || "",
+    "{supplier}": (sup && sup.name) || "",
+    "{brand}": group ? group.brand : "",
+    "{salesman}": po.salesman || "",
+    "{party}": po.against_customer_name || "",
+    "{so_no}": po.so_no || "",
+    "{required}": po.required_delivery_date || "",
+    /* With its unit, so a covering note reading "Total 45" does not sit
+       above a body reading "Total Quantity: 45 Sheets". */
+    "{total_qty}": poWaTotalQty(items),
+    "{shop}": (state.settings || {}).business_name || "",
+
+    /* Two clauses rather than raw values, so the default template reads as a
+       sentence whether or not the order names a customer. A bare "{party}"
+       leaves "against customer ." on a stock purchase. */
+    "{party_clause}": po.against_customer_name ? ` against customer ${po.against_customer_name}` : "",
+    "{salesman_line}": po.salesman ? `Salesman: ${po.salesman}\n` : ""
+  };
+
+  return String(template).replace(/\{[a-z_]+\}/g, m =>
+    Object.prototype.hasOwnProperty.call(values, m) ? values[m] : m);
+}
+
 /** What one saved line costs, GST included. */
 function poItemTotal(it){
   const taxable = round2(it.qty * it.rate - it.discount_amount);
@@ -12318,12 +12377,21 @@ function poItemsByBrand(po){
   }));
 }
 
+/* Who the order is from, who it is for, and what it answers to.
+
+   "Against Party" is on the message deliberately: the supplier should
+   know whose requirement they are filling, which is what stops a mill
+   asking the shop three times which job a load belongs to. */
 function poWaHeader(po){
   const sup = state.suppliers.find(s => s.id === po.supplier_id);
   return [
     "*Purchase Order " + po.po_no + "*",
     "Date: " + po.date,
-    sup ? "To: " + sup.name : "",
+    sup ? "Supplier: " + sup.name : "",
+    po.salesman ? "Salesman: " + po.salesman : "",
+    po.against_customer_name ? "Against Party: " + po.against_customer_name : "",
+    po.so_no ? "Sales Order: " + po.so_no : "",
+    po.required_delivery_date ? "Required by: " + po.required_delivery_date : "",
     po.expected_delivery_date ? "Expected: " + po.expected_delivery_date : ""
   ].filter(Boolean).join("\n");
 }
@@ -12349,8 +12417,9 @@ function poCompleteMessage(po){
       parts.push("Subtotal: " + fmt(g.total), "");
     });
   }
+  parts.push("Total Quantity: " + poWaTotalQty(po.items));
   parts.push("*Grand Total: " + fmt(po.total) + "*", ...poWaFooter(po));
-  return parts.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  return poWaCompose(po, null, parts);
 }
 
 /** One company's part of the order — its lines, its total, the same PO number. */
@@ -12359,10 +12428,36 @@ function poBrandMessage(po, group){
     poWaHeader(po), "",
     "*" + group.brand.toUpperCase() + "*",
     ...group.items.map(poWaLine), "",
+    "Total Quantity: " + poWaTotalQty(group.items),
     "*Total: " + fmt(group.total) + "*",
     ...poWaFooter(po)
   ];
-  return parts.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  return poWaCompose(po, group, parts);
+}
+
+/** What the supplier is being asked for, added up. */
+/* What the supplier is being asked for, added up.
+
+   Counted through poWaQty so the total reads in the same unit the lines
+   above it do. "20 Sheets ... 15 Sheets ... Total Quantity: 35 Pc" is the
+   kind of small disagreement that makes a supplier ring up to check. */
+function poWaTotalQty(items){
+  const total = round2(items.reduce((t, it) => t + (Number(it.qty) || 0), 0));
+  const first = items[0] || {};
+  return poWaQty({ qty: total, mode: first.mode || "UNIT",
+                   product_id: first.product_id, unit_label: first.unit_label });
+}
+
+/* The shop's covering note on top, the generated order underneath.
+
+   Kept in that order and never interleaved: the order is machine-written
+   and must stay that way, because a supplier reading numbers somebody
+   retyped instead of the ones on the PO is the confusion this whole
+   module exists to prevent. */
+function poWaCompose(po, group, parts){
+  const body = parts.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  const note = poWaFill(poWaTemplate(), po, group).trim();
+  return note ? note + "\n\n" + body : body;
 }
 
 function sharePoWhatsApp(po){
@@ -12407,6 +12502,244 @@ async function copyToClipboard(text){
  * knows. So the messages are written here and sent one at a time; Copy is
  * there for whichever chat isn't the supplier's.
  */
+/* ============================================================
+   THE ORDER AS A FILE
+
+   A supplier can file, sign and hand on a PDF; they cannot do any of that
+   with a chat message. So the shop gets both, and picks per send.
+
+   The file comes from the server rather than being drawn here: the same
+   sheet then goes to the printer, to a download and to WhatsApp, and three
+   renderers of one document is three chances for them to disagree about
+   what was ordered.
+   ============================================================ */
+
+/** Fetch one purchase order as a PDF. `brand` narrows it to one company. */
+async function poPdfFile(po, brand){
+  const url = `/api/print/purchase-order/${encodeURIComponent(po.id)}` +
+              (brand ? `?brand=${encodeURIComponent(brand)}` : "");
+  const res = await fetch(url, { credentials: "same-origin" });
+  if(!res.ok){
+    let msg = "Could not build the PDF.";
+    try{ msg = (await res.json()).error || msg; }catch(e){}
+    throw new Error(msg);
+  }
+  const blob = await res.blob();
+  const name = `${po.po_no}${brand ? "-" + brand.replace(/[^A-Za-z0-9]+/g, "-") : ""}.pdf`;
+  return new File([blob], name, { type: "application/pdf" });
+}
+
+/**
+ * Hand the PDF to WhatsApp.
+ *
+ * navigator.share with a file is the ONLY way a web page can pass an actual
+ * document to WhatsApp — wa.me pre-fills text and nothing else. Where the
+ * browser won't (most desktops), the file is downloaded instead and the
+ * message text is copied, so the shop can attach one and paste the other
+ * rather than being told it cannot be done.
+ */
+async function sharePoPdf(po, brand, btn){
+  const label = btn ? btn.textContent : "";
+  if(btn){ btn.disabled = true; btn.textContent = "⏳ Preparing…"; }
+  try{
+    const file = await poPdfFile(po, brand);
+    const text = brand
+      ? poBrandMessage(po, poItemsByBrand(po).find(g => g.brand === brand))
+      : poCompleteMessage(po);
+
+    if(navigator.canShare && navigator.canShare({ files: [file] })){
+      await navigator.share({ files: [file], title: file.name, text });
+      return;
+    }
+
+    const url = URL.createObjectURL(file);
+    const a = document.createElement("a");
+    a.href = url; a.download = file.name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 30000);
+
+    const copied = await copyToClipboard(text);
+    toast(copied
+      ? "PDF downloaded and the message copied — attach the file in WhatsApp and paste the text."
+      : "PDF downloaded — attach it in WhatsApp.");
+  }catch(e){
+    if(e && e.name === "AbortError") return;   // the share sheet was dismissed
+    toast(e.message || "Couldn't share the PDF.");
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = label; }
+  }
+}
+
+/** Open the PDF in a tab — for checking it before it goes out. */
+function viewPoPdf(po, brand){
+  const url = `/api/print/purchase-order/${encodeURIComponent(po.id)}` +
+              (brand ? `?brand=${encodeURIComponent(brand)}` : "");
+  const win = window.open(url, "_blank");
+  if(!win) toast("Couldn't open the PDF — allow pop-ups for this site.");
+}
+
+/* ============================================================
+   ONE PLACE TO SEND FROM
+
+   Four ways to send an order — whole or company-wise, as text or as a PDF —
+   were becoming four buttons on the detail sheet, which is how an action row
+   turns into a wall. They live here instead, as one question: what are you
+   sending, and to whom.
+
+   Nothing on this sheet creates or renumbers anything. Every option below is
+   a view of one saved order carrying one number.
+   ============================================================ */
+function openPoSend(po){
+  const sheet = document.getElementById("sheet-po-send");
+  const groups = poItemsByBrand(po);
+  const sup = state.suppliers.find(s => s.id === po.supplier_id);
+  const toWhom = sup && sup.phone ? "Send to " + sup.name : "Send on WhatsApp";
+
+  const chain = [
+    po.salesman ? `Salesman ${escapeHtml(po.salesman)}` : "",
+    po.against_customer_name ? `for ${escapeHtml(po.against_customer_name)}` : "",
+    po.so_no ? `against ${escapeHtml(po.so_no)}` : ""
+  ].filter(Boolean).join(" · ");
+
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">Send ${escapeHtml(po.po_no)}</div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px;">
+      ${chain || "Stock purchase"} — the order keeps this number on every message.
+    </div>
+
+    <div class="section-title" style="margin-top:0;">The whole order</div>
+    <div class="card" style="margin-top:0;">
+      <div class="row-sub">${po.items.length} item${po.items.length===1?"":"s"}${groups.length>1?` across ${groups.length} companies`:""} · ${fmt(po.total)}</div>
+      <div class="action-row" style="margin-top:8px;">
+        <button class="btn btn-gold" data-po-send="text">💬 ${escapeHtml(toWhom)}</button>
+        <button class="btn btn-outline" data-po-send="pdf">📄 Send as PDF</button>
+        <button class="btn btn-outline" data-po-send="view">👁 View PDF</button>
+      </div>
+    </div>
+
+    ${groups.length > 1 ? `
+      <div class="section-title">Company by company</div>
+      <div class="muted" style="font-size:11.5px;margin:-4px 0 8px;">
+        Each message carries only that company's lines and total — a mill never sees another's rates.
+      </div>
+      ${groups.map(g => `
+        <div class="card" style="margin-top:0;margin-bottom:8px;">
+          <div class="row-title">${escapeHtml(g.brand)}</div>
+          <div class="row-sub">${g.items.length} item${g.items.length===1?"":"s"} · ${fmt(g.total)}</div>
+          <div class="action-row" style="margin-top:8px;">
+            <button class="btn btn-gold" data-po-brand-send="text" data-brand="${escapeHtml(g.brand)}">💬 Text</button>
+            <button class="btn btn-outline" data-po-brand-send="pdf" data-brand="${escapeHtml(g.brand)}">📄 PDF</button>
+            <button class="btn btn-outline" data-po-brand-send="copy" data-brand="${escapeHtml(g.brand)}">Copy</button>
+          </div>
+          <pre class="po-wa-preview">${escapeHtml(poBrandMessage(po, g))}</pre>
+        </div>`).join("")}
+    ` : ""}
+
+    <div class="section-title">Message wording</div>
+    <div class="card" style="margin-top:0;">
+      <div class="row-sub">The greeting above the order is yours to word. The order itself is always generated.</div>
+      <button class="btn btn-outline" id="po-edit-template" style="margin-top:8px;">✎ Edit the covering note</button>
+    </div>`;
+
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", ()=>{
+    closeAllSheets(); openPoDetail(po.id);
+  });
+
+  sheet.querySelectorAll("[data-po-send]").forEach(b => b.addEventListener("click", ()=>{
+    const how = b.dataset.poSend;
+    if(how === "text") openWhatsApp(sup && sup.phone, poCompleteMessage(po));
+    else if(how === "pdf") sharePoPdf(po, null, b);
+    else viewPoPdf(po, null);
+  }));
+
+  sheet.querySelectorAll("[data-po-brand-send]").forEach(b => b.addEventListener("click", async ()=>{
+    const brand = b.dataset.brand;
+    const g = groups.find(x => x.brand === brand);
+    const how = b.dataset.poBrandSend;
+    if(how === "text") openWhatsApp(sup && sup.phone, poBrandMessage(po, g));
+    else if(how === "pdf") sharePoPdf(po, brand, b);
+    else {
+      const ok = await copyToClipboard(poBrandMessage(po, g));
+      toast(ok ? "Message copied — paste it into any chat."
+               : "Couldn't copy. Long-press the message to select it.", ok ? "ok" : "");
+    }
+  }));
+
+  const tpl = sheet.querySelector("#po-edit-template");
+  if(tpl) tpl.addEventListener("click", ()=>{ closeAllSheets(); openPoTemplateEditor(po); });
+
+  showSheet("sheet-po-send");
+}
+
+/* ============================================================
+   THE COVERING NOTE, EDITED
+
+   Owner only, because it goes out under the shop's name to every supplier.
+   The preview is filled against the order the shop was just looking at, so
+   they can see what a placeholder actually becomes rather than guessing.
+   ============================================================ */
+function openPoTemplateEditor(po){
+  const sheet = document.getElementById("sheet-po-template");
+  let draft = poWaTemplate();
+
+  const paint = () => {
+    sheet.innerHTML = `
+      <div class="sheet-handle"></div>
+      <button class="sheet-close" data-sheetclose>✕</button>
+      <div class="sheet-title">Covering note</div>
+      <div class="muted" style="font-size:12px;margin-bottom:10px;">
+        Goes above every purchase order you send. The order itself — items, quantities,
+        rates, totals — is always generated and cannot be edited here.
+      </div>
+      <textarea id="po-tpl-text" rows="6" style="width:100%;font-size:13px;line-height:1.5;">${escapeHtml(draft)}</textarea>
+      <div class="section-title">Placeholders</div>
+      <div class="card" style="margin-top:0;font-size:11.5px;">
+        ${PO_WA_PLACEHOLDERS.map(([k, d]) =>
+          `<div class="inv-flex" style="padding:3px 0;"><code style="font-weight:800;">${escapeHtml(k)}</code><span class="muted">${escapeHtml(d)}</span></div>`
+        ).join("")}
+      </div>
+      <div class="section-title">How it will read</div>
+      <pre class="po-wa-preview" id="po-tpl-preview">${escapeHtml(poWaFill(draft, po, null))}</pre>
+      <div class="action-row" style="margin-top:12px;">
+        <button class="btn btn-gold" id="po-tpl-save">Save</button>
+        <button class="btn btn-outline" id="po-tpl-reset">Use the standard wording</button>
+      </div>`;
+
+    sheet.querySelector("[data-sheetclose]").addEventListener("click", ()=>{
+      closeAllSheets(); openPoSend(po);
+    });
+    const ta = sheet.querySelector("#po-tpl-text");
+    ta.addEventListener("input", ()=>{
+      draft = ta.value;
+      // Only the preview is redrawn, so the cursor stays where it is.
+      sheet.querySelector("#po-tpl-preview").textContent = poWaFill(draft, po, null);
+    });
+    sheet.querySelector("#po-tpl-reset").addEventListener("click", ()=>{
+      draft = PO_WA_DEFAULT_TEMPLATE; paint();
+    });
+    sheet.querySelector("#po-tpl-save").addEventListener("click", async ()=>{
+      const btn = sheet.querySelector("#po-tpl-save");
+      btn.disabled = true;
+      try{
+        const saved = await api("PUT", "/settings/po-wa-template", { template: draft });
+        state.settings.po_wa_template = saved.template;
+        toast("Saved.", "ok");
+        closeAllSheets(); openPoSend(po);
+      }catch(e){ toast(e.message); btn.disabled = false; }
+    });
+  };
+
+  paint();
+  showSheet("sheet-po-template");
+}
+
+/* Superseded by openPoSend, which offers text AND pdf, whole AND
+   company-wise, from one place. Kept because it is a complete, working
+   company-wise share and nothing is gained by deleting it — if the
+   combined sheet ever proves too much on a small phone, this is the
+   simpler thing to fall back to. */
 function openPoBrandShare(po){
   const groups = poItemsByBrand(po);
   const sup = state.suppliers.find(s => s.id === po.supplier_id);

@@ -1,6 +1,7 @@
 const express = require("express");
 const db = require("../db");
 const { buildInvoicePdf } = require("../printing/pdf");
+const { buildPurchaseOrderPdf } = require("../printing/poPdf");
 const printer = require("../printing/printer");
 
 const router = express.Router();
@@ -62,6 +63,72 @@ router.post("/", async (req, res) => {
 });
 
 /** Poll this after POST / to find out when printing finished (or failed). */
+/* ============================================================
+   PURCHASE ORDER AS A PDF
+
+   Streams the sheet straight back rather than queueing a print job: this is
+   for handing to a supplier over WhatsApp, not for the shop's own printer.
+
+   `?brand=Swagat` narrows it to one company, which is what the company-wise
+   share sends. It is the same order and the same number either way — the
+   brand only decides which lines are on the paper.
+   ============================================================ */
+router.get("/purchase-order/:id", (req, res) => {
+  const po = db.prepare("SELECT * FROM purchase_orders WHERE id = ?").get(req.params.id);
+  if (!po) return res.status(404).json({ error: "Purchase Order not found." });
+
+  const items = db.prepare(`
+    SELECT poi.*,
+           CASE WHEN COALESCE(NULLIF(TRIM(poi.size_label),''), '') <> ''
+                THEN poi.size_label ELSE COALESCE(ps.label,'') END AS size_label
+      FROM purchase_order_items poi
+      LEFT JOIN product_sizes ps ON ps.id = poi.size_id
+     WHERE poi.po_id = ?
+     ORDER BY CASE WHEN COALESCE(poi.brand,'') = '' THEN 1 ELSE 0 END,
+              poi.brand COLLATE NOCASE, poi.id`).all(po.id);
+
+  /* The names the sheet prints. Resolved here rather than trusting the
+     query string, so a link cannot put someone else's customer on a
+     purchase order. */
+  const nameOf = id => {
+    if (!id) return null;
+    const c = db.prepare("SELECT name FROM customers WHERE id = ?").get(id);
+    return c ? c.name : null;
+  };
+  const so = po.so_id ? db.prepare("SELECT so_no FROM sales_orders WHERE id = ?").get(po.so_id) : null;
+  const full = {
+    ...po,
+    against_customer_name: nameOf(po.against_customer_id),
+    so_no: so ? so.so_no : null,
+    items: items.map(it => ({ ...it, against_customer_name: nameOf(it.against_customer_id) || nameOf(po.against_customer_id) }))
+  };
+
+  const brand = (req.query.brand || "").trim() || null;
+  if (brand) {
+    const has = items.some(it => ((it.brand || "").trim() || "Other") === brand);
+    if (!has) return res.status(400).json({ error: `Nothing on this order is from ${brand}.` });
+  }
+
+  const supplier = po.supplier_id
+    ? db.prepare("SELECT * FROM suppliers WHERE id = ?").get(po.supplier_id)
+    : null;
+
+  let pdf;
+  try {
+    pdf = buildPurchaseOrderPdf(full, getSettingsRow(), supplier, { brand });
+  } catch (err) {
+    return res.status(500).json({ error: "Could not generate the PDF: " + err.message });
+  }
+
+  const safe = s => String(s || "").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  const name = `${safe(po.po_no)}${brand ? "-" + safe(brand) : ""}.pdf`;
+
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `inline; filename="${name}"`);
+  res.setHeader("Content-Length", pdf.length);
+  res.send(pdf);
+});
+
 router.get("/jobs/:id", (req, res) => {
   const job = printer.getJob(req.params.id);
   if (!job) return res.status(404).json({ error: "Print job not found." });

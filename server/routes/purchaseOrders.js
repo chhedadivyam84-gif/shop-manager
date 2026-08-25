@@ -133,9 +133,14 @@ function lineCustomerId(raw, headerCustomerId) {
 
 function serialize(po) {
   const items = db.prepare(`
-    SELECT * FROM purchase_order_items WHERE po_id = ?
-     ORDER BY CASE WHEN COALESCE(brand,'') = '' THEN 1 ELSE 0 END,
-              brand COLLATE NOCASE, id`).all(po.id);
+    SELECT poi.*,
+           CASE WHEN COALESCE(NULLIF(TRIM(poi.size_label),''), '') <> ''
+                THEN poi.size_label ELSE COALESCE(ps.label,'') END AS size_label
+      FROM purchase_order_items poi
+      LEFT JOIN product_sizes ps ON ps.id = poi.size_id
+     WHERE poi.po_id = ?
+     ORDER BY CASE WHEN COALESCE(poi.brand,'') = '' THEN 1 ELSE 0 END,
+              poi.brand COLLATE NOCASE, poi.id`).all(po.id);
 
   /* Names, not just ids. Every screen and both WhatsApp messages need
      them, and four of them re-querying is four chances to disagree. */

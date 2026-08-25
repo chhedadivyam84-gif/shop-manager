@@ -161,6 +161,21 @@ router.put("/print-prefs", requireRole("owner"), (req, res) => {
  */
 const LOGO_MAX_BYTES = 400 * 1024;
 
+/* The covering note that goes above a purchase order on WhatsApp.
+
+   Capped rather than unlimited: this is a greeting, and a message long
+   enough to push the order itself off a phone screen defeats the point
+   of sending it. Blank restores the built-in wording. */
+router.put("/po-wa-template", requireRole("owner"), (req, res) => {
+  const t = String(req.body.template == null ? "" : req.body.template);
+  if (t.length > 1000) {
+    return res.status(400).json({ error: "That message is too long — keep it under 1000 characters." });
+  }
+  db.prepare("UPDATE settings SET po_wa_template = ? WHERE id = 1").run(t.trim());
+  logAction(req, "settings.poWaTemplate", t.trim() ? "set" : "cleared");
+  res.json({ ok: true, template: t.trim() });
+});
+
 router.put("/logo", requireRole("owner"), (req, res) => {
   const { logo } = req.body;
 

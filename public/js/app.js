@@ -9187,6 +9187,9 @@ async function renderPoReport(body){
     <div class="muted" style="font-size:11.5px;margin-bottom:8px;">
       Salesman → party → sales order → purchase order → supplier → goods
     </div>
+    <div class="muted" style="font-size:11px;margin:-4px 0 8px;">
+      Rows that name an order open it — from there you can edit, cancel or delete it.
+    </div>
     <div class="chip-row" id="po-report-views" style="margin-bottom:10px;">
       ${PO_REPORT_VIEWS.map(([k,l])=>`<button class="chip ${k===state.poReportView?"selected":""}" data-po-report="${k}">${l}</button>`).join("")}
     </div>
@@ -9220,13 +9223,30 @@ function poBarRows(rows, valueKey, subLine){
 }
 
 /** A plain table that scrolls sideways inside itself on a phone. */
-function poTable(head, rows, cells){
+/** A plain table that scrolls sideways inside itself on a phone.
+ *
+ *  Pass `openId` and each row becomes a way into the order it names, so
+ *  the report can hand the shop straight to the thing it is reporting on
+ *  rather than leaving them to hunt for it. */
+function poTable(head, rows, cells, openId){
   if(!rows.length) return `<div class="empty-hint">Nothing in this period.</div>`;
   return `<div style="overflow-x:auto;">
     <table class="rep-table" style="width:100%;border-collapse:collapse;font-size:11.5px;white-space:nowrap;">
       <thead><tr>${head.map(h=>`<th style="text-align:left;padding:5px 8px;border-bottom:1px solid var(--border);">${escapeHtml(h)}</th>`).join("")}</tr></thead>
-      <tbody>${rows.map(r=>`<tr>${cells(r).map(c=>`<td style="padding:5px 8px;border-bottom:1px solid var(--border);">${c}</td>`).join("")}</tr>`).join("")}</tbody>
+      <tbody>${rows.map(r=>{
+        const id = openId ? openId(r) : null;
+        return `<tr${id ? ` data-po-open="${escapeHtml(id)}" style="cursor:pointer;"` : ""}>` +
+          cells(r).map(c=>`<td style="padding:5px 8px;border-bottom:1px solid var(--border);">${c}</td>`).join("") +
+        `</tr>`;
+      }).join("")}</tbody>
     </table></div>`;
+}
+
+/** Wire whatever rows in `box` name an order. */
+function wirePoOpeners(box){
+  box.querySelectorAll("[data-po-open]").forEach(el => el.addEventListener("click", ()=>{
+    openPoDetail(el.dataset.poOpen);
+  }));
 }
 
 const poQty = n => Pricing.trimNum(round2(Number(n) || 0));
@@ -9259,7 +9279,8 @@ const PO_REPORT_RENDERERS = {
         poTable(["PO","Date","Party","Sales Order","Supplier","Status","Value"], list, r => [
           escapeHtml(r.po_no), r.date, escapeHtml(r.party||"—"), escapeHtml(r.so_no||"—"),
           escapeHtml(r.supplier||"—"), escapeHtml(r.status), fmt(r.value)
-        ]);
+        ], r => r.id);
+      wirePoOpeners(box);
     }));
   },
 
@@ -9300,7 +9321,8 @@ const PO_REPORT_RENDERERS = {
         poQty(r.qty), poQty(r.received_qty),
         `<b style="color:var(--danger);">${poQty(r.pending)}</b>`,
         escapeHtml(r.supplier||"—")
-      ]);
+      ], r => r.po_id);
+    wirePoOpeners(into);
   },
 
   async completed(into){
@@ -9308,7 +9330,8 @@ const PO_REPORT_RENDERERS = {
     into.innerHTML = poTable(["PO","Date","Party","Salesman","Supplier","Value"], rows, r => [
       escapeHtml(r.po_no), r.date, escapeHtml(r.party||"—"),
       escapeHtml(r.salesman||"—"), escapeHtml(r.supplier||"—"), fmt(r.value)
-    ]);
+    ], r => r.id);
+    wirePoOpeners(into);
   },
 
   async date(into){
@@ -12185,7 +12208,10 @@ async function openPoDetail(poId){
   const canApprove = ["Draft","Pending"].includes(po.status);
   const canConvert = po.status === "Approved";
   const canClose = !["Completed","Cancelled"].includes(po.status);
-  const canDelete = po.status === "Draft";
+  /* Matching the server: a draft is anyone's to discard, anything further
+     is the owner's call, and an order already made into a Purchase Entry
+     is nobody's — the stock and the supplier's account moved on it. */
+  const canDelete = !po.converted_purchase_id && (po.status === "Draft" || isOwner());
   sheet.innerHTML = `
     <div class="sheet-handle"></div>
     <button class="sheet-close" data-sheetclose>✕</button>
@@ -12252,7 +12278,7 @@ async function openPoDetail(poId){
       ${escapeHtml(PO_NO_EDIT_BECAUSE[po.status])}
     </div>`}
     ${canClose ? `<div style="margin-top:12px;text-align:center;"><a href="#" id="close-po-link" class="btn-danger-link">Close / Cancel this order</a></div>` : ""}
-    ${canDelete ? `<div style="margin-top:8px;text-align:center;"><a href="#" id="delete-po-link" class="btn-danger-link">Delete this draft</a></div>` : ""}
+    ${canDelete ? `<div style="margin-top:8px;text-align:center;"><a href="#" id="delete-po-link" class="btn-danger-link">${po.status === "Draft" ? "Delete this draft" : "Delete this order"}</a></div>` : ""}
   `;
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
   const editBtn = sheet.querySelector("#edit-po-btn");
@@ -12303,11 +12329,13 @@ async function openPoDetail(poId){
   const deleteLink = sheet.querySelector("#delete-po-link");
   if(deleteLink) deleteLink.addEventListener("click", async (e)=>{
     e.preventDefault();
-    if(confirm(`Delete this draft permanently? This can't be undone.`)){
+    /* The confirmation names the order. "Delete this draft?" on a screen
+       showing four orders is not a question anybody can answer safely. */
+    if(confirm(`Delete ${po.po_no} permanently? This can't be undone.`)){
       try{
         await api("DELETE", `/purchase-orders/${po.id}`);
         closeAllSheets();
-        toast("Draft deleted.", "ok");
+        toast(`${po.po_no} deleted.`, "ok");
       }catch(err){ toast(err.message); }
     }
   });

@@ -730,8 +730,22 @@ router.post("/:id/receive", (req, res) => {
 router.delete("/:id", (req, res) => {
   const po = db.prepare("SELECT * FROM purchase_orders WHERE id = ?").get(req.params.id);
   if (!po) return res.status(404).json({ error: "Purchase Order not found." });
-  if (po.status !== "Draft") {
-    return res.status(400).json({ error: "Only a Draft Purchase Order can be deleted. Use Close/Cancel for others." });
+  /* A converted order is the one thing that must not be deleted whoever
+     asks. Converting it moved stock onto the racks and put the amount on
+     the supplier's account; the purchase entry that did so points back
+     here. Deleting the order leaves that entry pointing at nothing, and
+     nothing about the stock or the money is undone by it. Cancel is the
+     action for an order that should not have been placed. */
+  if (po.converted_purchase_id) {
+    return res.status(400).json({
+      error: "This order has already been made into a Purchase Entry, so it can't be deleted. Cancel it instead."
+    });
+  }
+
+  /* Otherwise the same rule quotations already use: a draft is anyone's
+     to discard, anything further is the owner's call. */
+  if (po.status !== "Draft" && !(req.session && req.session.role === "owner")) {
+    return res.status(403).json({ error: "Only the owner can delete a Purchase Order that isn't a Draft." });
   }
   db.prepare("DELETE FROM purchase_orders WHERE id = ?").run(po.id);
   logAction(req, "po.delete", `${po.po_no}`);

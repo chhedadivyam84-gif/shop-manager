@@ -345,7 +345,93 @@ function startSchedule() {
   setInterval(() => kick("scheduled"), intervalMs).unref?.();
 }
 
+/* ------------------------------------------------------------
+   WHAT IS IN THE BUCKET, AND REMOVING IT
+
+   Rotation happens automatically, but the shop should be able to look in the
+   cupboard itself and throw out what it does not want. Storage runs out on a
+   Sunday, and waiting for the next scheduled tidy-up is no answer.
+
+   Grouped by RUN rather than by file: one backup is a database file plus its
+   registry, and deleting half of a pair leaves a backup that cannot restore.
+   ------------------------------------------------------------ */
+async function listCloud() {
+  const cfg = cloudConfig();
+  if (!cfg.enabled) return { enabled: false, runs: [], totalBytes: 0 };
+
+  const res = await fetch(`${cfg.url}/storage/v1/object/list/${cfg.bucket}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${cfg.key}`, apikey: cfg.key, "Content-Type": "application/json" },
+    body: JSON.stringify({ prefix: "", limit: 5000, sortBy: { column: "name", order: "desc" } }),
+    signal: AbortSignal.timeout(30000)
+  });
+  if (!res.ok) throw new Error(`Supabase said ${res.status}`);
+
+  const runs = new Map();
+  for (const f of await res.json()) {
+    const name = f && f.name;
+    if (!name || !name.startsWith("shop-")) continue;
+    const stamp = stampOf(name);
+    if (!stamp) continue;
+    const size = (f.metadata && f.metadata.size) || 0;
+    if (!runs.has(stamp)) runs.set(stamp, { stamp, files: [], bytes: 0, at: null });
+    const r = runs.get(stamp);
+    r.files.push(name);
+    r.bytes += size;
+    // The stamp is the time it was taken; parsed here so the browser need not.
+    const m = /^(d{4})(d{2})(d{2})-(d{2})(d{2})(d{2})$/.exec(stamp);
+    if (m) r.at = Date.parse(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}`);
+  }
+
+  const list = [...runs.values()].sort((a, b) => (b.at || 0) - (a.at || 0));
+  return {
+    enabled: true,
+    bucket: cfg.bucket,
+    runs: list,
+    totalBytes: list.reduce((t, r) => t + r.bytes, 0)
+  };
+}
+
+/**
+ * Deletes whole runs, by stamp.
+ *
+ * The newest run is refused outright, whatever is asked for. Deleting the only
+ * copy the app would restore from is not a decision anyone means to make, and
+ * on a host that wipes its disk it is the difference between an inconvenience
+ * and losing the shop's books.
+ */
+async function deleteCloudRuns(stamps) {
+  const cfg = cloudConfig();
+  if (!cfg.enabled) throw new Error("Cloud backup is not set up.");
+  if (!Array.isArray(stamps) || !stamps.length) return { deleted: 0, files: 0 };
+
+  const current = await listCloud();
+  if (!current.runs.length) return { deleted: 0, files: 0 };
+
+  const newest = current.runs[0].stamp;
+  const asked = new Set(stamps.map(String));
+  if (asked.has(newest)) asked.delete(newest);
+  if (!asked.size) return { deleted: 0, files: 0, refusedNewest: true };
+
+  const doomed = current.runs.filter(r => asked.has(r.stamp));
+  const files = doomed.flatMap(r => r.files);
+  if (!files.length) return { deleted: 0, files: 0 };
+
+  const del = await fetch(`${cfg.url}/storage/v1/object/${cfg.bucket}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${cfg.key}`, apikey: cfg.key, "Content-Type": "application/json" },
+    body: JSON.stringify({ prefixes: files }),
+    signal: AbortSignal.timeout(60000)
+  });
+  if (!del.ok) throw new Error(`Supabase said ${del.status}`);
+
+  const freed = doomed.reduce((t, r) => t + r.bytes, 0);
+  console.log(`[backup] owner deleted ${doomed.length} backup(s), ${files.length} file(s)`);
+  return { deleted: doomed.length, files: files.length, freedBytes: freed,
+           refusedNewest: stamps.map(String).includes(newest) };
+}
+
 module.exports = {
-  runBackup, status, snapshotForDownload, startSchedule,
+  runBackup, status, snapshotForDownload, startSchedule, listCloud, deleteCloudRuns,
   cloudConfig, uploadToCloud, listLocal, BACKUP_DIR
 };

@@ -3,6 +3,7 @@ const fs = require("fs");
 const backup = require("../backup");
 const db = require("../db");
 const { logAction } = require("../util");
+const { requireRole } = require("../auth");
 
 const router = express.Router();
 
@@ -48,6 +49,33 @@ router.get("/download", (req, res) => {
     if (err && !res.headersSent) res.status(500).end();
   });
   logAction(req, "backup.download", fname);
+});
+
+/* ------------------------------------------------------------
+   THE CLOUD BUCKET, AND CLEARING IT
+
+   Owner only. Deleting backups is not routine work, and on a host that wipes
+   its own disk these copies are the only thing standing between a restart and
+   an empty shop.
+   ------------------------------------------------------------ */
+router.get("/cloud", requireRole("owner"), async (req, res) => {
+  try {
+    res.json(await backup.listCloud());
+  } catch (e) {
+    res.status(502).json({ error: "Could not read the backup store: " + e.message });
+  }
+});
+
+router.post("/cloud/delete", requireRole("owner"), async (req, res) => {
+  const stamps = Array.isArray(req.body.stamps) ? req.body.stamps : [];
+  if (!stamps.length) return res.status(400).json({ error: "Choose at least one backup." });
+  try {
+    const out = await backup.deleteCloudRuns(stamps);
+    logAction(req, "backup.cloud.delete", `${out.deleted} backup(s)`);
+    res.json(out);
+  } catch (e) {
+    res.status(502).json({ error: "Could not delete: " + e.message });
+  }
 });
 
 module.exports = router;

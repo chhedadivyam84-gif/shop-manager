@@ -869,7 +869,7 @@ async function switchTab(tab){
   // brought into view — otherwise switching from a tile leaves it off-screen.
   const activeBtn = document.querySelector(`nav.bottom .tab[data-tab="${tab}"]`);
   if(activeBtn && activeBtn.scrollIntoView) activeBtn.scrollIntoView({ block:"nearest", inline:"nearest" });
-  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",quotation:"Quotation",so:"Sales Order",pquery:"Product Query",accounts:"Accounts",otherledger:(state.olKind==="income"?"Other Income":"Other Expenses"),fyear:"Financial Year",fyclose:"Financial Year",printmgr:"Print Management",outstanding:"Outstanding",ewb:"E-Way Bill",delivery:"Delivery & Dispatch",alerts:"Reminders",notes:"Notepad"};
+  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",quotation:"Quotation",so:"Sales Order",pquery:"Product Query",accounts:"Accounts",otherledger:(state.olKind==="income"?"Other Income":"Other Expenses"),fyear:"Financial Year",fyclose:"Financial Year",printmgr:"Print Management",outstanding:"Outstanding",ewb:"E-Way Bill",delivery:"Delivery & Dispatch",alerts:"Reminders",notes:"Notepad",backups:"Cloud Backups"};
   document.getElementById("hdr-sub").textContent = subMap[tab];
   document.getElementById("hdr-main").textContent = tab==="home" ? greeting() : subMap[tab];
   if(tab==="billing") await renderBilling();
@@ -894,6 +894,7 @@ async function switchTab(tab){
   if(tab==="delivery") await renderDelivery();
   if(tab==="alerts") await renderAlerts();
   if(tab==="notes") await renderNotes();
+  if(tab==="backups") await renderBackups();
 }
 
 async function renderAll(){
@@ -1525,7 +1526,8 @@ const MENU = [
   ]],
   ["Tools", [
     ["alerts",      "&#128276;", "Reminders"],
-    ["notes",       "&#128221;", "Notepad"]
+    ["notes",       "&#128221;", "Notepad"],
+    ["backups",     "&#128190;", "Cloud Backups"],
   ]]
 ];
 
@@ -1555,6 +1557,125 @@ function openMenu(){
   });
   showSheet("sheet-menu");
 }
+
+/* ============================================================
+   CLOUD BACKUPS
+
+   What is actually in the Supabase bucket, and a way to clear out what is not
+   wanted — because storage runs out on a Sunday, and waiting for the next
+   automatic tidy-up is no answer.
+
+   Whole backups are removed, never single files: one backup is a database
+   plus its registry, and deleting half a pair leaves something that cannot
+   restore. The newest is never offered, because it is the one the app would
+   rebuild itself from.
+   ============================================================ */
+const BK = { runs: [], picked: new Set() };
+
+const bkSize = b => b >= 1048576 ? (b / 1048576).toFixed(1) + " MB"
+                  : b >= 1024 ? Math.round(b / 1024) + " KB" : b + " B";
+
+async function renderBackups(){
+  const body = document.getElementById("backups-body");
+  body.innerHTML = `<p class="muted" style="font-size:13px;">Reading the backup store…</p>`;
+
+  let r;
+  try{ r = await api("GET", "/backup/cloud"); }
+  catch(e){
+    body.innerHTML = `<div class="card" style="margin-top:0;"><div class="row-title">Couldn't read it</div>
+      <div class="row-sub">${escapeHtml(e.message)}</div></div>`;
+    return;
+  }
+
+  if(!r.enabled){
+    body.innerHTML = `<div class="card" style="margin-top:0;">
+      <div class="row-title">Cloud backup is off</div>
+      <div class="row-sub">Set SUPABASE_URL and SUPABASE_KEY where the app runs, and every
+        backup will be copied to your bucket.</div></div>`;
+    return;
+  }
+
+  BK.runs = r.runs || [];
+  BK.picked.clear();
+
+  if(!BK.runs.length){
+    body.innerHTML = `<div class="card" style="margin-top:0;">
+      <div class="row-title">Nothing in the bucket yet</div>
+      <div class="row-sub">The next backup will appear here.</div></div>`;
+    return;
+  }
+
+  const newest = BK.runs[0].stamp;
+  body.innerHTML = `
+    <div class="card" style="margin-top:0;">
+      <div class="row-title">${BK.runs.length} backup${BK.runs.length===1?"":"s"} · ${bkSize(r.totalBytes)}</div>
+      <div class="row-sub">In "${escapeHtml(r.bucket)}". Each one is a complete copy of the shop —
+        deleting an old backup never deletes an old bill.</div>
+      <div class="chip-row" style="margin-top:8px;">
+        <button class="chip" data-bk-pick="week">Older than a week</button>
+        <button class="chip" data-bk-pick="month">Older than a month</button>
+        <button class="chip" data-bk-pick="none">Clear selection</button>
+      </div>
+    </div>
+    <div id="bk-list"></div>
+    <button class="btn btn-outline" id="bk-delete" style="margin-top:10px;color:var(--bad);" disabled>
+      Delete selected
+    </button>`;
+
+  const list = document.getElementById("bk-list");
+  list.innerHTML = BK.runs.map(run => {
+    const when = run.at ? new Date(run.at).toLocaleString("en-IN") : run.stamp;
+    const isNewest = run.stamp === newest;
+    return `<label class="card" style="display:flex;gap:11px;align-items:flex-start;margin-top:0;margin-bottom:6px;${isNewest?"opacity:.65;":""}">
+      <input type="checkbox" data-bk="${escapeHtml(run.stamp)}" ${isNewest?"disabled":""}
+             style="margin-top:3px;width:18px;height:18px;flex:none;">
+      <span style="min-width:0;flex:1;">
+        <span class="row-title">${escapeHtml(when)}</span>
+        <span class="row-sub">${bkSize(run.bytes)} · ${run.files.length} file${run.files.length===1?"":"s"}${isNewest?" · newest, always kept":""}</span>
+      </span></label>`;
+  }).join("");
+
+  const btn = document.getElementById("bk-delete");
+  const paint = () => {
+    const n = BK.picked.size;
+    const bytes = BK.runs.filter(x => BK.picked.has(x.stamp)).reduce((t,x)=>t+x.bytes,0);
+    btn.disabled = !n;
+    btn.textContent = n ? `Delete ${n} backup${n===1?"":"s"} · frees ${bkSize(bytes)}` : "Delete selected";
+  };
+
+  list.querySelectorAll("[data-bk]").forEach(c =>
+    c.addEventListener("change", () => {
+      if(c.checked) BK.picked.add(c.dataset.bk); else BK.picked.delete(c.dataset.bk);
+      paint();
+    }));
+
+  body.querySelectorAll("[data-bk-pick]").forEach(b =>
+    b.addEventListener("click", () => {
+      const mode = b.dataset.bkPick;
+      const cut = Date.now() - (mode === "week" ? 7 : 30) * 86400000;
+      BK.picked.clear();
+      list.querySelectorAll("[data-bk]").forEach(c => {
+        const run = BK.runs.find(x => x.stamp === c.dataset.bk);
+        const pick = mode !== "none" && !c.disabled && run && run.at && run.at < cut;
+        c.checked = !!pick;
+        if(pick) BK.picked.add(run.stamp);
+      });
+      paint();
+    }));
+
+  btn.addEventListener("click", async () => {
+    const n = BK.picked.size;
+    if(!n) return;
+    if(!confirm(`Delete ${n} backup${n===1?"":"s"}? The newest is always kept.`)) return;
+    btn.disabled = true;
+    try{
+      const out = await api("POST", "/backup/cloud/delete", { stamps: [...BK.picked] });
+      toast(`${out.deleted} backup(s) deleted, ${bkSize(out.freedBytes || 0)} freed.`, "ok");
+      renderBackups();
+    }catch(e){ toast(e.message); btn.disabled = false; }
+  });
+}
+
 
 /* ============================================================
    REMINDERS

@@ -549,7 +549,7 @@ router.get("/salesman-wise", (req, res) => {
     SELECT COALESCE(NULLIF(TRIM(delivery_man),''), 'Unassigned') AS label,
       COALESCE(SUM(total),0) AS value, COUNT(*) AS invoices
     FROM invoices WHERE voided = 0 AND doc_type = 'invoice'${range.sql("date")}
-    GROUP BY label ORDER BY value DESC
+    GROUP BY 1 ORDER BY value DESC
   `).all(...range.params());
   res.json(rows);
 });
@@ -564,7 +564,7 @@ router.get("/brand-wise", (req, res) => {
     JOIN invoices i ON i.id = ii.invoice_id
     LEFT JOIN products p ON p.id = ii.product_id
     WHERE i.voided = 0 AND i.doc_type = 'invoice'${range.sql("i.date")}
-    GROUP BY label ORDER BY value DESC
+    GROUP BY 1 ORDER BY value DESC
   `).all(...range.params());
   res.json(rows);
 });
@@ -1248,7 +1248,7 @@ function buildReportRows(req) {
     rows = [["Salesperson", "Total Sales", "Invoices"]];
     db.prepare(`
       SELECT COALESCE(NULLIF(TRIM(delivery_man),''), 'Unassigned') AS label, COALESCE(SUM(total),0) AS value, COUNT(*) AS invoices
-      FROM invoices WHERE voided = 0 AND doc_type = 'invoice'${range.sql("date")} GROUP BY label ORDER BY value DESC
+      FROM invoices WHERE voided = 0 AND doc_type = 'invoice'${range.sql("date")} GROUP BY 1 ORDER BY value DESC
     `).all(...range.params()).forEach(r => rows.push([r.label, round2(r.value), r.invoices]));
   } else if (type === "Brand") {
     filename = "brand-wise-report";
@@ -1477,6 +1477,10 @@ const PO_LINE_SOURCE = `
   LEFT JOIN suppliers s ON s.id = po.supplier_id
   LEFT JOIN customers c ON c.id = COALESCE(poi.against_customer_id, po.against_customer_id)
   LEFT JOIN sales_orders so ON so.id = po.so_id
+  -- product_sizes carries a column called label too, which is why every
+  -- report below groups by output position: a bare GROUP BY label would
+  -- bind to that column rather than to the name being grouped.
+  LEFT JOIN product_sizes ps ON ps.id = poi.size_id
   WHERE po.status <> 'Cancelled'`;
 
 const poValue = "poi.qty * poi.rate - poi.discount_amount";
@@ -1493,7 +1497,7 @@ router.get("/po-party-wise", (req, res) => {
            COALESCE(SUM(MAX(0, poi.qty - poi.received_qty)),0) AS pending,
            COALESCE(SUM(${poValue}),0) AS value
     ${PO_LINE_SOURCE}${range.sql("po.date")}
-    GROUP BY label ORDER BY value DESC
+    GROUP BY 1 ORDER BY value DESC
   `).all(...range.params());
   res.json(rows);
 });
@@ -1509,7 +1513,7 @@ router.get("/po-salesman-wise", (req, res) => {
            COALESCE(SUM(MAX(0, poi.qty - poi.received_qty)),0) AS pending,
            COALESCE(SUM(${poValue}),0) AS value
     ${PO_LINE_SOURCE}${range.sql("po.date")}
-    GROUP BY label ORDER BY value DESC
+    GROUP BY 1 ORDER BY value DESC
   `).all(...range.params());
   res.json(rows);
 });
@@ -1545,7 +1549,7 @@ router.get("/po-supplier-wise", (req, res) => {
            COALESCE(SUM(MAX(0, poi.qty - poi.received_qty)),0) AS pending,
            COALESCE(SUM(${poValue}),0) AS value
     ${PO_LINE_SOURCE}${range.sql("po.date")}
-    GROUP BY label ORDER BY value DESC
+    GROUP BY 1 ORDER BY value DESC
   `).all(...range.params());
   res.json(rows);
 });
@@ -1560,7 +1564,7 @@ router.get("/po-brand-wise", (req, res) => {
            COALESCE(SUM(MAX(0, poi.qty - poi.received_qty)),0) AS pending,
            COALESCE(SUM(${poValue}),0) AS value
     ${PO_LINE_SOURCE}${range.sql("po.date")}
-    GROUP BY label ORDER BY value DESC
+    GROUP BY 1 ORDER BY value DESC
   `).all(...range.params());
   res.json(rows);
 });
@@ -1571,7 +1575,7 @@ router.get("/po-product-wise", (req, res) => {
   const rows = db.prepare(`
     SELECT poi.name AS label,
            COALESCE(NULLIF(TRIM(poi.brand),''),'') AS brand,
-           COALESCE(NULLIF(TRIM(poi.size_label),''),'') AS size,
+           COALESCE(NULLIF(TRIM(poi.size_label),''), ps.label, '') AS size,
            COUNT(DISTINCT po.id) AS orders,
            COALESCE(SUM(poi.qty),0) AS qty,
            COALESCE(SUM(poi.received_qty),0) AS received,

@@ -8991,6 +8991,7 @@ async function renderReport(){
     if(state.reportType==="Orders") return renderOrdersReport(body);
     if(state.reportType==="TaxInvoice") return renderTaxInvoiceReport(body);
     if(state.reportType==="PurchaseBill") return renderPurchaseBillReport(body);
+    if(state.reportType==="PurchaseOrders") return renderPoReport(body);
     if(state.reportType==="Salesman") return renderSalesmanReport(body);
     if(state.reportType==="Area") return renderAreaReport(body);
     if(state.reportType==="Party") return renderPartyReport(body);
@@ -9154,6 +9155,185 @@ async function renderPurchaseBillReport(body){
     el.addEventListener("click", ()=>openPurchaseDetail(el.dataset.openPurchase));
   });
 }
+/* ============================================================
+   PURCHASE ORDER REPORTS
+
+   Nine views of one chain, so they live under one report rather than nine
+   chips in a row that already runs off the side of a phone. The chip row
+   picks which question is being asked; the range picker above it already
+   decides over what period.
+
+   Every figure comes from the server's own line-level queries — nothing is
+   summed here — so the number on screen and the number in an export cannot
+   drift apart.
+   ============================================================ */
+const PO_REPORT_VIEWS = [
+  ["party",    "Party-wise"],
+  ["salesman", "Salesman-wise"],
+  ["supplier", "Supplier-wise"],
+  ["brand",    "Brand-wise"],
+  ["product",  "Product-wise"],
+  ["pending",  "Pending"],
+  ["completed","Completed"],
+  ["date",     "Date-wise"],
+  ["sovspo",   "Order vs PO"]
+];
+
+async function renderPoReport(body){
+  if(!state.poReportView) state.poReportView = "party";
+
+  body.innerHTML = `
+    <div style="font-weight:800;font-size:14px;">Purchase Orders</div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:8px;">
+      Salesman → party → sales order → purchase order → supplier → goods
+    </div>
+    <div class="chip-row" id="po-report-views" style="margin-bottom:10px;">
+      ${PO_REPORT_VIEWS.map(([k,l])=>`<button class="chip ${k===state.poReportView?"selected":""}" data-po-report="${k}">${l}</button>`).join("")}
+    </div>
+    <div id="po-report-body"><p class="muted" style="font-size:13px;">Loading…</p></div>`;
+
+  body.querySelectorAll("[data-po-report]").forEach(b => b.addEventListener("click", ()=>{
+    state.poReportView = b.dataset.poReport;
+    renderPoReport(body);
+  }));
+
+  const into = document.getElementById("po-report-body");
+  try{ await PO_REPORT_RENDERERS[state.poReportView](into); }
+  catch(e){ into.innerHTML = `<p class="muted" style="font-size:13px;">${escapeHtml(e.message)}</p>`; }
+}
+
+/* A bar chart of one labelled column. Used by the five "grouped by" views,
+   which differ only in what they group and what the second figure says. */
+function poBarRows(rows, valueKey, subLine){
+  if(!rows.length) return `<div class="empty-hint">Nothing in this period.</div>`;
+  const max = Math.max(1, ...rows.map(r => Number(r[valueKey]) || 0));
+  return rows.map(r => `
+    <div style="margin-bottom:10px;">
+      <div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;font-weight:700;margin-bottom:4px;">
+        <span style="min-width:0;overflow-wrap:anywhere;">${escapeHtml(r.label || "—")}</span>
+        <span style="white-space:nowrap;">${escapeHtml(subLine(r))}</span>
+      </div>
+      <div style="height:8px;background:var(--bg-outer);border-radius:100px;">
+        <div style="height:100%;width:${(Number(r[valueKey])||0)/max*100}%;background:var(--navy);border-radius:100px;"></div>
+      </div>
+    </div>`).join("");
+}
+
+/** A plain table that scrolls sideways inside itself on a phone. */
+function poTable(head, rows, cells){
+  if(!rows.length) return `<div class="empty-hint">Nothing in this period.</div>`;
+  return `<div style="overflow-x:auto;">
+    <table class="rep-table" style="width:100%;border-collapse:collapse;font-size:11.5px;white-space:nowrap;">
+      <thead><tr>${head.map(h=>`<th style="text-align:left;padding:5px 8px;border-bottom:1px solid var(--border);">${escapeHtml(h)}</th>`).join("")}</tr></thead>
+      <tbody>${rows.map(r=>`<tr>${cells(r).map(c=>`<td style="padding:5px 8px;border-bottom:1px solid var(--border);">${c}</td>`).join("")}</tr>`).join("")}</tbody>
+    </table></div>`;
+}
+
+const poQty = n => Pricing.trimNum(round2(Number(n) || 0));
+
+const PO_REPORT_RENDERERS = {
+  async party(into){
+    const rows = await api("GET","/reports/po-party-wise"+reportRangeQS());
+    into.innerHTML = `<div class="muted" style="font-size:11.5px;margin-bottom:8px;">What has been bought in for each customer, and what they are still waiting on.</div>` +
+      poBarRows(rows, "value", r =>
+        `${fmt(r.value)} · ${r.orders} PO${r.orders===1?"":"s"}` +
+        (r.pending > 0 ? ` · ${poQty(r.pending)} pending` : ""));
+  },
+
+  async salesman(into){
+    const rows = await api("GET","/reports/po-salesman-wise"+reportRangeQS());
+    into.innerHTML = `<div class="muted" style="font-size:11.5px;margin-bottom:8px;">Tap a name to see that salesman's own orders.</div>` +
+      poBarRows(rows, "value", r =>
+        `${fmt(r.value)} · ${r.orders} PO${r.orders===1?"":"s"} · ${r.parties} part${r.parties===1?"y":"ies"}`) +
+      `<div class="chip-row" style="margin-top:6px;">
+        ${rows.map(r=>`<button class="chip" data-po-sm="${escapeHtml(r.label)}">${escapeHtml(r.label)}</button>`).join("")}
+      </div>
+      <div id="po-sm-detail"></div>`;
+
+    into.querySelectorAll("[data-po-sm]").forEach(b => b.addEventListener("click", async ()=>{
+      into.querySelectorAll("[data-po-sm]").forEach(x=>x.classList.toggle("selected", x===b));
+      const box = document.getElementById("po-sm-detail");
+      box.innerHTML = `<p class="muted" style="font-size:12px;">Loading…</p>`;
+      const list = await api("GET","/reports/po-salesman-detail?salesman="+encodeURIComponent(b.dataset.poSm)+reportRangeQS(true));
+      box.innerHTML = `<div class="section-title">${escapeHtml(b.dataset.poSm)}</div>` +
+        poTable(["PO","Date","Party","Sales Order","Supplier","Status","Value"], list, r => [
+          escapeHtml(r.po_no), r.date, escapeHtml(r.party||"—"), escapeHtml(r.so_no||"—"),
+          escapeHtml(r.supplier||"—"), escapeHtml(r.status), fmt(r.value)
+        ]);
+    }));
+  },
+
+  async supplier(into){
+    const rows = await api("GET","/reports/po-supplier-wise"+reportRangeQS());
+    into.innerHTML = poBarRows(rows, "value", r =>
+      `${fmt(r.value)} · ${r.orders} PO${r.orders===1?"":"s"}` + (r.pending>0?` · ${poQty(r.pending)} pending`:""));
+  },
+
+  async brand(into){
+    const rows = await api("GET","/reports/po-brand-wise"+reportRangeQS());
+    into.innerHTML = poBarRows(rows, "value", r =>
+      `${fmt(r.value)} · ${poQty(r.qty)} ordered` + (r.pending>0?` · ${poQty(r.pending)} pending`:""));
+  },
+
+  async product(into){
+    const rows = await api("GET","/reports/po-product-wise"+reportRangeQS());
+    into.innerHTML = poTable(["Product","Brand","Size","Ordered","Received","Pending","Value"], rows, r => [
+      escapeHtml(r.label), escapeHtml(r.brand||"—"), escapeHtml(r.size||"—"),
+      poQty(r.qty), poQty(r.received),
+      r.pending > 0 ? `<b style="color:var(--danger);">${poQty(r.pending)}</b>` : "—",
+      fmt(r.value)
+    ]);
+  },
+
+  async pending(into){
+    const rows = await api("GET","/reports/po-pending"+reportRangeQS());
+    const total = rows.reduce((t,r)=>t+(Number(r.pending)||0), 0);
+    into.innerHTML =
+      `<div class="card" style="margin-top:0;margin-bottom:8px;">
+        <div class="row-title">${poQty(total)} still to come in</div>
+        <div class="row-sub">Across ${rows.length} line${rows.length===1?"":"s"}, oldest promise first.</div>
+      </div>` +
+      poTable(["Due","PO","Party","Salesman","Product","Ordered","Received","Pending","Supplier"], rows, r => [
+        escapeHtml(r.required_delivery_date || r.expected_delivery_date || r.date),
+        escapeHtml(r.po_no), escapeHtml(r.party||"—"), escapeHtml(r.salesman||"—"),
+        escapeHtml(r.name) + (r.brand?` <span class="muted">${escapeHtml(r.brand)}</span>`:""),
+        poQty(r.qty), poQty(r.received_qty),
+        `<b style="color:var(--danger);">${poQty(r.pending)}</b>`,
+        escapeHtml(r.supplier||"—")
+      ]);
+  },
+
+  async completed(into){
+    const rows = await api("GET","/reports/po-completed"+reportRangeQS());
+    into.innerHTML = poTable(["PO","Date","Party","Salesman","Supplier","Value"], rows, r => [
+      escapeHtml(r.po_no), r.date, escapeHtml(r.party||"—"),
+      escapeHtml(r.salesman||"—"), escapeHtml(r.supplier||"—"), fmt(r.value)
+    ]);
+  },
+
+  async date(into){
+    const rows = await api("GET","/reports/po-date-wise"+reportRangeQS());
+    into.innerHTML = poBarRows(rows, "value", r => `${fmt(r.value)} · ${r.orders} PO${r.orders===1?"":"s"}`);
+  },
+
+  async sovspo(into){
+    const rows = await api("GET","/reports/po-so-vs-po"+reportRangeQS());
+    into.innerHTML =
+      `<div class="muted" style="font-size:11.5px;margin-bottom:8px;">
+        What was promised against what was bought in. A blank PO column is a sales order nobody ordered material for.
+      </div>` +
+      poTable(["Sales Order","Date","Party","Ordered","On PO","Received","Short","Purchase Orders"], rows, r => {
+        const short = round2((Number(r.ordered_qty)||0) - (Number(r.po_qty)||0));
+        return [
+          escapeHtml(r.so_no), r.date, escapeHtml(r.party||"—"),
+          poQty(r.ordered_qty), poQty(r.po_qty), poQty(r.received_qty),
+          short > 0.0001 ? `<b style="color:var(--danger);">${poQty(short)}</b>` : "—",
+          escapeHtml(r.po_nos || "—")
+        ];
+      });
+  }
+};
+
 async function renderSalesmanReport(body){
   const rows = await api("GET","/reports/salesman-wise"+reportRangeQS());
   const max = Math.max(1, ...rows.map(r=>r.value));

@@ -1572,7 +1572,8 @@ function openMenu(){
    ============================================================ */
 const BK = { runs: [], picked: new Set() };
 
-const bkSize = b => b >= 1048576 ? (b / 1048576).toFixed(1) + " MB"
+const bkSize = b => b >= 1073741824 ? (b / 1073741824).toFixed(b >= 10737418240 ? 0 : 1) + " GB"
+                  : b >= 1048576 ? (b / 1048576).toFixed(1) + " MB"
                   : b >= 1024 ? Math.round(b / 1024) + " KB" : b + " B";
 
 async function renderBackups(){
@@ -1590,8 +1591,8 @@ async function renderBackups(){
   if(!r.enabled){
     body.innerHTML = `<div class="card" style="margin-top:0;">
       <div class="row-title">Cloud backup is off</div>
-      <div class="row-sub">Set SUPABASE_URL and SUPABASE_KEY where the app runs, and every
-        backup will be copied to your bucket.</div></div>`;
+      <div class="row-sub">No off-site store is configured where the app runs, so
+        backups stay on this machine only.</div></div>`;
     return;
   }
 
@@ -1609,6 +1610,7 @@ async function renderBackups(){
   body.innerHTML = `
     <div class="card" style="margin-top:0;">
       <div class="row-title">${BK.runs.length} backup${BK.runs.length===1?"":"s"} · ${bkSize(r.totalBytes)}</div>
+      ${r.limit ? `<div class="row-sub" id="bk-usage" style="color:${r.totalBytes/r.limit>=0.9?"var(--bad)":r.totalBytes/r.limit>=0.7?"var(--gold)":""};">${escapeHtml(r.label||"The store")} is ${(r.totalBytes/r.limit*100).toFixed(1)}% full — ${bkSize(r.totalBytes)} of ${bkSize(r.limit)}</div>` : ""}
       <div class="row-sub">In "${escapeHtml(r.bucket)}". Each one is a complete copy of the shop —
         deleting an old backup never deletes an old bill.</div>
       <div class="chip-row" style="margin-top:8px;">

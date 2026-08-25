@@ -11,6 +11,7 @@
    ============================================================ */
 const express = require("express");
 const db = require("../db");
+const backup = require("../backup");
 
 const router = express.Router();
 
@@ -130,6 +131,32 @@ router.get("/", (req, res) => {
   } catch { /* older schema */ }
   add("stock-out", "Products showing no stock", "info",
     lowStock.map(r => ({ id: r.id, line: r.name, sub: "nothing on the racks", goto: "inventory" })));
+
+
+  /* ---- the backup store filling up --------------------------------------
+
+     Asked for by the shop after a full bucket took the app down: warn while
+     there is still time to do something, not once uploads have started
+     failing. Read from the measurement rotation already took — no network
+     call happens while this screen is drawn. */
+  /* Owner only: the Backups screen it points at is owner only, and a warning
+     nobody at the counter can act on is just noise. */
+  const usage = req.session.role === "owner" ? backup.cloudUsage() : null;
+  if (usage && usage.limit) {
+    const pct = Math.round(usage.used * 100);
+    const mb = Math.round(usage.bytes / 1048576);
+    const gb = (usage.limit / 1073741824).toFixed(usage.limit >= 1073741824 ? 0 : 1);
+    if (usage.used >= 0.7) {
+      add("backup-storage", "Backup storage is filling up", usage.used >= 0.9 ? "bad" : "warn", [{
+        id: "storage",
+        line: `${usage.label} is ${pct}% full — ${mb} MB of ${gb} GB`,
+        sub: usage.used >= 0.9
+          ? "Uploads stop when it is full. Clear old backups now."
+          : "Clear some old backups before it runs out.",
+        goto: "backups"
+      }]);
+    }
+  }
 
   res.json({
     generatedAt: Date.now(),

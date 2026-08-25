@@ -180,8 +180,9 @@ async function runBackup(trigger = "manual") {
     cloud = r;
   }
 
-  // Old runs are cleared from the bucket AFTER the new one is safely in it.
-  const cloudRemoved = cloud.ok ? await rotateCloud() : 0;
+  // Old runs are cleared from the bucket AFTER the new one is safely in it —
+  // but the bucket is measured either way, full or not.
+  const cloudRemoved = await rotateCloud(cloud.ok);
 
   const primary = written[0];
   lastRun = {
@@ -221,10 +222,45 @@ async function runBackup(trigger = "manual") {
  * restart, not enough to survive a night. */
 const KEEP_CLOUD = 96;
 
-async function rotateCloud() {
-  if (!cloudStore.configured()) return 0;
+/* What the off-site store is holding, measured whenever rotation runs anyway.
+ *
+ * Cached rather than fetched on demand: the Reminders screen reads this, and
+ * putting a network call in the path that draws a screen is how a slow bucket
+ * becomes a slow app. Rotation already lists every object, so the measurement
+ * is free.
+ *
+ * Free-tier ceilings, so the warning can be a fraction rather than a number
+ * nobody can place. */
+const FREE_LIMITS = { r2: 10 * 1024 * 1024 * 1024, supabase: 1024 * 1024 * 1024 };
+let lastCloudUsage = null;
+
+/** { bytes, limit, used, provider, label, at } or null if never measured. */
+function cloudUsage() { return lastCloudUsage; }
+
+async function rotateCloud(deleteStale) {
+  if (!cloudStore.configured()) { lastCloudUsage = null; return 0; }
   try {
-    const names = (await cloudStore.list()).map(f => f.name).filter(n => n.startsWith("shop-"));
+    const all = await cloudStore.list();
+
+    const d = cloudStore.describe();
+    const bytes = all.reduce((t, f) => t + (f.size || 0), 0);
+    const limit = FREE_LIMITS[d.provider] || 0;
+    lastCloudUsage = {
+      bytes, limit, provider: d.provider, label: d.label,
+      used: limit ? bytes / limit : 0,
+      files: all.length,
+      at: Date.now()
+    };
+    if (limit && bytes / limit >= 0.7) {
+      console.warn(`[backup] ${d.label} is ${Math.round(bytes / limit * 100)}% full ` +
+                   `(${(bytes / 1048576).toFixed(0)} MB of ${Math.round(limit / 1073741824)} GB)`);
+    }
+
+    /* Measuring is done. Clearing out is not: old copies are only safe to
+       remove once a newer one is definitely in the bucket. */
+    if (!deleteStale) return 0;
+
+    const names = all.map(f => f.name).filter(n => n.startsWith("shop-"));
     const stamps = [...new Set(names.map(stampOf).filter(Boolean))].sort().reverse();
     const stale = stamps.slice(KEEP_CLOUD);
     if (!stale.length) return 0;
@@ -233,7 +269,7 @@ async function rotateCloud() {
     if (!doomed.length) return 0;
 
     const gone = await cloudStore.remove(doomed);
-    console.log(`[backup] cleared ${gone} old file(s) from ${cloudStore.describe().label}`);
+    console.log(`[backup] cleared ${gone} old file(s) from ${d.label}`);
     return gone;
   } catch (e) {
     /* Never let tidying up break a backup. The snapshot is already uploaded;
@@ -324,14 +360,15 @@ async function listCloud() {
     const run = runs.get(st);
     run.files.push(f.name);
     run.bytes += f.size || 0;
-    const m = /^(d{4})(d{2})(d{2})-(d{2})(d{2})(d{2})$/.exec(st);
+    const m = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$/.exec(st);
     if (m) run.at = Date.parse(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}`);
   }
 
   const list = [...runs.values()].sort((a, b) => (b.at || 0) - (a.at || 0));
   return {
     enabled: true, bucket: d.bucket, provider: d.provider, label: d.label,
-    runs: list, totalBytes: list.reduce((t, x) => t + x.bytes, 0)
+    runs: list, totalBytes: list.reduce((t, x) => t + x.bytes, 0),
+    limit: FREE_LIMITS[d.provider] || 0
   };
 }
 
@@ -367,6 +404,6 @@ async function deleteCloudRuns(stamps) {
 }
 
 module.exports = {
-  runBackup, status, snapshotForDownload, startSchedule, listCloud, deleteCloudRuns,
+  runBackup, status, cloudUsage, rotateCloud, snapshotForDownload, startSchedule, listCloud, deleteCloudRuns,
   cloudConfig, uploadToCloud, listLocal, BACKUP_DIR
 };

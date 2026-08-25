@@ -212,9 +212,17 @@ function buildInvoicePdf(invoice, settings, customer, opts = {}) {
   const totalsBoxH = totalsRows.length * fs(4.6);
 
   const deliveryAddr = invoice.delivery_address || (customer && customer.address) || "";
+  /* Matches the on-screen rule in public/js/app.js: the delivery address is the
+     shop's own record and stays off the printed sheet unless "Print delivery
+     address" is ticked in Bill Print Settings. Reading the same stored
+     preference means the server PDF and the browser preview cannot disagree. */
+  let printDeliveryAddr = false;
+  try {
+    printDeliveryAddr = JSON.parse((settings && settings.print_prefs) || "{}").printDeliveryAddress === true;
+  } catch (e) { printDeliveryAddr = false; }
   const bottomLeftWidth = CONTENT_W * 0.58;
   const bottomLeftLines = [];
-  if (deliveryAddr) doc.splitTextToSize("Delivery Address: " + deliveryAddr, bottomLeftWidth - 6).forEach(l => bottomLeftLines.push(l));
+  if (deliveryAddr && printDeliveryAddr) doc.splitTextToSize("Delivery Address: " + deliveryAddr, bottomLeftWidth - 6).forEach(l => bottomLeftLines.push(l));
   if (invoice.remarks) doc.splitTextToSize("Remarks: " + invoice.remarks, bottomLeftWidth - 6).forEach(l => bottomLeftLines.push(l));
   if (showRate) doc.splitTextToSize("Amount in Words: " + Pricing.amountInWords(displayTotal), bottomLeftWidth - 6).forEach(l => bottomLeftLines.push(l));
   const bottomBoxH = Math.max(totalsBoxH, bottomLeftLines.length * fs(4) + 4) + 3;

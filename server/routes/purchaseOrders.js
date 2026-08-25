@@ -173,6 +173,18 @@ router.get("/", (req, res) => {
   res.json(rows);
 });
 
+/* The number this purchase order will get, WITHOUT taking it.
+
+   Reads the counter rather than allocating from it, the same way
+   purchases.js and quotations.js do: a form the shopkeeper opens and then
+   abandons must not burn a number out of the series. The number becomes
+   real on save, and not before. */
+router.get("/next-number", (req, res) => {
+  const row = db.prepare("SELECT value FROM counters WHERE name = ?").get("po-no");
+  const next = row ? row.value + 1 : 1;
+  res.json({ poNo: `PO${String(next).padStart(7, "0")}` });
+});
+
 router.get("/:id", (req, res) => {
   const po = db.prepare("SELECT * FROM purchase_orders WHERE id = ?").get(req.params.id);
   if (!po) return res.status(404).json({ error: "Purchase Order not found." });
@@ -258,11 +270,20 @@ router.post("/", (req, res) => {
 router.put("/:id", (req, res) => {
   const po = db.prepare("SELECT * FROM purchase_orders WHERE id = ?").get(req.params.id);
   if (!po) return res.status(404).json({ error: "Purchase Order not found." });
-  /* Partially Completed is deliberately NOT here. Goods turning up against
-     an order is the commonest reason to need to correct it — a rate the
-     mill revised, a line they cannot supply, a quantity to top up. What
-     has already arrived is preserved through the rewrite above. */
-  if (["Approved", "Completed", "Cancelled"].includes(po.status)) {
+  /* Only what genuinely cannot change is listed here.
+
+     Completed means the goods are all in and the entry is made; editing
+     it would rewrite an order the books have already acted on.
+     Cancelled means it did not happen.
+
+     Approved and Partially Completed are both editable on purpose. A
+     mill revising a rate after the owner signed off, or a line they
+     cannot supply, is ordinary — and the shopkeeper who has to work
+     around a locked order will raise a second one, which is how a
+     shop ends up with two orders for one delivery. The approval does
+     not survive the change: the status drops back below, so somebody
+     signs off on what the order actually says now. */
+  if (["Completed", "Cancelled"].includes(po.status)) {
     return res.status(400).json({ error: `Can't edit a Purchase Order that's already ${po.status}.` });
   }
 

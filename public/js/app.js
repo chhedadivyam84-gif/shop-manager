@@ -75,7 +75,7 @@ let state = {
   po: {
     supplierId: null, purchaseType: "Local", date: "", deliveryAddress: "", expectedDeliveryDate: "",
     paymentTerms: "", deliveryTerms: "", remarks: "", freight: 0, otherCharges: 0, roundOff: true,
-    cart: [], editingPoId: null, brandFilter: "",
+    cart: [], editingPoId: null, brandFilter: "", poNo: null,
     poType: "General", salesman: "", againstCustomerId: null, soId: null,
     requiredDeliveryDate: "", soOptions: []
   },
@@ -88,7 +88,7 @@ let state = {
   so: {
     customerId: null, saleType: "Local", date: "", deliveryAddress: "", expectedDeliveryDate: "", remarks: "",
     discountType: "pct", discountValue: 0, transport: 0, loading: 0, gstOnCharges: true, roundOff: true,
-    cart: [], editingSoId: null
+    cart: [], editingSoId: null, soNo: null
   },
   locations: [], invLocationCode: null, invStockFilter: "all",
   me: { staffName: "", role: "" },
@@ -11471,7 +11471,41 @@ async function renderPoScreen(){
      not hold up the whole form. */
   loadSalesmanNames();
   loadPoSalesOrders();
+  renderPoNumber();
 }
+/* The number this order carries, shown before it is saved.
+
+   Billing, Purchase and Quotation all showed theirs; Purchase Order and
+   Sales Order did not, so the one number the shop quotes down the phone
+   was the one number the screen would not tell them until after saving.
+
+   A new order peeks at the series without taking a number — an abandoned
+   form must not burn one. An order being edited already has its own, and
+   showing it is what tells the shopkeeper WHICH order they are changing. */
+async function renderPoNumber(){
+  const el = document.getElementById("po-number-display");
+  if(!el) return;
+  if(state.po.editingPoId && state.po.poNo){ el.textContent = state.po.poNo; return; }
+  el.textContent = "…";
+  try{
+    const { poNo } = await api("GET", "/purchase-orders/next-number");
+    state.po.poNo = poNo;
+    el.textContent = poNo;
+  }catch(e){ el.textContent = "—"; }
+}
+
+async function renderSoNumber(){
+  const el = document.getElementById("so-number-display");
+  if(!el) return;
+  if(state.so.editingSoId && state.so.soNo){ el.textContent = state.so.soNo; return; }
+  el.textContent = "…";
+  try{
+    const { soNo } = await api("GET", "/sales-orders/next-number");
+    state.so.soNo = soNo;
+    el.textContent = soNo;
+  }catch(e){ el.textContent = "—"; }
+}
+
 function renderPoEditBanner(){
   const el = document.getElementById("po-edit-mode-banner");
   if(!el) return;
@@ -11479,7 +11513,7 @@ function renderPoEditBanner(){
   el.style.display = "block";
   el.innerHTML = `
     <div class="card" style="background:var(--warn-bg);border-color:var(--warn-text);margin-bottom:10px;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;gap:8px;">
-      <div style="font-size:12px;font-weight:700;color:var(--warn-text);">✎ Editing an existing Purchase Order — Save below will UPDATE it, not create a new one.</div>
+      <div style="font-size:12px;font-weight:700;color:var(--warn-text);">✎ Editing ${escapeHtml(state.po.poNo || "an existing Purchase Order")} — Save below will UPDATE it, not create a new one.</div>
       <a href="#" id="cancel-po-edit-link" style="font-size:12px;font-weight:800;color:var(--warn-text);white-space:nowrap;">Cancel</a>
     </div>
   `;
@@ -11494,7 +11528,7 @@ function resetPoState(){
   state.po = {
     supplierId: null, purchaseType: "Local", date: "", deliveryAddress: "", expectedDeliveryDate: "",
     paymentTerms: "", deliveryTerms: "", remarks: "", freight: 0, otherCharges: 0, roundOff: true,
-    cart: [], editingPoId: null, brandFilter: "",
+    cart: [], editingPoId: null, brandFilter: "", poNo: null,
     poType: "General", salesman: "", againstCustomerId: null, soId: null,
     requiredDeliveryDate: "", soOptions: []
   };
@@ -12130,7 +12164,6 @@ async function savePo(asDraft){
    with no explanation reads as the app being broken; the shopkeeper needs
    to know it is a rule and what to do about it. */
 const PO_NO_EDIT_BECAUSE = {
-  "Approved": "This order has been approved. Cancel the approval to change it, or raise a fresh order.",
   "Completed": "Everything on this order has arrived, so it is closed. Raise a fresh order for anything more.",
   "Cancelled": "This order was cancelled."
 };
@@ -12148,7 +12181,7 @@ async function openPoDetail(poId){
   /* Partially Completed belongs here: goods arriving against an order is
      the commonest reason to need to correct it. What has already arrived
      is preserved through the save. */
-  const canEdit = ["Draft","Pending","Partially Completed"].includes(po.status);
+  const canEdit = ["Draft","Pending","Approved","Partially Completed"].includes(po.status);
   const canApprove = ["Draft","Pending"].includes(po.status);
   const canConvert = po.status === "Approved";
   const canClose = !["Completed","Cancelled"].includes(po.status);
@@ -12210,6 +12243,10 @@ async function openPoDetail(poId){
       <button class="btn btn-outline" id="print-po-btn">Print</button>
       <button class="btn btn-outline" id="share-po-btn">📱 Send on WhatsApp</button>
     </div>
+    ${po.status !== "Approved" ? "" : `
+    <div class="muted" style="font-size:11.5px;margin-top:8px;text-align:center;">
+      Editing this order withdraws its approval — it needs approving again afterwards.
+    </div>`}
     ${canEdit || !PO_NO_EDIT_BECAUSE[po.status] ? "" : `
     <div class="muted" style="font-size:11.5px;margin-top:8px;text-align:center;">
       ${escapeHtml(PO_NO_EDIT_BECAUSE[po.status])}
@@ -12308,6 +12345,7 @@ function editExistingPo(po){
   state.po.againstCustomerId = po.against_customer_id || null;
   state.po.soId = po.so_id || null;
   state.po.requiredDeliveryDate = po.required_delivery_date || "";
+  state.po.poNo = po.po_no;
   state.po.editingPoId = po.id;
 
   switchTab("po");
@@ -13922,6 +13960,7 @@ async function renderSoScreen(){
   renderSoProducts();
   renderSoCart();
   renderSoTotals();
+  renderSoNumber();
 }
 function renderSoEditBanner(){
   const el = document.getElementById("so-edit-mode-banner");
@@ -13930,7 +13969,7 @@ function renderSoEditBanner(){
   el.style.display = "block";
   el.innerHTML = `
     <div class="card" style="background:var(--warn-bg);border-color:var(--warn-text);margin-bottom:10px;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;gap:8px;">
-      <div style="font-size:12px;font-weight:700;color:var(--warn-text);">✎ Editing an existing Sales Order — Save below will UPDATE it, not create a new one.</div>
+      <div style="font-size:12px;font-weight:700;color:var(--warn-text);">✎ Editing ${escapeHtml(state.so.soNo || "an existing Sales Order")} — Save below will UPDATE it, not create a new one.</div>
       <a href="#" id="cancel-so-edit-link" style="font-size:12px;font-weight:800;color:var(--warn-text);white-space:nowrap;">Cancel</a>
     </div>
   `;
@@ -13945,7 +13984,7 @@ function resetSoState(){
   state.so = {
     customerId: null, saleType: "Local", date: "", deliveryAddress: "", expectedDeliveryDate: "", remarks: "",
     discountType: "pct", discountValue: 0, transport: 0, loading: 0, gstOnCharges: true, roundOff: true,
-    cart: [], editingSoId: null
+    cart: [], editingSoId: null, soNo: null
   };
   const set = (id, val) => { const el=document.getElementById(id); if(el) el.value = val; };
   set("so-delivery-address", ""); set("so-expected-date", ""); set("so-remarks", "");
@@ -14278,7 +14317,10 @@ async function openSoDetail(soId){
     const taxable = round2(it.qty*it.rate - it.discount_amount);
     return round2(taxable + taxable*(it.gst_rate/100));
   };
-  const canEdit = so.status === "Draft";
+  /* Confirmed is a sales order's version of approved, and the server has
+     always allowed editing one — it refuses only Converted and Cancelled.
+     The screen alone was holding it shut. */
+  const canEdit = ["Draft","Confirmed"].includes(so.status);
   const canConfirm = so.status === "Draft";
   const canConvert = so.status === "Confirmed";
   const canCancel = !["Converted","Cancelled"].includes(so.status);
@@ -14401,6 +14443,7 @@ function editExistingSo(so){
   state.so.loading = so.loading || 0;
   state.so.gstOnCharges = !!so.gst_on_charges;
   state.so.roundOff = true;
+  state.so.soNo = so.so_no;
   state.so.editingSoId = so.id;
 
   switchTab("so");

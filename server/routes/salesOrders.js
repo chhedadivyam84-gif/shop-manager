@@ -106,6 +106,18 @@ router.get("/", (req, res) => {
   res.json(rows);
 });
 
+/* The number this sales order will get, WITHOUT taking it.
+
+   Reads the counter rather than allocating from it, the same way
+   purchases.js and quotations.js do: a form the shopkeeper opens and then
+   abandons must not burn a number out of the series. The number becomes
+   real on save, and not before. */
+router.get("/next-number", (req, res) => {
+  const row = db.prepare("SELECT value FROM counters WHERE name = ?").get("so-no");
+  const next = row ? row.value + 1 : 1;
+  res.json({ soNo: `SO${String(next).padStart(7, "0")}` });
+});
+
 router.get("/:id", (req, res) => {
   const so = db.prepare("SELECT * FROM sales_orders WHERE id = ?").get(req.params.id);
   if (!so) return res.status(404).json({ error: "Sales Order not found." });

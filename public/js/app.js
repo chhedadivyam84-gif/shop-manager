@@ -75,7 +75,7 @@ let state = {
   po: {
     supplierId: null, purchaseType: "Local", date: "", deliveryAddress: "", expectedDeliveryDate: "",
     paymentTerms: "", deliveryTerms: "", remarks: "", freight: 0, otherCharges: 0, roundOff: true,
-    cart: [], editingPoId: null
+    cart: [], editingPoId: null, brandFilter: ""
   },
   quotation: {
     customerId: null, saleType: "Local", date: "", validUntil: "", terms: "", remarks: "",
@@ -11254,6 +11254,7 @@ async function renderPoScreen(){
   renderPoEditBanner();
   renderPoSuppliers();
   renderPoSupplierInfo();
+  renderPoBrands();
   renderPoProducts();
   renderPoCart();
   renderPoTotals();
@@ -11280,11 +11281,13 @@ function resetPoState(){
   state.po = {
     supplierId: null, purchaseType: "Local", date: "", deliveryAddress: "", expectedDeliveryDate: "",
     paymentTerms: "", deliveryTerms: "", remarks: "", freight: 0, otherCharges: 0, roundOff: true,
-    cart: [], editingPoId: null
+    cart: [], editingPoId: null, brandFilter: ""
   };
   const set = (id, val) => { const el=document.getElementById(id); if(el) el.value = val; };
   set("po-delivery-address", ""); set("po-expected-date", ""); set("po-payment-terms", "");
   set("po-delivery-terms", ""); set("po-remarks", ""); set("po-freight-input", 0); set("po-other-input", 0);
+  const chips = document.getElementById("po-brand-chips");
+  if(chips) chips.innerHTML = "";
   document.querySelectorAll('[data-po-type]').forEach(x=>x.classList.toggle("selected", x.dataset.poType==="Local"));
 }
 function renderPoSuppliers(){
@@ -11327,10 +11330,85 @@ function renderPoSupplierInfo(){
     ${sup.area_id ? `<div class="muted">&#128205; ${escapeHtml(areaLabel(sup.area_id))}</div>` : ""}
   `;
 }
+/* ============================================================
+   PURCHASE ORDER — BRAND / COMPANY
+
+   One order, many companies. The shop buys Swagat, Maharashtra and Ganga
+   plywood on a single PO and does NOT want three POs just because three
+   mills are involved: the order number is one thing, who makes each board
+   is another.
+
+   So brand is a lens over one order, never a reason to split it. It filters
+   which products the picker offers, it groups the item list, and it decides
+   how the WhatsApp messages are cut. The PO number never changes.
+
+   Brands come from the products themselves rather than a master list —
+   products.brand is where the shop already records this, and a second list
+   to keep in step would only drift.
+   ============================================================ */
+
+/** Every brand that has at least one product, most-stocked first, with counts. */
+function poBrandList(){
+  const counts = new Map();
+  for(const p of sellableProducts()){
+    const b = (p.brand || "").trim() || "Other";
+    counts.set(b, (counts.get(b) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([brand, count]) => ({ brand, count }))
+    .sort((a, b) => a.brand.localeCompare(b.brand));
+}
+
+/** The brand of a cart line — its own, falling back to the product's. */
+function poLineBrand(c){
+  if(c.brand) return c.brand;
+  const p = state.products.find(x => x.id === c.productId);
+  return ((p && p.brand) || "").trim() || "Other";
+}
+
+/** Cart lines gathered under their brand, each keeping its real cart index.
+ *  Brands appear in the order they were first added, so the list doesn't
+ *  jump around under the shopkeeper's finger while they are still typing. */
+function poBrandGroups(cart){
+  const groups = [];
+  const byBrand = new Map();
+  (cart || state.po.cart).forEach((c, idx) => {
+    const brand = poLineBrand(c);
+    if(!byBrand.has(brand)){
+      const g = { brand, lines: [] };
+      byBrand.set(brand, g); groups.push(g);
+    }
+    byBrand.get(brand).lines.push({ c, idx });
+  });
+  return groups;
+}
+
+function renderPoBrands(){
+  const wrap = document.getElementById("po-brand-chips");
+  if(!wrap) return;
+  const brands = poBrandList();
+  const picked = state.po.brandFilter || "";
+  const inCart = new Set(state.po.cart.map(poLineBrand));
+
+  wrap.innerHTML = [
+    `<button class="chip ${picked===""?"selected":""}" data-po-brand="">All companies</button>`,
+    ...brands.map(b => `<button class="chip ${picked===b.brand?"selected":""}" data-po-brand="${escapeHtml(b.brand)}">
+        ${escapeHtml(b.brand)} <span class="muted" style="font-weight:400;">${b.count}</span>${inCart.has(b.brand)?" \u2713":""}</button>`)
+  ].join("");
+
+  wrap.querySelectorAll("[data-po-brand]").forEach(b => b.addEventListener("click", () => {
+    state.po.brandFilter = b.dataset.poBrand;
+    renderPoBrands();
+    renderPoProducts();
+  }));
+}
+
+
 function renderPoProducts(){
   const q = (document.getElementById("po-search").value||"").toLowerCase();
   const list = sellableProducts().filter(p=>
-    !q || p.name.toLowerCase().includes(q) || (p.brand||"").toLowerCase().includes(q) || (p.sku||"").toLowerCase().includes(q)
+    (!state.po.brandFilter || ((p.brand||"").trim()||"Other") === state.po.brandFilter) &&
+    (!q || p.name.toLowerCase().includes(q) || (p.brand||"").toLowerCase().includes(q) || (p.sku||"").toLowerCase().includes(q))
   );
   const wrap = document.getElementById("po-product-list");
   wrap.innerHTML = list.map(p=>{
@@ -11340,7 +11418,7 @@ function renderPoProducts(){
       <div><div class="row-title">${escapeHtml(p.name)}</div><div class="row-sub">${escapeHtml(p.brand||"")} · ${priceLabel}</div></div>
       <div class="row-right"><button class="gold-fab" data-po-quickadd="${p.id}">+</button></div>
     </div>`;
-  }).join("") || `<div class="empty-hint">No matching products.</div>`;
+  }).join("") || `<div class="empty-hint">${state.po.brandFilter ? "No "+escapeHtml(state.po.brandFilter)+" products match." : "No matching products."}</div>`;
 
   wrap.querySelectorAll("[data-open-po-product]").forEach(el=>{
     el.addEventListener("click", (e)=>{
@@ -11362,6 +11440,7 @@ function addToPoCart(productId, sizeIdx){
     name: p.name + (p.sizes.length>1 ? " ("+size.label+")" : ""),
     mode: Pricing.normaliseMode(p.default_mode),
     ...lineDims(p, size),
+    brand: (p.brand||"").trim() || "Other", remark: "",
     pieces: 1, rate: size.price, gstRate: p.gst,
     discountType: "pct", discountValue: 0
   });
@@ -11378,13 +11457,7 @@ function poLineCalc(c){
   const finalAmt = round2(taxable + gstAmt);
   return {...r, discountAmount, taxable, gstAmt, finalAmt};
 }
-function renderPoCart(){
-  const wrap = document.getElementById("po-cart-list");
-  if(!state.po.cart.length){
-    wrap.innerHTML = `<div class="empty-hint">No items yet. Add products above.</div>`;
-    return;
-  }
-  wrap.innerHTML = state.po.cart.map((c,idx)=>{
+function poCartLineHtml(c, idx){
     const m = Pricing.MODES[Pricing.normaliseMode(c.mode)];
     const r = poLineCalc(c);
 
@@ -11426,6 +11499,11 @@ function renderPoCart(){
       <div class="dim-grid">
         ${dim("Discount", c.discountType==="flat"?"₹":"%", "discountValue", c.discountValue)}
         <label class="dim"><span>GST <em>(%)</em></span><input type="number" value="${c.gstRate}" disabled style="opacity:0.6;"></label>
+        <label class="dim" style="grid-column:1/-1;">
+          <span>Remark <em>(optional)</em></span>
+          <input type="text" data-po-line-remark="${idx}" value="${escapeHtml(c.remark||"")}"
+                 placeholder="e.g. send 12mm if 18mm short" maxlength="200">
+        </label>
       </div>
 
       <div class="line-calc">
@@ -11440,7 +11518,28 @@ function renderPoCart(){
         <div class="line-calc-amount">${fmtPaise(r.finalAmt)}</div>
       </div>
     </div>`;
-  }).join("");
+}
+
+function renderPoCart(){
+  const wrap = document.getElementById("po-cart-list");
+  if(!state.po.cart.length){
+    wrap.innerHTML = `<div class="empty-hint">No items yet. Add products above.</div>`;
+    renderPoBrands();
+    return;
+  }
+  const groups = poBrandGroups();
+  const brandTotal = g => round2(g.lines.reduce((t, {c}) => t + poLineCalc(c).finalAmt, 0));
+
+  /* One brand needs no heading — it would only repeat what the single
+     group beneath it already says. */
+  wrap.innerHTML = groups.map(g => (groups.length > 1 ? `
+    <div class="po-brand-group-head">
+      <span>${escapeHtml(g.brand)}</span>
+      <span class="muted">${g.lines.length} item${g.lines.length===1?"":"s"} · ${fmtPaise(brandTotal(g))}</span>
+    </div>` : "") +
+    g.lines.map(({c, idx}) => poCartLineHtml(c, idx)).join("")).join("");
+
+  renderPoBrands();          // the ✓ ticks follow what is in the cart
 
   wrap.querySelectorAll("[data-po-line-mode]").forEach(b=>b.addEventListener("click", ()=>{
     const c = state.po.cart[b.dataset.poLine];
@@ -11469,6 +11568,15 @@ function renderPoCart(){
       renderPoTotals();
     });
     inp.addEventListener("blur", ()=>{ renderPoCart(); renderPoTotals(); });
+  });
+
+  /* No re-render while typing: redrawing the cart would blur the box
+     under the shopkeeper's finger. A remark changes no total, so
+     nothing else on screen has to move. */
+  wrap.querySelectorAll("[data-po-line-remark]").forEach(inp=>{
+    inp.addEventListener("input", ()=>{
+      state.po.cart[inp.dataset.poLineRemark].remark = inp.value;
+    });
   });
 
   wrap.querySelectorAll("[data-po-dup]").forEach(a=>a.addEventListener("click", (e)=>{
@@ -11548,7 +11656,7 @@ function poPayload(){
       productId:c.productId, sizeId:c.sizeId, name:c.name, mode:c.mode,
       lengthFt:c.lengthFt, widthVal:c.widthVal, thicknessIn:c.thicknessIn,
       pieces:c.pieces, rate:c.rate, gstRate:c.gstRate,
-      discountType:c.discountType, discountValue:c.discountValue
+      discountType:c.discountType, discountValue:c.discountValue, remark:c.remark||""
     }))
   };
 }
@@ -11608,12 +11716,17 @@ async function openPoDetail(poId){
     <button class="sheet-close" data-sheetclose>✕</button>
     <div class="sheet-title">${escapeHtml(po.po_no)} <span class="pill ${PO_STATUS_PILL[po.status]||''}">${escapeHtml(po.status)}</span></div>
     <div class="muted" style="font-size:12px;margin-bottom:10px;">${po.date}${po.expected_delivery_date?" · Expected "+po.expected_delivery_date:""}${po.delivery_address?"<br>"+escapeHtml(po.delivery_address):""}</div>
-    <div class="card">${po.items.map(it=>`
-      <div class="list-row">
-        <div><div class="row-title">${escapeHtml(it.name)}</div><div class="row-sub">${escapeHtml(it.size_label||"")} · ${it.pieces} ${escapeHtml(it.unit_label||"")} × ${fmt(it.rate)}${it.discount_amount>0?" · disc. "+fmt(it.discount_amount):""}</div></div>
-        <div class="row-right row-title">${fmt(lineTotal(it))}</div>
+    ${poItemsByBrand(po).map((g, gi, all) => (all.length > 1 ? `
+      <div class="po-brand-group-head">
+        <span>${escapeHtml(g.brand)}</span>
+        <span class="muted">${g.items.length} item${g.items.length===1?"":"s"} · ${fmt(g.total)}</span>
+      </div>` : "") + `
+      <div class="card" style="margin-top:0;">${g.items.map(it=>`
+        <div class="list-row">
+          <div><div class="row-title">${escapeHtml(it.name)}</div><div class="row-sub">${escapeHtml(it.size_label||"")} · ${it.pieces} ${escapeHtml(it.unit_label||"")} × ${fmt(it.rate)}${it.discount_amount>0?" · disc. "+fmt(it.discount_amount):""}</div></div>
+          <div class="row-right row-title">${fmt(lineTotal(it))}</div>
+        </div>`).join("")}
       </div>`).join("")}
-    </div>
     <div class="card" style="margin-top:8px;">
       <div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Subtotal</span><span>${fmt(po.subtotal)}</span></div>
       ${po.discount_amount>0?`<div class="inv-flex" style="margin-bottom:4px;"><span class="muted">Discount</span><span>-${fmt(po.discount_amount)}</span></div>`:""}
@@ -11640,7 +11753,10 @@ async function openPoDetail(poId){
       ${canApprove ? `<button class="btn btn-outline" id="approve-po-btn">Approve</button>` : ""}
       ${canConvert ? `<button class="btn btn-gold" id="convert-po-btn">Convert to Purchase Entry</button>` : ""}
       <button class="btn btn-outline" id="print-po-btn">Print</button>
-      <button class="btn btn-outline" id="share-po-btn">Share (WhatsApp)</button>
+      <button class="btn btn-outline" id="share-po-btn">💬 WhatsApp — whole PO</button>
+      ${poItemsByBrand(po).length > 1
+        ? `<button class="btn btn-outline" id="share-po-brand-btn">💬 WhatsApp — company-wise</button>`
+        : ""}
     </div>
     ${canClose ? `<div style="margin-top:12px;text-align:center;"><a href="#" id="close-po-link" class="btn-danger-link">Close / Cancel this order</a></div>` : ""}
     ${canDelete ? `<div style="margin-top:8px;text-align:center;"><a href="#" id="delete-po-link" class="btn-danger-link">Delete this draft</a></div>` : ""}
@@ -11676,6 +11792,8 @@ async function openPoDetail(poId){
   });
   sheet.querySelector("#print-po-btn").addEventListener("click", ()=>printPurchaseOrder(po));
   sheet.querySelector("#share-po-btn").addEventListener("click", ()=>sharePoWhatsApp(po));
+  const brandShareBtn = sheet.querySelector("#share-po-brand-btn");
+  if(brandShareBtn) brandShareBtn.addEventListener("click", ()=>{ closeAllSheets(); openPoBrandShare(po); });
   const closeLink = sheet.querySelector("#close-po-link");
   if(closeLink) closeLink.addEventListener("click", async (e)=>{
     e.preventDefault();
@@ -11708,7 +11826,11 @@ function editExistingPo(po){
       productId: it.product_id, sizeId: it.size_id, sizeIdx: sizeIdx>=0 ? sizeIdx : 0,
       name: it.name, mode: it.mode, lengthFt: it.length_ft||"", widthVal: it.width_val||"",
       thicknessIn: it.thickness_in||"", pieces: it.pieces, rate: it.rate, gstRate: it.gst_rate,
-      discountType: it.discount_amount>0 ? "flat" : "pct", discountValue: it.discount_amount>0 ? it.discount_amount : 0
+      discountType: it.discount_amount>0 ? "flat" : "pct", discountValue: it.discount_amount>0 ? it.discount_amount : 0,
+      /* The brand SAVED on the line, not the product's brand today — if a
+         product was re-branded since, the order still reads as it was placed. */
+      brand: (it.brand||"").trim() || (product ? ((product.brand||"").trim()||"Other") : "Other"),
+      remark: it.remark || ""
     };
   });
   state.po.supplierId = po.supplier_id;
@@ -11774,16 +11896,197 @@ function printPurchaseOrder(po){
   openPrintWindow(html, { title: "Purchase Order" });
 }
 /** Same share-as-text-link pattern as an invoice's WhatsApp share — there is no real email/SMTP integration in this app. */
+/* ============================================================
+   PURCHASE ORDER -> WHATSAPP
+
+   Two ways to send the same order, because the shop sends it to two kinds
+   of reader:
+
+     Complete PO   one message, every company, grouped under its own
+                   heading. For the supplier handling the whole order, who
+                   needs to see all of it at once.
+
+     Brand-wise    one message per company, holding only that company's
+                   lines and that company's total. For the mills, who have
+                   no business reading each other's rates.
+
+   Both are built from the SAME saved order. Nothing here creates a second
+   PO, renumbers anything, or writes to the database — the order stays one
+   order with one number, and these are two views of it.
+   ============================================================ */
+
+/** What one saved line costs, GST included. */
+function poItemTotal(it){
+  const taxable = round2(it.qty * it.rate - it.discount_amount);
+  return round2(taxable + taxable * (it.gst_rate / 100));
+}
+
+function poWaQty(it){
+  if(Pricing.normaliseMode(it.mode) !== "UNIT") return Pricing.formatQty(it.qty, it.mode);
+  const prod = state.products.find(x => x.id === it.product_id);
+  const unit = (((prod && prod.unit) || it.unit_label || "Pc") + "").trim();
+  const n = it.qty;
+  return n + " " + (n === 1 || /s$/i.test(unit) ? unit : unit + "s");
+}
+
+/** One line as the supplier reads it. WhatsApp keeps *bold*; nothing else. */
+function poWaLine(it, i){
+  const size = (it.size_label || "").trim();
+  let line = (i + 1) + ". " + it.name;
+  if(size && !it.name.includes(size)) line += " (" + size + ")";
+  line += " — " + poWaQty(it);
+  if(it.rate) line += " @ " + fmt(it.rate);
+  if(it.remark) line += "\n    ↳ " + it.remark;
+  return line;
+}
+
+/** Saved items gathered under their company, in the order the server sent. */
+function poItemsByBrand(po){
+  const out = [], seen = new Map();
+  for(const it of po.items){
+    const brand = (it.brand || "").trim() || "Other";
+    if(!seen.has(brand)){ const g = { brand, items: [] }; seen.set(brand, g); out.push(g); }
+    seen.get(brand).items.push(it);
+  }
+  return out.map(g => ({
+    brand: g.brand,
+    items: g.items,
+    total: round2(g.items.reduce((t, it) => t + poItemTotal(it), 0))
+  }));
+}
+
+function poWaHeader(po){
+  const sup = state.suppliers.find(s => s.id === po.supplier_id);
+  return [
+    "*Purchase Order " + po.po_no + "*",
+    "Date: " + po.date,
+    sup ? "To: " + sup.name : "",
+    po.expected_delivery_date ? "Expected: " + po.expected_delivery_date : ""
+  ].filter(Boolean).join("\n");
+}
+
+function poWaFooter(po){
+  const out = [];
+  if(po.delivery_address) out.push("Deliver to: " + po.delivery_address);
+  if(po.remarks) out.push("Note: " + po.remarks);
+  return out;
+}
+
+/** Everything, every company, one message. */
+function poCompleteMessage(po){
+  const groups = poItemsByBrand(po);
+  const parts = [poWaHeader(po), ""];
+  if(groups.length === 1){
+    // A lone heading and subtotal would only restate the grand total.
+    parts.push(...groups[0].items.map(poWaLine));
+  }else{
+    groups.forEach(g => {
+      parts.push("*" + g.brand.toUpperCase() + "*");
+      parts.push(...g.items.map(poWaLine));
+      parts.push("Subtotal: " + fmt(g.total), "");
+    });
+  }
+  parts.push("*Grand Total: " + fmt(po.total) + "*", ...poWaFooter(po));
+  return parts.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/** One company's part of the order — its lines, its total, the same PO number. */
+function poBrandMessage(po, group){
+  const parts = [
+    poWaHeader(po), "",
+    "*" + group.brand.toUpperCase() + "*",
+    ...group.items.map(poWaLine), "",
+    "*Total: " + fmt(group.total) + "*",
+    ...poWaFooter(po)
+  ];
+  return parts.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 function sharePoWhatsApp(po){
-  const sup = state.suppliers.find(s=>s.id===po.supplier_id);
-  const lines = [
-    `Purchase Order ${po.po_no}`,
-    `Date: ${po.date}`,
-    sup ? `Supplier: ${sup.name}` : "",
-    ...po.items.map(it=>`${it.name} (${it.size_label||""}) x${it.pieces} @ ${fmt(it.rate)}`),
-    `Grand Total: ${fmt(po.total)}`
-  ].filter(Boolean);
-  openWhatsApp(sup && sup.phone, lines.join("\n"));
+  const sup = state.suppliers.find(s => s.id === po.supplier_id);
+  openWhatsApp(sup && sup.phone, poCompleteMessage(po));
+}
+
+/**
+ * Copy that works without the Clipboard API.
+ *
+ * navigator.clipboard needs a secure context, which this app has on Render
+ * but an older phone browser may still refuse. The textarea fallback is
+ * deprecated and ugly and works everywhere, which on a counter phone is the
+ * property that actually matters.
+ */
+async function copyToClipboard(text){
+  try{
+    if(navigator.clipboard && window.isSecureContext){
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  }catch(e){ /* fall through to the old way */ }
+  try{
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.cssText = "position:fixed;top:-1000px;opacity:0;";
+    document.body.appendChild(ta);
+    ta.select(); ta.setSelectionRange(0, text.length);
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  }catch(e){ return false; }
+}
+
+/**
+ * The company-wise sheet: every message prepared, one tap each.
+ *
+ * Deliberately NOT a loop of window.open — a browser blocks the second and
+ * later popups, so three companies would send one message and silently drop
+ * two. And each company may go to a different person, which only the shop
+ * knows. So the messages are written here and sent one at a time; Copy is
+ * there for whichever chat isn't the supplier's.
+ */
+function openPoBrandShare(po){
+  const groups = poItemsByBrand(po);
+  const sup = state.suppliers.find(s => s.id === po.supplier_id);
+  const sheet = document.getElementById("sheet-po-brand-share");
+
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">Send ${escapeHtml(po.po_no)} company-wise</div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px;">
+      ${groups.length} separate message${groups.length===1?"":"s"}, one per company —
+      each showing only its own items. The order stays one order: same PO number on every message.
+    </div>
+    ${groups.map((g,i)=>`
+      <div class="card" style="margin-top:0;margin-bottom:8px;">
+        <div class="inv-flex">
+          <div style="min-width:0;">
+            <div class="row-title">${escapeHtml(g.brand)}</div>
+            <div class="row-sub">${g.items.length} item${g.items.length===1?"":"s"} · ${fmt(g.total)}</div>
+          </div>
+        </div>
+        <pre class="po-wa-preview">${escapeHtml(poBrandMessage(po, g))}</pre>
+        <div class="action-row" style="margin-top:8px;">
+          <button class="btn btn-gold" data-po-wa-send="${i}">💬 ${sup && sup.phone ? "Send to "+escapeHtml(sup.name) : "Send on WhatsApp"}</button>
+          <button class="btn btn-outline" data-po-wa-copy="${i}">Copy</button>
+        </div>
+      </div>`).join("")}
+  `;
+
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", ()=>{
+    closeAllSheets();
+    openPoDetail(po.id);          // back where they came from, not nowhere
+  });
+  sheet.querySelectorAll("[data-po-wa-send]").forEach(b=>b.addEventListener("click", ()=>{
+    openWhatsApp(sup && sup.phone, poBrandMessage(po, groups[b.dataset.poWaSend]));
+  }));
+  sheet.querySelectorAll("[data-po-wa-copy]").forEach(b=>b.addEventListener("click", async ()=>{
+    const ok = await copyToClipboard(poBrandMessage(po, groups[b.dataset.poWaCopy]));
+    toast(ok ? "Message copied — paste it into any chat."
+             : "Couldn't copy. Long-press the message to select it.", ok ? "ok" : "");
+  }));
+
+  showSheet("sheet-po-brand-share");
 }
 
 /* ============================================================

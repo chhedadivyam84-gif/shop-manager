@@ -71,6 +71,7 @@ function buildItems(rawItems) {
       productId: product.id, sizeId: size.id, name: raw.name || product.name,
       brand: product.brand || "", category: product.category || "",
       gstRate: raw.gstRate != null ? Number(raw.gstRate) : product.gst_rate,
+      remark: String(raw.remark || "").trim().slice(0, 200),
       discountAmount, ...calc
     });
   }
@@ -78,7 +79,10 @@ function buildItems(rawItems) {
 }
 
 function serialize(po) {
-  const items = db.prepare("SELECT * FROM purchase_order_items WHERE po_id = ?").all(po.id);
+  const items = db.prepare(`
+    SELECT * FROM purchase_order_items WHERE po_id = ?
+     ORDER BY CASE WHEN COALESCE(brand,'') = '' THEN 1 ELSE 0 END,
+              brand COLLATE NOCASE, id`).all(po.id);
   return { ...po, items };
 }
 
@@ -137,8 +141,8 @@ router.post("/", (req, res) => {
   const insertItem = db.prepare(`
     INSERT INTO purchase_order_items
       (po_id, product_id, size_id, name, brand, category, mode, length_ft, width_val, thickness_in,
-       size_label, pieces, per_piece, unit_label, qty, rate, discount_amount, gst_rate)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       size_label, pieces, per_piece, unit_label, qty, rate, discount_amount, gst_rate, remark)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   db.transaction(() => {
@@ -155,7 +159,7 @@ router.post("/", (req, res) => {
     items.forEach(it => insertItem.run(
       id, it.productId, it.sizeId, it.name, it.brand, it.category, it.mode,
       it.lengthFt || null, it.widthVal || null, it.thicknessIn || null,
-      it.sizeLabel, it.pieces, it.perPiece, it.unit, it.billedQty, it.rate, it.discountAmount, it.gstRate
+      it.sizeLabel, it.pieces, it.perPiece, it.unit, it.billedQty, it.rate, it.discountAmount, it.gstRate, it.remark
     ));
   })();
 
@@ -197,8 +201,8 @@ router.put("/:id", (req, res) => {
   const insertItem = db.prepare(`
     INSERT INTO purchase_order_items
       (po_id, product_id, size_id, name, brand, category, mode, length_ft, width_val, thickness_in,
-       size_label, pieces, per_piece, unit_label, qty, rate, discount_amount, gst_rate)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       size_label, pieces, per_piece, unit_label, qty, rate, discount_amount, gst_rate, remark)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   db.transaction(() => {
@@ -206,7 +210,7 @@ router.put("/:id", (req, res) => {
     items.forEach(it => insertItem.run(
       po.id, it.productId, it.sizeId, it.name, it.brand, it.category, it.mode,
       it.lengthFt || null, it.widthVal || null, it.thicknessIn || null,
-      it.sizeLabel, it.pieces, it.perPiece, it.unit, it.billedQty, it.rate, it.discountAmount, it.gstRate
+      it.sizeLabel, it.pieces, it.perPiece, it.unit, it.billedQty, it.rate, it.discountAmount, it.gstRate, it.remark
     ));
     db.prepare(`
       UPDATE purchase_orders SET supplier_id=@supplierId, date=@date, delivery_address=@deliveryAddress,

@@ -427,7 +427,8 @@ CREATE TABLE IF NOT EXISTS purchase_order_items (
   unit_label TEXT NOT NULL DEFAULT 'Pc',
   qty REAL NOT NULL, rate REAL NOT NULL,
   discount_amount REAL NOT NULL DEFAULT 0,
-  gst_rate REAL NOT NULL DEFAULT 18
+  gst_rate REAL NOT NULL DEFAULT 18,
+  remark TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS purchase_items (
@@ -2216,6 +2217,14 @@ CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(pinned DESC, updated_at DE
 addColumn("areas", "zone", "TEXT DEFAULT ''");
 addColumn("areas", "sub_area", "TEXT DEFAULT ''");
 addColumn("areas", "route", "TEXT DEFAULT ''");
+
+/* A note against one line of a purchase order, not the whole order.
+
+   The order already has a Remarks box, but it is the wrong place for
+   "send this one in 12mm if 18mm is short" — that belongs beside the item
+   it is about, and it has to survive into the brand-wise WhatsApp message
+   where the supplier reads only their own few lines. */
+addColumn("purchase_order_items", "remark", "TEXT DEFAULT ''");
 
 /* A station can sit on more than one line — CSMT is Central and Harbour, Bandra
    is Western and Harbour — so line membership is its own table rather than a

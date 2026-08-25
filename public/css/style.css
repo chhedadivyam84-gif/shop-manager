@@ -1629,3 +1629,37 @@ table.erp-table tbody td{ height: var(--bill-row-h, auto); }
   padding:11px 2px;font-size:14px;color:var(--ink);font-weight:600;}
 .menu-item .ic{font-size:16px;width:22px;text-align:center;flex:none;}
 .menu-item:active{background:var(--bg);}
+
+/* ============================================================
+   PURCHASE ORDER — COMPANY GROUPING
+
+   One order can carry three mills' material at once. A heading above
+   each company's items makes that read as three blocks instead of one
+   long list, without splitting the order itself.
+
+   Sticky, because on a phone the list runs past the screen and it is
+   otherwise easy to lose track of whose board you are looking at.
+   ============================================================ */
+.po-brand-group-head{
+  position:sticky; top:0; z-index:2;
+  display:flex; align-items:baseline; justify-content:space-between; gap:8px;
+  margin:14px 0 6px; padding:7px 11px;
+  background:var(--navy); color:#fff;
+  border-radius:9px;
+  font-size:12.5px; font-weight:800; letter-spacing:.02em;
+}
+.po-brand-group-head:first-child{ margin-top:0; }
+.po-brand-group-head .muted{
+  color:rgba(255,255,255,.72); font-weight:600; font-size:11.5px; white-space:nowrap;
+}
+
+/* The exact text that will be sent, shown before it is sent. Scrolls
+   inside itself so a long order never widens the sheet. */
+.po-wa-preview{
+  margin:8px 0 0; padding:9px 11px;
+  background:var(--bg); border:1px solid var(--border); border-radius:9px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:11.5px; line-height:1.5; color:var(--text);
+  white-space:pre-wrap; overflow-wrap:anywhere;
+  max-height:190px; overflow-y:auto;
+}

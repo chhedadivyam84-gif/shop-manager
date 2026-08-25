@@ -3584,7 +3584,7 @@ function addTopSearchMatch(){
 function renderCart(){
   const wrap = document.getElementById("cart-list");
   if(!state.cart.length){
-    wrap.innerHTML = `<div class="empty-hint">No items yet. Add products above.</div>`;
+    wrap.innerHTML = `<div class="empty-hint">No items yet. Pick from the products below.</div>`;
     return;
   }
   wrap.innerHTML = state.cart.map((c,idx)=>{
@@ -10992,7 +10992,7 @@ function purchaseLineCalc(c){
 function renderPurchaseCart(){
   const wrap = document.getElementById("pur-cart-list");
   if(!state.pur.cart.length){
-    wrap.innerHTML = `<div class="empty-hint">No items yet. Add products above.</div>`;
+    wrap.innerHTML = `<div class="empty-hint">No items yet. Pick from the products below.</div>`;
     return;
   }
   wrap.innerHTML = state.pur.cart.map((c,idx)=>{
@@ -11989,7 +11989,7 @@ function poCartLineHtml(c, idx){
 function renderPoCart(){
   const wrap = document.getElementById("po-cart-list");
   if(!state.po.cart.length){
-    wrap.innerHTML = `<div class="empty-hint">No items yet. Add products above.</div>`;
+    wrap.innerHTML = `<div class="empty-hint">No items yet. Pick from the products below.</div>`;
     renderPoBrands();
     return;
   }
@@ -13366,7 +13366,7 @@ function quotationLineCalc(c){
 function renderQuotationCart(){
   const wrap = document.getElementById("quotation-cart-list");
   if(!state.quotation.cart.length){
-    wrap.innerHTML = `<div class="empty-hint">No items yet. Add products above.</div>`;
+    wrap.innerHTML = `<div class="empty-hint">No items yet. Pick from the products below.</div>`;
     return;
   }
   wrap.innerHTML = state.quotation.cart.map((c,idx)=>{
@@ -14116,7 +14116,7 @@ function soLineCalc(c){
 function renderSoCart(){
   const wrap = document.getElementById("so-cart-list");
   if(!state.so.cart.length){
-    wrap.innerHTML = `<div class="empty-hint">No items yet. Add products above.</div>`;
+    wrap.innerHTML = `<div class="empty-hint">No items yet. Pick from the products below.</div>`;
     return;
   }
   wrap.innerHTML = state.so.cart.map((c,idx)=>{

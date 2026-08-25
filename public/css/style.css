@@ -1663,3 +1663,27 @@ table.erp-table tbody td{ height: var(--bill-row-h, auto); }
   white-space:pre-wrap; overflow-wrap:anywhere;
   max-height:190px; overflow-y:auto;
 }
+
+/* Which company makes this line's board. A select rather than a chip row:
+   it is one choice out of a handful, it opens the phone's own picker, and
+   it costs no vertical space on a screen that already carries a dimension
+   grid per line. Where only one mill makes the product there is nothing to
+   choose, so it renders as a plain label instead. */
+.po-line-brand{
+  align-self:flex-start;
+  margin:2px 0 0; padding:2px 22px 2px 8px;
+  border:1px solid var(--border); border-radius:99px;
+  background:var(--bg); color:var(--muted);
+  font:inherit; font-size:11px; font-weight:700; letter-spacing:.02em;
+  line-height:1.5; max-width:100%;
+}
+select.po-line-brand{
+  -webkit-appearance:none; appearance:none; cursor:pointer;
+  background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
+                   linear-gradient(135deg,var(--muted) 50%,transparent 50%);
+  background-position:calc(100% - 12px) 52%, calc(100% - 8px) 52%;
+  background-size:4px 4px, 4px 4px;
+  background-repeat:no-repeat;
+}
+select.po-line-brand:focus-visible{ outline:2px solid var(--gold); outline-offset:1px; }
+.po-line-brand.as-label{ padding-right:8px; }

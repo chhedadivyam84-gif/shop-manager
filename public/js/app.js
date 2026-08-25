@@ -11383,6 +11383,60 @@ function poBrandGroups(cart){
   return groups;
 }
 
+/**
+ * The same board from a different mill.
+ *
+ * "Change the company on this line" cannot mean "relabel it": the line
+ * points at a product, and a line reading Ganga while pointing at a Swagat
+ * board would send Ganga's stock to Swagat's shelf the day this order is
+ * converted to a purchase entry. So changing the company SWAPS the product
+ * for the same-named one made by that company, and the line stays honest.
+ *
+ * Only products with the same name qualify, which is the shop's own way of
+ * saying "same thing, different mill" — 18mm Plywood is 18mm Plywood
+ * whoever pressed it.
+ */
+function poSwapTargets(c){
+  const cur = state.products.find(p => p.id === c.productId);
+  if(!cur) return [];
+  const name = cur.name.trim().toLowerCase();
+  return sellableProducts()
+    .filter(p => p.name.trim().toLowerCase() === name && p.sizes.length)
+    .map(p => ({ id: p.id, brand: (p.brand || "").trim() || "Other" }))
+    .sort((a, b) => a.brand.localeCompare(b.brand));
+}
+
+/** Move one line to another company's version of the same product. */
+function poSwapLineBrand(idx, productId){
+  const c = state.po.cart[idx];
+  const next = state.products.find(p => p.id === productId);
+  if(!c || !next || !next.sizes.length) return;
+
+  const old = state.products.find(p => p.id === c.productId);
+  const oldSize = old ? (old.sizes.find(s => s.id === c.sizeId) || old.sizes[0]) : null;
+
+  // Keep the same size if the new mill sells it; the shop asked for 8x4, not
+  // for whatever this mill happens to list first.
+  let sizeIdx = oldSize ? next.sizes.findIndex(s => s.label === oldSize.label) : -1;
+  if(sizeIdx < 0) sizeIdx = 0;
+  const size = next.sizes[sizeIdx];
+
+  /* A rate the shop typed is a negotiated rate and survives the swap. A rate
+     still sitting at the old mill's list price was never chosen, so it moves
+     to the new mill's. */
+  const untouched = oldSize && Number(c.rate) === Number(oldSize.price);
+
+  c.productId = next.id;
+  c.sizeId = size.id;
+  c.sizeIdx = sizeIdx;
+  c.brand = (next.brand || "").trim() || "Other";
+  c.name = next.name + (next.sizes.length > 1 ? " (" + size.label + ")" : "");
+  c.gstRate = next.gst;
+  if(untouched) c.rate = size.price;
+
+  renderPoCart(); renderPoTotals();
+}
+
 function renderPoBrands(){
   const wrap = document.getElementById("po-brand-chips");
   if(!wrap) return;
@@ -11471,6 +11525,14 @@ function poCartLineHtml(c, idx){
     return `<div class="bill-line" data-po-line-row="${idx}">
       <div class="bill-line-head">
         <div class="bill-line-name">${escapeHtml(c.name)}</div>
+        ${(()=>{ const t = poSwapTargets(c); const b = poLineBrand(c);
+          /* One mill making this board is a fact, not a choice — show it
+             as a label rather than a dropdown that does nothing. */
+          return t.length > 1
+            ? `<select class="po-line-brand" data-po-line-brand="${idx}" title="Which company makes this">
+                 ${t.map(x=>`<option value="${escapeHtml(x.id)}"${x.brand===b?" selected":""}>${escapeHtml(x.brand)}</option>`).join("")}
+               </select>`
+            : `<span class="po-line-brand as-label">${escapeHtml(b)}</span>`; })()}
         <div class="line-actions">
           <a href="#" data-po-dup="${idx}">Duplicate</a>
           <a href="#" data-po-remove="${idx}" class="btn-danger-link">Remove</a>
@@ -11573,6 +11635,10 @@ function renderPoCart(){
   /* No re-render while typing: redrawing the cart would blur the box
      under the shopkeeper's finger. A remark changes no total, so
      nothing else on screen has to move. */
+  wrap.querySelectorAll("[data-po-line-brand]").forEach(sel=>{
+    sel.addEventListener("change", ()=>poSwapLineBrand(sel.dataset.poLineBrand, sel.value));
+  });
+
   wrap.querySelectorAll("[data-po-line-remark]").forEach(inp=>{
     inp.addEventListener("input", ()=>{
       state.po.cart[inp.dataset.poLineRemark].remark = inp.value;

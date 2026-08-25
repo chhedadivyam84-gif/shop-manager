@@ -75,7 +75,9 @@ let state = {
   po: {
     supplierId: null, purchaseType: "Local", date: "", deliveryAddress: "", expectedDeliveryDate: "",
     paymentTerms: "", deliveryTerms: "", remarks: "", freight: 0, otherCharges: 0, roundOff: true,
-    cart: [], editingPoId: null, brandFilter: ""
+    cart: [], editingPoId: null, brandFilter: "",
+    poType: "General", salesman: "", againstCustomerId: null, soId: null,
+    requiredDeliveryDate: "", soOptions: []
   },
   quotation: {
     customerId: null, saleType: "Local", date: "", validUntil: "", terms: "", remarks: "",
@@ -725,6 +727,30 @@ async function initApp(){
   document.getElementById("po-payment-terms").addEventListener("input", (e)=>{ state.po.paymentTerms = e.target.value; });
   document.getElementById("po-delivery-terms").addEventListener("input", (e)=>{ state.po.deliveryTerms = e.target.value; });
   document.getElementById("po-remarks").addEventListener("input", (e)=>{ state.po.remarks = e.target.value; });
+
+  /* Which kind of purchase this is. Switching to a stock purchase leaves
+     the party fields filled but hidden — the server drops them on save,
+     and clearing them here would lose the salesman's typing the moment
+     they tapped the wrong chip. */
+  document.querySelectorAll("[data-po-kind]").forEach(b => b.addEventListener("click", ()=>{
+    state.po.poType = b.dataset.poKind;
+    renderPoKind();
+    renderPoCart();          // the per-line party column appears with it
+  }));
+  document.getElementById("po-salesman").addEventListener("input", (e)=>{ state.po.salesman = e.target.value; });
+  document.getElementById("po-required-date").addEventListener("change", (e)=>{ state.po.requiredDeliveryDate = e.target.value; });
+  document.getElementById("po-party-search").addEventListener("input", renderPoParties);
+  document.getElementById("po-so").addEventListener("change", (e)=>{
+    state.po.soId = e.target.value || null;
+    /* The sales order already knows whose it is, so choosing one sets the
+       party too — the server does the same on save, and disagreeing with
+       it on screen would be a bug the shop has to notice. */
+    const so = (state.po.soOptions||[]).find(s => s.id === state.po.soId);
+    if(so && so.customer_id){
+      state.po.againstCustomerId = so.customer_id;
+      renderPoParties();
+    }
+  });
   document.querySelectorAll('[data-po-type]').forEach(b=>{
     b.addEventListener("click", ()=>{
       state.po.purchaseType = b.dataset.poType;
@@ -11254,10 +11280,17 @@ async function renderPoScreen(){
   renderPoEditBanner();
   renderPoSuppliers();
   renderPoSupplierInfo();
+  renderPoKind();
+  renderPoParties();
+  renderPoSoOptions();
   renderPoBrands();
   renderPoProducts();
   renderPoCart();
   renderPoTotals();
+  /* Unawaited: the screen is usable without them, and a slow list should
+     not hold up the whole form. */
+  loadSalesmanNames();
+  loadPoSalesOrders();
 }
 function renderPoEditBanner(){
   const el = document.getElementById("po-edit-mode-banner");
@@ -11281,11 +11314,17 @@ function resetPoState(){
   state.po = {
     supplierId: null, purchaseType: "Local", date: "", deliveryAddress: "", expectedDeliveryDate: "",
     paymentTerms: "", deliveryTerms: "", remarks: "", freight: 0, otherCharges: 0, roundOff: true,
-    cart: [], editingPoId: null, brandFilter: ""
+    cart: [], editingPoId: null, brandFilter: "",
+    poType: "General", salesman: "", againstCustomerId: null, soId: null,
+    requiredDeliveryDate: "", soOptions: []
   };
   const set = (id, val) => { const el=document.getElementById(id); if(el) el.value = val; };
   set("po-delivery-address", ""); set("po-expected-date", ""); set("po-payment-terms", "");
   set("po-delivery-terms", ""); set("po-remarks", ""); set("po-freight-input", 0); set("po-other-input", 0);
+  set("po-required-date", ""); set("po-salesman", ""); set("po-party-search", "");
+  document.querySelectorAll("[data-po-kind]").forEach(x=>x.classList.toggle("selected", x.dataset.poKind==="General"));
+  const againstFields = document.getElementById("po-against-fields");
+  if(againstFields) againstFields.style.display = "none";
   const chips = document.getElementById("po-brand-chips");
   if(chips) chips.innerHTML = "";
   document.querySelectorAll('[data-po-type]').forEach(x=>x.classList.toggle("selected", x.dataset.poType==="Local"));
@@ -11437,6 +11476,123 @@ function poSwapLineBrand(idx, productId){
   renderPoCart(); renderPoTotals();
 }
 
+/* ============================================================
+   WHO THE ORDER IS FOR
+
+   A purchase order is one of two things, and the screen should not pretend
+   otherwise:
+
+     Stock purchase          the shop topping up its own racks. Nobody is
+                             waiting for it; asking which customer would be
+                             a field with no answer.
+
+     Against a customer      a salesman has promised material to a party and
+                             is buying it in. Then salesman, party, sales
+                             order and the date they were promised all
+                             matter, and the shop wants them back later.
+
+   So the whole block appears only for the second kind. Fields nobody can
+   fill are worse than absent: they get filled with something.
+   ============================================================ */
+
+/** Names already in use, so "Rahul" doesn't become three different people. */
+async function loadSalesmanNames(){
+  try{ state.salesmanNames = await api("GET", "/reports/salesman-names"); }
+  catch(e){ state.salesmanNames = []; }
+  const dl = document.getElementById("po-salesman-names");
+  if(dl) dl.innerHTML = (state.salesmanNames||[]).map(n=>`<option value="${escapeHtml(n)}"></option>`).join("");
+}
+
+function renderPoKind(){
+  const against = state.po.poType === "AgainstCustomer";
+  document.querySelectorAll("[data-po-kind]").forEach(b =>
+    b.classList.toggle("selected", b.dataset.poKind === state.po.poType));
+  const fields = document.getElementById("po-against-fields");
+  if(fields) fields.style.display = against ? "" : "none";
+}
+
+/** The customer this order is for. Same chip pattern as the supplier row. */
+function renderPoParties(){
+  const wrap = document.getElementById("po-parties");
+  if(!wrap) return;
+  const q = (document.getElementById("po-party-search").value||"").toLowerCase();
+  const list = (state.customers||[]).filter(c =>
+    !q || c.name.toLowerCase().includes(q) || (c.phone||"").includes(q));
+
+  /* The chosen party stays on screen even when the search no longer matches
+     it — otherwise typing a new search makes the current selection vanish
+     and it looks like nothing is selected. */
+  const picked = state.po.againstCustomerId;
+  const shown = list.slice(0, 30);
+  if(picked && !shown.some(c => c.id === picked)){
+    const c = (state.customers||[]).find(x => x.id === picked);
+    if(c) shown.unshift(c);
+  }
+
+  wrap.innerHTML = shown.map(c =>
+    `<button class="chip ${c.id===picked?"selected":""}" data-po-party="${escapeHtml(c.id)}">${escapeHtml(c.name)}</button>`
+  ).join("") || `<span class="muted" style="font-size:12px;">No matching customer.</span>`;
+
+  wrap.querySelectorAll("[data-po-party]").forEach(b => b.addEventListener("click", ()=>{
+    state.po.againstCustomerId = state.po.againstCustomerId === b.dataset.poParty ? null : b.dataset.poParty;
+    /* Picking a party by hand means they are no longer working from that
+       sales order's party, so a mismatched SO is dropped rather than left
+       to overrule them on save. */
+    if(state.po.soId){
+      const so = (state.po.soOptions||[]).find(s => s.id === state.po.soId);
+      if(so && so.customer_id !== state.po.againstCustomerId) state.po.soId = null;
+    }
+    renderPoParties(); renderPoSoOptions();
+  }));
+}
+
+/** Sales orders that are still open, newest first. */
+async function loadPoSalesOrders(){
+  try{
+    const rows = await api("GET", "/sales-orders");
+    state.po.soOptions = (rows||[]).filter(s => s.status !== "Cancelled");
+  }catch(e){ state.po.soOptions = []; }
+  renderPoSoOptions();
+}
+
+function renderPoSoOptions(){
+  const sel = document.getElementById("po-so");
+  if(!sel) return;
+  const all = state.po.soOptions || [];
+  /* Once a party is chosen, only their orders are worth offering — picking
+     another customer's sales order here would silently move the whole PO to
+     that customer on save. */
+  const list = state.po.againstCustomerId
+    ? all.filter(s => s.customer_id === state.po.againstCustomerId)
+    : all;
+
+  // The list route returns raw rows, so the party's name is looked up here
+  // rather than asking the server for a shape only this dropdown wants.
+  const partyName = id => {
+    const c = (state.customers||[]).find(x => x.id === id);
+    return c ? c.name : "";
+  };
+  sel.innerHTML = `<option value="">— none —</option>` + list.map(s =>
+    `<option value="${escapeHtml(s.id)}"${s.id===state.po.soId?" selected":""}>${escapeHtml(s.so_no)} · ${escapeHtml(partyName(s.customer_id))} · ${s.date}</option>`
+  ).join("");
+  if(state.po.soId && !list.some(s => s.id === state.po.soId)) sel.value = "";
+}
+
+/** Every party named anywhere on this order — header or any line. */
+function poPartiesOnOrder(){
+  const out = [];
+  const seen = new Set();
+  const add = id => {
+    if(!id || seen.has(id)) return;
+    const c = (state.customers||[]).find(x => x.id === id);
+    if(!c) return;
+    seen.add(id); out.push(c);
+  };
+  add(state.po.againstCustomerId);
+  state.po.cart.forEach(c => add(c.againstCustomerId));
+  return out;
+}
+
 function renderPoBrands(){
   const wrap = document.getElementById("po-brand-chips");
   if(!wrap) return;
@@ -11495,6 +11651,7 @@ function addToPoCart(productId, sizeIdx){
     mode: Pricing.normaliseMode(p.default_mode),
     ...lineDims(p, size),
     brand: (p.brand||"").trim() || "Other", remark: "",
+    againstCustomerId: state.po.againstCustomerId || null,
     pieces: 1, rate: size.price, gstRate: p.gst,
     discountType: "pct", discountValue: 0
   });
@@ -11561,6 +11718,16 @@ function poCartLineHtml(c, idx){
       <div class="dim-grid">
         ${dim("Discount", c.discountType==="flat"?"₹":"%", "discountValue", c.discountValue)}
         <label class="dim"><span>GST <em>(%)</em></span><input type="number" value="${c.gstRate}" disabled style="opacity:0.6;"></label>
+        ${state.po.poType !== "AgainstCustomer" ? "" : `
+        <label class="dim" style="grid-column:1/-1;">
+          <span>For party <em>(this item)</em></span>
+          <select data-po-line-party="${idx}">
+            <option value="">${state.po.againstCustomerId
+              ? escapeHtml((state.customers.find(x=>x.id===state.po.againstCustomerId)||{}).name || "Order's party")
+              : "— no party —"}</option>
+            ${(state.customers||[]).map(x=>`<option value="${escapeHtml(x.id)}"${x.id===c.againstCustomerId?" selected":""}>${escapeHtml(x.name)}</option>`).join("")}
+          </select>
+        </label>`}
         <label class="dim" style="grid-column:1/-1;">
           <span>Remark <em>(optional)</em></span>
           <input type="text" data-po-line-remark="${idx}" value="${escapeHtml(c.remark||"")}"
@@ -11639,6 +11806,17 @@ function renderPoCart(){
     sel.addEventListener("change", ()=>poSwapLineBrand(sel.dataset.poLineBrand, sel.value));
   });
 
+  /* Blank means "whoever the order is for" rather than nobody, which is
+     why it is stored as null and resolved on the server. Re-rendering is
+     needed here: the cart groups by brand, not party, but the summary
+     line above it counts parties. */
+  wrap.querySelectorAll("[data-po-line-party]").forEach(sel=>{
+    sel.addEventListener("change", ()=>{
+      state.po.cart[sel.dataset.poLineParty].againstCustomerId = sel.value || null;
+      renderPoCart();
+    });
+  });
+
   wrap.querySelectorAll("[data-po-line-remark]").forEach(inp=>{
     inp.addEventListener("input", ()=>{
       state.po.cart[inp.dataset.poLineRemark].remark = inp.value;
@@ -11711,6 +11889,11 @@ function renderPoTotals(){
 }
 function poPayload(){
   return {
+    poType: state.po.poType,
+    salesman: state.po.salesman,
+    againstCustomerId: state.po.againstCustomerId,
+    soId: state.po.soId,
+    requiredDeliveryDate: state.po.requiredDeliveryDate,
     supplierId: state.po.supplierId,
     date: document.getElementById("po-date").value || state.po.date,
     deliveryAddress: state.po.deliveryAddress,
@@ -11722,7 +11905,8 @@ function poPayload(){
       productId:c.productId, sizeId:c.sizeId, name:c.name, mode:c.mode,
       lengthFt:c.lengthFt, widthVal:c.widthVal, thicknessIn:c.thicknessIn,
       pieces:c.pieces, rate:c.rate, gstRate:c.gstRate,
-      discountType:c.discountType, discountValue:c.discountValue, remark:c.remark||""
+      discountType:c.discountType, discountValue:c.discountValue, remark:c.remark||"",
+      againstCustomerId: c.againstCustomerId || null
     }))
   };
 }
@@ -11782,6 +11966,14 @@ async function openPoDetail(poId){
     <button class="sheet-close" data-sheetclose>✕</button>
     <div class="sheet-title">${escapeHtml(po.po_no)} <span class="pill ${PO_STATUS_PILL[po.status]||''}">${escapeHtml(po.status)}</span></div>
     <div class="muted" style="font-size:12px;margin-bottom:10px;">${po.date}${po.expected_delivery_date?" · Expected "+po.expected_delivery_date:""}${po.delivery_address?"<br>"+escapeHtml(po.delivery_address):""}</div>
+    ${po.po_type === "AgainstCustomer" ? `
+    <div class="card po-chain">
+      <div class="po-chain-title">Bought against a customer order</div>
+      ${po.salesman ? `<div><span>Salesman</span><b>${escapeHtml(po.salesman)}</b></div>` : ""}
+      ${po.against_customer_name ? `<div><span>Party</span><b>${escapeHtml(po.against_customer_name)}</b></div>` : ""}
+      ${po.so_no ? `<div><span>Sales Order</span><b>${escapeHtml(po.so_no)}</b></div>` : ""}
+      ${po.required_delivery_date ? `<div><span>Promised by</span><b>${po.required_delivery_date}</b></div>` : ""}
+    </div>` : ""}
     ${poItemsByBrand(po).map((g, gi, all) => (all.length > 1 ? `
       <div class="po-brand-group-head">
         <span>${escapeHtml(g.brand)}</span>
@@ -11789,7 +11981,7 @@ async function openPoDetail(poId){
       </div>` : "") + `
       <div class="card" style="margin-top:0;">${g.items.map(it=>`
         <div class="list-row">
-          <div><div class="row-title">${escapeHtml(it.name)}</div><div class="row-sub">${escapeHtml(it.size_label||"")} · ${it.pieces} ${escapeHtml(it.unit_label||"")} × ${fmt(it.rate)}${it.discount_amount>0?" · disc. "+fmt(it.discount_amount):""}</div></div>
+          <div><div class="row-title">${escapeHtml(it.name)}</div><div class="row-sub">${escapeHtml(it.size_label||"")} · ${it.pieces} ${escapeHtml(it.unit_label||"")} × ${fmt(it.rate)}${it.discount_amount>0?" · disc. "+fmt(it.discount_amount):""}${it.against_customer_name && it.against_customer_name !== po.against_customer_name ? " · for "+escapeHtml(it.against_customer_name) : ""}</div>${it.pending_qty > 0 && (it.received_qty||0) > 0 ? `<div class="row-sub po-pending-note">${Pricing.formatQty(it.received_qty, it.mode)} received · ${Pricing.formatQty(it.pending_qty, it.mode)} still due</div>` : ""}</div>
           <div class="row-right row-title">${fmt(lineTotal(it))}</div>
         </div>`).join("")}
       </div>`).join("")}
@@ -11818,6 +12010,8 @@ async function openPoDetail(poId){
       ${canEdit ? `<button class="btn btn-outline" id="edit-po-btn">✎ Edit</button>` : ""}
       ${canApprove ? `<button class="btn btn-outline" id="approve-po-btn">Approve</button>` : ""}
       ${canConvert ? `<button class="btn btn-gold" id="convert-po-btn">Convert to Purchase Entry</button>` : ""}
+      ${["Cancelled"].includes(po.status) || po.converted_purchase_id ? ""
+        : `<button class="btn btn-outline" id="receive-po-btn">📦 Record delivery</button>`}
       <button class="btn btn-outline" id="print-po-btn">Print</button>
       <button class="btn btn-outline" id="share-po-btn">💬 WhatsApp — whole PO</button>
       ${poItemsByBrand(po).length > 1
@@ -11856,6 +12050,8 @@ async function openPoDetail(poId){
       toast(`Converted to ${result.purchase.purchase_no}.`, "ok");
     }catch(err){ toast(err.message); }
   });
+  const receiveBtn = sheet.querySelector("#receive-po-btn");
+  if(receiveBtn) receiveBtn.addEventListener("click", ()=>{ closeAllSheets(); openPoReceive(po); });
   sheet.querySelector("#print-po-btn").addEventListener("click", ()=>printPurchaseOrder(po));
   sheet.querySelector("#share-po-btn").addEventListener("click", ()=>sharePoWhatsApp(po));
   const brandShareBtn = sheet.querySelector("#share-po-brand-btn");
@@ -11896,7 +12092,8 @@ function editExistingPo(po){
       /* The brand SAVED on the line, not the product's brand today — if a
          product was re-branded since, the order still reads as it was placed. */
       brand: (it.brand||"").trim() || (product ? ((product.brand||"").trim()||"Other") : "Other"),
-      remark: it.remark || ""
+      remark: it.remark || "",
+      againstCustomerId: it.against_customer_id || null
     };
   });
   state.po.supplierId = po.supplier_id;
@@ -11910,6 +12107,11 @@ function editExistingPo(po){
   state.po.freight = po.freight || 0;
   state.po.otherCharges = po.other_charges || 0;
   state.po.roundOff = true;
+  state.po.poType = po.po_type || "General";
+  state.po.salesman = po.salesman || "";
+  state.po.againstCustomerId = po.against_customer_id || null;
+  state.po.soId = po.so_id || null;
+  state.po.requiredDeliveryDate = po.required_delivery_date || "";
   state.po.editingPoId = po.id;
 
   switchTab("po");
@@ -11921,6 +12123,8 @@ function editExistingPo(po){
     set("po-payment-terms", state.po.paymentTerms);
     set("po-delivery-terms", state.po.deliveryTerms);
     set("po-remarks", state.po.remarks);
+    set("po-required-date", state.po.requiredDeliveryDate);
+    set("po-salesman", state.po.salesman);
     set("po-freight-input", state.po.freight);
     set("po-other-input", state.po.otherCharges);
     document.querySelectorAll('[data-po-type]').forEach(x=>x.classList.toggle("selected", x.dataset.poType===state.po.purchaseType));
@@ -11929,6 +12133,99 @@ function editExistingPo(po){
   });
 }
 /** Simple print view — mirrors printCashBook()/printPartyLedger(); no dedicated PDF pipeline for POs yet. */
+/* ============================================================
+   RECORDING WHAT ARRIVED
+
+   A mill sending 60 of 100 sheets is the ordinary case. Before this the
+   order was either untouched or converted in full, so the 40 still owed to
+   the customer were a number nobody held.
+
+   This records the delivery only. It does not touch stock or the supplier's
+   due — those move when the supplier's bill is entered, which is Convert to
+   Purchase Entry's job, and doing it in both places would double the stock.
+   The sheet says so out loud, because "Record delivery" reasonably sounds
+   like it would.
+   ============================================================ */
+function openPoReceive(po){
+  const sheet = document.getElementById("sheet-po-receive");
+  const draft = new Map(po.items.map(it => [String(it.id), Number(it.received_qty) || 0]));
+
+  const paint = () => {
+    const rows = po.items.map(it => {
+      const got = draft.get(String(it.id)) || 0;
+      const due = round2(Math.max(0, (it.qty || 0) - got));
+      const full = due <= 0.0001;
+      return `
+        <div class="card" style="margin-top:0;margin-bottom:6px;">
+          <div class="row-title">${escapeHtml(it.name)}${it.size_label?` <span class="muted" style="font-weight:600;">${escapeHtml(it.size_label)}</span>`:""}</div>
+          <div class="row-sub">
+            ${escapeHtml(it.brand||"")}${it.against_customer_name?" · for "+escapeHtml(it.against_customer_name):""}
+            · ordered ${Pricing.formatQty(it.qty, it.mode)}
+          </div>
+          <div class="dim-grid" style="margin-top:8px;">
+            <label class="dim">
+              <span>Received so far</span>
+              <input type="number" inputmode="decimal" step="any" min="0" max="${it.qty}"
+                     data-recv="${it.id}" value="${got || ""}" placeholder="0">
+            </label>
+            <label class="dim">
+              <span>Still due</span>
+              <input type="text" value="${full ? "nothing" : Pricing.formatQty(due, it.mode)}" disabled
+                     style="opacity:.7;${full?"":"color:var(--danger);font-weight:800;"}">
+            </label>
+          </div>
+        </div>`;
+    }).join("");
+
+    sheet.innerHTML = `
+      <div class="sheet-handle"></div>
+      <button class="sheet-close" data-sheetclose>✕</button>
+      <div class="sheet-title">What has arrived — ${escapeHtml(po.po_no)}</div>
+      <div class="muted" style="font-size:12px;margin-bottom:10px;">
+        Enter the running total received against each line, not just today's lot.
+        This updates what is still owed; it does <b>not</b> add stock or the supplier's bill —
+        that happens when you convert the order to a Purchase Entry.
+      </div>
+      ${rows}
+      <div class="action-row" style="margin-top:12px;">
+        <button class="btn btn-gold" id="po-receive-save">Save</button>
+        <button class="btn btn-outline" id="po-receive-all">Mark everything received</button>
+      </div>`;
+
+    sheet.querySelector("[data-sheetclose]").addEventListener("click", ()=>{
+      closeAllSheets(); openPoDetail(po.id);
+    });
+    sheet.querySelectorAll("[data-recv]").forEach(inp => {
+      inp.addEventListener("input", ()=>{
+        const v = inp.value === "" ? 0 : Math.max(0, parseFloat(inp.value) || 0);
+        draft.set(String(inp.dataset.recv), v);
+      });
+      // Repaint on blur only, so the "still due" figure updates without
+      // stealing the cursor mid-number.
+      inp.addEventListener("blur", paint);
+    });
+    sheet.querySelector("#po-receive-all").addEventListener("click", ()=>{
+      po.items.forEach(it => draft.set(String(it.id), it.qty));
+      paint();
+    });
+    sheet.querySelector("#po-receive-save").addEventListener("click", async ()=>{
+      const btn = sheet.querySelector("#po-receive-save");
+      btn.disabled = true;
+      try{
+        const saved = await api("POST", `/purchase-orders/${po.id}/receive`, {
+          lines: po.items.map(it => ({ id: it.id, receivedQty: draft.get(String(it.id)) || 0 }))
+        });
+        toast(`Delivery recorded — ${saved.status}.`, "ok");
+        closeAllSheets();
+        openPoDetail(po.id);
+      }catch(e){ toast(e.message); btn.disabled = false; }
+    });
+  };
+
+  paint();
+  showSheet("sheet-po-receive");
+}
+
 function printPurchaseOrder(po){
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(po.po_no)}</title>
     <style>

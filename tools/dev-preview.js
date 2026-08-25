@@ -58,6 +58,19 @@ if (!seeded) {
     db.prepare("INSERT INTO product_sizes (product_id, label, price, stock, sort_order) VALUES (?,?,?,100,0)")
       .run(id, "8x4", price);
   }
+
+  /* Parties and a sales order, so the against-customer side of a purchase
+     order has something real to point at. */
+  for (const [id, name] of [["CUST-A","ABC Traders"],["CUST-B","XYZ Traders"],["CUST-C","Royal Traders"]]) {
+    db.prepare("INSERT INTO customers (id,name,phone,created_at) VALUES (?,?,?,?)")
+      .run(id, name, "98200" + id.slice(-1).charCodeAt(0) + "1122", now);
+  }
+  db.prepare(`INSERT INTO sales_orders (id,so_no,date,created_at,customer_id,sale_type,tax_type,total,status)
+              VALUES ('SO-PREVIEW','SO0000542',date('now'),?,'CUST-A','Local','CGST_SGST',25000,'Confirmed')`).run(now);
+  db.prepare(`INSERT INTO sales_order_items (so_id,product_id,size_id,name,brand,mode,size_label,pieces,per_piece,unit_label,qty,rate)
+              VALUES ('SO-PREVIEW','PV1',(SELECT id FROM product_sizes WHERE product_id='PV1'),
+                      '18mm Plywood','Swagat','UNIT','8x4',20,1,'Sheet',20,1250)`).run();
+  console.log("[preview] seeded 3 parties and sales order SO0000542");
   console.log(`[preview] seeded ${rows.length} products across 4 companies`);
 }
 

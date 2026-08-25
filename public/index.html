@@ -902,6 +902,31 @@
         <div class="chip-row" id="po-suppliers" style="margin-top:8px;"></div>
         <div class="card" id="po-supplier-info" style="display:none;margin-top:8px;font-size:12px;"></div>
 
+        <div class="section-title">Order for</div>
+        <div class="card">
+          <label class="field-label" style="margin-top:0;">Purchase Type</label>
+          <div class="chip-row" id="po-kind-chips">
+            <button class="chip selected" data-po-kind="General">Stock purchase</button>
+            <button class="chip" data-po-kind="AgainstCustomer">Against a customer order</button>
+          </div>
+
+          <div id="po-against-fields" style="display:none;">
+            <label class="field-label" style="margin-top:10px;">Salesman</label>
+            <input type="text" id="po-salesman" list="po-salesman-names" placeholder="Who took this order — e.g. Rahul">
+            <datalist id="po-salesman-names"></datalist>
+
+            <label class="field-label" style="margin-top:10px;">Sales Order <span class="muted" style="font-weight:400;">— optional</span></label>
+            <select id="po-so"></select>
+
+            <label class="field-label" style="margin-top:10px;">Against Party / Customer</label>
+            <input type="text" id="po-party-search" placeholder="Search customer by name or phone">
+            <div class="chip-row" id="po-parties" style="margin-top:8px;"></div>
+
+            <label class="field-label" style="margin-top:10px;">Required Delivery Date <span class="muted" style="font-weight:400;">— what the customer was promised</span></label>
+            <input type="date" id="po-required-date">
+          </div>
+        </div>
+
         <div class="section-title">Order Details</div>
         <div class="card">
           <div class="charge-grid">
@@ -1158,6 +1183,7 @@
   <div class="sheet" id="sheet-purchase-detail"></div>
   <div class="sheet" id="sheet-po-detail"></div>
   <div class="sheet" id="sheet-po-brand-share"></div>
+  <div class="sheet" id="sheet-po-receive"></div>
   <div class="sheet" id="sheet-quotation-detail"></div>
   <div class="sheet" id="sheet-so-detail"></div>
   <div class="sheet" id="sheet-sales-return"></div>

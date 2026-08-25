@@ -43,7 +43,11 @@ function r2Config() {
   };
 }
 
+/* Set only while a forProvider() handle is in use — see the bottom of this file. */
+let pinned = null;
+
 function provider() {
+  if (pinned) return pinned;
   if (r2Config().ok) return "r2";
   if (supabaseConfig().ok) return "supabase";
   return null;
@@ -278,4 +282,37 @@ async function remove(names) {
   return done;
 }
 
-module.exports = { provider, describe, list, upload, download, remove, configured: () => !!provider() };
+
+/* ---------------------------------------------------------- one specific one
+
+   The four verbs above act on whichever provider is configured. Moving
+   backups from one to the other needs both at once, so this returns a handle
+   bound to a named provider regardless of which would otherwise win.
+
+   Only migration uses it. Everything else should stay provider-blind. */
+function forProvider(name) {
+  if (name !== "supabase" && name !== "r2") throw new Error("Unknown provider: " + name);
+  const cfg = name === "r2" ? r2Config() : supabaseConfig();
+  if (!cfg.ok) throw new Error(name + " is not configured");
+
+  /* Held across the whole call, not just until the promise is handed back.
+     Each verb happens to read the provider on its first synchronous line, so
+     releasing early would work today and break the first time one of them
+     grows an await above that read. */
+  const only = fn => async (...args) => {
+    const saved = pinned;
+    pinned = name;
+    try { return await fn(...args); } finally { pinned = saved; }
+  };
+  return {
+    name,
+    label: name === "r2" ? "Cloudflare R2" : "Supabase Storage",
+    bucket: cfg.bucket,
+    list: only(list),
+    upload: only(upload),
+    download: only(download),
+    remove: only(remove)
+  };
+}
+
+module.exports = { provider, describe, list, upload, download, remove, forProvider, configured: () => !!provider() };

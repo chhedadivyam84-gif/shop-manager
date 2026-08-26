@@ -6177,7 +6177,11 @@ function renderAddProductSheet(context){
       are correct, otherwise those read as zero. A real purchase entry always overrides the cost.
     </div>
     <div id="np-sizes"></div>
-    <a href="#" id="np-add-size" style="font-size:12px;font-weight:700;">+ Add another size</a>
+    <div id="np-range-panel"></div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;">
+      <a href="#" id="np-add-size" style="font-size:12px;font-weight:700;">+ Add another size</a>
+      <a href="#" id="np-add-range" style="font-size:12px;font-weight:700;">+ Add a whole range</a>
+    </div>
     ${editing ? `<p class="muted" style="font-size:11px;margin-top:8px;">Correcting a miscount here is fine. For goods actually received, use “Record Stock In” so the purchase is kept in the history.</p>` : ""}
     <label class="field-label">Godown / Rack</label><input type="text" id="np-godown" placeholder="e.g. Godown A / R3" value="${v("godown")}">
     <button class="btn btn-primary" id="np-save" style="margin-top:16px;">${editing ? "Update Product" : "Save Product"}</button>
@@ -6257,6 +6261,7 @@ function renderAddProductSheet(context){
     b.classList.add("selected"); renderDims();
   }));
   sheet.querySelector("#np-add-size").addEventListener("click", (e)=>{ e.preventDefault(); sizes.push({label:"",price:"",stock:0,cost:0,shopStock:0,warehouseStock:0}); renderSizes(); });
+  sheet.querySelector("#np-add-range").addEventListener("click", (e)=>{ e.preventDefault(); openRangeBuilder(sizes, renderSizes); });
   sheet.querySelector("#np-save").addEventListener("click", async ()=>{
     const name = document.getElementById("np-name").value.trim();
     if(!name){ toast("Enter a product name."); return; }
@@ -19704,6 +19709,148 @@ function openAppThemePicker(){
 
   draw(current);
   showSheet("sheet-app-theme");
+}
+
+
+/* ============================================================
+   A WHOLE RANGE AT ONCE
+
+   Some products are not one thing with a size — they are a grid. VOX
+   Linerio is three profiles (S-Line, M-Line, L-Line) and every profile
+   comes in every colour, so what the shop actually stocks is three times
+   however many colours they carry. Entered a row at a time that is thirty
+   taps on "+ Add another size" before a single price is typed, and it is
+   the reason a product like that ends up split across three or four
+   half-made product records instead of one.
+
+   So the two lists are typed once and every combination is made under the
+   ONE product. Nothing new is stored: these are ordinary variant rows, so
+   billing, stock per location, purchase, reports and print all keep
+   working exactly as they already do for a product with two sizes.
+
+   ONE AXIS IS ENOUGH. Leave colours empty and it makes three rows, not
+   none — a range of sizes with no finishes is the commoner case and should
+   not need a different button.
+
+   IT NEVER TOUCHES A ROW THAT IS ALREADY THERE. Combinations that already
+   exist are skipped rather than duplicated or overwritten, so running it
+   again after adding two new colours adds two rows and leaves the prices
+   and stock counts on the other twenty-eight alone.
+   ============================================================ */
+
+/** "S-Line, M-Line\nL-Line" -> ["S-Line","M-Line","L-Line"].
+ *  Commas or new lines, because people paste from both. */
+function splitRangeList(text){
+  return String(text || "")
+    .split(/[,\n]/)
+    .map(s => s.trim())
+    .filter(Boolean)
+    /* Same colour typed twice would make two identical rows that can never
+       be told apart on a bill. */
+    .filter((s, i, all) => all.findIndex(x => x.toLowerCase() === s.toLowerCase()) === i);
+}
+
+/** How a generated variant is named. One separator, used everywhere, so a
+ *  label can always be read back as "profile, then finish". */
+function rangeLabel(a, b){
+  return b ? `${a} · ${b}` : a;
+}
+
+function openRangeBuilder(sizes, onDone){
+  const host = document.getElementById("np-range-panel");
+  if(!host) return;
+
+  host.innerHTML = `
+    <div style="border:1px dashed var(--navy);border-radius:9px;padding:10px;margin-bottom:8px;">
+      <div style="font-weight:700;font-size:12px;margin-bottom:2px;">Add a whole range</div>
+      <div class="muted" style="font-size:11px;margin-bottom:8px;">
+        Type the lines and the colours. Every combination is added to <b>this one product</b>,
+        each keeping its own price and its own stock.
+      </div>
+
+      <label class="field-label">Lines / types</label>
+      <input type="text" id="np-range-a" placeholder="S-Line, M-Line, L-Line">
+
+      <label class="field-label" style="margin-top:8px;">Colours / finishes <span class="muted" style="font-weight:400;">— optional</span></label>
+      <input type="text" id="np-range-b" placeholder="Natural, Chocolate, Mocca, White, Grey, Anthracite">
+
+      <div style="display:flex;gap:8px;margin-top:10px;">
+        <label class="dim" style="flex:1;"><span>Cost each</span>
+          <input type="number" min="0" step="any" id="np-range-cost" placeholder="0"></label>
+        <label class="dim" style="flex:1;"><span>Price each</span>
+          <input type="number" min="0" step="any" id="np-range-price" placeholder="0"></label>
+      </div>
+      <div class="muted" style="font-size:11px;margin-top:6px;">
+        The same figures go on every row to start with — change the ones that differ afterwards.
+        Stock stays at zero; count it in per line once the goods are on the shelf.
+      </div>
+
+      <div id="np-range-preview" class="muted" style="font-size:11px;margin-top:8px;"></div>
+
+      <div style="display:flex;gap:8px;margin-top:10px;">
+        <button class="btn btn-primary" id="np-range-add" style="flex:1;">Add them</button>
+        <button class="btn btn-outline" id="np-range-cancel" style="flex:0 0 auto;">Cancel</button>
+      </div>
+    </div>`;
+
+  const a = document.getElementById("np-range-a");
+  const b = document.getElementById("np-range-b");
+  const preview = document.getElementById("np-range-preview");
+
+  const combos = () => {
+    const A = splitRangeList(a.value);
+    const B = splitRangeList(b.value);
+    if(!A.length) return [];
+    return B.length
+      ? A.flatMap(x => B.map(y => rangeLabel(x, y)))
+      : A.map(x => rangeLabel(x, ""));
+  };
+
+  const refresh = () => {
+    const all = combos();
+    const have = new Set(sizes.map(s => String(s.label || "").trim().toLowerCase()));
+    const fresh = all.filter(l => !have.has(l.toLowerCase()));
+    const already = all.length - fresh.length;
+    preview.innerHTML = !all.length
+      ? "Nothing yet — type at least one line above."
+      : `<b>${fresh.length}</b> to add${already ? ` · ${already} already on this product, left alone` : ""}`
+        + (fresh.length ? `<br>${escapeHtml(fresh.slice(0, 4).join(", "))}${fresh.length > 4 ? ` … and ${fresh.length - 4} more` : ""}` : "");
+  };
+  a.addEventListener("input", refresh);
+  b.addEventListener("input", refresh);
+  refresh();
+
+  document.getElementById("np-range-cancel").addEventListener("click", (e) => {
+    e.preventDefault();
+    host.innerHTML = "";
+  });
+
+  document.getElementById("np-range-add").addEventListener("click", (e) => {
+    e.preventDefault();
+    const all = combos();
+    if(!all.length){ toast("Type at least one line — e.g. S-Line, M-Line, L-Line."); a.focus(); return; }
+
+    const have = new Set(sizes.map(s => String(s.label || "").trim().toLowerCase()));
+    const fresh = all.filter(l => !have.has(l.toLowerCase()));
+    if(!fresh.length){ toast("Every one of those is already on this product."); return; }
+
+    const cost = Math.max(0, parseFloat(document.getElementById("np-range-cost").value) || 0);
+    const price = Math.max(0, parseFloat(document.getElementById("np-range-price").value) || 0);
+
+    /* A single blank row is what a brand-new product starts with. Filling it
+       rather than leaving it above thirty real ones saves the owner deleting
+       an empty line they did not create. */
+    if(sizes.length === 1 && !String(sizes[0].label || "").trim() && !sizes[0].price){
+      sizes.length = 0;
+    }
+    fresh.forEach(label => sizes.push({
+      label, price: price || "", cost, stock: 0, shopStock: 0, warehouseStock: 0
+    }));
+
+    host.innerHTML = "";
+    onDone();
+    toast(`${fresh.length} variant${fresh.length === 1 ? "" : "s"} added to this product.`, "ok");
+  });
 }
 
 })();

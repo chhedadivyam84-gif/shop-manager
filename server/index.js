@@ -42,7 +42,53 @@ start().catch(err => {
   process.exit(1);
 });
 
+/* ============================================================
+   ONE BUCKET PER SHOP
+
+   restore.js repopulates an empty disk from the NEWEST shop-*.db in the
+   bucket. It has no way to tell whose it is, and it should not need one:
+   a bucket is meant to hold one shop's books.
+
+   Two sold copies pointed at the same bucket would therefore overwrite
+   each other's backups and, the first time either was redeployed,
+   restore the other shop's entire book — customers, bills, outstanding.
+   There is no recovering from that quietly, and nothing later in the
+   code can make up for it.
+
+   SUPABASE_BUCKET has a default so the shop's own copy needs no
+   configuration. On a SOLD copy that default is a trap: whoever sets up
+   the second buyer and leaves the variable unset lands both on
+   "shop-backups". So a licence-enforced copy must name its bucket.
+
+   This refuses at start-up rather than warning, and start-up on a hosted
+   copy is the first deploy — before the shop has entered anything. It is
+   the one moment when failing costs nothing and is impossible to miss.
+   ============================================================ */
+function assertOwnBucket() {
+  const sold = require("./license").enabled();
+  if (!sold) return;                       // the shop's own copy: unchanged
+  const url = (process.env.SUPABASE_URL || "").trim();
+  const r2 = (process.env.R2_ACCOUNT_ID || "").trim();
+  if (!url && !r2) return;                 // no cloud backup configured at all
+
+  const named = (process.env.SUPABASE_BUCKET || "").trim() || (process.env.R2_BUCKET || "").trim();
+  if (named) return;
+
+  console.error("");
+  console.error("  Cloud backup is configured but no bucket is named.");
+  console.error("");
+  console.error("  Set SUPABASE_BUCKET (or R2_BUCKET) to a bucket used by THIS shop");
+  console.error("  and no other. Without it this copy would fall back to the shared");
+  console.error("  default name, overwrite another shop's backups, and restore their");
+  console.error("  books the next time it was redeployed.");
+  console.error("");
+  console.error("  One bucket per shop. Refusing to start.");
+  console.error("");
+  process.exit(1);
+}
+
 async function start() {
+  assertOwnBucket();
   // Must happen before anything requires ./db — on an ephemeral-disk host
   // (Render free tier resets the filesystem on every redeploy) this is what
   // puts shop.db back in place from the last cloud snapshot, before the

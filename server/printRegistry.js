@@ -108,6 +108,24 @@ const DOCUMENTS = [
     items: ALL_GOODS, supportsRate: true, defaultTitle: "QUOTATION"
   },
   {
+    /* Not a priced document, so no tax columns: the rate on a selection
+       slip is what the party was quoted across the counter, and the
+       quantity beside it is usually still blank. It has its own printed
+       layout (printSelectionSlip in app.js) rather than a designable
+       template, because what the shop wants is the pad it already uses. */
+    key: "selection_slip", label: "Selection Slip", group: "Sales", available: true,
+    table: "selection_slips", where: null, numberCol: "slip_no",
+    partyCol: "customer_id", partyKind: "customer", dateCol: "date",
+    voidedCol: null, locationCol: null, areaCol: null,
+    salesmanCol: "salesman", totalCol: "total",
+    itemsTable: "selection_slip_items", itemsKey: "slip_id",
+    items: ["sn","code","name","qty","rate","amount","remarks"], supportsRate: true,
+    defaultTitle: "SELECTION SLIP",
+    /* The paper slip names these columns its own way, and the staff read
+       them by those names. */
+    labels: { sn: "Sr. No.", code: "Design No.", name: "Description", qty: "Qty", remarks: "Note" }
+  },
+  {
     key: "sales_order", label: "Sales Order", group: "Sales", available: true,
     table: "sales_orders", where: null, numberCol: "so_no",
     partyCol: "customer_id", partyKind: "customer", dateCol: "date",

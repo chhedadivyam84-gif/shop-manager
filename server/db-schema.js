@@ -1771,7 +1771,12 @@ addColumn("doc_numbering", "auto_enabled", "INTEGER NOT NULL DEFAULT 1");
     // Its own series and its own prefix from the start — a dispatch note is
     // not a bill, and nothing else writes to this column.
     ["dispatch",  "DN", 7, "dispatches", "dispatch_no",  null],
-    ["delivery",  "DL", 7, "deliveries", "delivery_no",  null]
+    ["delivery",  "DL", 7, "deliveries", "delivery_no",  null],
+    /* Width 4 and no prefix, unlike every other series here: a selection
+       slip is torn off a printed pad numbered 0001-9999, and the number the
+       app shows has to be the number on the paper in the customer's hand.
+       Editable in Settings like the rest. */
+    ["selection", "", 4, "selection_slips", "slip_no", null]
   ];
   defs.forEach(([type, prefix, width, table, column, scope]) => {
     seed.run(type, prefix, width, startFor(table, column, scope, prefix), Date.now());
@@ -2564,6 +2569,117 @@ CREATE TABLE IF NOT EXISTS delivery_status_log (
   note TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_delivery_log ON delivery_status_log(delivery_id, at);
+`);
+
+
+/* ============================================================
+   SELECTION SLIP
+
+   The pink slip the counter writes while the customer is still standing at
+   the catalogue. It is not a quotation and not an order: it is the record of
+   WHICH DESIGNS THIS PARTY PICKED, so that the moment they ring back — days
+   or weeks later, usually asking "that wooden one I liked" — somebody can
+   read out the design numbers instead of starting the selection again.
+
+   Three things about it are unlike every other document here, and each one
+   is deliberate:
+
+   1. THE PARTY MAY NOT HAVE AN ACCOUNT. A slip gets written for whoever
+      walks in. Requiring a customer record first would mean the slip does
+      not get written at all, which loses the only thing it exists to keep.
+      So customer_id is optional and customer_name always holds the name as
+      written. A slip made for an existing customer carries both.
+
+   2. QUANTITY IS USUALLY BLANK, AND BLANK IS NOT ZERO. The party has chosen
+      designs, not amounts — the Qty column on the paper slip is empty far
+      more often than not. Storing that as 0 would turn "not decided yet"
+      into "none wanted", and the difference is the whole conversation when
+      they call back. qty and rate are therefore nullable.
+
+   3. A LINE NEED NOT BE A PRODUCT. Laminate design numbers come off a
+      supplier's catalogue long before anyone creates a product record for
+      them, and the slip must be able to hold 2066HG whether or not the shop
+      stocks it. product_id is optional; design_no is always written down.
+      Where a line IS linked to a product, the link is what lets the slip
+      convert into a quotation without retyping.
+
+   The referrer is the Ar / ID / Cont box on the paper: the architect,
+   interior designer or contractor who sent the party in. Recorded because
+   it is who gets the follow-up call and, at some shops, the commission.
+   ============================================================ */
+db.exec(`
+CREATE TABLE IF NOT EXISTS selection_slips (
+  id TEXT PRIMARY KEY,
+  slip_no TEXT UNIQUE NOT NULL,
+  date TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+
+  -- Optional link; the name is always there. See note 1 above.
+  customer_id TEXT REFERENCES customers(id) ON DELETE SET NULL,
+  customer_name TEXT NOT NULL DEFAULT '',
+  contact TEXT DEFAULT '',
+
+  -- The Ar | ID | Cont box.
+  referrer_type    TEXT DEFAULT '',
+  referrer_name    TEXT DEFAULT '',
+  referrer_contact TEXT DEFAULT '',
+
+  site_address TEXT DEFAULT '',
+
+  -- Free text, matching purchase_orders.salesman deliberately: one spelling
+  -- of a salesman's name across the app beats two lists drifting apart.
+  salesman         TEXT DEFAULT '',
+  salesman_contact TEXT DEFAULT '',
+
+  remarks TEXT DEFAULT '',
+
+  -- Sum of the lines that HAVE both a quantity and a rate. Lines still
+  -- undecided contribute nothing rather than distorting it.
+  total REAL NOT NULL DEFAULT 0,
+
+  status TEXT NOT NULL DEFAULT 'Open'
+    CHECK (status IN ('Open', 'Quoted', 'Converted', 'Cancelled')),
+
+  -- Set once Convert to Quotation runs, so the slip links forward.
+  converted_quotation_id TEXT REFERENCES quotations(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_sel_customer ON selection_slips(customer_id);
+CREATE INDEX IF NOT EXISTS idx_sel_salesman ON selection_slips(salesman);
+CREATE INDEX IF NOT EXISTS idx_sel_date ON selection_slips(date);
+CREATE INDEX IF NOT EXISTS idx_sel_status ON selection_slips(status);
+
+CREATE TABLE IF NOT EXISTS selection_slip_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  slip_id TEXT NOT NULL REFERENCES selection_slips(id) ON DELETE CASCADE,
+
+  -- The order the lines were written in. The paper slip is numbered by hand
+  -- and the party refers to "the third one", so the sequence is data.
+  sr_no INTEGER NOT NULL DEFAULT 0,
+
+  -- Optional. See note 3 above.
+  product_id TEXT REFERENCES products(id) ON DELETE SET NULL,
+  size_id INTEGER REFERENCES product_sizes(id) ON DELETE SET NULL,
+
+  design_no   TEXT NOT NULL DEFAULT '',
+  description TEXT DEFAULT '',
+
+  -- NULL means "not decided", 0 means "none". Never conflate them.
+  qty  REAL,
+  rate REAL,
+
+  -- qty * rate when both are known, else 0. Stored rather than computed so
+  -- a report never has to re-derive it and get a different answer.
+  amount REAL NOT NULL DEFAULT 0,
+
+  -- The margin note on the paper — "(Plain)", "matt finish", "check stock".
+  -- Beside the line it is about, the way it is written on the slip.
+  remark TEXT DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_sel_items ON selection_slip_items(slip_id);
+CREATE INDEX IF NOT EXISTS idx_sel_items_design ON selection_slip_items(design_no);
+CREATE INDEX IF NOT EXISTS idx_sel_items_product ON selection_slip_items(product_id);
 `);
 
 // Where the data lives — the backup module needs the on-disk paths, and this

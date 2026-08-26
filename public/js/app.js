@@ -93,6 +93,10 @@ let state = {
     discountType: "pct", discountValue: 0, transport: 0, loading: 0, gstOnCharges: true, roundOff: true,
     cart: [], editingSoId: null, soNo: null
   },
+  /* Selection Slip. Built by selResetForm() the first time the screen
+     opens rather than spelled out here, so the blank shape lives in one
+     place and a reset cannot drift from an initial value. */
+  sel: null,
   locations: [], invLocationCode: null, invStockFilter: "all",
   me: { staffName: "", role: "" },
   ctx: {}
@@ -774,6 +778,31 @@ async function initApp(){
   document.getElementById("po-save-btn").addEventListener("click", ()=>savePo(false));
   document.getElementById("po-save-draft-btn").addEventListener("click", ()=>savePo(true));
 
+  document.getElementById("selection-back-link").addEventListener("click", (e)=>{ e.preventDefault(); switchTab("home"); });
+  document.getElementById("selection-customer-search").addEventListener("input", renderSelectionCustomers);
+  document.getElementById("selection-search").addEventListener("input", renderSelectionProducts);
+  document.getElementById("selection-date").addEventListener("change", (e)=>{ state.sel.date = e.target.value; });
+  document.querySelectorAll("[data-selection-referrer]").forEach(b=>{
+    b.addEventListener("click", ()=>{
+      /* Tapping the chosen one again clears it — the box on the paper slip
+         is left blank far more often than it is ticked. */
+      const v = b.dataset.selectionReferrer;
+      state.sel.referrerType = (state.sel.referrerType === v) ? "" : v;
+      document.querySelectorAll("[data-selection-referrer]").forEach(x=>
+        x.classList.toggle("selected", x.dataset.selectionReferrer === state.sel.referrerType));
+    });
+  });
+  document.getElementById("selection-add-row-btn").addEventListener("click", ()=>{
+    state.sel.rows.push(selBlankRow());
+    renderSelectionRows();
+  });
+  document.getElementById("selection-clear-btn").addEventListener("click", ()=>{
+    if(!confirm("Clear every design off this slip?")) return;
+    state.sel.rows = [selBlankRow()];
+    renderSelectionRows();
+  });
+  document.getElementById("selection-save-btn").addEventListener("click", saveSelectionSlip);
+  document.getElementById("selection-list-btn").addEventListener("click", openSelectionList);
   document.getElementById("quotation-back-link").addEventListener("click", (e)=>{ e.preventDefault(); switchTab("home"); });
   document.getElementById("quotation-customer-search").addEventListener("input", renderQuotationCustomers);
   document.getElementById("quotation-search").addEventListener("input", renderQuotationProducts);
@@ -898,7 +927,7 @@ async function switchTab(tab){
   // brought into view — otherwise switching from a tile leaves it off-screen.
   const activeBtn = document.querySelector(`nav.bottom .tab[data-tab="${tab}"]`);
   if(activeBtn && activeBtn.scrollIntoView) activeBtn.scrollIntoView({ block:"nearest", inline:"nearest" });
-  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",quotation:"Quotation",so:"Sales Order",pquery:"Product Query",accounts:"Accounts",otherledger:(state.olKind==="income"?"Other Income":"Other Expenses"),fyear:"Financial Year",fyclose:"Financial Year",printmgr:"Print Management",outstanding:"Outstanding",ewb:"E-Way Bill",delivery:"Delivery & Dispatch",alerts:"Reminders",notes:"Notepad",backups:"Cloud Backups"};
+  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",selection:"Selection Slip",quotation:"Quotation",so:"Sales Order",pquery:"Product Query",accounts:"Accounts",otherledger:(state.olKind==="income"?"Other Income":"Other Expenses"),fyear:"Financial Year",fyclose:"Financial Year",printmgr:"Print Management",outstanding:"Outstanding",ewb:"E-Way Bill",delivery:"Delivery & Dispatch",alerts:"Reminders",notes:"Notepad",backups:"Cloud Backups"};
   document.getElementById("hdr-sub").textContent = subMap[tab];
   document.getElementById("hdr-main").textContent = tab==="home" ? greeting() : subMap[tab];
   if(tab==="billing") await renderBilling();
@@ -912,6 +941,7 @@ async function switchTab(tab){
   if(tab==="inquiries") await renderInquiries();
   if(tab==="purchase") await renderPurchaseScreen();
   if(tab==="po") await renderPoScreen();
+  if(tab==="selection") await renderSelectionScreen();
   if(tab==="quotation") await renderQuotationScreen();
   if(tab==="so") await renderSoScreen();
   if(tab==="pquery") await renderPqScreen();
@@ -1529,6 +1559,7 @@ function printChequeSheet(html){
 const MENU = [
   ["Sell", [
     ["billing",     "&#128220;", "New Invoice"],
+    ["selection",   "&#127912;", "Selection Slip"],
     ["quotation",   "&#128203;", "Quotation"],
     ["so",          "&#128197;", "Sales Order"],
     ["delivery",    "&#128666;", "Delivery &amp; Dispatch"],
@@ -14014,6 +14045,21 @@ async function saveQuotation(asDraft){
     const saved = editingId
       ? await api("PUT", `/quotations/${editingId}`, payload)
       : await api("POST", "/quotations", payload);
+    /* If this quotation was built from a selection slip, tell the slip so.
+       Done here rather than server-side because only now does the quotation
+       exist: the slip carries no quantities, so a person had to type them,
+       and that typing happens on this screen using this screen's pricing.
+
+       Deliberately not fatal. The quotation is saved and the shop can bill
+       from it; a slip left saying Open is a wrong label on an old slip, and
+       throwing that in the operator's face after a successful save would be
+       the app crying wolf. */
+    const fromSlip = state.ctx.fromSelectionSlipId;   // fromSelectionSlipId, so the slip
+    state.ctx.fromSelectionSlipId = null;             // can be marked exactly once
+    if(fromSlip && !editingId){
+      try{ await api("POST", `/selection-slips/${fromSlip}/converted`, { quotationId: saved.id }); }
+      catch(e){ /* the quotation is what matters, and it is saved */ }
+    }
     resetQuotationState();
     renderQuotationEditBanner();
     await loadCustomers();
@@ -18224,6 +18270,758 @@ async function openPqDetail(productId, sizeId, tab){
     closeAllSheets();
     openProductDetail(productId, "pquery");
   });
+}
+
+
+/* ============================================================
+   SELECTION SLIP
+
+   What the counter fills in while the party is still standing at the
+   catalogue. It is the only screen in this app where the operator TYPES the
+   goods rather than picking them, because that is how the job actually
+   works: laminate design numbers come off a supplier's sample book months
+   before anyone creates a product record for them, and a screen that
+   insisted on a product would send the staff back to the paper pad.
+
+   So the design rows are free text first and linked to a product second.
+   The product picker below them is a convenience for the designs the shop
+   does stock, not the way in.
+
+   The one rule enforced hard here is the same one the server enforces:
+   an empty quantity box stays empty. It is not 0. A party who picked five
+   designs and named no quantities has not ordered nothing — they have not
+   decided yet, and that difference is the entire conversation when they
+   ring back a fortnight later.
+   ============================================================ */
+
+/* A blank input is blank. "" and null both mean "not decided"; only a real
+   number typed by a person is a number. parseFloat("") is NaN and Number("")
+   is 0, so neither can be used on its own. */
+function selNum(v){
+  if(v === null || v === undefined) return null;
+  const s = String(v).trim();
+  if(s === "") return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+function selBlankRow(){
+  return { designNo:"", description:"", qty:"", rate:"", remark:"", productId:null, sizeId:null };
+}
+
+function selRowAmount(r){
+  const q = selNum(r.qty), rt = selNum(r.rate);
+  if(q === null || rt === null) return null;      // null, not 0 — nothing to show
+  return round2(q * rt);
+}
+
+function selResetForm(){
+  state.sel = {
+    slipNo: null, editingSlipId: null,
+    customerId: null, customerName: "", contact: "",
+    referrerType: "", referrerName: "", referrerContact: "",
+    siteAddress: "", salesman: "", salesmanContact: "",
+    date: todayISO(), remarks: "",
+    rows: [selBlankRow()]
+  };
+}
+
+async function renderSelectionScreen(){
+  if(!state.sel) selResetForm();
+  if(!state.sel.date) state.sel.date = todayISO();
+
+  /* Only fetch a number for a NEW slip. An edit keeps the number it was
+     torn out with — a slip in the customer's hand and a slip in the app
+     that disagree about their number is worse than no app at all. */
+  if(!state.sel.editingSlipId){
+    try{
+      const r = await api("GET", "/selection-slips/next-number");
+      state.sel.slipNo = r.slipNo;
+    }catch(e){ state.sel.slipNo = null; }
+  }
+
+  document.getElementById("selection-number-display").textContent = state.sel.slipNo || "—";
+  document.getElementById("selection-date").value = state.sel.date;
+  document.getElementById("selection-customer-name").value = state.sel.customerName;
+  document.getElementById("selection-contact").value = state.sel.contact;
+  document.getElementById("selection-referrer-name").value = state.sel.referrerName;
+  document.getElementById("selection-referrer-contact").value = state.sel.referrerContact;
+  document.getElementById("selection-site-address").value = state.sel.siteAddress;
+  document.getElementById("selection-salesman").value = state.sel.salesman;
+  document.getElementById("selection-salesman-contact").value = state.sel.salesmanContact;
+  document.getElementById("selection-remarks").value = state.sel.remarks;
+
+  document.querySelectorAll("[data-selection-referrer]").forEach(b=>
+    b.classList.toggle("selected", b.dataset.selectionReferrer === state.sel.referrerType));
+
+  /* The salesmen already in use, offered back so one person's name is not
+     spelled three ways across three slips. */
+  const dl = document.getElementById("selection-salesman-list");
+  if(dl) dl.innerHTML = (state.staffNames||[]).map(n=>`<option value="${escapeHtml(n)}"></option>`).join("");
+
+  const banner = document.getElementById("selection-edit-mode-banner");
+  if(state.sel.editingSlipId){
+    banner.style.display = "";
+    banner.innerHTML = `
+      <div class="card" style="background:var(--warn-bg);border-color:var(--warn-text);margin-bottom:10px;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;gap:8px;">
+        <div style="font-size:12px;font-weight:700;color:var(--warn-text);">✎ Editing slip ${escapeHtml(state.sel.slipNo||"")} — Save below will UPDATE it, not tear out a new one.</div>
+        <a href="#" id="selection-cancel-edit" style="font-size:12px;font-weight:800;color:var(--warn-text);white-space:nowrap;">Cancel</a>
+      </div>`;
+    const c = document.getElementById("selection-cancel-edit");
+    if(c) c.addEventListener("click", async (e)=>{ e.preventDefault(); selResetForm(); await renderSelectionScreen(); });
+  } else {
+    banner.style.display = "none";
+    banner.innerHTML = "";
+  }
+
+  selLoadDesignList();
+  renderSelectionCustomers();
+  renderSelectionRows();
+  renderSelectionProducts();
+}
+
+/* Design numbers this shop has already written down, offered back as you
+   type. Not a master list — there is no such thing for a catalogue that
+   changes every season — just the shop's own history, which is enough to
+   stop 2066HG being written as 2066-HG on the next slip. */
+async function selLoadDesignList(){
+  const dl = document.getElementById("selection-design-list");
+  if(!dl) return;
+  try{
+    const rows = await api("GET", "/selection-slips/design-numbers");
+    dl.innerHTML = rows.map(d=>
+      `<option value="${escapeHtml(d.designNo)}">${escapeHtml(d.description||"")}</option>`).join("");
+  }catch(e){ /* the list is a convenience; the slip is written either way */ }
+}
+
+function renderSelectionCustomers(){
+  const wrap = document.getElementById("selection-customers");
+  const searchEl = document.getElementById("selection-customer-search");
+  const q = (searchEl && searchEl.value || "").trim().toLowerCase();
+
+  /* Nothing shows until they search. A slip is usually for somebody with no
+     account at all, so a wall of every customer in the book is noise on the
+     one screen where the name is normally just typed. */
+  if(!q){
+    wrap.innerHTML = `<div class="empty-hint" style="padding:8px 4px;">
+      Type the name above if they already have an account — otherwise just write it in below.</div>`;
+    return;
+  }
+  const list = state.customers.filter(c=>
+    c.name.toLowerCase().includes(q) || (c.phone||"").includes(q)).slice(0, 30);
+
+  wrap.innerHTML = list.map(c=>`
+    <button class="chip ${state.sel.customerId===c.id?'selected':''}" data-selection-cust="${c.id}">${escapeHtml(c.name)}</button>
+  `).join("") || `<div class="empty-hint" style="padding:8px 4px;">No account matches "${escapeHtml(q)}" — write the name in below instead.</div>`;
+
+  wrap.querySelectorAll("[data-selection-cust]").forEach(b=>{
+    b.addEventListener("click", ()=>{
+      const cust = state.customers.find(c=>c.id===b.dataset.selectionCust);
+      if(!cust) return;
+      /* Tapping the same chip again lets go of the account without losing
+         the typed name — the staff member who linked the wrong Sharma needs
+         a way back that is not "start again". */
+      if(state.sel.customerId === cust.id){
+        state.sel.customerId = null;
+      } else {
+        state.sel.customerId = cust.id;
+        state.sel.customerName = cust.name;
+        if(!state.sel.contact) state.sel.contact = cust.phone || "";
+      }
+      document.getElementById("selection-customer-name").value = state.sel.customerName;
+      document.getElementById("selection-contact").value = state.sel.contact;
+      renderSelectionCustomers();
+    });
+  });
+}
+
+function renderSelectionRows(){
+  const wrap = document.getElementById("selection-rows");
+  if(!state.sel.rows.length) state.sel.rows = [selBlankRow()];
+
+  wrap.innerHTML = state.sel.rows.map((r, idx)=>{
+    const amt = selRowAmount(r);
+    const linked = r.productId ? (state.products.find(p=>p.id===r.productId) || null) : null;
+    return `<div class="bill-line" data-selection-row="${idx}">
+      <div class="bill-line-head">
+        <div class="bill-line-name">${idx+1}.${linked ? ` <span class="muted" style="font-weight:600;">${escapeHtml(linked.name)}</span>` : ""}</div>
+        <div class="line-actions">
+          ${linked ? `<a href="#" data-selection-unlink="${idx}">Unlink product</a>` : ""}
+          <a href="#" data-selection-dup="${idx}">Duplicate</a>
+          <a href="#" data-selection-remove="${idx}" class="btn-danger-link">Remove</a>
+        </div>
+      </div>
+      <div class="dim-grid">
+        <label class="dim"><span>Design No.</span>
+          <input type="text" list="selection-design-list" value="${escapeHtml(r.designNo)}"
+                 data-selection-field="designNo" data-selection-line="${idx}" placeholder="e.g. 2066HG"></label>
+        <label class="dim"><span>Description</span>
+          <input type="text" value="${escapeHtml(r.description)}"
+                 data-selection-field="description" data-selection-line="${idx}" placeholder="e.g. wooden"></label>
+      </div>
+      <div class="dim-grid">
+        <label class="dim"><span>Qty <em>(leave blank if not decided)</em></span>
+          <input type="number" inputmode="decimal" step="any" min="0" value="${r.qty === 0 || r.qty ? r.qty : ""}"
+                 data-selection-field="qty" data-selection-line="${idx}" placeholder="—"></label>
+        <label class="dim"><span>Rate <em>(₹)</em></span>
+          <input type="number" inputmode="decimal" step="any" min="0" value="${r.rate === 0 || r.rate ? r.rate : ""}"
+                 data-selection-field="rate" data-selection-line="${idx}" placeholder="—"></label>
+      </div>
+      <div class="dim-grid">
+        <label class="dim"><span>Note <em>(optional)</em></span>
+          <input type="text" value="${escapeHtml(r.remark)}"
+                 data-selection-field="remark" data-selection-line="${idx}" placeholder="e.g. Plain, matt"></label>
+      </div>
+      <div class="inv-flex" style="margin-top:6px;">
+        <span class="muted">Amount</span>
+        <span style="font-weight:800;">${amt === null ? "—" : fmtPaise(amt)}</span>
+      </div>
+    </div>`;
+  }).join("");
+
+  /* Typing must not redraw the row — a redraw takes the cursor with it, and
+     this is a screen somebody types five lines into without looking up. The
+     total is the only thing that needs to move, so only the total moves. */
+  wrap.querySelectorAll("[data-selection-field]").forEach(inp=>{
+    inp.addEventListener("input", ()=>{
+      const i = Number(inp.dataset.selectionLine);
+      const f = inp.dataset.selectionField;
+      state.sel.rows[i][f] = inp.value;
+      /* The product link is NOT broken when the design number is edited.
+         A shop's own SKU and the design number off a supplier's catalogue
+         are routinely different — correcting one to the other is the
+         normal keystroke here, and unlinking on it would quietly throw
+         away the link that lets the slip be priced up later. Breaking it
+         is a deliberate act, and it has its own Unlink button. */
+      if(f === "qty" || f === "rate"){
+        const row = inp.closest("[data-selection-row]");
+        const amt = selRowAmount(state.sel.rows[i]);
+        const cell = row && row.querySelector(".inv-flex span:last-child");
+        if(cell) cell.textContent = amt === null ? "—" : fmtPaise(amt);
+        renderSelectionTotal();
+      }
+    });
+  });
+  wrap.querySelectorAll("[data-selection-remove]").forEach(a=>{
+    a.addEventListener("click", (e)=>{
+      e.preventDefault();
+      state.sel.rows.splice(Number(a.dataset.selectionRemove), 1);
+      if(!state.sel.rows.length) state.sel.rows = [selBlankRow()];
+      renderSelectionRows();
+    });
+  });
+  wrap.querySelectorAll("[data-selection-dup]").forEach(a=>{
+    a.addEventListener("click", (e)=>{
+      e.preventDefault();
+      const i = Number(a.dataset.selectionDup);
+      state.sel.rows.splice(i+1, 0, { ...state.sel.rows[i] });
+      renderSelectionRows();
+    });
+  });
+  wrap.querySelectorAll("[data-selection-unlink]").forEach(a=>{
+    a.addEventListener("click", (e)=>{
+      e.preventDefault();
+      state.sel.rows[Number(a.dataset.selectionUnlink)].productId = null;
+      state.sel.rows[Number(a.dataset.selectionUnlink)].sizeId = null;
+      renderSelectionRows();
+    });
+  });
+
+  renderSelectionTotal();
+}
+
+function renderSelectionTotal(){
+  const card = document.getElementById("selection-total-card");
+  if(!card) return;
+  const rows = state.sel.rows;
+  const priced = rows.filter(r=>selRowAmount(r) !== null);
+  const total = round2(priced.reduce((s,r)=>s + selRowAmount(r), 0));
+  const written = rows.filter(r=>(r.designNo||"").trim() || (r.description||"").trim() || r.productId).length;
+  const undecided = written - priced.length;
+
+  card.innerHTML = `
+    <div class="inv-flex"><span class="muted">Designs on this slip</span><span style="font-weight:700;">${written}</span></div>
+    <div class="inv-flex"><span class="muted">Total of the priced lines</span><span style="font-weight:800;">${fmtPaise(total)}</span></div>
+    ${undecided > 0 ? `<div class="muted" style="font-size:12px;margin-top:6px;">
+      ${undecided} line${undecided===1?"":"s"} still without a quantity or rate — not counted, and saved as blank rather than zero.</div>` : ""}`;
+}
+
+function renderSelectionProducts(){
+  const q = (document.getElementById("selection-search").value||"").toLowerCase();
+  const wrap = document.getElementById("selection-product-list");
+  if(!q){
+    wrap.innerHTML = `<div class="empty-hint">Search to add a design you already stock. Anything else, type it into a row above.</div>`;
+    return;
+  }
+  const list = sellableProducts().filter(p=>
+    p.name.toLowerCase().includes(q) || (p.brand||"").toLowerCase().includes(q) || (p.sku||"").toLowerCase().includes(q)
+  ).slice(0, 40);
+
+  wrap.innerHTML = list.map(p=>{
+    const price = p.sizes && p.sizes.length ? Math.min(...p.sizes.map(s=>s.price)) : null;
+    return `<div class="list-row">
+      <div class="swatch"></div>
+      <div><div class="row-title">${escapeHtml(p.name)}</div>
+           <div class="row-sub">${escapeHtml(p.sku||"—")}${p.brand?" · "+escapeHtml(p.brand):""}${price!==null?" · "+fmt(price):""}</div></div>
+      <div class="row-right"><button class="gold-fab" data-selection-pick="${p.id}">+</button></div>
+    </div>`;
+  }).join("") || `<div class="empty-hint">No matching products — type the design number into a row above instead.</div>`;
+
+  wrap.querySelectorAll("[data-selection-pick]").forEach(b=>{
+    b.addEventListener("click", ()=>{
+      const p = state.products.find(x=>x.id===b.dataset.selectionPick);
+      if(!p) return;
+      const price = p.sizes && p.sizes.length ? Math.min(...p.sizes.map(s=>s.price)) : "";
+      const row = {
+        designNo: p.sku || "", description: p.name,
+        /* Quantity stays blank even here. Picking a product off a list is
+           still only "they liked this one". */
+        qty: "", rate: price === "" ? "" : String(price),
+        remark: "", productId: p.id,
+        sizeId: (p.sizes && p.sizes.length === 1) ? p.sizes[0].id : null
+      };
+      /* Fill the trailing blank row rather than leaving a hole above the new
+         line — the pad is written top to bottom and so is this. */
+      const last = state.sel.rows[state.sel.rows.length-1];
+      const lastEmpty = last && !last.designNo && !last.description && !last.productId;
+      if(lastEmpty) state.sel.rows[state.sel.rows.length-1] = row;
+      else state.sel.rows.push(row);
+      renderSelectionRows();
+      toast(`${p.name} added to the slip.`, "ok");
+    });
+  });
+}
+
+function selReadHeaderFromForm(){
+  state.sel.customerName    = document.getElementById("selection-customer-name").value.trim();
+  state.sel.contact         = document.getElementById("selection-contact").value.trim();
+  state.sel.referrerName    = document.getElementById("selection-referrer-name").value.trim();
+  state.sel.referrerContact = document.getElementById("selection-referrer-contact").value.trim();
+  state.sel.siteAddress     = document.getElementById("selection-site-address").value.trim();
+  state.sel.salesman        = document.getElementById("selection-salesman").value.trim();
+  state.sel.salesmanContact = document.getElementById("selection-salesman-contact").value.trim();
+  state.sel.remarks         = document.getElementById("selection-remarks").value.trim();
+  state.sel.date            = document.getElementById("selection-date").value || todayISO();
+}
+
+function selPayload(){
+  return {
+    customerId: state.sel.customerId, customerName: state.sel.customerName, contact: state.sel.contact,
+    referrerType: state.sel.referrerType, referrerName: state.sel.referrerName,
+    referrerContact: state.sel.referrerContact, siteAddress: state.sel.siteAddress,
+    salesman: state.sel.salesman, salesmanContact: state.sel.salesmanContact,
+    date: state.sel.date, remarks: state.sel.remarks,
+    items: state.sel.rows.map(r=>({
+      designNo: r.designNo, description: r.description,
+      /* Sent through as written. The server does the same blank-is-blank
+         test, and sending "" rather than 0 is what lets it. */
+      qty: r.qty, rate: r.rate,
+      remark: r.remark, productId: r.productId, sizeId: r.sizeId
+    }))
+  };
+}
+
+async function saveSelectionSlip(){
+  selReadHeaderFromForm();
+  if(!state.sel.customerName && !state.sel.customerId){
+    toast("Whose selection is this? Write the customer's name.");
+    document.getElementById("selection-customer-name").focus();
+    return;
+  }
+  const written = state.sel.rows.filter(r=>(r.designNo||"").trim() || (r.description||"").trim() || r.productId);
+  if(!written.length){ toast("Write at least one design on the slip."); return; }
+
+  const btn = document.getElementById("selection-save-btn");
+  btn.disabled = true;
+  try{
+    const saved = state.sel.editingSlipId
+      ? await api("PUT", `/selection-slips/${state.sel.editingSlipId}`, selPayload())
+      : await api("POST", "/selection-slips", selPayload());
+    toast(`Slip ${saved.slip_no} saved.`, "ok");
+    selResetForm();
+    await renderSelectionScreen();
+    openSelectionDetail(saved.id);
+  }catch(e){
+    toast(e.message);
+  }finally{
+    btn.disabled = false;
+  }
+}
+
+/* ---------------------------------------------------------------- the book */
+
+async function openSelectionList(){
+  const sheet = document.getElementById("sheet-selection-list");
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>&#10005;</button>
+    <div class="sheet-title">The Slip Book</div>
+    <div class="searchbar" style="margin-top:6px;">
+      <span>&#128269;</span>
+      <input type="text" id="selection-list-search" placeholder="Name, phone, slip number or the person who sent them">
+    </div>
+    <label class="field-label" style="margin-top:10px;">Or find who picked a design</label>
+    <div class="searchbar" style="margin-top:0;">
+      <span>&#127912;</span>
+      <input type="text" id="selection-list-design" placeholder="e.g. 2066HG">
+    </div>
+    <div class="chip-row" style="margin-top:10px;" id="selection-list-status">
+      ${["All","Open","Quoted","Converted","Cancelled"].map((s,i)=>
+        `<button class="chip sm ${i===0?"selected":""}" data-selection-status="${s}">${s}</button>`).join("")}
+    </div>
+    <div id="selection-list-body" style="margin-top:10px;"><div class="empty-hint">Loading…</div></div>`;
+
+  sheet.querySelectorAll("[data-sheetclose]").forEach(b=>b.addEventListener("click", closeAllSheets));
+
+  let status = "All";
+  const load = async ()=>{
+    const q = (document.getElementById("selection-list-search").value||"").trim();
+    const design = (document.getElementById("selection-list-design").value||"").trim();
+    const params = [];
+    if(q) params.push("q=" + encodeURIComponent(q));
+    if(design) params.push("designNo=" + encodeURIComponent(design));
+    if(status !== "All") params.push("status=" + encodeURIComponent(status));
+    const body = document.getElementById("selection-list-body");
+    try{
+      const rows = await api("GET", "/selection-slips" + (params.length ? "?"+params.join("&") : ""));
+      body.innerHTML = rows.length ? rows.map(s=>`
+        <div class="list-row" data-open-slip="${s.id}" style="cursor:pointer;">
+          <div>
+            <div class="row-title">${escapeHtml(s.slip_no)} · ${escapeHtml(s.customer_name)}</div>
+            <div class="row-sub">${s.date} · ${s.item_count} design${s.item_count===1?"":"s"}${
+              s.salesman ? " · " + escapeHtml(s.salesman) : ""}</div>
+          </div>
+          <div class="row-right"><span class="pill">${escapeHtml(s.status)}</span></div>
+        </div>`).join("")
+        : `<div class="empty-hint">No slips match.</div>`;
+      body.querySelectorAll("[data-open-slip]").forEach(el=>
+        el.addEventListener("click", ()=>openSelectionDetail(el.dataset.openSlip)));
+    }catch(e){ body.innerHTML = `<div class="empty-hint">${escapeHtml(e.message)}</div>`; }
+  };
+
+  let t = null;
+  const debounced = ()=>{ clearTimeout(t); t = setTimeout(load, 220); };
+  document.getElementById("selection-list-search").addEventListener("input", debounced);
+  document.getElementById("selection-list-design").addEventListener("input", debounced);
+  sheet.querySelectorAll("[data-selection-status]").forEach(b=>{
+    b.addEventListener("click", ()=>{
+      status = b.dataset.selectionStatus;
+      sheet.querySelectorAll("[data-selection-status]").forEach(x=>x.classList.remove("selected"));
+      b.classList.add("selected");
+      load();
+    });
+  });
+
+  showSheet("sheet-selection-list");
+  load();
+}
+
+async function openSelectionDetail(slipId){
+  let s;
+  try{ s = await api("GET", `/selection-slips/${slipId}`); }
+  catch(e){ toast(e.message); return; }
+
+  const sheet = document.getElementById("sheet-selection-detail");
+  const canEdit = !["Converted","Cancelled"].includes(s.status) && mayI("selection_slip","edit");
+  const priced = s.items.filter(i=>i.qty !== null && i.rate !== null);
+
+  const line = (label, value) => value
+    ? `<div class="inv-flex"><span class="muted">${label}</span><span>${escapeHtml(String(value))}</span></div>` : "";
+
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>&#10005;</button>
+    <div class="sheet-title">Slip ${escapeHtml(s.slip_no)} <span class="pill">${escapeHtml(s.status)}</span></div>
+
+    <div class="card" style="margin-top:8px;">
+      ${line("Date", s.date)}
+      ${line("Customer", s.customer_name)}
+      ${line("Contact", s.contact)}
+      ${s.referrer_type || s.referrer_name
+        ? line(s.referrer_type || "Sent by",
+               [s.referrer_name, s.referrer_contact].filter(Boolean).join(" · ") || "name not taken")
+        : ""}
+      ${line("Site", s.site_address)}
+      ${line("Salesman", [s.salesman, s.salesman_contact].filter(Boolean).join(" · "))}
+      ${line("Remarks", s.remarks)}
+    </div>
+
+    <div class="section-title">Designs selected</div>
+    <div style="overflow-x:auto;">
+      <table class="pq-table">
+        <thead><tr>
+          <th>Sr</th><th>Design No.</th><th>Description</th>
+          <th class="num">Qty</th><th class="num">Rate</th><th class="num">Amount</th>
+        </tr></thead>
+        <tbody>
+          ${s.items.map(i=>`<tr>
+            <td>${i.sr_no}</td>
+            <td>${escapeHtml(i.design_no || "—")}${i.remark ? `<div class="row-sub">(${escapeHtml(i.remark)})</div>` : ""}</td>
+            <td>${escapeHtml(i.description || "—")}</td>
+            <td class="num">${i.qty === null ? "—" : i.qty}</td>
+            <td class="num">${i.rate === null ? "—" : fmtPaise(i.rate)}</td>
+            <td class="num">${(i.qty === null || i.rate === null) ? "—" : fmtPaise(i.amount)}</td>
+          </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
+    <div class="card" style="margin-top:8px;">
+      <div class="inv-flex"><span class="muted">Total of ${priced.length} priced line${priced.length===1?"":"s"}</span>
+        <span style="font-weight:800;">${fmtPaise(s.total)}</span></div>
+      ${priced.length < s.items.length ? `<div class="muted" style="font-size:12px;margin-top:6px;">
+        A dash means the party has not decided that one yet — it is not a zero.</div>` : ""}
+    </div>
+
+    <div style="margin-top:14px;display:flex;flex-direction:column;gap:8px;">
+      ${canEdit ? `<button class="btn btn-primary" id="slip-edit-btn">Edit this slip</button>` : ""}
+      ${canEdit && mayI("quotation","add") ? `<button class="btn btn-outline" id="slip-to-quotation-btn">Price it up as a Quotation</button>` : ""}
+      ${mayI("selection_slip","print") ? `<button class="btn btn-outline" id="slip-print-btn">Print</button>` : ""}
+      ${mayI("selection_slip","print") ? `<button class="btn btn-outline" id="slip-share-btn">Send on WhatsApp</button>` : ""}
+      ${s.status === "Cancelled"
+        ? `<button class="btn btn-outline" id="slip-reopen-btn">Reopen</button>`
+        : (["Converted"].includes(s.status) ? "" : `<button class="btn btn-outline" id="slip-cancel-btn">Cancel this slip</button>`)}
+      ${isOwner() ? `<button class="btn btn-outline btn-danger-link" id="slip-delete-btn">Delete</button>` : ""}
+    </div>`;
+
+  sheet.querySelectorAll("[data-sheetclose]").forEach(b=>b.addEventListener("click", closeAllSheets));
+
+  const on = (id, fn) => { const el = document.getElementById(id); if(el) el.addEventListener("click", fn); };
+
+  on("slip-edit-btn", async ()=>{
+    state.sel = {
+      slipNo: s.slip_no, editingSlipId: s.id,
+      customerId: s.customer_id, customerName: s.customer_name, contact: s.contact,
+      referrerType: s.referrer_type, referrerName: s.referrer_name, referrerContact: s.referrer_contact,
+      siteAddress: s.site_address, salesman: s.salesman, salesmanContact: s.salesman_contact,
+      date: s.date, remarks: s.remarks,
+      rows: s.items.map(i=>({
+        designNo: i.design_no, description: i.description,
+        /* null comes back as an empty box, which is what it means. */
+        qty: i.qty === null ? "" : String(i.qty),
+        rate: i.rate === null ? "" : String(i.rate),
+        remark: i.remark, productId: i.product_id, sizeId: i.size_id
+      }))
+    };
+    if(!state.sel.rows.length) state.sel.rows = [selBlankRow()];
+    closeAllSheets();
+    await switchTab("selection");
+  });
+
+  on("slip-to-quotation-btn", ()=>selectionToQuotation(s));
+
+  on("slip-print-btn", ()=>printSelectionSlip(s));
+  on("slip-share-btn", ()=>{
+    const lines = s.items.map(i=>
+      `${i.sr_no}. ${i.design_no || ""}${i.description ? " — " + i.description : ""}` +
+      `${i.qty !== null ? "  Qty " + i.qty : ""}${i.rate !== null ? "  ₹" + i.rate : ""}` +
+      `${i.remark ? " (" + i.remark + ")" : ""}`).join("\n");
+    const text =
+      `*Selection Slip ${s.slip_no}*\n${s.date}\n` +
+      `${s.customer_name}${s.contact ? " — " + s.contact : ""}\n\n` +
+      `${lines}\n` +
+      (s.total > 0 ? `\nTotal (priced lines): ₹${s.total}` : "") +
+      (s.salesman ? `\n\nSalesman: ${s.salesman}` : "");
+    const url = "https://wa.me/" + (s.contact ? s.contact.replace(/\D/g,"") : "") +
+      "?text=" + encodeURIComponent(text);
+    window.open(url, "_blank");
+  });
+
+  on("slip-cancel-btn", async ()=>{
+    if(!confirm("Cancel this slip? It stays in the book — nothing is deleted.")) return;
+    try{ await api("POST", `/selection-slips/${s.id}/cancel`); toast("Slip cancelled.", "ok"); openSelectionDetail(s.id); }
+    catch(e){ toast(e.message); }
+  });
+  on("slip-reopen-btn", async ()=>{
+    try{ await api("POST", `/selection-slips/${s.id}/reopen`); toast("Slip reopened.", "ok"); openSelectionDetail(s.id); }
+    catch(e){ toast(e.message); }
+  });
+  on("slip-delete-btn", async ()=>{
+    if(!confirm(`Delete slip ${s.slip_no} for good?\n\nCancelling keeps it in the book instead — that is usually what you want.`)) return;
+    try{ await api("DELETE", `/selection-slips/${s.id}`); toast("Slip deleted.", "ok"); closeAllSheets(); }
+    catch(e){ toast(e.message); }
+  });
+
+  showSheet("sheet-selection-detail");
+}
+
+/**
+ * Carry a slip into the Quotation screen.
+ *
+ * Only lines that are LINKED TO A PRODUCT can go: a quotation prices goods,
+ * and the pricing engine works on a product and a size. Lines that are just
+ * a design number off a catalogue have nothing to price, so they are named
+ * out loud and left behind rather than silently dropped.
+ *
+ * Nothing is converted here. The quotation is built on the Quotation screen
+ * by a person who types the quantities the slip does not have; the slip is
+ * only marked Converted afterwards, by that screen, once the quotation
+ * exists. One pricing engine, not two.
+ */
+function selectionToQuotation(s){
+  const linked = s.items.filter(i=>i.product_id);
+  const loose  = s.items.filter(i=>!i.product_id);
+
+  if(!linked.length){
+    toast("None of these designs are linked to a product yet, so there is nothing to price. Add them as products first.");
+    return;
+  }
+  if(loose.length && !confirm(
+      `${loose.length} design${loose.length===1?" is":"s are"} not linked to a product and cannot be priced:\n\n` +
+      loose.map(i=>"• " + (i.design_no || i.description)).join("\n") +
+      `\n\nCarry the other ${linked.length} over?`)){
+    return;
+  }
+
+  state.quotation.cart = linked.map(i=>{
+    const p = state.products.find(x=>x.id===i.product_id);
+    const size = p && p.sizes ? p.sizes.find(z=>z.id===i.size_id) || p.sizes[0] : null;
+    return {
+      productId: i.product_id, sizeId: size ? size.id : i.size_id,
+      name: i.description || (p ? p.name : ""),
+      mode: (p && p.default_mode) || "UNIT",
+      lengthFt: p ? p.length_ft : null, widthVal: p ? p.width_val : null, thicknessIn: p ? p.thickness_in : null,
+      /* A slip with no quantity becomes a quotation line of 1, which the
+         person pricing it then corrects. 1 is a number they will notice and
+         change; 0 is a number that quietly prices the whole line at nothing. */
+      pieces: i.qty === null ? 1 : i.qty,
+      rate: i.rate === null ? (size ? size.price : 0) : i.rate,
+      discountType: "pct", discountValue: 0,
+      gstRate: p ? p.gst_rate : 18
+    };
+  });
+  state.quotation.customerId = s.customer_id || null;
+  state.quotation.remarks = `From selection slip ${s.slip_no}`;
+  state.quotation.editingQuotationId = null;
+  /* Remembered so the Quotation screen can tell the slip which quotation
+     came out of it once it saves. */
+  state.ctx.fromSelectionSlipId = s.id;
+
+  closeAllSheets();
+  switchTab("quotation").then(()=>{
+    /* Written into the box rather than left in state, because the Quotation
+       screen reads its text boxes rather than painting them from state.
+       Setting state.quotation.remarks alone would look right here and be
+       gone by the time the quotation saved. Done this way rather than by
+       changing how that screen renders, which would alter it for the
+       people already using it. */
+    const rem = document.getElementById("quotation-remarks");
+    if(rem){ rem.value = `From selection slip ${s.slip_no}`; rem.dispatchEvent(new Event("input", { bubbles: true })); }
+    toast(
+      s.items.some(i=>i.qty === null)
+        ? "Carried over. Quantities the party had not decided came across as 1 — set them before saving."
+        : "Carried over from the slip.", "ok");
+  });
+}
+
+
+/**
+ * The slip, printed.
+ *
+ * Laid out like the pad it replaces, because the people reading it have
+ * read that pad for years: the party at the top, the Ar/ID/Cont box under
+ * it, then Sr / Design No. / Description / Qty / Rate straight down.
+ *
+ * A quantity or rate nobody has decided prints as a dash, exactly as the
+ * paper leaves it blank. It is never printed as 0 — a customer handed a
+ * slip saying they wanted 0 of a design would be right to be annoyed.
+ */
+function printSelectionSlip(s){
+  const cfg = state.settings || {};
+
+  const rows = s.items.map(it=>`<tr>
+      <td>${it.sr_no}</td>
+      <td>${escapeHtml(it.design_no || "—")}</td>
+      <td>${escapeHtml(it.description || "—")}${it.remark ? ` <i>(${escapeHtml(it.remark)})</i>` : ""}</td>
+      <td class="num">${it.qty === null ? "—" : it.qty}</td>
+      <td class="num">${it.rate === null ? "—" : fmtPaise(it.rate)}</td>
+      <td class="num">${(it.qty === null || it.rate === null) ? "—" : fmtPaise(it.amount)}</td>
+    </tr>`).join("");
+
+  /* Blank rows to the bottom of the page, so the slip can be added to by
+     hand at the counter the way the pad was. A printed form that stops
+     dead at the last line gets a second sheet stapled to it. */
+  const blanks = Math.max(0, 12 - s.items.length);
+  const blankRows = Array.from({ length: blanks }, (_, i) =>
+    `<tr class="q2-blank"><td>${s.items.length + i + 1}</td><td></td><td></td><td></td><td></td><td></td></tr>`).join("");
+
+  const undecided = s.items.filter(i=>i.qty === null || i.rate === null).length;
+
+  const infoRow = (label, value) => value
+    ? `<tr><td>${escapeHtml(label)}</td><td>${escapeHtml(String(value))}</td></tr>` : "";
+
+  const bodyHtml = `
+    <div class="q2-header">
+      <div class="q2-header-left">
+        <div class="q2-crest">SP</div>
+        <div>
+          <div class="q2-biz-name">${escapeHtml(cfg.business_name||"")}</div>
+          ${cfg.tagline ? `<div class="q2-biz-tag">${escapeHtml(cfg.tagline)}</div>` : ""}
+          ${cfg.address ? `<div class="q2-biz-tag">${escapeHtml(cfg.address)}</div>` : ""}
+        </div>
+      </div>
+      <div class="q2-qbox">
+        <div class="q2-qbox-title">SELECTION SLIP</div>
+        <table>
+          <tr><td>Slip No.</td><td>${escapeHtml(s.slip_no)}</td></tr>
+          <tr><td>Date</td><td>${s.date}</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="q2-footer" style="margin-bottom:8px;">
+      <div class="q2-footer-left">
+        <div class="q2-box-label">Customer</div>
+        <table class="q2-info">
+          ${infoRow("Name", s.customer_name)}
+          ${infoRow("Contact", s.contact)}
+          ${s.referrer_type || s.referrer_name
+            ? infoRow(s.referrer_type || "Sent by",
+                      [s.referrer_name, s.referrer_contact].filter(Boolean).join(" · ") || "—")
+            : ""}
+          ${infoRow("Site Address", s.site_address)}
+        </table>
+      </div>
+      <div class="q2-footer-right">
+        <div class="q2-box-label">Salesman</div>
+        <table class="q2-info">
+          ${infoRow("Name", s.salesman)}
+          ${infoRow("Contact", s.salesman_contact)}
+        </table>
+      </div>
+    </div>
+
+    <table class="q2-items">
+      <thead><tr>
+        <th>Sr. No.</th><th>Design No.</th><th>Description</th>
+        <th class="num">Qty</th><th class="num">Rate (₹)</th><th class="num">Amount (₹)</th>
+      </tr></thead>
+      <tbody>${rows}${blankRows}</tbody>
+      <tfoot><tr><td colspan="5" style="text-align:right;">TOTAL</td><td class="num">${fmtPaise(s.total)}</td></tr></tfoot>
+    </table>
+
+    ${undecided ? `<div class="q2-words" style="border:none;padding-left:0;">
+      A dash means the quantity or rate is still to be decided.</div>` : ""}
+    ${s.remarks ? `<div class="q2-words"><b>Remarks:</b> ${escapeHtml(s.remarks)}</div>` : ""}
+
+    <div class="q2-sign-row">
+      <div>For ${escapeHtml(cfg.business_name||"")}<br><br><br>Authorized Signatory</div>
+      <div>Customer Signature<br><br><br></div>
+    </div>
+    <div class="q2-thankyou">This is a selection record, not a bill. Goods once sold will not be taken back.</div>
+  `;
+
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Selection Slip ${escapeHtml(s.slip_no)}</title>
+    <style>${QUOTATION_PRINT_CSS}
+      table.q2-info{width:100%;font-size:10px;border-collapse:collapse;}
+      table.q2-info td{padding:2px 4px;vertical-align:top;}
+      table.q2-info td:first-child{color:#555;white-space:nowrap;width:34%;}
+      tr.q2-blank td{height:16px;}
+    </style>
+    </head><body>
+    <div class="q2-page">${bodyHtml}</div>
+    <script>window.onload=()=>window.print();<\/script>
+    </body></html>`;
+  openPrintWindow(html, { title: "Selection Slip" });
 }
 
 })();

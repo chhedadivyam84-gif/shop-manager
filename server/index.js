@@ -253,6 +253,7 @@ app.use("/api/cheques", requireAuth, require("./routes/cheques"));
 app.use("/api/inquiries", requireAuth, require("./routes/inquiries"));
 app.use("/api/purchases", requireAuth, require("./routes/purchases"));
 app.use("/api/purchase-orders", requireAuth, require("./routes/purchaseOrders"));
+app.use("/api/selection-slips", requireAuth, require("./routes/selectionSlips"));
 app.use("/api/quotations", requireAuth, require("./routes/quotations"));
 app.use("/api/sales-orders", requireAuth, require("./routes/salesOrders"));
 app.use("/api/sales-returns", requireAuth, require("./routes/salesReturns"));

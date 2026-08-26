@@ -162,6 +162,32 @@ app.use("/api/auth", require("./routes/auth"));
    or entry cannot be back-dated into a year already filed. Reads are
    untouched — a closed year stays fully visible, printable and exportable. */
 app.use("/api", require("./fyLock").guard);
+
+/* ============================================================
+   DELETE IS THE OWNER'S ALONE
+
+   Mounted here rather than added to each route on purpose. Thirteen of
+   the eighteen delete routes already checked the role and four did not —
+   an e-way bill number could be wiped off an invoice by anyone signed in —
+   and the reason is simply that a guard written eighteen times gets
+   written seventeen times. A route added next month inherits this one
+   without anybody remembering to.
+
+   It sits ahead of every data route and behind /api/auth, so signing in
+   still works and nothing that touches the books is reachable without
+   passing through it.
+
+   This is the API-level half of the rule. The screens hide their delete
+   controls too, but that is a courtesy to the user, not the enforcement:
+   a hidden button is still a request anyone can send by hand.
+   ============================================================ */
+app.use("/api", (req, res, next) => {
+  if (req.method !== "DELETE") return next();
+  if (req.session && req.session.loggedIn && req.session.role === "owner") return next();
+  return res.status(403).json({
+    error: "Only the shop owner can delete records. Ask the owner, or cancel the document instead."
+  });
+});
 app.use("/api/license", requireAuth, require("./routes/license"));
 /* Bind the request to its business BEFORE any route runs, so every
    db.prepare() inside a handler already speaks to the right database. The id
@@ -207,6 +233,10 @@ app.use("/api/purchase-returns", requireAuth, require("./routes/purchaseReturns"
 app.use("/api/stock-ins", requireAuth, require("./routes/stockIns"));
 app.use("/api/locations", requireAuth, require("./routes/locations"));
 app.use("/api/transfers", requireAuth, require("./routes/transfers"));
+/* requireAuth only, not requireRole: /permissions/me is how a staff member's
+   own screen learns what to show them, and it is the one thing here a
+   non-owner can read. Everything else inside is behind requireRole. */
+app.use("/api/permissions", requireAuth, require("./routes/permissions"));
 app.use("/api/staff", requireAuth, requireRole("owner"), require("./routes/staff"));
 app.use("/api/audit", requireAuth, requireRole("owner"), require("./routes/audit"));
 app.use("/api/backup", requireAuth, requireRole("owner"), require("./routes/backup"));

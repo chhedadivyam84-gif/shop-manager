@@ -920,6 +920,7 @@ async function switchTab(tab){
   if(tab==="delivery") await renderDelivery();
   if(tab==="alerts") await renderAlerts();
   if(tab==="notes") await renderNotes();
+  if(tab==="permissions") await renderPermissions();
   if(tab==="backups") await renderBackups();
 }
 
@@ -1573,6 +1574,7 @@ function openMenu(){
         `<button class="menu-item" data-menu="${tab}"><span class="ic">${icon}</span>${label}</button>`
       ).join("")}`).join("")}
     <div class="menu-group">Shop</div>
+    ${isOwner() ? `<button class="menu-item" id="menu-permissions"><span class="ic">&#128100;</span>Staff Access</button>` : ""}
     <button class="menu-item" id="menu-settings"><span class="ic">&#9881;</span>Settings</button>`;
 
   sheet.querySelectorAll("[data-sheetclose]").forEach(b => b.addEventListener("click", closeAllSheets));
@@ -1581,6 +1583,8 @@ function openMenu(){
       closeAllSheets();
       await switchTab(b.dataset.menu);
     }));
+  const permBtn = document.getElementById("menu-permissions");
+  if(permBtn) permBtn.addEventListener("click", async ()=>{ closeAllSheets(); await switchTab("permissions"); });
   document.getElementById("menu-settings").addEventListener("click", () => {
     closeAllSheets();
     openSettings();
@@ -1605,6 +1609,212 @@ const BK = { runs: [], picked: new Set() };
 const bkSize = b => b >= 1073741824 ? (b / 1073741824).toFixed(b >= 10737418240 ? 0 : 1) + " GB"
                   : b >= 1048576 ? (b / 1048576).toFixed(1) + " MB"
                   : b >= 1024 ? Math.round(b / 1024) + " KB" : b + " B";
+
+/* ============================================================
+   PERMISSION MANAGEMENT — OWNER ONLY
+
+   One staff member at a time, one grid: every module down the side, View /
+   Add / Edit / Print across the top, and the data scope underneath.
+
+   A role picker fills the grid in as a starting point rather than applying
+   a role. Shops do not divide neatly by job title — three salesmen
+   identical and a fourth allowed to see outstanding is the normal case, and
+   a role-only model makes the owner invent a role for that one person. Pick
+   the nearest role, then change the two boxes that differ.
+
+   Delete has no column. It is not withheld quietly: the screen says out
+   loud that it belongs to the owner, because a missing column reads as an
+   oversight and invites somebody to ask for it to be added.
+   ============================================================ */
+const PERM = { staff: [], catalogue: null, editing: null, draft: null };
+
+async function renderPermissions(){
+  const body = document.getElementById("permissions-body");
+  if(!isOwner()){
+    body.innerHTML = `<div class="card" style="margin-top:0;">
+      <div class="row-title">Owner only</div>
+      <div class="row-sub">Staff access is set by the shop owner.</div></div>`;
+    return;
+  }
+  body.innerHTML = `<p class="muted" style="font-size:13px;">Loading…</p>`;
+
+  try{
+    if(!PERM.catalogue) PERM.catalogue = await api("GET", "/permissions/catalogue");
+    PERM.staff = await api("GET", "/staff");
+  }catch(e){
+    body.innerHTML = `<p class="muted" style="font-size:13px;">${escapeHtml(e.message)}</p>`;
+    return;
+  }
+
+  const others = PERM.staff.filter(s => s.role !== "owner");
+  body.innerHTML = `
+    <div class="muted" style="font-size:12px;margin-bottom:10px;">
+      Choose someone to set what they can see and do. ${escapeHtml(PERM.catalogue.deleteNote)}
+    </div>
+    ${others.length ? `<div class="card" style="margin-top:0;">
+      ${others.map(s => `
+        <div class="list-row" data-perm-staff="${escapeHtml(s.id)}" style="cursor:pointer;">
+          <div>
+            <div class="row-title">${escapeHtml(s.name)}${s.active ? "" : ` <span class="pill">Inactive</span>`}</div>
+            <div class="row-sub">${escapeHtml(s.job_role || "No role set")}${s.salesman_name ? " · salesman " + escapeHtml(s.salesman_name) : ""} · ${escapeHtml(s.data_scope || "Own Only")}</div>
+          </div>
+          <div class="row-right">›</div>
+        </div>`).join("")}
+    </div>` : `<div class="empty-hint">No staff yet. Add them under Staff first.</div>`}`;
+
+  body.querySelectorAll("[data-perm-staff]").forEach(el =>
+    el.addEventListener("click", ()=>openStaffPermissions(el.dataset.permStaff)));
+}
+
+async function openStaffPermissions(staffId){
+  const sheet = document.getElementById("sheet-permissions");
+  sheet.innerHTML = `<div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <p class="muted" style="font-size:13px;">Loading…</p>`;
+  showSheet("sheet-permissions");
+
+  let data;
+  try{ data = await api("GET", `/permissions/${staffId}`); }
+  catch(e){ sheet.querySelector("p").textContent = e.message; return; }
+
+  PERM.editing = staffId;
+  PERM.draft = {
+    jobRole: data.jobRole, salesman: data.salesman, loginId: data.loginId,
+    scope: data.scope, modules: JSON.parse(JSON.stringify(data.modules)),
+    assigned: data.assigned.slice()
+  };
+  paintStaffPermissions(data);
+}
+
+function paintStaffPermissions(data){
+  const sheet = document.getElementById("sheet-permissions");
+  const cat = PERM.catalogue;
+  const d = PERM.draft;
+  const others = PERM.staff.filter(s => s.role !== "owner" && s.id !== data.id);
+
+  const tick = (mod, act) => `
+    <label class="perm-cell">
+      <input type="checkbox" data-perm-mod="${mod}" data-perm-act="${act}" ${d.modules[mod] && d.modules[mod][act] ? "checked" : ""}>
+    </label>`;
+
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">${escapeHtml(data.name)}</div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px;">What this person can see and do.</div>
+
+    <label class="field-label" style="margin-top:0;">Start from a role</label>
+    <div class="chip-row" id="perm-roles">
+      ${cat.roles.map(r => `<button class="chip ${r===d.jobRole?"selected":""}" data-perm-role="${escapeHtml(r)}">${escapeHtml(r)}</button>`).join("")}
+    </div>
+    <div class="muted" style="font-size:11px;margin-top:4px;">
+      Fills the boxes below as a starting point — change any of them afterwards.
+    </div>
+
+    <div class="charge-grid" style="margin-top:12px;">
+      <label class="dim"><span>Login ID</span><input type="text" id="perm-login" value="${escapeHtml(d.loginId)}" placeholder="e.g. jinath"></label>
+      <label class="dim"><span>Salesman name</span><input type="text" id="perm-salesman" value="${escapeHtml(d.salesman)}" placeholder="as it should appear on bills"></label>
+    </div>
+
+    <label class="field-label" style="margin-top:12px;">Which data they see</label>
+    <div class="chip-row" id="perm-scopes">
+      ${cat.scopes.map(s => `<button class="chip ${s===d.scope?"selected":""}" data-perm-scope="${escapeHtml(s)}">${escapeHtml(s)}</button>`).join("")}
+    </div>
+    <div id="perm-assigned-wrap" style="display:${d.scope==="Assigned Staff"?"":"none"};">
+      <label class="field-label" style="margin-top:10px;">Whose data they may see</label>
+      <div class="chip-row" id="perm-assigned">
+        ${others.length ? others.map(s => `<button class="chip ${d.assigned.includes(s.id)?"selected":""}" data-perm-assign="${escapeHtml(s.id)}">${escapeHtml(s.name)}</button>`).join("")
+                        : `<span class="muted" style="font-size:12px;">Nobody else to assign yet.</span>`}
+      </div>
+    </div>
+
+    <div class="section-title">What they can do</div>
+    <div style="overflow-x:auto;">
+      <table class="perm-table">
+        <thead><tr><th>Module</th>${cat.actions.map(a=>`<th>${a[0].toUpperCase()+a.slice(1)}</th>`).join("")}</tr></thead>
+        <tbody>
+          ${cat.modules.map(m => `<tr>
+            <td class="perm-mod">${escapeHtml(m.label)}</td>
+            ${cat.actions.map(a => `<td>${tick(m.key, a)}</td>`).join("")}
+          </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card perm-locked">
+      <div class="row-title">Delete</div>
+      <div class="row-sub">${escapeHtml(cat.deleteNote)} It is refused by the server, not just hidden here.</div>
+    </div>
+
+    <div class="card perm-locked" style="margin-top:8px;">
+      <div class="row-title">Owner-only figures</div>
+      <div class="row-sub">${cat.sensitive.map(s=>escapeHtml(s.label)).join(" · ")} — never shown to staff.</div>
+    </div>
+
+    <div class="action-row" style="margin-top:14px;">
+      <button class="btn btn-gold" id="perm-save">Save</button>
+      <button class="btn btn-outline" id="perm-none">Clear everything</button>
+    </div>`;
+
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", ()=>{ closeAllSheets(); renderPermissions(); });
+
+  sheet.querySelectorAll("[data-perm-role]").forEach(b => b.addEventListener("click", async ()=>{
+    try{
+      const def = await api("GET", `/permissions/role-defaults/${encodeURIComponent(b.dataset.permRole)}`);
+      d.jobRole = b.dataset.permRole;
+      d.scope = def.scope;
+      d.modules = def.modules;
+      paintStaffPermissions(data);
+    }catch(e){ toast(e.message); }
+  }));
+
+  sheet.querySelectorAll("[data-perm-scope]").forEach(b => b.addEventListener("click", ()=>{
+    d.scope = b.dataset.permScope;
+    paintStaffPermissions(data);
+  }));
+
+  sheet.querySelectorAll("[data-perm-assign]").forEach(b => b.addEventListener("click", ()=>{
+    const id = b.dataset.permAssign;
+    const at = d.assigned.indexOf(id);
+    if(at >= 0) d.assigned.splice(at, 1); else d.assigned.push(id);
+    paintStaffPermissions(data);
+  }));
+
+  /* No repaint on a tick: the grid is long, and redrawing it would throw the
+     owner back to the top after every single box. */
+  sheet.querySelectorAll("[data-perm-mod]").forEach(cb => cb.addEventListener("change", ()=>{
+    const mod = cb.dataset.permMod, act = cb.dataset.permAct;
+    if(!d.modules[mod]) d.modules[mod] = { view:false, add:false, edit:false, print:false };
+    d.modules[mod][act] = cb.checked;
+    /* Anything that writes or prints needs to be able to see it first.
+       Ticking Add on a module with no View makes a screen that can create
+       what it cannot show, so View follows along. */
+    if(cb.checked && act !== "view"){
+      d.modules[mod].view = true;
+      const viewBox = sheet.querySelector(`[data-perm-mod="${mod}"][data-perm-act="view"]`);
+      if(viewBox) viewBox.checked = true;
+    }
+  }));
+
+  sheet.querySelector("#perm-login").addEventListener("input", e => { d.loginId = e.target.value; });
+  sheet.querySelector("#perm-salesman").addEventListener("input", e => { d.salesman = e.target.value; });
+
+  sheet.querySelector("#perm-none").addEventListener("click", ()=>{
+    Object.keys(d.modules).forEach(k => d.modules[k] = { view:false, add:false, edit:false, print:false });
+    paintStaffPermissions(data);
+  });
+
+  sheet.querySelector("#perm-save").addEventListener("click", async ()=>{
+    const btn = sheet.querySelector("#perm-save");
+    btn.disabled = true;
+    try{
+      await api("PUT", `/permissions/${data.id}`, d);
+      toast(`${data.name}'s access saved.`, "ok");
+      closeAllSheets();
+      renderPermissions();
+    }catch(e){ toast(e.message); btn.disabled = false; }
+  });
+}
 
 async function renderBackups(){
   const body = document.getElementById("backups-body");

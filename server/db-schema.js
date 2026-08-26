@@ -2290,6 +2290,61 @@ addColumn("invoices", "created_by", "TEXT DEFAULT ''");
 addColumn("invoices", "updated_by", "TEXT DEFAULT ''");
 addColumn("invoices", "updated_at", "INTEGER");
 
+/* ============================================================
+   WHO MAY DO WHAT
+
+   The shop had two roles — owner and staff — and every gate in the app
+   was one of those two. That answers "can they open Settings" and nothing
+   else: the person who takes orders and the person who enters purchases
+   were the same user as far as the app was concerned.
+
+   Permissions are stored per staff member, not per role. Roles are a
+   starting point the owner picks from — a shop with four salesmen will
+   want three of them identical and one allowed to see outstanding, and a
+   role-only model forces a new role to be invented for that one person.
+   The role is kept as a label and as the source of the defaults; what
+   actually gets checked is the row.
+
+   Delete is deliberately NOT a column here. It is not configurable — it
+   belongs to the owner, enforced ahead of every route in index.js — and a
+   column would invite somebody to switch it on.
+   ============================================================ */
+addColumn("staff", "login_id", "TEXT DEFAULT ''");
+
+/* The role a staff member was created as. The CHECK on the original column
+   only allows owner/staff, and widening it would mean rebuilding the table
+   on every existing shop; this carries the finer role beside it. Anything
+   the app has not been taught about falls back to the plain staff rules. */
+addColumn("staff", "job_role", "TEXT DEFAULT ''");
+
+/* The salesman this login IS. A sales staff member's own transactions are
+   recorded against this name, and Own Only scope is measured by it. */
+addColumn("staff", "salesman_name", "TEXT DEFAULT ''");
+
+/* Own Only | Assigned Staff | All Staff | All Data. Blank means Own Only:
+   an unconfigured login should see the least, not the most. */
+addColumn("staff", "data_scope", "TEXT DEFAULT ''");
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS staff_permissions (
+  staff_id TEXT NOT NULL REFERENCES staff(id) ON DELETE CASCADE,
+  module   TEXT NOT NULL,
+  can_view  INTEGER NOT NULL DEFAULT 0,
+  can_add   INTEGER NOT NULL DEFAULT 0,
+  can_edit  INTEGER NOT NULL DEFAULT 0,
+  can_print INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (staff_id, module)
+);
+
+-- Which salesmen a manager may see. Empty for everyone else.
+CREATE TABLE IF NOT EXISTS staff_assigned (
+  manager_id TEXT NOT NULL REFERENCES staff(id) ON DELETE CASCADE,
+  staff_id   TEXT NOT NULL REFERENCES staff(id) ON DELETE CASCADE,
+  PRIMARY KEY (manager_id, staff_id)
+);
+CREATE INDEX IF NOT EXISTS idx_staff_perm ON staff_permissions(staff_id);
+`);
+
 /* Indexes for the party- and salesman-wise reports: without them every
    report scans every PO line the shop has ever raised. */
 db.exec("CREATE INDEX IF NOT EXISTS idx_po_customer ON purchase_orders(against_customer_id)");

@@ -1753,3 +1753,31 @@ select.po-line-brand:focus-visible{ outline:2px solid var(--gold); outline-offse
 /* Where the records run out. Stated, not left as a blank the shop has to
    interpret as either 'nothing happened' or 'the app does not know'. */
 .po-trace-stop{ margin-top:10px; border-style:dashed; }
+
+/* ============================================================
+   THE PERMISSION GRID
+
+   Modules down, actions across. The module name is sticky to the left
+   because on a phone the row scrolls sideways and a tick with no visible
+   label is a tick nobody can trust.
+   ============================================================ */
+.perm-table{ width:100%; border-collapse:collapse; font-size:12px; }
+.perm-table th{
+  text-align:center; padding:6px 4px; font-size:10.5px; font-weight:800;
+  letter-spacing:.05em; text-transform:uppercase; color:var(--muted);
+  border-bottom:1px solid var(--border); white-space:nowrap;
+}
+.perm-table th:first-child{ text-align:left; }
+.perm-table td{ padding:2px 4px; border-bottom:1px solid var(--border); text-align:center; }
+.perm-table td.perm-mod{
+  text-align:left; font-weight:700; white-space:nowrap;
+  position:sticky; left:0; background:var(--card); padding-right:10px;
+}
+.perm-cell{ display:flex; justify-content:center; padding:5px 0; cursor:pointer; }
+.perm-cell input{ width:18px; height:18px; }
+
+/* What cannot be granted, stated rather than left out. A missing column
+   reads as an oversight; a box saying why reads as a decision. */
+.perm-locked{
+  margin-top:12px; border-style:dashed; background:var(--bg);
+}

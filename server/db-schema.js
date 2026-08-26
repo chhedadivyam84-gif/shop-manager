@@ -680,6 +680,22 @@ CREATE INDEX IF NOT EXISTS idx_purchase_returns_purchase ON purchase_returns(pur
 CREATE INDEX IF NOT EXISTS idx_inquiries_date ON inquiries(date);
 `);
 
+/* ============================================================
+   CHECKING IN WITH THE LICENCE SERVER
+
+   A copy that was sold holds an activation code, which grants nothing on
+   its own — it says which row in the vendor's panel to ask about. The
+   signed answer is cached here so the shop keeps working when the licence
+   server cannot be reached, which is the whole point of caching it.
+
+   All dormant in the shop's own copy: license.js ships with an empty
+   public key, and nothing here is read without one.
+   ============================================================ */
+addColumn("settings", "activation_code", "TEXT DEFAULT ''");
+addColumn("settings", "install_id", "TEXT DEFAULT ''");
+addColumn("settings", "last_verdict", "TEXT");
+addColumn("settings", "last_verdict_at", "INTEGER");
+
 /* ------------------------------------------------------------------
    MIGRATIONS
    CREATE TABLE IF NOT EXISTS never alters an existing table, so columns

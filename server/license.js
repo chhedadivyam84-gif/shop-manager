@@ -53,6 +53,11 @@ function limitFrom(data) {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_COMPANY_LIMIT;
 }
 
+/* The vendor key, for licenseCheckin.js to verify verdicts with. Exposed
+   rather than duplicated: two copies of a public key is one chance for
+   them to disagree about which vendor this build belongs to. */
+function publicKey() { return PUBLIC_KEY; }
+
 function enabled() {
   return PUBLIC_KEY.trim().length > 0;
 }
@@ -149,6 +154,7 @@ function state(key) {
 }
 
 module.exports = {
+  publicKey,
   enabled, parse, state, resolveKey, keyIsFromEnv,
   WARN_WITHIN_DAYS, DEFAULT_COMPANY_LIMIT
 };

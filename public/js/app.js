@@ -7289,18 +7289,83 @@ async function refreshLicenseBanner(){
   const bad = st.expired;
   bar.style.background = bad ? "var(--danger)" : "var(--gold)";
   bar.style.color = bad ? "#fff" : "var(--navy)";
+  /* Worded from the state rather than assuming expiry: a copy blocked
+     because it cannot reach the licence server has not expired, and
+     telling its owner to renew sends them to their supplier with the
+     wrong question. */
   bar.textContent = bad
-    ? `${st.message} Read-only — tap to enter a renewal key.`
-    : `${st.message} Tap to renew.`;
+    ? `${st.message} Read-only until this is sorted out — tap for details.`
+    : `${st.message} Tap for details.`;
 }
+/* The subscription box in Settings.
+ *
+ * Two shapes, because a copy is sold under one of two schemes and the
+ * wording has to match what the shopkeeper was actually handed. Asking for
+ * a "licence key" when their supplier sent a short code is how a support
+ * call starts.
+ *
+ *   mode "server" — they were given an activation code. The subscription
+ *                   lives in the supplier's panel and can be withdrawn.
+ *   mode "key"    — older copies, given a long signed key to paste.
+ *
+ * Hidden entirely in the shop's own copy, where nothing is enforced.
+ */
 function licenseSettingsHtml(){
   const st = state.license;
-  if(!st || !st.enforced) return "";      // unlicensed build — hide entirely
-  const colour = st.expired ? "var(--danger)" : (st.status==="expiring" ? "var(--gold)" : "var(--ok)");
+  if(!st || !st.enforced) return "";
+
+  const bad = st.blocked || st.expired;
+  const colour = bad ? "var(--danger)"
+               : (st.status === "expiring" || st.status === "active-cached") ? "var(--gold)"
+               : "var(--ok)";
+
+  if(st.mode === "server"){
+    const facts = [
+      st.licensedTo ? `Licensed to ${escapeHtml(st.licensedTo)}` : "",
+      st.expiresOn
+        ? `Valid until ${escapeHtml(st.expiresOn)}${st.daysLeft != null ? ` — ${st.daysLeft} day${st.daysLeft === 1 ? "" : "s"} left` : ""}`
+        : "",
+      st.code ? `Activation code ${escapeHtml(st.code)}` : "",
+      st.lastConfirmedDaysAgo != null
+        ? `Last confirmed ${st.lastConfirmedDaysAgo === 0 ? "today" : st.lastConfirmedDaysAgo + " day(s) ago"}`
+        : ""
+    ].filter(Boolean);
+
+    /* The box to type a code into appears only when there is no working
+       subscription. A copy that is running fine has nothing to type, and an
+       empty box invites somebody to try. */
+    const needsCode = !st.code || st.status === "needs-activation" || st.status === "not-approved";
+
+    return `
+    <div class="section-title" style="margin-top:18px;">Subscription</div>
+    <div class="card" id="st-lic-card" style="border-left:3px solid ${colour};">
+      <div style="font-size:12px;font-weight:700;">${escapeHtml(st.message || "")}</div>
+      ${facts.map(f => `<div class="muted" style="font-size:11px;margin-top:2px;">${f}</div>`).join("")}
+      ${needsCode ? `
+        <label class="field-label" style="margin-top:10px;">Activation code</label>
+        <input type="text" id="st-activation" placeholder="ABCD-EFGH-JKLM"
+               autocapitalize="characters" spellcheck="false"
+               style="letter-spacing:.08em;font-weight:700;">
+        <button class="btn btn-primary" id="st-activate" style="margin-top:10px;">Activate</button>
+        <div class="muted" style="font-size:11px;margin-top:6px;">
+          Your supplier gives you this code. It is not a password — it only says
+          which subscription this copy belongs to.
+        </div>` : `
+        <button class="btn btn-outline" id="st-recheck" style="margin-top:10px;">Check again now</button>
+        <div class="muted" style="font-size:11px;margin-top:6px;">
+          This copy confirms its subscription on its own every few hours.
+          Use this if you have just renewed.
+        </div>
+        <a href="#" id="st-newcode" class="btn-danger-link"
+           style="display:inline-block;margin-top:10px;font-size:11.5px;">Enter a different code</a>`}
+    </div>`;
+  }
+
+  /* The older scheme: one long signed key, pasted in. */
   return `
     <div class="section-title" style="margin-top:18px;">Subscription</div>
     <div class="card" style="border-left:3px solid ${colour};">
-      <div style="font-size:12px;font-weight:700;">${escapeHtml(st.message||"")}</div>
+      <div style="font-size:12px;font-weight:700;">${escapeHtml(st.message || "")}</div>
       ${st.licensedTo ? `<div class="muted" style="font-size:11px;margin-top:2px;">Licensed to ${escapeHtml(st.licensedTo)}</div>` : ""}
       <label class="field-label" style="margin-top:10px;">Licence key</label>
       <input type="text" id="st-license" placeholder="Paste the key you were sent">
@@ -7308,6 +7373,60 @@ function licenseSettingsHtml(){
     </div>`;
 }
 function wireLicenseSettings(){
+  /* --- the activation-code scheme --- */
+  const act = document.getElementById("st-activate");
+  if(act) act.addEventListener("click", async ()=>{
+    const code = (document.getElementById("st-activation").value || "").trim();
+    if(!code){ toast("Enter the code your supplier gave you."); return; }
+    act.disabled = true;
+    const wasA = act.textContent;
+    act.textContent = "Checking…";
+    try{
+      await api("POST", "/license/activate", { code });
+      state.license = await api("GET", "/license");
+      await refreshLicenseBanner();
+      toast("Activated.", "ok");
+      closeAllSheets();
+    }catch(e){
+      toast(e.message);
+      act.disabled = false;
+      act.textContent = wasA;
+    }
+  });
+
+  const recheck = document.getElementById("st-recheck");
+  if(recheck) recheck.addEventListener("click", async ()=>{
+    recheck.disabled = true;
+    const wasR = recheck.textContent;
+    recheck.textContent = "Checking…";
+    try{
+      const r = await api("POST", "/license/recheck");
+      state.license = await api("GET", "/license");
+      await refreshLicenseBanner();
+      toast(r.ok ? "Subscription confirmed."
+                 : `Could not reach the licence server: ${r.error}`, r.ok ? "ok" : "");
+    }catch(e){ toast(e.message); }
+    recheck.disabled = false;
+    recheck.textContent = wasR;
+  });
+
+  const newCode = document.getElementById("st-newcode");
+  if(newCode) newCode.addEventListener("click", (e)=>{
+    e.preventDefault();
+    /* Swaps the box in place and saves nothing. The subscription this copy
+       is running on keeps working until a new code is actually accepted —
+       clearing it first would take a working shop offline to type. */
+    const card = document.getElementById("st-lic-card");
+    if(!card) return;
+    card.innerHTML =
+      `<label class="field-label" style="margin-top:0;">Activation code</label>` +
+      `<input type="text" id="st-activation" placeholder="ABCD-EFGH-JKLM" ` +
+      `autocapitalize="characters" spellcheck="false" style="letter-spacing:.08em;font-weight:700;">` +
+      `<button class="btn btn-primary" id="st-activate" style="margin-top:10px;">Activate</button>` +
+      `<div class="muted" style="font-size:11px;margin-top:6px;">` +
+      `The subscription this copy is using now keeps working until a new code is accepted.</div>`;
+    wireLicenseSettings();
+  });
   const btn = document.getElementById("st-license-save");
   if(!btn) return;
   btn.addEventListener("click", async ()=>{

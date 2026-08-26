@@ -3,6 +3,7 @@ const db = require("../db");
 const { requireRole } = require("../auth");
 const { logAction } = require("../util");
 const license = require("../license");
+const checkin = require("../licenseCheckin");
 
 const router = express.Router();
 
@@ -14,8 +15,59 @@ function currentKey() {
 }
 
 /** Current subscription state — drives the banner and the renew screen. */
+/** Current subscription state — drives the banner and the renew screen. */
 router.get("/", (req, res) => {
-  res.json({ ...license.state(currentKey()), fromEnv: license.keyIsFromEnv() });
+  /* A copy sold under the licence server reports what the server last
+     said; an older one reports what its key says. The screen does not
+     need to know which — it reads `mode` if it wants to word things
+     differently, and `blocked` either way. */
+  if (checkin.enabled()) {
+    const st = checkin.state();
+    const last = checkin.lastAttempt();
+    return res.json({
+      ...st, mode: "server", blocked: !!st.blocked, expired: !!st.blocked,
+      server: checkin.serverUrl(),
+      lastAttemptAt: last.at || null,
+      lastAttemptError: last.error || ""
+    });
+  }
+  res.json({ ...license.state(currentKey()), mode: "key", fromEnv: license.keyIsFromEnv() });
+});
+
+/**
+ * Enter the activation code the supplier gave them.
+ *
+ * Reachable while blocked, like the key route and for the same reason: a
+ * copy that cannot be activated because it is not activated is a support
+ * call nobody can resolve.
+ *
+ * Owner-only. It is a commercial matter, not routine data entry.
+ */
+router.post("/activate", requireRole("owner"), async (req, res) => {
+  if (!checkin.enabled()) {
+    return res.status(409).json({
+      error: "This copy does not use activation codes."
+    });
+  }
+  const r = await checkin.activate(String(req.body.code || ""));
+  if (!r.ok) return res.status(400).json({ error: r.error });
+  logAction(req, "license.activate", `${r.state.licensedTo || "—"} until ${r.state.expiresOn || "—"}`);
+  res.json({ ok: true, state: r.state });
+});
+
+/**
+ * Ask the licence server again, now.
+ *
+ * For the shopkeeper on the phone to their supplier: renewed a minute
+ * ago, does not want to wait six hours for the next scheduled check.
+ * Not owner-only — anybody who can see the blocked screen should be able
+ * to retry it, and it grants nothing the timer would not.
+ */
+router.post("/recheck", async (req, res) => {
+  if (!checkin.enabled()) return res.status(409).json({ error: "This copy does not use activation codes." });
+  const r = await checkin.checkIn("asked by hand");
+  const st = checkin.state();
+  res.json({ ok: r.ok, error: r.error || "", state: st });
 });
 
 /**

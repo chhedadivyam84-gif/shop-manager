@@ -133,6 +133,7 @@ app.use(session({
    BACK to working: logging in, and saving a new licence key.
    ------------------------------------------------------------ */
 const license = require("./license");
+const checkin = require("./licenseCheckin");
 const LICENCE_EXEMPT = [
   "/api/auth",      // must be able to log in to see the renew screen
   "/api/license",   // entering the new key
@@ -146,12 +147,27 @@ app.use("/api", (req, res, next) => {
   // Through resolveKey, so LICENSE_KEY counts here too. This is the gate that
   // actually holds the app read-only: reading the database directly would keep
   // a host that wipes its disk locked out however the key was supplied.
-  const row = db.prepare("SELECT license_key FROM settings WHERE id = 1").get();
-  const st = license.state(license.resolveKey(row && row.license_key));
-  if (!st.expired) return next();
+  /* Two ways a copy can be licensed, and it uses whichever it was sold
+     under. A copy pointed at a licence server asks that (its answer can
+     be withdrawn); an older copy with a signed key on disk asks the key
+     (it cannot). Both end at the same read-only gate below, so there is
+     one place where the app decides to stop accepting writes. */
+  let st;
+  if (checkin.enabled()) {
+    st = checkin.state();
+    if (!st.blocked) return next();
+  } else {
+    /* Read from the database rather than a cached value: on a host that
+       wipes its disk, a stale in-memory copy would keep a shop locked
+       out however the key was actually supplied. */
+    const row = db.prepare("SELECT license_key FROM settings WHERE id = 1").get();
+    st = license.state(license.resolveKey(row && row.license_key));
+    if (!st.expired) return next();
+  }
   return res.status(403).json({
-    error: `${st.message} The app is read-only until it's renewed — you can still view, print and back up your records.`,
-    licenseExpired: true
+    error: `${st.message} The app is read-only until this is sorted out — you can still view, print and back up your records.`,
+    licenseExpired: true,
+    licenceStatus: st.status
   });
 });
 
@@ -302,6 +318,11 @@ app.use((err, req, res, next) => {
   console.error(err);
   res.status(500).json({ error: "Something went wrong on the server." });
 });
+
+/* Not awaited and not blocking: a licence server that is slow to wake
+   must never hold up a shop opening its own app. Whatever was cached at
+   the last successful check-in applies until it answers. */
+checkin.start();
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Shop Manager running on port ${PORT}`);

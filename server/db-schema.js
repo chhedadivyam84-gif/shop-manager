@@ -696,6 +696,17 @@ addColumn("settings", "install_id", "TEXT DEFAULT ''");
 addColumn("settings", "last_verdict", "TEXT");
 addColumn("settings", "last_verdict_at", "INTEGER");
 
+/* The last verdict that said ACTIVE, kept separately from the latest one.
+
+   It is what lets a copy tell two very different things apart when the
+   licence server suddenly does not recognise its code: a code that was
+   never approved, and a code the SERVER has forgotten because its own
+   database was lost. The vendor panel has no delete, so a code that
+   worked yesterday cannot legitimately vanish today — and a shop must
+   not be taken off the air by its supplier's hosting accident. */
+addColumn("settings", "last_good_verdict", "TEXT");
+addColumn("settings", "last_good_at", "INTEGER");
+
 /* ------------------------------------------------------------------
    MIGRATIONS
    CREATE TABLE IF NOT EXISTS never alters an existing table, so columns

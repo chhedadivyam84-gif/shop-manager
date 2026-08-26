@@ -160,9 +160,42 @@ function state() {
     return { enforced: true, status: "cancelled", blocked: true, companyLimit, code,
              message: v.message || "This subscription has been cancelled. Please contact your supplier." };
   }
-  if (v.status === "unknown") {
+  /* Never approved. Blocked, and correctly so — this copy has no history
+     of ever having worked. */
+  if (v.status === "pending") {
     return { enforced: true, status: "not-approved", blocked: true, companyLimit, code,
              message: v.message || "This copy has not been approved yet. Please contact your supplier." };
+  }
+
+  /* The licence server does not recognise this code.
+
+     Two very different things look identical from here: a code that is
+     genuinely wrong, and a code the server has FORGOTTEN because it lost
+     its own database — which on a host with no persistent disk happens
+     on every redeploy.
+
+     The vendor panel has no delete, so a code that was active yesterday
+     cannot legitimately stop existing today. When this copy holds proof
+     that its code was good recently, that proof outweighs a bare 'not
+     recognised', and the grace period runs instead of an immediate stop.
+
+     The asymmetry is deliberate. A shop wrongly cut off because its
+     supplier's hosting had a bad night is a catastrophe; a shop granted
+     an extra fortnight after a code was reissued is a phone call. */
+  if (v.status === "unknown") {
+    const good = openVerdict(s.last_good_verdict, code);
+    const goodAge = s.last_good_at ? daysSince(s.last_good_at) : null;
+    if (good && goodAge !== null && goodAge <= (Number(good.graceDays) || DEFAULT_GRACE_DAYS)) {
+      return {
+        enforced: true, status: "vendor-unreachable", blocked: false,
+        companyLimit: good.companies === "unlimited" ? null : (Number(good.companies) || 1),
+        code, expiresOn: good.expires || "", lastConfirmedDaysAgo: goodAge,
+        graceDays: Number(good.graceDays) || DEFAULT_GRACE_DAYS,
+        message: "Your supplier's licence server did not recognise this copy. It is still working — please tell them, so it can be sorted out."
+      };
+    }
+    return { enforced: true, status: "not-approved", blocked: true, companyLimit, code,
+             message: v.message || "This activation code is not recognised. Please contact your supplier." };
   }
 
   /* The end date is checked here as well as on the server. A copy that
@@ -242,6 +275,14 @@ async function checkIn(reason) {
 
     db.prepare("UPDATE settings SET last_verdict = ?, last_verdict_at = ? WHERE id = 1")
       .run(String(body.verdict), Date.now());
+
+    /* Kept separately, and only when it was good. This is the copy's
+       evidence that its code was real — evidence it needs if the
+       licence server later fails to recognise it. */
+    if (v.status === "active") {
+      db.prepare("UPDATE settings SET last_good_verdict = ?, last_good_at = ? WHERE id = 1")
+        .run(String(body.verdict), Date.now());
+    }
     lastError = "";
     console.log(`[licence] checked in (${reason}): ${v.status}${v.expires ? ", until " + v.expires : ""}`);
     return { ok: true, status: v.status };

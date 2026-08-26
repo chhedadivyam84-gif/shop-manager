@@ -176,6 +176,29 @@ router.put("/po-wa-template", requireRole("owner"), (req, res) => {
   res.json({ ok: true, template: t.trim() });
 });
 
+/* The app's colour scheme.
+
+   Its own route rather than another field on PUT /settings, matching
+   /numbering, /print-prefs and /logo below: that handler rewrites twenty
+   columns in one statement, and threading a twenty-first through it to
+   change a colour risks the other nineteen.
+
+   Validated against the list rather than stored as free text. An
+   unrecognised value would reach the page as a class that matches
+   nothing, and the app would come up unstyled. */
+const APP_THEMES = ["navy-gold", "forest-brass", "maroon-gold", "teal-copper",
+                    "indigo-amber", "charcoal-gold", "plum-rose"];
+
+router.put("/app-theme", requireRole("owner"), (req, res) => {
+  const t = String(req.body.theme || "").trim();
+  if (t && !APP_THEMES.includes(t)) {
+    return res.status(400).json({ error: "That colour scheme is not one this app knows." });
+  }
+  db.prepare("UPDATE settings SET app_theme = ? WHERE id = 1").run(t);
+  logAction(req, "settings.appTheme", t || "default");
+  res.json({ ok: true, theme: t, themes: APP_THEMES });
+});
+
 router.put("/logo", requireRole("owner"), (req, res) => {
   const { logo } = req.body;
 

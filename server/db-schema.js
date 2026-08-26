@@ -2301,6 +2301,12 @@ addColumn("purchase_order_items", "received_qty", "REAL NOT NULL DEFAULT 0");
    around it is theirs to word. Blank means use the built-in wording. */
 addColumn("settings", "po_wa_template", "TEXT DEFAULT ''");
 
+/* The colour the app itself wears. Shop-wide rather than per-device: the
+   look is the shop's, and a counter, a phone and a tablet showing three
+   different colours reads as three different apps. Blank means the
+   original navy and gold, so an existing shop sees no change. */
+addColumn("settings", "app_theme", "TEXT DEFAULT ''");
+
 /* ============================================================
    WHO WROTE THIS BILL, AND WHO CHANGED IT
 

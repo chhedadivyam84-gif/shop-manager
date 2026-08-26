@@ -1807,3 +1807,129 @@ select.po-line-brand:focus-visible{ outline:2px solid var(--gold); outline-offse
 
 /* Everything shifts down so the banner never covers the header. */
 body.previewing{ padding-top:34px; }
+
+
+/* ============================================================
+   COLOUR SCHEMES
+
+   The palette above is already written in OKLCH, which is what makes this
+   safe to offer at all. In OKLCH the first number IS the perceived
+   lightness, so a theme can move the HUE and leave lightness alone — and
+   the contrast between text and its background comes out the same in every
+   scheme, without anyone checking seven of them by eye.
+
+   So each theme below changes hue, and chroma where a colour wants to be
+   quieter or louder. It never changes lightness. That rule is the whole
+   reason these are safe: break it and one scheme quietly becomes
+   unreadable in daylight on a counter, which is exactly where this app is
+   used.
+
+   Applied as [data-theme] on <html>. Anything not listed in a block keeps
+   the value from :root, so a theme only says what it changes.
+
+   The status colours — ok, warn, danger — deliberately do NOT move. Green
+   means fine and red means money going out, in every scheme. A palette
+   that recoloured those would be prettier and would cost somebody a
+   mis-read at the till.
+   ============================================================ */
+
+/* Forest and brass — green with a warm metal accent. */
+html[data-theme="forest-brass"]{
+  --navy:   oklch(0.30 0.06 155);
+  --navy-2: oklch(0.24 0.06 155);
+  --gold:   oklch(0.78 0.11 95);
+  --gold-2: oklch(0.70 0.11 95);
+  --bg:       oklch(0.985 0.004 150);
+  --bg-outer: oklch(0.94 0.008 150);
+  --border:   oklch(0.90 0.012 150);
+  --text:  oklch(0.25 0.02 155);
+  --muted: oklch(0.55 0.02 155);
+}
+
+/* Maroon and gold — the traditional shop-board pairing. */
+html[data-theme="maroon-gold"]{
+  --navy:   oklch(0.30 0.09 20);
+  --navy-2: oklch(0.24 0.09 20);
+  --gold:   oklch(0.78 0.13 85);
+  --gold-2: oklch(0.70 0.13 85);
+  --bg:       oklch(0.985 0.005 40);
+  --bg-outer: oklch(0.94 0.009 40);
+  --border:   oklch(0.90 0.013 40);
+  --text:  oklch(0.25 0.03 20);
+  --muted: oklch(0.55 0.025 20);
+}
+
+/* Teal and copper — cooler, and the easiest of these on a bright screen. */
+html[data-theme="teal-copper"]{
+  --navy:   oklch(0.30 0.06 205);
+  --navy-2: oklch(0.24 0.06 205);
+  --gold:   oklch(0.78 0.11 55);
+  --gold-2: oklch(0.70 0.11 55);
+  --bg:       oklch(0.985 0.004 200);
+  --bg-outer: oklch(0.94 0.008 200);
+  --border:   oklch(0.90 0.012 200);
+  --text:  oklch(0.25 0.02 205);
+  --muted: oklch(0.55 0.02 205);
+}
+
+/* Indigo and amber — the brightest accent here, for a dim shop. */
+html[data-theme="indigo-amber"]{
+  --navy:   oklch(0.30 0.08 285);
+  --navy-2: oklch(0.24 0.08 285);
+  --gold:   oklch(0.80 0.14 75);
+  --gold-2: oklch(0.72 0.14 75);
+  --bg:       oklch(0.985 0.004 280);
+  --bg-outer: oklch(0.94 0.008 280);
+  --border:   oklch(0.90 0.012 280);
+  --text:  oklch(0.25 0.025 285);
+  --muted: oklch(0.55 0.022 285);
+}
+
+/* Charcoal and gold — no hue at all in the dark tone. The quietest, and
+   the one that photographs and prints most predictably. */
+html[data-theme="charcoal-gold"]{
+  --navy:   oklch(0.30 0.005 258);
+  --navy-2: oklch(0.22 0.005 258);
+  --gold:   oklch(0.78 0.13 85);
+  --gold-2: oklch(0.70 0.13 85);
+  --bg:       oklch(0.985 0.002 90);
+  --bg-outer: oklch(0.94 0.004 90);
+  --border:   oklch(0.90 0.006 90);
+  --text:  oklch(0.24 0.005 258);
+  --muted: oklch(0.55 0.006 258);
+}
+
+/* Plum and rose — the only scheme here whose accent is not warm metal. */
+html[data-theme="plum-rose"]{
+  --navy:   oklch(0.30 0.08 330);
+  --navy-2: oklch(0.24 0.08 330);
+  --gold:   oklch(0.76 0.10 15);
+  --gold-2: oklch(0.68 0.10 15);
+  --bg:       oklch(0.985 0.004 330);
+  --bg-outer: oklch(0.94 0.008 330);
+  --border:   oklch(0.90 0.012 330);
+  --text:  oklch(0.25 0.025 330);
+  --muted: oklch(0.55 0.022 330);
+}
+
+/* The swatches on the picker. Each shows the two colours a scheme is
+   actually named after, so the choice is made by looking rather than by
+   reading a name and finding out afterwards. */
+.theme-swatch{
+  width: 34px; height: 34px; border-radius: 9px;
+  border: 1px solid var(--border);
+  flex: 0 0 auto;
+  overflow: hidden;
+  display: block;
+}
+.theme-swatch i{ display:block; height: 50%; }
+.theme-card{
+  display:flex; align-items:center; gap:10px;
+  padding: 10px; border-radius: var(--card-radius);
+  border: 1px solid var(--border); background: var(--card);
+  cursor: pointer; width: 100%; text-align: left;
+  font: inherit; color: var(--text);
+}
+.theme-card.selected{ border-color: var(--navy); box-shadow: 0 0 0 2px var(--navy) inset; }
+.theme-card .theme-name{ font-weight: 700; font-size: var(--fs-row-title); }
+.theme-card .theme-sub{ font-size: var(--fs-row-sub); color: var(--muted); }

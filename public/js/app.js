@@ -300,6 +300,9 @@ async function showLogin(){
 let appInited = false;
 async function initApp(){
   state.settings = await api("GET","/settings");
+  /* The device remembered a colour at boot so the app did not flash;
+     this is the shop's actual answer, and it wins. */
+  applyAppTheme((state.settings && state.settings.app_theme) || "navy-gold");
   document.title = state.settings.business_name + " — Shop Manager";
   document.getElementById("avatar-btn").textContent = initials(state.settings.business_name);
   await refreshLicenseBanner();
@@ -6414,6 +6417,13 @@ function openSettings(){
       <p class="muted" style="font-size:11px;margin-bottom:10px;">Capital, fixed assets, loans and deposits — the figures the app can't work out from your sales and purchases. Enter them once; they feed the Balance Sheet from then on.</p>
       <button class="btn btn-outline" id="st-accounting">Set Opening Balances</button>
 
+      <div class="section-title">Appearance</div>
+      <button class="btn btn-outline" id="st-app-theme">App Colour</button>
+      <div class="muted" style="font-size:11px;margin-top:4px;">
+        Changes the colour of the app itself, for every device in the shop.
+        Nothing on a printed bill changes &mdash; that is set by the Invoice Theme above.
+      </div>
+
       <div class="section-title">Staff Access</div>
       <button class="btn btn-outline" id="st-manage-staff">Manage Staff &amp; PINs</button>
       <button class="btn btn-outline" id="st-audit-log" style="margin-top:8px;">Activity Log</button>
@@ -6581,6 +6591,9 @@ function openSettings(){
   // Print themes save on their own button rather than the business-details
   // "Save Settings" far above them — the PUT merges, so sending just these two
   // leaves every other setting untouched.
+  const appThemeBtn = sheet.querySelector("#st-app-theme");
+  if(appThemeBtn) appThemeBtn.addEventListener("click", () => { closeAllSheets(); openAppThemePicker(); });
+
   const invThemeSel = sheet.querySelector("#st-invoice-theme");
   const chThemeSel = sheet.querySelector("#st-challan-theme");
   if(invThemeSel && chThemeSel){
@@ -19572,6 +19585,125 @@ async function openGstFilings(){
 
   showSheet("sheet-gst-filings");
   await draw();
+}
+
+
+/* ============================================================
+   THE APP'S COLOUR
+
+   Seven schemes, each one a hue shift over the same palette. Lightness
+   never moves between them (see the block in style.css), so every scheme
+   has the contrast the original was built with rather than the contrast
+   somebody happened to get.
+
+   Shop-wide, not per-device. The look belongs to the shop, and a counter,
+   a phone and a tablet showing three different colours reads as three
+   different apps to the staff using them.
+   ============================================================ */
+const APP_THEMES = [
+  { key: "navy-gold",     name: "Navy & Gold",     sub: "The original",              a: "oklch(0.30 0.06 258)", b: "oklch(0.78 0.13 85)" },
+  { key: "forest-brass",  name: "Forest & Brass",  sub: "Green, warm accent",        a: "oklch(0.30 0.06 155)", b: "oklch(0.78 0.11 95)" },
+  { key: "maroon-gold",   name: "Maroon & Gold",   sub: "The shop-board pairing",    a: "oklch(0.30 0.09 20)",  b: "oklch(0.78 0.13 85)" },
+  { key: "teal-copper",   name: "Teal & Copper",   sub: "Easiest on a bright screen", a: "oklch(0.30 0.06 205)", b: "oklch(0.78 0.11 55)" },
+  { key: "indigo-amber",  name: "Indigo & Amber",  sub: "Brightest accent, for a dim shop", a: "oklch(0.30 0.08 285)", b: "oklch(0.80 0.14 75)" },
+  { key: "charcoal-gold", name: "Charcoal & Gold", sub: "The quietest",              a: "oklch(0.30 0.005 258)", b: "oklch(0.78 0.13 85)" },
+  { key: "plum-rose",     name: "Plum & Rose",     sub: "Cool accent, not metal",    a: "oklch(0.30 0.08 330)", b: "oklch(0.76 0.10 15)" }
+];
+
+const THEME_CACHE_KEY = "shopManagerAppTheme";
+
+/**
+ * Paint a scheme.
+ *
+ * Also remembered on this device, and that copy is what boot() reads before
+ * the settings have loaded. Without it the app would come up navy for a
+ * moment and then change colour under the person looking at it — which on a
+ * slow morning connection is long enough to look like a fault.
+ */
+function applyAppTheme(key){
+  const k = APP_THEMES.some(t => t.key === key) ? key : "navy-gold";
+  if(k === "navy-gold") document.documentElement.removeAttribute("data-theme");
+  else document.documentElement.setAttribute("data-theme", k);
+  try{ localStorage.setItem(THEME_CACHE_KEY, k); }catch(e){ /* private mode; the server still knows */ }
+}
+
+/* Run at boot, before the first paint, from whatever this device last saw.
+   Reconciled with the shop's real setting the moment settings load. */
+(function paintRememberedTheme(){
+  try{
+    const k = localStorage.getItem(THEME_CACHE_KEY);
+    if(k && k !== "navy-gold" && APP_THEMES.some(t => t.key === k)){
+      document.documentElement.setAttribute("data-theme", k);
+    }
+  }catch(e){ /* nothing remembered; the default is already correct */ }
+})();
+
+function openAppThemePicker(){
+  const sheet = document.getElementById("sheet-app-theme");
+  const current = (state.settings && state.settings.app_theme) || "navy-gold";
+
+  const draw = (sel) => {
+    sheet.innerHTML = `
+      <div class="sheet-handle"></div>
+      <button class="sheet-close" data-sheetclose>&#10005;</button>
+      <div class="sheet-title">App Colour</div>
+      <div class="muted" style="font-size:12px;margin-top:2px;">
+        Tap one to see it straight away. It applies to every phone, tablet and computer
+        in the shop${isOwner() ? "" : " — only the owner can save the change"}.
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px;">
+        ${APP_THEMES.map(t => `
+          <button class="theme-card ${t.key === sel ? "selected" : ""}" data-theme-pick="${t.key}">
+            <span class="theme-swatch"><i style="background:${t.a};"></i><i style="background:${t.b};"></i></span>
+            <span>
+              <span class="theme-name">${escapeHtml(t.name)}</span>
+              <span class="theme-sub" style="display:block;">${escapeHtml(t.sub)}</span>
+            </span>
+          </button>`).join("")}
+      </div>
+      ${isOwner() ? `
+        <div style="margin-top:14px;display:flex;flex-direction:column;gap:8px;">
+          <button class="btn btn-primary" id="theme-save">Save for the whole shop</button>
+          <button class="btn btn-outline" id="theme-cancel">Cancel</button>
+        </div>` : `
+        <div class="muted" style="font-size:11.5px;margin-top:14px;">
+          You can look, but only the owner can change the shop's colour.
+        </div>`}`;
+
+    sheet.querySelectorAll("[data-theme-pick]").forEach(b => {
+      b.addEventListener("click", () => {
+        /* Painted at once rather than on save. Choosing a colour from a
+           list of names is guesswork; choosing it by watching the app turn
+           that colour is not. */
+        applyAppTheme(b.dataset.themePick);
+        draw(b.dataset.themePick);
+      });
+    });
+
+    const close = () => { applyAppTheme(current); closeAllSheets(); };
+    sheet.querySelectorAll("[data-sheetclose]").forEach(b => b.addEventListener("click", close));
+    const cancel = document.getElementById("theme-cancel");
+    if(cancel) cancel.addEventListener("click", close);
+
+    const save = document.getElementById("theme-save");
+    if(save) save.addEventListener("click", async () => {
+      const chosen = sheet.querySelector(".theme-card.selected");
+      const key = chosen ? chosen.dataset.themePick : current;
+      try{
+        await api("PUT", "/settings/app-theme", { theme: key === "navy-gold" ? "" : key });
+        state.settings = await api("GET", "/settings");
+        applyAppTheme(key);
+        toast("Colour saved for the whole shop.", "ok");
+        closeAllSheets();
+      }catch(e){
+        applyAppTheme(current);
+        toast(e.message);
+      }
+    });
+  };
+
+  draw(current);
+  showSheet("sheet-app-theme");
 }
 
 })();

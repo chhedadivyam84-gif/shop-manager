@@ -365,12 +365,18 @@ router.get("/purchase-payments", (req, res) => {
 router.get("/purchases", (req, res) => {
   const range = dateRange(req);
   const stockInRows = db.prepare(`
-    SELECT id, product_name, size_label, purchase_date, invoice_no, supplier, qty, billed_qty, mode, grand_total, created_at
+    /* Two different things share this list, and a row must say which it
+       is: a stock-in is its own record, while a purchase LINE belongs to
+       a bill. doc_id is the thing to open or act on — for a line that is
+       the parent purchase, never the line itself. */
+    SELECT id, id AS doc_id, 'stock_in' AS source,
+      product_name, size_label, purchase_date, invoice_no, supplier, qty, billed_qty, mode, grand_total, created_at
     FROM stock_ins WHERE 1 = 1${range.sql("purchase_date")}
   `).all(...range.params());
 
   const purchaseLineRows = db.prepare(`
-    SELECT pi.id, pi.name AS product_name, pi.size_label, p.date AS purchase_date, p.supplier_invoice_no AS invoice_no,
+    SELECT pi.id, p.id AS doc_id, 'purchase' AS source, p.purchase_no AS doc_no,
+      pi.name AS product_name, pi.size_label, p.date AS purchase_date, p.supplier_invoice_no AS invoice_no,
       s.name AS supplier, pi.pieces AS qty, pi.qty AS billed_qty, pi.mode, pi.rate, pi.discount_amount, pi.gst_rate, p.created_at
     FROM purchase_items pi
     JOIN purchases p ON p.id = pi.purchase_id
@@ -741,7 +747,7 @@ function groupByParty(rows) {
 router.get("/profit", ownerOnly, (req, res) => {
   const range = dateRange(req);
   const items = db.prepare(`
-    SELECT ii.product_id, ii.name, ii.pieces, ii.qty, ii.rate, ii.gst_rate AS sales_gst_rate,
+    SELECT ii.invoice_id AS invoice_id, ii.product_id, ii.name, ii.pieces, ii.qty, ii.rate, ii.gst_rate AS sales_gst_rate,
       ii.qty*ii.rate AS sales_amount, i.date, i.challan_no
     FROM invoice_items ii JOIN invoices i ON i.id = ii.invoice_id
     WHERE i.voided = 0 AND i.doc_type = 'invoice'${range.sql("i.date")}
@@ -769,7 +775,7 @@ router.get("/profit", ownerOnly, (req, res) => {
     totals.salesAmount += salesAmount; totals.salesGst += salesGst;
 
     return {
-      name: it.name, date: it.date, challan_no: it.challan_no, pieces: it.pieces, hasCost,
+      id: it.invoice_id, name: it.name, date: it.date, challan_no: it.challan_no, pieces: it.pieces, hasCost,
       purchaseAmount, purchaseGst, purchaseTotal, salesAmount, salesGst, salesTotal,
       grossProfit, profitPerUnit, profitPct
     };
@@ -1693,6 +1699,108 @@ router.get("/salesman-names", (req, res) => {
   `).all();
   res.json(rows.map(r => r.name).filter(Boolean));
 });
+
+/* ============================================================
+   WHAT IS BEHIND A NUMBER
+
+   Most reports are arithmetic. "Profit, 12 Aug, ₹4,200" is not a record —
+   it is sales minus cost, worked out fresh every time the report is
+   opened. There is nothing there to delete, and an owner who wants that
+   figure changed has to change one of the documents it was worked out
+   from.
+
+   So this answers the only question that makes that possible: which
+   documents produced this number? Give it the same filters the report was
+   showing and it returns the bills and purchases underneath, each with the
+   id its own screen and its void/delete route already use.
+
+   Deliberately one endpoint rather than a drill-down per report. Every
+   aggregate here groups the SAME two tables by a different column, so a
+   second query per report would be a second chance for the drill-down to
+   disagree with the total it was opened from — the thing that makes a
+   shopkeeper stop trusting the screen.
+   ============================================================ */
+router.get("/documents", (req, res) => {
+  const range = dateRange(req);
+  const { customerId, supplierId, salesman, areaId, brand, productId, kind } = req.query;
+
+  /* Voided documents are INCLUDED here, unlike in the totals above.
+     A total must exclude them — they were reversed and contribute nothing.
+     But this list exists to explain and to act on, and "why is the bill I
+     voided not in the list" is a support call. They come back marked. */
+  const wantSales = !kind || kind === "sales";
+  const wantPurchases = !kind || kind === "purchases";
+
+  const out = [];
+
+  if (wantSales) {
+    const where = [];
+    const params = [];
+    if (customerId) { where.push("i.customer_id = ?"); params.push(customerId); }
+    if (salesman)   { where.push("i.delivery_man = ?"); params.push(salesman); }
+    if (areaId)     { where.push("i.area_id = ?"); params.push(areaId); }
+    if (brand || productId) {
+      where.push(`EXISTS (SELECT 1 FROM invoice_items x WHERE x.invoice_id = i.id`
+        + (brand ? " AND x.brand = ?" : "")
+        + (productId ? " AND x.product_id = ?" : "") + ")");
+      if (brand) params.push(brand);
+      if (productId) params.push(productId);
+    }
+    const rows = db.prepare(`
+      SELECT i.id, i.challan_no AS number, i.doc_type, i.date, i.total, i.voided,
+             i.delivery_man AS salesman, c.name AS party
+      FROM invoices i LEFT JOIN customers c ON c.id = i.customer_id
+      WHERE 1=1 ${where.length ? "AND " + where.join(" AND ") : ""}${range.sql("i.date")}
+      ORDER BY i.date DESC, i.created_at DESC
+      LIMIT 500
+    `).all(...params, ...range.params());
+    rows.forEach(r => out.push({
+      ...r,
+      /* The kind the front end needs to know which void/delete route to
+         call. A challan and a tax invoice share a table but not a series. */
+      kind: r.doc_type === "challan" ? "challan" : "invoice",
+      direction: "in"
+    }));
+  }
+
+  if (wantPurchases) {
+    const where = [];
+    const params = [];
+    if (supplierId) { where.push("p.supplier_id = ?"); params.push(supplierId); }
+    if (brand || productId) {
+      where.push(`EXISTS (SELECT 1 FROM purchase_items x WHERE x.purchase_id = p.id`
+        + (brand ? " AND x.brand = ?" : "")
+        + (productId ? " AND x.product_id = ?" : "") + ")");
+      if (brand) params.push(brand);
+      if (productId) params.push(productId);
+    }
+    /* Skipped entirely when the caller narrowed by something only a sale
+       has. Returning every purchase in the period beside one salesman's
+       bills would read as "these are his too". */
+    const salesOnly = customerId || salesman || areaId;
+    if (!salesOnly) {
+      const rows = db.prepare(`
+        SELECT p.id, p.purchase_no AS number, p.date, p.total, p.voided,
+               s.name AS party
+        FROM purchases p LEFT JOIN suppliers s ON s.id = p.supplier_id
+        WHERE 1=1 ${where.length ? "AND " + where.join(" AND ") : ""}${range.sql("p.date")}
+        ORDER BY p.date DESC, p.created_at DESC
+        LIMIT 500
+      `).all(...params, ...range.params());
+      rows.forEach(r => out.push({ ...r, kind: "purchase", direction: "out" }));
+    }
+  }
+
+  out.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  res.json({
+    documents: out,
+    /* Counted separately so the screen can say "3 of these are voided"
+       rather than leaving the reader to work out why the list does not add
+       up to the total they tapped. */
+    voidedCount: out.filter(d => d.voided).length
+  });
+});
+
 
 router.get("/data", (req, res) => {
   try {

@@ -560,13 +560,12 @@ async function initApp(){
         return;
       }
       e.target.value = "";
-      const openers = {
-        invoice: openExistingInvoice, quotation: openQuotationDetail, salesOrder: openSoDetail,
-        purchaseOrder: openPoDetail, purchase: openPurchaseDetail,
-        purchaseReturn: openPurchaseReturnDetail, salesReturn: openSalesReturnDetail,
-        customer: openCustomerDetail, supplier: openSupplierDetail
-      };
-      const opener = openers[result.type];
+      /* The same registry the report rows act through, so a document
+         kind is described in one place rather than two that drift. */
+      const entry = DOC_KINDS[result.type];
+      const opener = entry && entry.open
+        ? entry.open
+        : ({ customer: openCustomerDetail, supplier: openSupplierDetail })[result.type];
       if(opener) opener(result.id); else toast(`Found ${result.number}, but can't open it here.`);
     }catch(err){ toast(err.message); }
   });
@@ -9381,6 +9380,18 @@ function reportRangeQS(hasQuery){
   return (hasQuery ? "&" : "?") + p.join("&");
 }
 
+/* The same period the report is showing, as an object rather than a query
+   string. A drill-down that used a different range from the total it was
+   opened from would be worse than no drill-down: the reader would trust
+   it. Built from the same two pieces of state as reportRangeQS above, so
+   the two cannot disagree. */
+function reportRangeParams(){
+  const p = {};
+  if(state.repFrom) p.from = state.repFrom;
+  if(state.repTo) p.to = state.repTo;
+  return p;
+}
+
 function setReportRange(from, to, period){
   state.repFrom = from || "";
   state.repTo = to || "";
@@ -9447,26 +9458,26 @@ async function renderReport(){
   const ackFilter = document.getElementById("challan-ack-filter");
   if(ackFilter) ackFilter.style.display = state.reportType==="Challan" ? "flex" : "none";
   try{
-    if(state.reportType==="Purchase") return renderPurchaseReport(body);
-    if(state.reportType==="Challan") return renderChallanReport(body);
-    if(state.reportType==="Orders") return renderOrdersReport(body);
-    if(state.reportType==="TaxInvoice") return renderTaxInvoiceReport(body);
-    if(state.reportType==="PurchaseBill") return renderPurchaseBillReport(body);
-    if(state.reportType==="PurchaseOrders") return renderPoReport(body);
-    if(state.reportType==="Salesman") return renderSalesmanReport(body);
-    if(state.reportType==="Area") return renderAreaReport(body);
-    if(state.reportType==="Party") return renderPartyReport(body);
-    if(state.reportType==="PartyProduct") return renderPartyProductReport(body);
-    if(state.reportType==="Profit") return renderProfitReport(body);
-    if(state.reportType==="ProfitByInvoice") return renderProfitByInvoiceReport(body);
-    if(state.reportType==="Supplier") return renderSupplierReport(body);
-    if(state.reportType==="SalePayments") return renderSalePaymentsReport(body);
-    if(state.reportType==="PurchasePayments") return renderPurchasePaymentsReport(body);
-    if(state.reportType==="LocationStock") return renderLocationStockReport(body);
-    if(state.reportType==="Transfers") return renderTransfersReport(body);
-    if(state.reportType==="DailyMovement") return renderDailyMovementReport(body);
-    if(state.reportType==="BalanceSheet") return renderBalanceSheetReport(body);
-    if(state.reportType==="ProfitLoss") return renderPnlReport(body);
+    if(state.reportType==="Purchase") { await renderPurchaseReport(body); return finishReport(body); }
+    if(state.reportType==="Challan") { await renderChallanReport(body); return finishReport(body); }
+    if(state.reportType==="Orders") { await renderOrdersReport(body); return finishReport(body); }
+    if(state.reportType==="TaxInvoice") { await renderTaxInvoiceReport(body); return finishReport(body); }
+    if(state.reportType==="PurchaseBill") { await renderPurchaseBillReport(body); return finishReport(body); }
+    if(state.reportType==="PurchaseOrders") { await renderPoReport(body); return finishReport(body); }
+    if(state.reportType==="Salesman") { await renderSalesmanReport(body); return finishReport(body); }
+    if(state.reportType==="Area") { await renderAreaReport(body); return finishReport(body); }
+    if(state.reportType==="Party") { await renderPartyReport(body); return finishReport(body); }
+    if(state.reportType==="PartyProduct") { await renderPartyProductReport(body); return finishReport(body); }
+    if(state.reportType==="Profit") { await renderProfitReport(body); return finishReport(body); }
+    if(state.reportType==="ProfitByInvoice") { await renderProfitByInvoiceReport(body); return finishReport(body); }
+    if(state.reportType==="Supplier") { await renderSupplierReport(body); return finishReport(body); }
+    if(state.reportType==="SalePayments") { await renderSalePaymentsReport(body); return finishReport(body); }
+    if(state.reportType==="PurchasePayments") { await renderPurchasePaymentsReport(body); return finishReport(body); }
+    if(state.reportType==="LocationStock") { await renderLocationStockReport(body); return finishReport(body); }
+    if(state.reportType==="Transfers") { await renderTransfersReport(body); return finishReport(body); }
+    if(state.reportType==="DailyMovement") { await renderDailyMovementReport(body); return finishReport(body); }
+    if(state.reportType==="BalanceSheet") { await renderBalanceSheetReport(body); return finishReport(body); }
+    if(state.reportType==="ProfitLoss") { await renderPnlReport(body); return finishReport(body); }
 
     let title="", subtitle="", rows=[];
     if(state.reportType==="Sales"){
@@ -9491,9 +9502,14 @@ async function renderReport(){
     body.innerHTML = `<div style="font-weight:800;font-size:14px;">${title}</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">${subtitle}</div>` +
       (rows.length ? rows.map(r=>`
         <div style="margin-bottom:10px;">
-          <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700;margin-bottom:4px;"><span>${escapeHtml(r.label)}</span><span>${state.reportType==="Stock"?r.value+" units":fmt(r.value)}</span></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px;font-weight:700;margin-bottom:4px;">
+            <span>${escapeHtml(r.label)}</span>
+            <span style="display:flex;align-items:center;gap:6px;"><span>${state.reportType==="Stock"?r.value+" units":fmt(r.value)}</span>
+            ${drillBtn(`${r.label} — ${title}`, { ...reportRangeParams(), ...(state.reportType==="Stock" ? { brand: r.label } : {}) }, "The bills and purchases behind this figure")}</span>
+          </div>
           <div style="height:8px;background:var(--bg-outer);border-radius:100px;"><div style="height:100%;width:${(r.value/max)*100}%;background:var(--navy);border-radius:100px;"></div></div>
         </div>`).join("") : `<div class="empty-hint">No data yet for this report.</div>`);
+    await finishReport(body);
   }catch(e){ toast(e.message); }
 }
 
@@ -9501,8 +9517,11 @@ async function renderPurchaseReport(body){
   const rows = await api("GET","/reports/purchases"+reportRangeQS());
   body.innerHTML = `<div style="font-weight:800;font-size:14px;">Purchase Report</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Every stock-in recorded, newest first</div>` +
     (rows.length ? rows.map(r=>`
-      <div class="list-row"><div>
+      <div class="list-row" ${r.source==="purchase"
+        ? `style="cursor:pointer;" data-open-purchase="${r.doc_id}" data-doc-name="${escapeHtml(r.doc_no||"")}"`
+        : `style="cursor:pointer;" data-open-stock-in="${r.doc_id}" data-doc-name="${escapeHtml(r.product_name||"")}"`}><div>
         <div class="row-title">${escapeHtml(r.product_name)}${r.size_label?" · "+escapeHtml(r.size_label):""}</div>
+        ${r.source==="purchase" ? `<div class="row-sub muted">One line of purchase ${escapeHtml(r.doc_no||"")} — acting on it acts on the whole bill</div>` : ""}
         <div class="row-sub">${escapeHtml(r.purchase_date||"")}${r.invoice_no?" · Inv# "+escapeHtml(r.invoice_no):""}${r.supplier?" · "+escapeHtml(r.supplier):""}</div>
         <div class="row-sub">${r.qty} pcs${r.billed_qty&&r.billed_qty!==r.qty?" · "+Pricing.formatQty(r.billed_qty, r.mode||"UNIT"):""}</div>
       </div><div class="row-right row-title">${fmt(r.grand_total)}</div></div>
@@ -10067,7 +10086,8 @@ async function renderPartyReport(body){
       <div class="list-row"><div>
         <div class="row-title">${escapeHtml(r.label)}</div>
         <div class="row-sub">${escapeHtml(r.type||"")} · ${r.invoices} invoice${r.invoices!==1?"s":""}${r.due>0?" · Due "+fmt(r.due):""}</div>
-      </div><div class="row-right row-title">${fmt(r.value)}</div></div>
+      </div><div class="row-right" style="display:flex;align-items:center;gap:8px;"><span class="row-title">${fmt(r.value)}</span>
+        ${drillBtn(`${r.label}`, { ...reportRangeParams(), customerId: r.id }, "Every bill for this party")}</div></div>
     `).join("") : `<div class="empty-hint">No customers yet.</div>`);
 }
 
@@ -10105,7 +10125,8 @@ async function renderSupplierReport(body){
       <div class="list-row"><div>
         <div class="row-title">${escapeHtml(r.label)}</div>
         <div class="row-sub">${r.purchases} purchase${r.purchases!==1?"s":""}${r.due>0?" · Due "+fmt(r.due):""}</div>
-      </div><div class="row-right row-title">${fmt(r.value)}</div></div>
+      </div><div class="row-right" style="display:flex;align-items:center;gap:8px;"><span class="row-title">${fmt(r.value)}</span>
+        ${drillBtn(`${r.label}`, { ...reportRangeParams(), supplierId: r.id }, "Every purchase from this supplier")}</div></div>
     `).join("") : `<div class="empty-hint">No suppliers yet.</div>`);
 }
 
@@ -10113,7 +10134,7 @@ async function renderSalePaymentsReport(body){
   const rows = await api("GET","/reports/sale-payments"+reportRangeQS());
   body.innerHTML = `<div style="font-weight:800;font-size:14px;">Sale Payments (Receipts)</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Payments received from customers, newest first</div>` +
     (rows.length ? rows.map(r=>`
-      <div class="list-row"><div>
+      <div class="list-row" data-doc-kind-row="customerPayment" data-doc-id-row="${r.customer_id}:${r.id}" data-doc-name="${escapeHtml((r.reference_no||fmtPaise(r.amount))+" from "+(r.customer_name||""))}"><div>
         <div class="row-title">${escapeHtml(r.customer_name)}</div>
         <div class="row-sub">${escapeHtml(r.payment_date||"")} · ${escapeHtml(r.method)}${r.reference_no?" · Ref# "+escapeHtml(r.reference_no):""}${r.note?" · "+escapeHtml(r.note):""}</div>
       </div>
@@ -10141,7 +10162,7 @@ async function renderPurchasePaymentsReport(body){
   const rows = await api("GET","/reports/purchase-payments"+reportRangeQS());
   body.innerHTML = `<div style="font-weight:800;font-size:14px;">Purchase Payments</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">Payments made to suppliers, newest first</div>` +
     (rows.length ? rows.map(r=>`
-      <div class="list-row"><div>
+      <div class="list-row" data-doc-kind-row="supplierPayment" data-doc-id-row="${r.supplier_id}:${r.id}" data-doc-name="${escapeHtml((r.reference_no||fmtPaise(r.amount))+" to "+(r.supplier_name||""))}"><div>
         <div class="row-title">${escapeHtml(r.supplier_name)}</div>
         <div class="row-sub">${escapeHtml(r.payment_date||"")} · ${escapeHtml(r.method)}${r.reference_no?" · Ref# "+escapeHtml(r.reference_no):""}${r.note?" · "+escapeHtml(r.note):""}</div>
       </div>
@@ -10190,7 +10211,7 @@ async function renderProfitReport(body){
     ${missingCost ? `<div class="muted" style="font-size:11px;margin-bottom:8px;">⚠ Some items sold have no purchase on file, so their purchase side is counted as ₹0 — record a Purchase entry for accurate profit.</div>` : ""}
     <div class="section-title" style="margin-top:0;">Per Sale</div>
     ${d.rows.length ? d.rows.slice(0,50).map(r=>`
-      <div class="list-row"><div>
+      <div class="list-row" ${r.id?`style="cursor:pointer;" data-open-invoice="${r.id}" data-doc-name="${escapeHtml(r.challan_no||"")}"`:""}><div>
         <div class="row-title">${escapeHtml(r.name)}${!r.hasCost&&r.pieces>0?' <span class="pill warn">no cost on file</span>':""}</div>
         <div class="row-sub">${r.date} · ${escapeHtml(r.challan_no)}</div>
         <div class="row-sub">Sales ${fmt(r.salesAmount)} − Purchase ${fmt(r.purchaseAmount)}${r.pieces>0?" · "+fmt(r.profitPerUnit)+"/unit":""}${r.profitPct!=null?" · "+r.profitPct+"%":""}</div>
@@ -10209,7 +10230,7 @@ async function renderProfitByInvoiceReport(body){
       ${d.profitPct!=null ? `<div class="inv-flex muted" style="font-size:12px;"><span>Profit %</span><span>${d.profitPct}%</span></div>` : ""}
     </div>
     ${d.rows.length ? d.rows.map(r=>`
-      <div class="list-row"><div>
+      <div class="list-row" ${r.invoiceId?`style="cursor:pointer;" data-open-invoice="${r.invoiceId}" data-doc-name="${escapeHtml(r.challan_no||"")}"`:""}><div>
         <div class="row-title">${escapeHtml(r.challan_no)}${!r.hasCost?' <span class="pill warn">no cost on file</span>':""}</div>
         <div class="row-sub">${escapeHtml(r.date)} · ${escapeHtml(r.customer)} · ${r.itemCount} item${r.itemCount!==1?"s":""}</div>
         <div class="row-sub">Sales ${fmt(r.salesAmount)} − Purchase ${fmt(r.purchaseAmount)}${r.profitPct!=null?" · "+r.profitPct+"%":""}</div>
@@ -19022,6 +19043,393 @@ function printSelectionSlip(s){
     <script>window.onload=()=>window.print();<\/script>
     </body></html>`;
   openPrintWindow(html, { title: "Selection Slip" });
+}
+
+
+/* ============================================================
+   ACTING ON A DOCUMENT FROM A REPORT   —   OWNER ONLY
+
+   A report is a window onto documents, not a second copy of them. So
+   nothing here deletes anything itself: every action calls the SAME
+   endpoint the document's own screen calls — the one that puts the stock
+   back, brings the party's due down, releases the number and writes the
+   audit line. A second delete path would be a second chance to get that
+   wrong, and the one that got it wrong would be the one nobody tested.
+
+   VOID IS OFFERED FIRST, DELETE SECOND, and that order is the point.
+   Voiding reverses the money and the stock but keeps the row, struck
+   through, with its number — so a GST return already filed still
+   reconciles, and the books can still explain themselves to anyone who
+   asks. Deleting removes it entirely. That is sometimes exactly what is
+   wanted, and it is never the safer of the two.
+
+   Only what exists is offered. Some documents can be voided and not
+   deleted, some the reverse, and an order can be deleted but has nothing
+   to void because it never moved anything. A button that 404s is worse
+   than no button.
+
+   The server refuses all of this to anyone but the owner, and refuses it
+   in a closed financial year, whatever the screen shows. These checks only
+   keep the UI honest.
+   ============================================================ */
+const DOC_KINDS = {
+  invoice: {
+    noun: "bill", open: id => openExistingInvoice(id),
+    voidUrl: id => `/invoices/${id}/void`,
+    delUrl:  id => `/invoices/${id}`,
+    reverses: "The stock goes back on the shelf and the customer's due comes down."
+  },
+  challan: {
+    noun: "challan", open: id => openExistingInvoice(id),
+    voidUrl: id => `/invoices/${id}/void`,
+    delUrl:  id => `/invoices/${id}`,
+    reverses: "The stock goes back on the shelf and the customer's due comes down."
+  },
+  purchase: {
+    noun: "purchase", open: id => openPurchaseDetail(id),
+    voidUrl: id => `/purchases/${id}/void`,
+    delUrl:  id => `/purchases/${id}`,
+    reverses: "The stock comes back off the shelf and the supplier's due comes down."
+  },
+  salesOrder: {
+    noun: "sales order", open: id => openSoDetail(id),
+    delUrl: id => `/sales-orders/${id}`,
+    reverses: "Nothing to reverse — an order never moved stock or money."
+  },
+  purchaseOrder: {
+    noun: "purchase order", open: id => openPoDetail(id),
+    delUrl: id => `/purchase-orders/${id}`,
+    reverses: "Nothing to reverse — an order never moved stock or money."
+  },
+  quotation: {
+    noun: "quotation", open: id => openQuotationDetail(id),
+    delUrl: id => `/quotations/${id}`,
+    reverses: "Nothing to reverse — a quotation never moved stock or money."
+  },
+  selectionSlip: {
+    noun: "selection slip", open: id => openSelectionDetail(id),
+    delUrl: id => `/selection-slips/${id}`,
+    reverses: "Nothing to reverse — a slip never moved stock or money."
+  },
+  salesReturn: {
+    noun: "sales return", open: id => openSalesReturnDetail(id),
+    voidUrl: id => `/sales-returns/${id}/void`,
+    reverses: "The returned stock comes back off the shelf and the credit is undone."
+  },
+  purchaseReturn: {
+    noun: "purchase return", open: id => openPurchaseReturnDetail(id),
+    voidUrl: id => `/purchase-returns/${id}/void`,
+    reverses: "The returned stock goes back on the shelf and the debit is undone."
+  },
+  stockIn: {
+    noun: "stock entry",
+    delUrl: id => `/stock-ins/${id}`,
+    reverses: "The stock it added comes back off the shelf."
+  },
+  cashEntry: {
+    noun: "cash entry",
+    voidUrl: id => `/cashbook/${id}/void`,
+    reverses: "The cash balance goes back to what it was."
+  },
+  bankEntry: {
+    noun: "bank entry",
+    voidUrl: id => `/bankbook/${id}/void`,
+    reverses: "The bank balance goes back to what it was."
+  },
+  /* Two ids, because a payment belongs to a party. Passed as "party:payment"
+     rather than as two attributes, so one rule reads every row. */
+  customerPayment: {
+    noun: "receipt",
+    voidUrl: id => { const [c, p] = String(id).split(":"); return `/customers/${c}/payments/${p}/void`; },
+    reverses: "The customer's due goes back up by the amount received."
+  },
+  supplierPayment: {
+    noun: "payment",
+    voidUrl: id => { const [s, p] = String(id).split(":"); return `/suppliers/${s}/payments/${p}/void`; },
+    reverses: "The supplier's due goes back up by the amount paid."
+  }
+};
+
+/** The "..." button that goes on a report row. Renders to nothing for
+ *  anyone but the owner, so no other role ever sees a control they cannot
+ *  use — and nothing shifts on the page when they can't. */
+function docActionsBtn(kind, id, name){
+  if(!isOwner() || !DOC_KINDS[kind] || !id) return "";
+  return `<button class="chip sm doc-actions-btn" data-doc-kind="${kind}" data-doc-id="${escapeHtml(String(id))}"`
+    + ` data-doc-name="${escapeHtml(String(name || ""))}" title="Void or delete this ${DOC_KINDS[kind].noun}">&#8942;</button>`;
+}
+
+/** Attached once to a container; every row inside it works from then on,
+ *  including rows drawn later. Twenty-odd reports each wiring their own
+ *  handler is twenty chances for one to be forgotten. */
+function wireDocActions(container){
+  if(!container || container.dataset.docActionsWired) return;
+  container.dataset.docActionsWired = "1";
+  container.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-doc-kind]");
+    if(!btn || !container.contains(btn)) return;
+    e.preventDefault();
+    e.stopPropagation();          // never also open the row underneath
+    openDocActions(btn.dataset.docKind, btn.dataset.docId, btn.dataset.docName);
+  });
+}
+
+let DOC_ACTION_AFTER = null;      // what to redraw once something changes
+
+function openDocActions(kind, id, name){
+  const k = DOC_KINDS[kind];
+  if(!k) return;
+  if(!isOwner()){ toast("Only the shop owner can void or delete a record."); return; }
+
+  const sheet = document.getElementById("sheet-doc-actions");
+  const what = name ? `${k.noun} ${name}` : k.noun;
+
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>&#10005;</button>
+    <div class="sheet-title">${escapeHtml(what.charAt(0).toUpperCase() + what.slice(1))}</div>
+
+    <div class="card" style="margin-top:8px;font-size:12px;">
+      ${escapeHtml(k.reverses)}
+    </div>
+
+    <div style="margin-top:14px;display:flex;flex-direction:column;gap:8px;">
+      ${k.open ? `<button class="btn btn-outline" id="doc-act-open">Open it</button>` : ""}
+      ${k.voidUrl ? `<button class="btn btn-primary" id="doc-act-void">Void it</button>` : ""}
+      ${k.delUrl ? `<button class="btn btn-outline btn-danger-link" id="doc-act-del">Delete it for good</button>` : ""}
+    </div>
+
+    <div class="muted" style="font-size:11.5px;margin-top:12px;">
+      ${k.voidUrl && k.delUrl
+        ? "Voiding keeps the record and its number, struck through, so the books still add up and a filed GST return still reconciles. Deleting leaves no trace of it."
+        : (k.voidUrl
+          ? "Voiding keeps the record and its number, struck through, so the books still add up."
+          : "This record never moved stock or money, so there is nothing to reverse.")}
+    </div>`;
+
+  sheet.querySelectorAll("[data-sheetclose]").forEach(b => b.addEventListener("click", closeAllSheets));
+  const on = (elId, fn) => { const el = document.getElementById(elId); if(el) el.addEventListener("click", fn); };
+
+  on("doc-act-open", () => { closeAllSheets(); k.open(id); });
+
+  on("doc-act-void", async () => {
+    if(!confirm(`Void ${what}?\n\n${k.reverses}\n\nThe record stays in your books, struck through, with its number.`)) return;
+    try{
+      await api("POST", k.voidUrl(id));
+      toast(`${what.charAt(0).toUpperCase() + what.slice(1)} voided.`, "ok");
+      closeAllSheets();
+      await refreshAfterDocAction();
+    }catch(err){ toast(err.message); }
+  });
+
+  on("doc-act-del", async () => {
+    /* Two questions, not one. The first is the decision; the second is the
+       pause. A single confirm on a financial record is one mis-tap. */
+    if(!confirm(`Delete ${what} for good?\n\n${k.reverses}\n\nThis cannot be undone. Voiding does the same to your stock and dues but keeps the record.`)) return;
+    if(!confirm(`Last check — permanently delete ${what}?`)) return;
+    try{
+      const r = await api("DELETE", k.delUrl(id));
+      toast(r && r.releasedNumber
+        ? `${what} deleted. Number ${r.releasedNumber} is free again.`
+        : `${what.charAt(0).toUpperCase() + what.slice(1)} deleted.`, "ok");
+      closeAllSheets();
+      await refreshAfterDocAction();
+    }catch(err){ toast(err.message); }
+  });
+
+  showSheet("sheet-doc-actions");
+}
+
+/* Stock, dues and every total on screen have just moved. Redrawing the
+   report is not a nicety: a row that is still showing after it was deleted
+   is the next thing somebody taps. */
+async function refreshAfterDocAction(){
+  try{
+    await Promise.all([loadProducts(), loadCustomers(), loadSuppliers()]);
+  }catch(e){ /* the report below still refreshes */ }
+  if(typeof DOC_ACTION_AFTER === "function"){ await DOC_ACTION_AFTER(); return; }
+  const active = document.querySelector(".screen.active");
+  if(active && active.id === "screen-reports") await renderReport();
+}
+
+/* ============================================================
+   WHAT IS BEHIND A NUMBER
+
+   Profit, GST, Stock, Balance Sheet — none of these hold records. A day's
+   profit is sales minus cost, worked out fresh each time it is opened, so
+   there is nothing in it to delete. What an owner actually means by
+   "delete the profit for that day" is one of the bills it was worked out
+   from.
+
+   So a total opens the documents underneath it, and the actions live
+   there. Delete or void one and the figure recalculates by itself, because
+   it was never stored in the first place.
+   ============================================================ */
+async function openReportDrill(title, params, subtitle){
+  const sheet = document.getElementById("sheet-report-drill");
+  const qs = Object.entries(params || {})
+    .filter(([, v]) => v !== null && v !== undefined && v !== "")
+    .map(([k2, v]) => `${k2}=${encodeURIComponent(v)}`).join("&");
+
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>&#10005;</button>
+    <div class="sheet-title">${escapeHtml(title)}</div>
+    ${subtitle ? `<div class="muted" style="font-size:12px;margin-top:2px;">${escapeHtml(subtitle)}</div>` : ""}
+    <div id="drill-body" style="margin-top:10px;"><div class="empty-hint">Loading…</div></div>`;
+  sheet.querySelectorAll("[data-sheetclose]").forEach(b => b.addEventListener("click", closeAllSheets));
+  showSheet("sheet-report-drill");
+
+  const draw = async () => {
+    const body = document.getElementById("drill-body");
+    if(!body) return;
+    try{
+      const r = await api("GET", "/reports/documents" + (qs ? "?" + qs : ""));
+      const docs = r.documents || [];
+      if(!docs.length){ body.innerHTML = `<div class="empty-hint">Nothing behind this figure.</div>`; return; }
+      body.innerHTML = `
+        ${r.voidedCount ? `<div class="muted" style="font-size:11.5px;margin-bottom:8px;">
+          ${r.voidedCount} of these ${r.voidedCount === 1 ? "is" : "are"} already voided — shown struck through, and counted in no total.</div>` : ""}
+        ${docs.map(d => `
+          <div class="list-row" style="${d.voided ? "opacity:.55;" : ""}">
+            <div>
+              <div class="row-title" style="${d.voided ? "text-decoration:line-through;" : ""}">${escapeHtml(d.number || "—")}</div>
+              <div class="row-sub">${escapeHtml(d.party || "Walk-in")} · ${d.date}${d.salesman ? " · " + escapeHtml(d.salesman) : ""}</div>
+            </div>
+            <div class="row-right" style="display:flex;align-items:center;gap:8px;">
+              <span style="font-weight:700;">${fmt(d.total)}</span>
+              ${docActionsBtn(d.kind, d.id, d.number)}
+            </div>
+          </div>`).join("")}`;
+      wireDocActions(body);
+    }catch(e){ body.innerHTML = `<div class="empty-hint">${escapeHtml(e.message)}</div>`; }
+  };
+
+  /* While the drill-down is open it is what should redraw after an action,
+     not the report behind it — otherwise the list the owner is working
+     through still shows the row they just deleted. */
+  DOC_ACTION_AFTER = async () => { await draw(); await renderReport(); };
+  const stop = () => { DOC_ACTION_AFTER = null; };
+  sheet.querySelectorAll("[data-sheetclose]").forEach(b => b.addEventListener("click", stop));
+
+  await draw();
+}
+
+/** Put on any aggregate row so it can be opened. Same shape as
+ *  docActionsBtn so the two read alike in the report code. */
+function drillBtn(title, params, subtitle){
+  if(!isOwner()) return "";
+  const payload = escapeHtml(JSON.stringify({ title, params, subtitle: subtitle || "" }));
+  return `<button class="chip sm drill-btn" data-drill="${payload}" title="See the bills behind this figure">&#8942;</button>`;
+}
+
+function wireDrill(container){
+  if(!container || container.dataset.drillWired) return;
+  container.dataset.drillWired = "1";
+  container.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-drill]");
+    if(!btn || !container.contains(btn)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    let cfg;
+    try{ cfg = JSON.parse(btn.dataset.drill); }catch(err){ return; }
+    openReportDrill(cfg.title, cfg.params, cfg.subtitle);
+  });
+}
+
+
+/* ============================================================
+   PUTTING THE ACTIONS ON EVERY REPORT
+
+   Twenty-odd reports draw their own rows, and every one of them already
+   marks a row that can be opened — data-open-invoice, data-open-purchase,
+   and so on. That mark says "there is a real document behind this row",
+   which is exactly the question the delete engine needs answered.
+
+   So the actions are added by reading those marks after the report has
+   drawn, rather than by editing twenty row templates. One pass, and a
+   report written next year gets the actions for free the moment it marks
+   its rows the way every other report already does.
+
+   Rows with no mark are aggregates — a total, a stock balance, a day's
+   profit. Nothing is added to those here; tapping their figure opens what
+   is behind it instead (see openReportDrill).
+   ============================================================ */
+const OPEN_ATTR_KIND = {
+  "data-open-invoice": "invoice",
+  "data-open-purchase": "purchase",
+  "data-open-quotation": "quotation",
+  "data-open-so": "salesOrder",
+  "data-open-po": "purchaseOrder",
+  "data-open-sales-return": "salesReturn",
+  "data-open-purchase-return": "purchaseReturn",
+  "data-open-stock-in": "stockIn",
+  "data-open-slip": "selectionSlip"
+};
+
+function decorateReportRows(container){
+  if(!container || !isOwner()) return;
+
+  Object.entries(OPEN_ATTR_KIND).forEach(([attr, kind]) => {
+    container.querySelectorAll(`[${attr}]`).forEach(row => {
+      if(row.querySelector("[data-doc-kind]")) return;          // already done
+      const id = row.getAttribute(attr);
+      if(!id) return;
+
+      /* A challan and a tax invoice share the invoices table, so they share
+         an endpoint — but not a name. Calling a challan "bill" in the
+         confirm box is how somebody voids the wrong thing. */
+      const k = (kind === "invoice" && state.reportType === "Challan") ? "challan" : kind;
+
+      /* A row may name the document explicitly. It matters where the row
+         title is a product and the document is the bill it sits on —
+         "delete purchase Ply 18mm" names nothing anybody can check. */
+      const titleEl = row.querySelector(".row-title");
+      let name = row.getAttribute("data-doc-name") || "";
+      if(!name && titleEl){
+        const clone = titleEl.cloneNode(true);
+        clone.querySelectorAll(".pill").forEach(p => p.remove());
+        name = clone.textContent.trim();
+      }
+
+      let right = row.querySelector(".row-right");
+      if(!right){
+        right = document.createElement("div");
+        right.className = "row-right";
+        row.appendChild(right);
+      }
+      /* The button sits beside the amount, not on top of it: several
+         reports put the total in .row-right itself. */
+      right.style.display = "flex";
+      right.style.alignItems = "center";
+      right.style.gap = "8px";
+      right.insertAdjacentHTML("beforeend", docActionsBtn(k, id, name));
+    });
+  });
+
+  /* And rows that name their own kind, for records with no screen to
+     open — a receipt is a line in a party's ledger, not a document. */
+  container.querySelectorAll("[data-doc-kind-row]").forEach(row => {
+    if(row.querySelector("[data-doc-kind]")) return;
+    const kind = row.getAttribute("data-doc-kind-row");
+    const id = row.getAttribute("data-doc-id-row");
+    const name = row.getAttribute("data-doc-name") || "";
+    if(!kind || !id) return;
+    let right = row.querySelector(".row-right");
+    if(!right){ right = document.createElement("div"); right.className = "row-right"; row.appendChild(right); }
+    right.style.display = "flex"; right.style.alignItems = "center"; right.style.gap = "8px";
+    right.insertAdjacentHTML("beforeend", docActionsBtn(kind, id, name));
+  });
+
+  wireDocActions(container);
+  wireDrill(container);
+}
+
+/* Every report ends here, whichever branch drew it. Kept as its own
+   function so a new report cannot be added without it — the dispatch
+   below has no other way out. */
+async function finishReport(container){
+  decorateReportRows(container);
 }
 
 })();

@@ -20,6 +20,30 @@
    real backup, and it never deletes anything it did not just create.
    ============================================================ */
 const path = require("path");
+const fs = require("fs");
+
+/* Credentials from a file, so they never have to be typed into a shell
+   that keeps history — or pasted anywhere they might be read.
+
+   .env is gitignored in every form. It is still a secret sitting on disk,
+   so delete it when you are done; this prints a reminder rather than
+   deleting it for you, because a tool that removes a file you might still
+   need is worse than one that nags. */
+function loadEnvFile() {
+  const f = path.join(__dirname, "..", ".env");
+  if (!fs.existsSync(f)) return false;
+  fs.readFileSync(f, "utf8").split(/\r?\n/).forEach(line => {
+    const m = /^\s*([A-Z0-9_]+)\s*=\s*(.*)$/.exec(line);
+    if (!m) return;
+    let v = m[2].trim().replace(/^["']|["']$/g, "");
+    /* The file wins over the shell: somebody running this has just written
+       the values they want tested, and a stale export would silently test
+       the wrong key — which is the exact mistake this tool exists to catch. */
+    process.env[m[1]] = v;
+  });
+  return true;
+}
+const fromFile = loadEnvFile();
 
 /* Loaded after the environment is read, the way the app loads it. */
 const cloudStore = require(path.join(__dirname, "..", "server", "cloudStore.js"));
@@ -30,6 +54,7 @@ let failed = false;
 
 (async () => {
   console.log("");
+  if (fromFile) console.log("  (read from .env — delete that file when you are done)\n");
 
   if (!cloudStore.configured()) {
     console.log("  Nothing is configured. Set either:");

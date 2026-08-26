@@ -3,6 +3,14 @@ data/*.db
 data/*.db-*
 data/session-secret.txt
 data/.env
+
+# Any environment file, anywhere. A credentials file that can be committed
+# is a credentials file that eventually is — and rotating a key because it
+# reached a repository is how this rule got written.
+.env
+.env.*
+!.env.example
+*/.env
 data/reset-log.txt
 npm-debug.log
 backups/

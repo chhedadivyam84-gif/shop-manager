@@ -1599,6 +1599,16 @@ const MENU = [
   ]]
 ];
 
+/** Sign out. One function, because the Settings button and the menu item
+ *  must not drift into two slightly different sign-outs — and this one
+ *  is the sequence that was already working. */
+async function logOutOfThisDevice(){
+  try{ await api("POST","/auth/logout"); }
+  catch(e){ /* signing out locally matters more than the round trip */ }
+  closeAllSheets();
+  await showLogin();
+}
+
 function openMenu(){
   const sheet = document.getElementById("sheet-menu");
   sheet.innerHTML = `
@@ -1612,7 +1622,9 @@ function openMenu(){
       ).join("")}`).join("")}
     <div class="menu-group">Shop</div>
     ${isOwner() ? `<button class="menu-item" id="menu-permissions"><span class="ic">&#128100;</span>Staff Access</button>` : ""}
-    <button class="menu-item" id="menu-settings"><span class="ic">&#9881;</span>Settings</button>`;
+    <button class="menu-item" id="menu-settings"><span class="ic">&#9881;</span>Settings</button>
+    <button class="menu-item" id="menu-logout" style="color:var(--danger);">
+      <span class="ic">&#128682;</span>Log out${state.me.staffName ? " (" + escapeHtml(state.me.staffName) + ")" : ""}</button>`;
 
   sheet.querySelectorAll("[data-sheetclose]").forEach(b => b.addEventListener("click", closeAllSheets));
   sheet.querySelectorAll("[data-menu]").forEach(b =>
@@ -1622,6 +1634,13 @@ function openMenu(){
     }));
   const permBtn = document.getElementById("menu-permissions");
   if(permBtn) permBtn.addEventListener("click", async ()=>{ closeAllSheets(); await switchTab("permissions"); });
+  document.getElementById("menu-logout").addEventListener("click", async () => {
+    /* Asked, because the menu is somewhere people tap while looking for
+       something else, and the way back in is a PIN the counter staff may
+       not be the ones holding. */
+    if(!confirm("Log out of this device?")) return;
+    await logOutOfThisDevice();
+  });
   document.getElementById("menu-settings").addEventListener("click", () => {
     closeAllSheets();
     openSettings();
@@ -6893,11 +6912,7 @@ function openSettings(){
     });
     sheet.querySelector("#st-factory-reset").addEventListener("click", openFactoryResetSheet);
   }
-  sheet.querySelector("#st-logout").addEventListener("click", async ()=>{
-    await api("POST","/auth/logout");
-    closeAllSheets();
-    await showLogin();
-  });
+  sheet.querySelector("#st-logout").addEventListener("click", logOutOfThisDevice);
   const licBlock = sheet.querySelector("#st-license-block");
   if(licBlock){ licBlock.innerHTML = licenseSettingsHtml(); wireLicenseSettings(); }
   showSheet("sheet-settings");

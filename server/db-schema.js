@@ -2743,6 +2743,128 @@ CREATE TABLE IF NOT EXISTS gst_filings (
 CREATE INDEX IF NOT EXISTS idx_gst_filings_period ON gst_filings(period);
 `);
 
+
+/* ============================================================
+   PARTY-WISE PRICE LISTS
+
+   One product, many rates. ABC Traders buy 18mm at 2,100 and XYZ at
+   2,050, and the counter should not have to remember which.
+
+   FOUR RULES DECIDE THE WHOLE DESIGN.
+
+   1. A RATE CHANGE IS A NEW ROW, NEVER AN EDIT. Rows are never rewritten
+      when a price moves; a new one is inserted with a later effective_from
+      and the old one stays exactly as it was. That is what makes the
+      history real rather than a log written beside the truth, and it is
+      what lets a back-dated bill get the rate that applied on ITS date
+      rather than today's.
+
+   2. A SAVED BILL IS NEVER RE-PRICED. invoice_items.rate has always held
+      the rate as sold, and nothing here reads a price list at print or
+      report time — only when a line is first added to a document. Changing
+      a price list cannot reach backwards into a bill that already exists,
+      and no rule in here is what stops it: the rate simply is not stored
+      in one place and read from another.
+
+   3. NULL CUSTOMER MEANS EVERYBODY. The general list and a party's own
+      list are the same table, distinguished only by whether customer_id is
+      set. Resolution prefers the party's row and falls back to the general
+      one, so there is one query and one set of rules rather than two lists
+      that disagree at the edges.
+
+   4. QUANTITY BANDS ARE ROWS TOO. "1-20 at 2,200, 21-50 at 2,150, 51+ at
+      2,100" is three rows differing only in min_qty. Nothing special.
+
+   SIDE deliberately separates buying from selling in one table rather than
+   two. Every rule above is identical for a supplier's purchase rate, and
+   a second table would be the same code twice, drifting.
+   ============================================================ */
+db.exec(`
+CREATE TABLE IF NOT EXISTS price_list (
+  id TEXT PRIMARY KEY,
+
+  -- 'sale' | 'purchase'. Sales rates are keyed to a customer, purchase
+  -- rates to a supplier; everything else about them is the same.
+  side TEXT NOT NULL DEFAULT 'sale',
+
+  -- NULL = the general rate, used for any party with no rate of their own.
+  party_id TEXT,
+
+  product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+
+  -- NULL = every size of the product. A shop that prices by product rather
+  -- than by size should not have to write a row per size.
+  size_id INTEGER REFERENCES product_sizes(id) ON DELETE CASCADE,
+
+  -- Copied at the time the row was written, for display, for the Excel
+  -- import to match on, and so a row still reads sensibly after a product
+  -- has been renamed. Never used to decide which row applies.
+  brand     TEXT DEFAULT '',
+  category  TEXT DEFAULT '',
+  size_label TEXT DEFAULT '',
+  thickness TEXT DEFAULT '',
+  unit      TEXT DEFAULT '',
+
+  rate REAL NOT NULL,
+
+  -- The band this rate applies to. max_qty NULL means "and upwards".
+  min_qty REAL NOT NULL DEFAULT 0,
+  max_qty REAL,
+
+  -- effective_to NULL means "still current". A row is never deleted to end
+  -- it; it is closed, so what was charged last March stays answerable.
+  effective_from TEXT NOT NULL,
+  effective_to   TEXT,
+
+  active INTEGER NOT NULL DEFAULT 1,
+  remark TEXT DEFAULT '',
+
+  created_at INTEGER NOT NULL,
+  created_by TEXT DEFAULT '',
+  -- Set when a row is deactivated or closed. The row itself still never
+  -- changes its rate.
+  updated_at INTEGER,
+  updated_by TEXT DEFAULT ''
+);
+
+-- The index resolution actually uses: narrow to one party's rows for one
+-- product before looking at dates or quantities.
+CREATE INDEX IF NOT EXISTS idx_pl_lookup ON price_list(side, product_id, party_id, active);
+CREATE INDEX IF NOT EXISTS idx_pl_party ON price_list(party_id, side);
+CREATE INDEX IF NOT EXISTS idx_pl_product ON price_list(product_id, side);
+
+/* Every change to a rate, in the owner's words.
+
+   The rows above are already a history — a new rate is a new row — so this
+   is not where the old rate is kept. It is where the REASON is, and who
+   decided it, which the rows cannot hold: closing one row and opening
+   another is two events and one decision. */
+CREATE TABLE IF NOT EXISTS price_list_log (
+  id TEXT PRIMARY KEY,
+  at INTEGER NOT NULL,
+  side TEXT NOT NULL DEFAULT 'sale',
+  party_id TEXT,
+  party_name TEXT DEFAULT '',
+  product_id TEXT,
+  product_name TEXT DEFAULT '',
+  size_label TEXT DEFAULT '',
+  action TEXT NOT NULL,              -- added | changed | deactivated | reactivated | imported
+  old_rate REAL,
+  new_rate REAL,
+  reason TEXT DEFAULT '',
+  by_name TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_pl_log ON price_list_log(party_id, at);
+CREATE INDEX IF NOT EXISTS idx_pl_log_product ON price_list_log(product_id, at);
+`);
+
+/* The salesman a party belongs to.
+
+   Free text, matching purchase_orders.salesman and selection_slips.salesman
+   deliberately: one spelling of a name across the app beats a second list
+   of names drifting from the first. */
+addColumn("customers", "salesman", "TEXT DEFAULT ''");
+
 // Where the data lives — the backup module needs the on-disk paths, and this
 // is the single place that knows them.
 db.dataDir = DATA_DIR;

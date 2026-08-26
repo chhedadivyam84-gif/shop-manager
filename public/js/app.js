@@ -3144,6 +3144,10 @@ function renderBillingCustomers(){
       // silently carry over.
       state.taxTypeOverride = null;
       renderBillingCustomers(); renderTotals();
+      /* Their price list, then the bill re-rated against it. Changing the
+         customer half way through a bill and leaving the previous party's
+         rates on it is how one customer gets another's price. */
+      loadPartyRates(state.selectedCustomerId, "sale").then(repriceCartForParty);
       // The delivery address follows the customer while it is set to match.
       syncDeliveryAddress();
     });
@@ -3342,7 +3346,14 @@ function addToCart(productId, sizeIdx){
       mode: Pricing.normaliseMode(p.default_mode),
       ...lineDims(p, size),
       pieces: 1,
-      rate: size.price,
+      /* This party's agreed rate if they have one, otherwise the price on
+         the product itself — which is what the app has always used, so a
+         shop with no price list sees no change at all. */
+      rate: (partyRateFor(productId, size.id, 1) || {}).rate ?? size.price,
+      /* True until a person types over it. Only automatic rates are
+         re-priced when the customer or the quantity changes — a rate
+         somebody typed deliberately is theirs to keep. */
+      rateAuto: true,
       gstRate: p.gst
     });
   }
@@ -4010,6 +4021,18 @@ function renderCart(){
       const c = state.cart[inp.dataset.line];
       const v = inp.value === "" ? "" : Math.max(0, parseFloat(inp.value)||0);
       c[inp.dataset.lineField] = v;
+      /* Typed over, so it stops being automatic and nothing re-prices it. */
+      if(inp.dataset.lineField === "rate") c.rateAuto = false;
+      /* A quantity can cross a band boundary — 20 sheets at 2,200 becomes
+         21 at 2,150 — so an automatic rate follows the quantity. */
+      if(inp.dataset.lineField === "pieces" && c.rateAuto){
+        const e = partyRateFor(c.productId, c.sizeId, c.pieces);
+        if(e && e.rate != null && e.rate !== c.rate){
+          c.rate = e.rate;
+          const box = document.querySelector(`[data-line="${inp.dataset.line}"][data-line-field="rate"]`);
+          if(box) box.value = e.rate;
+        }
+      }
       renderLineCalc(inp.dataset.line);
       renderTotals();
     });
@@ -5225,6 +5248,7 @@ async function openCustomerDetail(customerId){
       <button class="btn btn-outline" id="edit-cust-btn">✎ Edit</button>
       ${detail.due>0 ? `<button class="btn btn-gold" id="record-payment-btn">Sale Payment</button>` : ""}
       ${detail.phone ? `<button class="btn btn-outline" id="wa-chat-cust-btn">💬 Chat on WhatsApp</button>` : ""}
+      <button class="btn btn-outline" id="cust-price-list-btn">Price List</button>
       <button class="btn btn-outline" id="print-ledger-btn">Print Ledger</button>
       <button class="btn btn-outline" id="export-ledger-btn">Export Excel</button>
       ${isOwner() ? `<button class="btn btn-outline" id="opening-balance-btn">Opening Outstanding</button>` : ""}
@@ -5280,6 +5304,8 @@ async function openCustomerDetail(customerId){
   if(waChatCustBtn) waChatCustBtn.addEventListener("click", ()=>openWhatsApp(detail.phone));
   const openingBalanceBtn = sheet.querySelector("#opening-balance-btn");
   if(openingBalanceBtn) openingBalanceBtn.addEventListener("click", ()=>openCustomerOpeningBalance(detail));
+  const plBtn = sheet.querySelector("#cust-price-list-btn");
+  if(plBtn) plBtn.addEventListener("click", ()=>openPriceList(customerId, detail.name, "sale"));
   sheet.querySelector("#print-ledger-btn").addEventListener("click", ()=>printPartyLedger(detail,"Customer"));
   sheet.querySelector("#export-ledger-btn").addEventListener("click", ()=>{
     window.open(`/api/customers/${detail.id}/ledger/export`, "_blank");
@@ -19851,6 +19877,396 @@ function openRangeBuilder(sizes, onDone){
     onDone();
     toast(`${fresh.length} variant${fresh.length === 1 ? "" : "s"} added to this product.`, "ok");
   });
+}
+
+
+/* ============================================================
+   PARTY RATES ON THE BILLING SCREEN
+
+   The rate must be there the instant a product is tapped, so the whole of
+   this party's price list is fetched once when the customer is chosen and
+   held until they change. Tapping a product is then a lookup, not a
+   request — a counter does not wait for the network between choosing a
+   sheet of ply and seeing its price.
+
+   THE SERVER DECIDED, NOT THIS. What arrives is already resolved: party
+   beats general, a rate for this size beats one for any size, latest
+   effective wins. Nothing here re-applies those rules. The only thing
+   chosen locally is which quantity band applies, because the quantity is
+   not known until somebody types it.
+   ============================================================ */
+const PARTY_RATES = { partyId: null, side: "sale", bySize: {}, byProduct: {} };
+
+async function loadPartyRates(partyId, side){
+  const want = partyId || null;
+  const s = side || "sale";
+  if(PARTY_RATES.partyId === want && PARTY_RATES.side === s) return;
+  PARTY_RATES.partyId = want; PARTY_RATES.side = s;
+  PARTY_RATES.bySize = {}; PARTY_RATES.byProduct = {};
+  try{
+    const r = await api("GET", `/price-lists/for-party?side=${s}${want ? "&partyId=" + encodeURIComponent(want) : ""}`);
+    /* Checked again on arrival: the customer may have been changed twice
+       while this was in flight, and the older answer must not win. */
+    if(PARTY_RATES.partyId !== want || PARTY_RATES.side !== s) return;
+    PARTY_RATES.bySize = r.bySize || {};
+    PARTY_RATES.byProduct = r.byProduct || {};
+  }catch(e){
+    /* An older server has no price lists. Everything falls back to the
+       product's own price, exactly as it always did. */
+  }
+}
+
+/** Which band a quantity falls in. The one piece of the decision that
+ *  cannot be made until somebody has typed how many. */
+/**
+ * Re-rate the open bill after the customer changes.
+ *
+ * Only lines whose rate the APP put there. A rate somebody typed is a
+ * decision they made, and silently replacing it when the customer is
+ * corrected would undo their work without saying so.
+ *
+ * A line with no entry in the new party's list falls back to the product's
+ * own price rather than keeping the previous party's rate — which is the
+ * whole point: the bill must never carry one customer's price to another.
+ */
+function repriceCartForParty(){
+  if(!state.cart || !state.cart.length) return;
+  let moved = 0;
+  state.cart.forEach(c => {
+    if(c.rateAuto === false) return;
+    const e = partyRateFor(c.productId, c.sizeId, c.pieces);
+    let want = e && e.rate != null ? e.rate : null;
+    if(want == null){
+      const p = state.products.find(x => x.id === c.productId);
+      const s = p && p.sizes ? p.sizes.find(z => z.id === c.sizeId) : null;
+      want = s ? s.price : c.rate;
+    }
+    if(want != null && want !== c.rate){ c.rate = want; moved += 1; }
+  });
+  if(moved){
+    renderCart(); renderTotals();
+    toast(`${moved} line${moved === 1 ? "" : "s"} re-priced for this customer.`, "ok");
+  }
+}
+
+function bandRate(entry, qty){
+  if(!entry) return null;
+  if(!entry.bands || !entry.bands.length || qty == null || qty === "") return entry.rate;
+  const q = Number(qty);
+  if(!Number.isFinite(q)) return entry.rate;
+  const hit = entry.bands.find(b => q >= (b.minQty || 0) && (b.maxQty == null || q <= b.maxQty));
+  return hit ? hit.rate : entry.rate;
+}
+
+/**
+ * The rate for one line, and where it came from.
+ *
+ * Returns null when this party has no price list entry at all, which is the
+ * signal to the caller to keep using the product's own price — the rate the
+ * app has always used, so a shop that never writes a price list sees no
+ * change whatsoever.
+ */
+function partyRateFor(productId, sizeId, qty){
+  const entry = PARTY_RATES.bySize[sizeId] || PARTY_RATES.byProduct[productId];
+  if(!entry) return null;
+  return { ...entry, rate: bandRate(entry, qty) };
+}
+
+/* What the salesman is shown beside the rate, so they can see at a glance
+   that this party is on their agreed rate and what everyone else pays. */
+function rateNote(productId, sizeId, qty){
+  const e = partyRateFor(productId, sizeId, qty);
+  if(!e) return "";
+  const bits = [];
+  bits.push(e.source === "party" ? "Party rate" : "General rate");
+  if(e.source === "party" && e.generalRate != null && e.generalRate !== e.rate){
+    bits.push("general " + fmtPaise(e.generalRate));
+  }
+  return bits.join(" · ");
+}
+
+
+/* ============================================================
+   ONE PARTY'S PRICE LIST
+
+   The rates agreed with this customer, the history of how they got there,
+   and who changed them.
+
+   Rates are never edited in place — setting a new one closes the old row
+   and opens another — so this screen shows the CURRENT rates by default and
+   the whole history behind any one of them on request. That is not a
+   display choice: it is what lets a bill dated last month still price at
+   last month's rate, and the screen would be lying if it hid it.
+   ============================================================ */
+async function openPriceList(partyId, partyName, side){
+  const s = side || "sale";
+  const sheet = document.getElementById("sheet-price-list");
+  let tab = "current";
+
+  const mayEdit = isOwner() || (state.access && state.access.jobRole === "Sales Manager");
+
+  const draw = async () => {
+    sheet.innerHTML = `
+      <div class="sheet-handle"></div>
+      <button class="sheet-close" data-sheetclose>&#10005;</button>
+      <div class="sheet-title">Price List — ${escapeHtml(partyName || "General")}</div>
+      <div class="muted" style="font-size:12px;margin-top:2px;">
+        ${partyId
+          ? "Rates agreed with this party. Anything not listed here falls back to the general rate, and then to the product's own price."
+          : "The rate everyone gets unless they have one of their own."}
+      </div>
+      <div class="chip-row" style="margin-top:10px;">
+        <button class="chip sm ${tab==="current"?"selected":""}" data-pl-tab="current">Current rates</button>
+        <button class="chip sm ${tab==="history"?"selected":""}" data-pl-tab="history">History</button>
+        <button class="chip sm ${tab==="log"?"selected":""}" data-pl-tab="log">Who changed what</button>
+      </div>
+      ${mayEdit && tab==="current" ? `
+        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
+          <button class="btn btn-primary" id="pl-add" style="flex:1;min-width:140px;">Set a rate</button>
+          <button class="btn btn-outline" id="pl-import" style="flex:1;min-width:140px;">Import from Excel</button>
+        </div>` : ""}
+      <div id="pl-body" style="margin-top:10px;"><div class="empty-hint">Loading…</div></div>`;
+
+    sheet.querySelectorAll("[data-sheetclose]").forEach(b => b.addEventListener("click", closeAllSheets));
+    sheet.querySelectorAll("[data-pl-tab]").forEach(b =>
+      b.addEventListener("click", () => { tab = b.dataset.plTab; draw(); }));
+    const addBtn = document.getElementById("pl-add");
+    if(addBtn) addBtn.addEventListener("click", () => openSetRate(partyId, partyName, s, draw));
+    const impBtn = document.getElementById("pl-import");
+    if(impBtn) impBtn.addEventListener("click", () => openPriceImport(partyName, s, draw));
+
+    const body = document.getElementById("pl-body");
+    try{
+      if(tab === "log"){
+        const rows = await api("GET", `/price-lists/log${partyId ? "?partyId=" + encodeURIComponent(partyId) : ""}`);
+        body.innerHTML = rows.length ? rows.map(l => `
+          <div class="list-row"><div>
+            <div class="row-title">${escapeHtml(l.product_name || "—")}${l.size_label ? " · " + escapeHtml(l.size_label) : ""}</div>
+            <div class="row-sub">${escapeHtml(l.action)}${
+              l.old_rate != null ? ` · ${fmtPaise(l.old_rate)} → ${fmtPaise(l.new_rate)}` : (l.new_rate != null ? ` · ${fmtPaise(l.new_rate)}` : "")}</div>
+            <div class="row-sub">${new Date(l.at).toLocaleString("en-IN")}${l.by_name ? " · " + escapeHtml(l.by_name) : ""}${
+              l.reason ? " · " + escapeHtml(l.reason) : ""}</div>
+          </div></div>`).join("") : `<div class="empty-hint">No changes recorded yet.</div>`;
+        return;
+      }
+
+      const rows = await api("GET",
+        `/price-lists?side=${s}${partyId ? "&partyId=" + encodeURIComponent(partyId) : "&scope=general"}${tab === "current" ? "&currentOnly=1" : ""}`);
+      if(!rows.length){
+        body.innerHTML = `<div class="empty-hint">${tab === "current"
+          ? "No rates set. Every product falls back to its own price."
+          : "Nothing in the history yet."}</div>`;
+        return;
+      }
+      body.innerHTML = rows.map(r => {
+        const band = (r.min_qty || r.max_qty != null)
+          ? `${r.min_qty || 0}${r.max_qty != null ? "–" + r.max_qty : "+"}` : "";
+        return `<div class="list-row" style="${r.active ? "" : "opacity:.55;"}">
+          <div>
+            <div class="row-title" style="${r.active ? "" : "text-decoration:line-through;"}">${escapeHtml(r.product_name)}${
+              r.size_label ? " · " + escapeHtml(r.size_label) : ""}</div>
+            <div class="row-sub">From ${escapeHtml(r.effective_from)}${
+              r.effective_to ? " to " + escapeHtml(r.effective_to) : (r.active ? " · current" : "")}${
+              band ? " · qty " + band : ""}</div>
+            ${r.remark ? `<div class="row-sub">${escapeHtml(r.remark)}</div>` : ""}
+          </div>
+          <div class="row-right" style="display:flex;align-items:center;gap:8px;">
+            <span class="row-title">${fmtPaise(r.rate)}</span>
+            ${mayEdit && r.active ? `<button class="chip sm" data-pl-off="${r.id}" title="Stop using this rate">✕</button>` : ""}
+            ${mayEdit && !r.active ? `<button class="chip sm" data-pl-on="${r.id}" title="Use this rate again">↺</button>` : ""}
+          </div>
+        </div>`;
+      }).join("");
+
+      body.querySelectorAll("[data-pl-off]").forEach(b => b.addEventListener("click", async () => {
+        const why = prompt("Why is this rate being stopped?\n\nIt is kept on the record either way — this is so the reason is too.", "");
+        if(why === null) return;
+        try{ await api("POST", `/price-lists/${b.dataset.plOff}/deactivate`, { reason: why.trim() }); await draw(); }
+        catch(e){ toast(e.message); }
+      }));
+      body.querySelectorAll("[data-pl-on]").forEach(b => b.addEventListener("click", async () => {
+        try{ await api("POST", `/price-lists/${b.dataset.plOn}/reactivate`); await draw(); }
+        catch(e){ toast(e.message); }
+      }));
+    }catch(e){ body.innerHTML = `<div class="empty-hint">${escapeHtml(e.message)}</div>`; }
+  };
+
+  showSheet("sheet-price-list");
+  await draw();
+}
+
+/** Set one rate. A new row every time — see the route. */
+function openSetRate(partyId, partyName, side, after){
+  const sheet = document.getElementById("sheet-set-rate");
+  let productId = "", sizeId = "";
+
+  const draw = () => {
+    const p = state.products.find(x => x.id === productId);
+    sheet.innerHTML = `
+      <div class="sheet-handle"></div>
+      <button class="sheet-close" data-sheetclose>&#10005;</button>
+      <div class="sheet-title">Set a rate${partyName ? " — " + escapeHtml(partyName) : ""}</div>
+
+      <label class="field-label" style="margin-top:8px;">Product</label>
+      <div class="searchbar" style="margin-top:0;">
+        <span>&#128269;</span><input type="text" id="sr-search" placeholder="Search name, brand or SKU">
+      </div>
+      <div class="chip-row" id="sr-products" style="margin-top:8px;"></div>
+
+      ${p && p.sizes && p.sizes.length ? `
+        <label class="field-label" style="margin-top:10px;">Size <span class="muted" style="font-weight:400;">— leave on “Any size” to price the whole product</span></label>
+        <div class="chip-row" id="sr-sizes">
+          <button class="chip sm ${!sizeId?"selected":""}" data-sr-size="">Any size</button>
+          ${p.sizes.map(z => `<button class="chip sm ${String(sizeId)===String(z.id)?"selected":""}" data-sr-size="${z.id}">${escapeHtml(z.label)} · ${fmtPaise(z.price)}</button>`).join("")}
+        </div>` : ""}
+
+      <div class="charge-grid" style="margin-top:10px;">
+        <label class="dim"><span>Rate</span><input type="number" min="0" step="any" id="sr-rate" placeholder="0"></label>
+        <label class="dim"><span>Effective from</span><input type="date" id="sr-from" value="${todayISO()}"></label>
+      </div>
+      <div class="charge-grid" style="margin-top:8px;">
+        <label class="dim"><span>Min qty</span><input type="number" min="0" step="any" id="sr-min" placeholder="0"></label>
+        <label class="dim"><span>Max qty <em>(blank = upwards)</em></span><input type="number" min="0" step="any" id="sr-max" placeholder="—"></label>
+      </div>
+      <div class="muted" style="font-size:11px;margin-top:6px;">
+        Leave both blank for a single rate. For slabs, set one rate per band — 0–20, 21–50, 51 and up.
+      </div>
+
+      <label class="field-label" style="margin-top:10px;">Reason <span class="muted" style="font-weight:400;">— goes on the record</span></label>
+      <input type="text" id="sr-reason" placeholder="e.g. annual revision, bulk agreement">
+      <label class="field-label" style="margin-top:10px;">Remark <span class="muted" style="font-weight:400;">— optional</span></label>
+      <input type="text" id="sr-remark" placeholder="Shown beside the rate">
+
+      <div id="sr-current" class="card" style="margin-top:10px;font-size:12px;display:none;"></div>
+
+      <button class="btn btn-primary" id="sr-save" style="margin-top:14px;">Save this rate</button>`;
+
+    sheet.querySelectorAll("[data-sheetclose]").forEach(b => b.addEventListener("click", closeAllSheets));
+
+    const searchEl = document.getElementById("sr-search");
+    const paint = () => {
+      const q = (searchEl.value || "").toLowerCase();
+      const list = (q ? sellableProducts().filter(x =>
+        x.name.toLowerCase().includes(q) || (x.brand||"").toLowerCase().includes(q) || (x.sku||"").toLowerCase().includes(q))
+        : sellableProducts().slice(0, 12));
+      document.getElementById("sr-products").innerHTML = list.map(x =>
+        `<button class="chip sm ${x.id===productId?"selected":""}" data-sr-prod="${x.id}">${escapeHtml(x.name)}</button>`).join("")
+        || `<div class="empty-hint" style="padding:6px 4px;">No match.</div>`;
+      document.querySelectorAll("[data-sr-prod]").forEach(b => b.addEventListener("click", () => {
+        productId = b.dataset.srProd; sizeId = ""; draw();
+      }));
+    };
+    searchEl.addEventListener("input", paint);
+    paint();
+
+    document.querySelectorAll("[data-sr-size]").forEach(b => b.addEventListener("click", () => {
+      sizeId = b.dataset.srSize; draw(); showCurrent();
+    }));
+
+    /* What they pay today, shown before the new rate is typed — so nobody
+       sets 2,100 without noticing it is already 2,100. */
+    async function showCurrent(){
+      const box = document.getElementById("sr-current");
+      if(!productId || !box) return;
+      try{
+        const r = await api("GET", `/price-lists/resolve?side=${side}&productId=${productId}${sizeId?"&sizeId="+sizeId:""}${partyId?"&partyId="+encodeURIComponent(partyId):""}`);
+        box.style.display = "";
+        box.innerHTML = `
+          <div class="inv-flex"><span class="muted">Right now they pay</span><span style="font-weight:800;">${r.rate!=null?fmtPaise(r.rate):"—"}</span></div>
+          <div class="inv-flex"><span class="muted">From</span><span>${r.source==="party"?"their own rate":r.source==="general"?"the general rate":"the product's price"}</span></div>
+          ${r.lastRate!=null?`<div class="inv-flex"><span class="muted">Last actually charged</span><span>${fmtPaise(r.lastRate)}${r.lastOn?" on "+r.lastOn:""}</span></div>`:""}`;
+      }catch(e){ /* the form still works */ }
+    }
+    if(productId) showCurrent();
+
+    document.getElementById("sr-save").addEventListener("click", async () => {
+      if(!productId){ toast("Pick a product first."); return; }
+      const rate = parseFloat(document.getElementById("sr-rate").value);
+      if(!Number.isFinite(rate) || rate < 0){ toast("Enter the rate."); return; }
+      try{
+        await api("POST", "/price-lists", {
+          side, partyId: partyId || null, productId,
+          sizeId: sizeId || null, rate,
+          minQty: document.getElementById("sr-min").value || 0,
+          maxQty: document.getElementById("sr-max").value || null,
+          effectiveFrom: document.getElementById("sr-from").value,
+          reason: document.getElementById("sr-reason").value,
+          remark: document.getElementById("sr-remark").value
+        });
+        toast("Rate saved. The old one is kept in the history.", "ok");
+        closeAllSheets();
+        /* This party's cached rates are now stale on the billing screen. */
+        PARTY_RATES.partyId = null;
+        if(typeof after === "function") { showSheet("sheet-price-list"); await after(); }
+      }catch(e){ toast(e.message); }
+    });
+  };
+
+  showSheet("sheet-set-rate");
+  draw();
+}
+
+/**
+ * Many rates from a spreadsheet.
+ *
+ * Pasted rather than uploaded: a shopkeeper copying two columns out of the
+ * sheet their supplier emailed is one Ctrl-C away, where finding that file
+ * again on a phone is not. The columns are the ones a price sheet already
+ * has.
+ */
+function openPriceImport(partyName, side, after){
+  const sheet = document.getElementById("sheet-price-import");
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>&#10005;</button>
+    <div class="sheet-title">Import rates</div>
+    <div class="muted" style="font-size:12px;margin-top:2px;">
+      Copy the rows out of Excel and paste them here. One row per rate, columns separated by tabs —
+      which is what pasting from Excel gives you.
+    </div>
+    <div class="card" style="margin-top:10px;font-size:11.5px;">
+      <b>Party &nbsp; Product or SKU &nbsp; Size &nbsp; Rate &nbsp; From</b><br>
+      <span class="muted">ABC Traders&nbsp;&nbsp;Swagat Ply&nbsp;&nbsp;8x4 18mm&nbsp;&nbsp;2100&nbsp;&nbsp;2026-08-26</span><br>
+      <span class="muted">Leave Party blank for the general rate. Size and From are optional.</span>
+    </div>
+    <textarea id="pi-text" rows="10" style="margin-top:10px;font-family:monospace;font-size:12px;" placeholder="Paste here"></textarea>
+    <div id="pi-result" style="margin-top:8px;"></div>
+    <button class="btn btn-primary" id="pi-go" style="margin-top:10px;">Check and import</button>`;
+
+  sheet.querySelectorAll("[data-sheetclose]").forEach(b => b.addEventListener("click", closeAllSheets));
+
+  document.getElementById("pi-go").addEventListener("click", async () => {
+    const text = document.getElementById("pi-text").value;
+    const lines = text.split(/\n/).map(l => l.trim()).filter(Boolean);
+    if(!lines.length){ toast("Paste the rows first."); return; }
+
+    const rows = lines.map(line => {
+      const c = line.split(/\t|\s{2,}/).map(x => x.trim());
+      /* The header row people paste along with the data, skipped by
+         recognising it rather than by asking them not to. */
+      if(/^party$/i.test(c[0]) || /^product$/i.test(c[0]) || /^sku$/i.test(c[0])) return null;
+      return { party: c[0] || "", product: c[1] || "", sku: c[1] || "", size: c[2] || "", rate: c[3], effectiveFrom: c[4] || "" };
+    }).filter(Boolean);
+
+    const out = document.getElementById("pi-result");
+    try{
+      const r = await api("POST", "/price-lists/import", { side, rows });
+      out.innerHTML = `<div class="card" style="font-size:12px;">
+        <b>Done.</b> ${r.added} added, ${r.replaced} changed, ${r.unchanged} already the same.</div>`;
+      PARTY_RATES.partyId = null;
+      toast(`${r.added + r.replaced} rate${r.added + r.replaced === 1 ? "" : "s"} imported.`, "ok");
+      if(typeof after === "function") await after();
+    }catch(e){
+      /* The refusal names the rows, because "some rows failed" is not
+         something anybody can act on. */
+      let detail = "";
+      try{ const j = JSON.parse(e.detail || "null"); if(j && j.problems) detail = j.problems.join("<br>"); }catch(err){}
+      out.innerHTML = `<div class="card" style="font-size:12px;background:var(--warn-bg);border-color:var(--warn-text);color:var(--warn-text);">
+        <b>Nothing was imported.</b><br>${escapeHtml(e.message)}${detail ? "<br><br>" + detail : ""}</div>`;
+    }
+  });
+
+  showSheet("sheet-price-import");
 }
 
 })();

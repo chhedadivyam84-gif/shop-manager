@@ -301,6 +301,7 @@ app.use("/api/purchases", requireAuth, require("./routes/purchases"));
 app.use("/api/purchase-orders", requireAuth, require("./routes/purchaseOrders"));
 app.use("/api/selection-slips", requireAuth, require("./routes/selectionSlips"));
 app.use("/api/gst-filings", requireAuth, require("./routes/gstFilings"));
+app.use("/api/price-lists", requireAuth, require("./routes/priceLists"));
 app.use("/api/quotations", requireAuth, require("./routes/quotations"));
 app.use("/api/sales-orders", requireAuth, require("./routes/salesOrders"));
 app.use("/api/sales-returns", requireAuth, require("./routes/salesReturns"));

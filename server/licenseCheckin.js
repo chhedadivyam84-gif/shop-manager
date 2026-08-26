@@ -156,6 +156,16 @@ function state() {
 
   /* Known bad. Grace covers not knowing, not knowing something bad, so
      these are acted on the moment they arrive and stay acted on. */
+  /* Somebody has installed this copy a second time on one subscription.
+
+     Known bad, so no grace: the server has told us plainly, and the shop
+     it refuses is the NEW installation — the original keeps working, which
+     is why the server decides this rather than the copy. */
+  if (v.status === "too-many-installs") {
+    return { enforced: true, status: "too-many-installs", blocked: true, companyLimit, code,
+             message: v.message || "This subscription is already in use on another installation. Contact your supplier." };
+  }
+
   if (v.status === "cancelled") {
     return { enforced: true, status: "cancelled", blocked: true, companyLimit, code,
              message: v.message || "This subscription has been cancelled. Please contact your supplier." };

@@ -69,7 +69,7 @@ router.post("/", async (req, res) => {
    Streams the sheet straight back rather than queueing a print job: this is
    for handing to a supplier over WhatsApp, not for the shop's own printer.
 
-   `?brand=Swagat` narrows it to one company, which is what the company-wise
+   `?brand=<name>` narrows it to one company, which is what the company-wise
    share sends. It is the same order and the same number either way — the
    brand only decides which lines are on the paper.
    ============================================================ */

@@ -1569,7 +1569,8 @@ router.get("/po-brand-wise", (req, res) => {
   res.json(rows);
 });
 
-/** Ordered by product, brand kept separate — 18mm Swagat is not 18mm Ganga. */
+/** Ordered by product, brand kept separate — the same board from two
+ *  different mills is two different things to buy. */
 router.get("/po-product-wise", (req, res) => {
   const range = dateRange(req);
   const rows = db.prepare(`

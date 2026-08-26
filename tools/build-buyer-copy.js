@@ -150,6 +150,30 @@ lic = lic.replace("const PUBLIC_KEY = ``;", "const PUBLIC_KEY = `" + pubKey + "`
 fs.writeFileSync(licPath, lic);
 console.log("  licence enforcement switched on");
 
+/* Where this copy will check in.
+
+   Baked in rather than left for the buyer to set. They have no reason to
+   know it, and a copy that does not know where to ask is a copy that
+   quietly never asks — which looks exactly like everything working, right
+   up until the vendor tries to cancel somebody.
+
+   Still overridable by the environment on the buyer's host, so a licence
+   server that has to move does not need every sold copy rebuilt. */
+const LICENCE_SERVER = process.env.LICENCE_SERVER || "https://admin-panel-lsty.onrender.com";
+const checkinPath = path.join(OUT, "server", "licenseCheckin.js");
+let ck = fs.readFileSync(checkinPath, "utf8");
+const before = ck;
+ck = ck.replace(
+  'const SERVER_URL = String(process.env.LICENCE_SERVER || "").trim().replace(/\\/+$/, "");',
+  'const SERVER_URL = String(process.env.LICENCE_SERVER || ' + JSON.stringify(LICENCE_SERVER) + ').trim().replace(/\\/+$/, "");');
+if (ck === before) {
+  console.error("\n  Could not point this copy at the licence server — licenseCheckin.js has changed shape.");
+  console.error("  Refusing to ship a copy that would never check in.\n");
+  process.exit(1);
+}
+fs.writeFileSync(checkinPath, ck);
+console.log(`  will check in with ${LICENCE_SERVER}`);
+
 // ------------------------------------------------- 3. the buyer's name
 const schemaPath = path.join(OUT, "server", "db-schema.js");
 let schema = fs.readFileSync(schemaPath, "utf8");
@@ -213,6 +237,11 @@ if (shopTraces.length) problems.push(`"Swagat" appears in ${shopTraces.length} f
 
 if (!/const PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----/.test(fs.readFileSync(licPath, "utf8")))
   problems.push("licence enforcement is NOT on — the key would be decorative");
+
+/* A copy that cannot check in is worse than one that is not licensed at
+   all: it works for ever and the vendor never finds out. */
+if (!/const SERVER_URL = String\(process\.env\.LICENCE_SERVER \|\| "http/.test(fs.readFileSync(checkinPath, "utf8")))
+  problems.push("the licence server URL did not make it into the build — this copy would never check in");
 
 if (problems.length) {
   console.error("\nREFUSED TO BUILD:\n");

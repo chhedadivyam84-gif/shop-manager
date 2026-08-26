@@ -12039,7 +12039,7 @@ function renderPoSupplierInfo(){
 /* ============================================================
    PURCHASE ORDER — BRAND / COMPANY
 
-   One order, many companies. The shop buys Swagat, Maharashtra and Ganga
+   One order, many companies. A shop buys three different mills'
    plywood on a single PO and does NOT want three POs just because three
    mills are involved: the order number is one thing, who makes each board
    is another.
@@ -12093,8 +12093,8 @@ function poBrandGroups(cart){
  * The same board from a different mill.
  *
  * "Change the company on this line" cannot mean "relabel it": the line
- * points at a product, and a line reading Ganga while pointing at a Swagat
- * board would send Ganga's stock to Swagat's shelf the day this order is
+ * points at a product, and a line naming one mill while pointing at another's
+ * board would put the stock on the wrong shelf the day this order is
  * converted to a purchase entry. So changing the company SWAPS the product
  * for the same-named one made by that company, and the line stays honest.
  *

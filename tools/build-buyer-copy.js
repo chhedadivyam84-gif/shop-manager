@@ -79,9 +79,18 @@ function verifyFolder(dir) {
   const dbs = files.filter(f => /\.(db|db-wal|db-shm|sqlite)$/i.test(f));
   if (dbs.length) bad.push(`${dbs.length} database file(s) — probably from running it: ${path.relative(dir, dbs[0])}`);
 
+  /* data/ must carry no books — but placeholders are not data. A repo
+     keeps .gitkeep so the folder exists at all, and .env.example so a
+     desktop buyer knows what to fill in. Flagging those made this check
+     fail every single time, and a check that always fails is a check
+     nobody reads. Anything else in there is still refused. */
   const dataDir = path.join(dir, "data");
-  if (fs.existsSync(dataDir) && fs.readdirSync(dataDir).length)
-    bad.push(`data/ is not empty — delete it before sending`);
+  const PLACEHOLDERS = [".gitkeep", ".env.example", ".keep"];
+  if (fs.existsSync(dataDir)) {
+    const real = fs.readdirSync(dataDir).filter(f => !PLACEHOLDERS.includes(f));
+    if (real.length)
+      bad.push(`data/ has ${real.length} file(s) that are not placeholders — starting with ${real[0]}`);
+  }
 
   const pk = files.filter(f => /private.*\.pem$/i.test(f));
   if (pk.length) bad.push(`the PRIVATE signing key is here: ${path.relative(dir, pk[0])}`);

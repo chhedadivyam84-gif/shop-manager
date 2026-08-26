@@ -157,7 +157,55 @@ const ROLE_DEFAULTS = {
   }
 };
 
-const isOwner = req => !!(req && req.session && req.session.loggedIn && req.session.role === "owner");
+/* ============================================================
+   VIEWING AS A STAFF MEMBER
+
+   The owner can set what a staff member sees and, until now, had no way
+   to look at it. Ticking twenty-two boxes and hoping is not a way to run
+   a shop, and "can you see the outstanding column?" over the phone is
+   worse.
+
+   The whole safety of this rests on keeping two things apart:
+
+     IDENTITY      who is actually doing this. Never changes. The owner
+                   previewing as Jinath is still the owner: every bill
+                   saved, every log line written, says the owner did it.
+                   An audit trail that can be made to name someone else
+                   is not an audit trail.
+
+     WHAT IS SHOWN which permissions and which data scope apply. This is
+                   what preview swaps.
+
+   Only an owner can start a preview, and only against a real staff
+   member. A staff member cannot start one, cannot end one they are not
+   in, and cannot reach owner access through one — the session's real
+   role is never written to, only read.
+
+   Preview genuinely restricts. An owner in preview cannot delete and
+   cannot see profit, because a preview that quietly kept the owner's
+   powers would show them a screen no staff member will ever see, which
+   is the one thing it exists to prevent. Leaving it is one tap.
+   ============================================================ */
+
+/** The staff member being previewed, or null. Only ever set for an owner. */
+function previewing(req) {
+  if (!req || !req.session) return null;
+  if (req.session.role !== "owner") return null;   // never for anyone else
+  return req.session.previewStaffId || null;
+}
+
+/** Whose permissions apply to this request — the previewed staff, or none. */
+function effectiveStaffId(req) {
+  return previewing(req) || (req && req.session ? req.session.staffId : null);
+}
+
+/* Answers no while previewing: everything downstream keys off this, so
+   one line makes the whole app behave as the staff member does. The real
+   role is untouched — previewing() reads it to decide whether a preview
+   is even allowed. */
+const isOwner = req =>
+  !!(req && req.session && req.session.loggedIn && req.session.role === "owner")
+  && !previewing(req);
 
 /** The permission rows for one staff member, keyed by module. */
 function rowsFor(staffId) {
@@ -187,7 +235,7 @@ function can(req, module, action) {
   if (!req || !req.session || !req.session.loggedIn) return false;
   if (!ACTIONS.includes(action)) return false;
 
-  const perms = rowsFor(req.session.staffId);
+  const perms = rowsFor(effectiveStaffId(req));
   const m = perms[module];
   if (!m) return false;
 
@@ -212,9 +260,9 @@ function canSee(req, what) {
 /** Own Only | Assigned Staff | All Staff | All Data — never blank. */
 function scopeOf(req) {
   if (isOwner(req)) return "All Data";
-  if (!req || !req.session || !req.session.staffId) return "Own Only";
+  if (!effectiveStaffId(req)) return "Own Only";
   try {
-    const s = db.prepare("SELECT data_scope FROM staff WHERE id = ?").get(req.session.staffId);
+    const s = db.prepare("SELECT data_scope FROM staff WHERE id = ?").get(effectiveStaffId(req));
     const v = s && String(s.data_scope || "").trim();
     return SCOPES.includes(v) ? v : "Own Only";
   } catch (e) { return "Own Only"; }
@@ -233,7 +281,7 @@ function visibleSalesmen(req) {
   const scope = scopeOf(req);
   if (scope === "All Data" || scope === "All Staff") return null;
 
-  const me = req && req.session ? req.session.staffId : null;
+  const me = effectiveStaffId(req);
   if (!me) return [];
 
   const nameOf = id => {
@@ -273,5 +321,6 @@ function require_(module, action) {
 module.exports = {
   MODULES, ACTIONS, SENSITIVE, SCOPES, ROLE_DEFAULTS,
   isOwner, can, canSee, scopeOf, visibleSalesmen, rowsFor,
+  previewing, effectiveStaffId,
   require: require_
 };

@@ -49,6 +49,9 @@ let state = {
   gstEnabled: false, einvoiceWanted: false, ewbWanted: false, deliveryMan: "",
   vehicleNumber: "", deliveryAddress: "", deliverySameAsBilling: true, remarks: "",
   invBrandFilter: "All", reportType: "Sales", partyMode: "customer",
+  /* What the signed-in person may do, from /permissions/me. Null until
+     it loads, and on an older server that has no such route. */
+  access: null,
   // Reports date range. Empty = All Time, which is the default so a report
   // shows full history until a period is picked. repPeriod remembers which
   // preset chip is lit ("" once a custom From/To or month is typed).
@@ -925,6 +928,7 @@ async function switchTab(tab){
 }
 
 async function renderAll(){
+  await refreshMyAccess();          // before anything draws, so nothing flashes up and vanishes
   await Promise.all([loadProducts(), loadCustomers(), loadSuppliers(), loadLocations(), loadBankAccounts(), loadStaffNames(), loadCategories(), loadAreas(), loadBusinesses()]);
   await renderHome();
   /* Not awaited: the bell is worth having but never worth holding up the
@@ -1626,6 +1630,95 @@ const bkSize = b => b >= 1073741824 ? (b / 1073741824).toFixed(b >= 10737418240 
    loud that it belongs to the owner, because a missing column reads as an
    oversight and invites somebody to ask for it to be added.
    ============================================================ */
+/* ============================================================
+   VIEWING THE APP AS A STAFF MEMBER
+
+   The owner sets what somebody can see and then has no way to look at it.
+   Ticking twenty-two boxes and hoping is not a way to run a shop, and
+   "can you see the outstanding column?" over the phone is worse.
+
+   The banner is deliberately loud and always there. An owner who forgets
+   they are in a preview will report the app as broken — half their menu
+   missing, delete refusing — and be right to. It sits above everything and
+   says whose eyes they are using, with the way out beside it.
+   ============================================================ */
+let PREVIEW = null;          // { id, name } while previewing, else null
+
+async function refreshMyAccess(){
+  try{
+    state.access = await api("GET", "/permissions/me");
+    PREVIEW = state.access.previewing || null;
+  }catch(e){
+    /* An older copy of the server has no such route. Treat it as "no
+       restrictions known" rather than locking the shop out of its own app. */
+    state.access = null;
+    PREVIEW = null;
+  }
+  paintPreviewBanner();
+}
+
+function paintPreviewBanner(){
+  let bar = document.getElementById("preview-bar");
+  if(!PREVIEW){
+    if(bar) bar.remove();
+    document.body.classList.remove("previewing");
+    return;
+  }
+  if(!bar){
+    bar = document.createElement("div");
+    bar.id = "preview-bar";
+    document.body.insertBefore(bar, document.body.firstChild);
+  }
+  document.body.classList.add("previewing");
+  bar.innerHTML = `
+    <span>👁 Seeing the app as <b>${escapeHtml(PREVIEW.name)}</b></span>
+    <button id="preview-stop">Back to my own view</button>`;
+  document.getElementById("preview-stop").addEventListener("click", stopPreview);
+}
+
+async function startPreview(staffId, staffName){
+  try{
+    await api("POST", `/permissions/preview/${encodeURIComponent(staffId)}`);
+    await refreshMyAccess();
+    closeAllSheets();
+    /* Straight to Home: the menu and the tabs are about to change shape, and
+       leaving them on a screen the staff member cannot open would be the
+       first thing the owner saw. */
+    await switchTab("home");
+    toast(`Now seeing the app as ${staffName}. Nothing you do is recorded as them.`, "ok");
+  }catch(e){ toast(e.message); }
+}
+
+async function stopPreview(){
+  try{
+    await api("POST", "/permissions/preview-stop");
+    await refreshMyAccess();
+    closeAllSheets();
+    await switchTab("home");
+    toast("Back to your own view.", "ok");
+  }catch(e){ toast(e.message); }
+}
+
+/** Does the signed-in person have this permission? Used to draw the UI.
+ *
+ *  The screens read this to decide what to show. It is a courtesy, not the
+ *  enforcement — every one of these is checked again on the server, because
+ *  a hidden button is still a request anybody can send by hand. */
+function mayI(module, action){
+  const a = state.access;
+  if(!a) return true;                       // older server: don't hide things
+  if(a.isOwner) return true;
+  const m = a.modules && a.modules[module];
+  return !!(m && m[action]);
+}
+
+/** May they see a figure the shop treats as the owner's business? */
+function maySee(what){
+  const a = state.access;
+  if(!a) return true;
+  return !!(a.sensitive && a.sensitive[what]);
+}
+
 const PERM = { staff: [], catalogue: null, editing: null, draft: null };
 
 async function renderPermissions(){
@@ -1658,10 +1751,14 @@ async function renderPermissions(){
             <div class="row-title">${escapeHtml(s.name)}${s.active ? "" : ` <span class="pill">Inactive</span>`}</div>
             <div class="row-sub">${escapeHtml(s.job_role || "No role set")}${s.salesman_name ? " · salesman " + escapeHtml(s.salesman_name) : ""} · ${escapeHtml(s.data_scope || "Own Only")}</div>
           </div>
-          <div class="row-right">›</div>
+          <div class="row-right"><button class="chip sm" data-perm-view="${escapeHtml(s.id)}" data-perm-view-name="${escapeHtml(s.name)}">👁 View as</button></div>
         </div>`).join("")}
     </div>` : `<div class="empty-hint">No staff yet. Add them under Staff first.</div>`}`;
 
+  body.querySelectorAll("[data-perm-view]").forEach(el => el.addEventListener("click", e => {
+    e.stopPropagation();          // the row behind opens the editor
+    startPreview(el.dataset.permView, el.dataset.permViewName);
+  }));
   body.querySelectorAll("[data-perm-staff]").forEach(el =>
     el.addEventListener("click", ()=>openStaffPermissions(el.dataset.permStaff)));
 }

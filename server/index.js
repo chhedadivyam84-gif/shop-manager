@@ -183,7 +183,18 @@ app.use("/api", require("./fyLock").guard);
    ============================================================ */
 app.use("/api", (req, res, next) => {
   if (req.method !== "DELETE") return next();
-  if (req.session && req.session.loggedIn && req.session.role === "owner") return next();
+  /* An owner previewing as a staff member is refused too. A preview that
+     quietly kept the delete button would show the owner a screen no staff
+     member will ever see, which is the one thing it exists to prevent.
+     Leaving the preview is one tap and restores it. */
+  const inPreview = req.session && req.session.role === "owner" && req.session.previewStaffId;
+  if (req.session && req.session.loggedIn && req.session.role === "owner" && !inPreview) return next();
+
+  if (inPreview) {
+    return res.status(403).json({
+      error: "You are viewing the app as a staff member. Stop the preview to delete anything."
+    });
+  }
   return res.status(403).json({
     error: "Only the shop owner can delete records. Ask the owner, or cancel the document instead."
   });

@@ -42,6 +42,14 @@ router.get("/me", (req, res) => {
      whether to draw a delete control; the server refuses regardless. */
   out.canDelete = owner;
 
+  /* So the screen can show the banner and offer the way out. The real
+     role is reported separately from the effective one: the app needs to
+     know it is still the owner underneath in order to draw an exit. */
+  out.previewing = permissions.previewing(req)
+    ? { id: req.session.previewStaffId, name: req.session.previewStaffName || "" }
+    : null;
+  out.realRole = req.session.role || "";
+
   /* A salesman sees their own name here so their screens can say "your
      sales" rather than making them work out whose data they are looking at. */
   out.salesman = "";
@@ -87,6 +95,39 @@ router.get("/role-defaults/:role", requireRole("owner"), (req, res) => {
 });
 
 /** One staff member's permissions, as the owner sees them. */
+/* ============================================================
+   VIEW AS A STAFF MEMBER
+
+   requireRole reads the session's REAL role, which a preview never
+   writes to. So an owner in preview can still stop it — the thing they
+   would otherwise be locked out of — and a staff member can never
+   start one, because their real role was never owner to begin with.
+   ============================================================ */
+router.post("/preview/:id", requireRole("owner"), (req, res) => {
+  const s = db.prepare("SELECT id, name, role, active FROM staff WHERE id = ?").get(req.params.id);
+  if (!s) return res.status(404).json({ error: "Staff member not found." });
+  if (s.role === "owner") {
+    return res.status(400).json({ error: "That is another owner — they already see everything you do." });
+  }
+
+  req.session.previewStaffId = s.id;
+  req.session.previewStaffName = s.name;
+
+  /* Logged as the owner, because it is the owner doing it. Anything done
+     while previewing is recorded the same way — the audit trail must not
+     be able to name somebody who was not there. */
+  logAction(req, "staff.preview.start", `Viewing the app as ${s.name}`);
+  res.json({ ok: true, previewing: { id: s.id, name: s.name } });
+});
+
+router.post("/preview-stop", requireRole("owner"), (req, res) => {
+  const was = req.session.previewStaffName;
+  req.session.previewStaffId = null;
+  req.session.previewStaffName = null;
+  if (was) logAction(req, "staff.preview.stop", `Stopped viewing as ${was}`);
+  res.json({ ok: true });
+});
+
 router.get("/:id", requireRole("owner"), (req, res) => {
   const s = db.prepare("SELECT * FROM staff WHERE id = ?").get(req.params.id);
   if (!s) return res.status(404).json({ error: "Staff member not found." });

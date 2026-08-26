@@ -2269,6 +2269,27 @@ addColumn("purchase_order_items", "received_qty", "REAL NOT NULL DEFAULT 0");
    around it is theirs to word. Blank means use the built-in wording. */
 addColumn("settings", "po_wa_template", "TEXT DEFAULT ''");
 
+/* ============================================================
+   WHO WROTE THIS BILL, AND WHO CHANGED IT
+
+   Several people bill from their own phones at once. The books recorded
+   what was sold and when, and nothing at all about which of them did it,
+   so a wrong rate or a missing line was a question nobody could answer
+   without asking the whole counter.
+
+   created_by is written once and never touched again. updated_by moves
+   every time the document is edited, which is the pair the shop actually
+   needs: who raised it, and who last touched it. One field could not say
+   both, and the second is the one that gets argued about.
+
+   Names, not staff ids: a staff row can be renamed or removed, and a bill
+   from last March must still say who wrote it. The audit log already
+   stores names for the same reason.
+   ============================================================ */
+addColumn("invoices", "created_by", "TEXT DEFAULT ''");
+addColumn("invoices", "updated_by", "TEXT DEFAULT ''");
+addColumn("invoices", "updated_at", "INTEGER");
+
 /* Indexes for the party- and salesman-wise reports: without them every
    report scans every PO line the shop has ever raised. */
 db.exec("CREATE INDEX IF NOT EXISTS idx_po_customer ON purchase_orders(against_customer_id)");

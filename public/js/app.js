@@ -1197,7 +1197,11 @@ async function renderHome(){
     // A challan is worth its goods; an invoice is worth its total.
     const worth = challan ? Number(inv.goods_value) || 0 : Number(inv.total) || 0;
     const amount = worth > 0 ? fmt(worth) : "";
-    return `<div class="list-row" data-open-invoice="${inv.id}" style="cursor:pointer;"><div><div class="row-title">${inv.challan_no}</div><div class="row-sub">${escapeHtml(inv.customer_name||"Walk-in")} · ${inv.date}</div></div>
+    const billMadeBy = [
+      inv.created_by ? "by " + escapeHtml(inv.created_by) : "",
+      inv.updated_by && inv.updated_by !== inv.created_by ? "edited by " + escapeHtml(inv.updated_by) : ""
+    ].filter(Boolean).join(" · ");
+    return `<div class="list-row" data-open-invoice="${inv.id}" style="cursor:pointer;"><div><div class="row-title">${inv.challan_no}</div><div class="row-sub">${escapeHtml(inv.customer_name||"Walk-in")} · ${inv.date}${billMadeBy ? " · " + billMadeBy : ""}</div></div>
     <div class="row-right"><div class="row-title">${amount}</div><span class="pill ${cls}">${status}</span></div></div>`;
   }).join("") : `<div class="empty-hint">No invoices yet. Tap "New Invoice" to create your first one.</div>`;
   document.querySelectorAll("[data-open-invoice]").forEach(el=>{

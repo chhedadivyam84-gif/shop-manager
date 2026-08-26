@@ -259,6 +259,16 @@ router.get("/:id", (req, res) => {
   res.json({ ...withStatus(inv), items, estimate });
 });
 
+/* The name to record against a document.
+
+   The same field the audit log uses, so a bill and its log entry never
+   disagree about who was at the counter. Falls back to "" rather than
+   to something invented: an unsigned save is better recorded as blank
+   than as a name nobody typed. */
+function whoIs(req) {
+  return String((req && req.session && req.session.staffName) || "").trim();
+}
+
 router.post("/", (req, res) => {
   const { customerId, items: rawItems, discountType, discountValue, advance,
           paymentMethod, paperSize, transport, loading, roundOff, deliveryMan,
@@ -360,6 +370,25 @@ router.post("/", (req, res) => {
      saved. A typed number is also allowed while auto is ON — the screen
      offers it — so the client sends the flag rather than the server
      inferring it from the setting alone. */
+  /* ---- WHY THIS IS SAFE WITH MANY COUNTERS AT ONCE -------------------
+
+     Five phones pressing Save in the same second cannot collide here, and
+     not by luck. This handler is not async and nothing between the number
+     being taken and the row being written ever awaits, so once a request
+     starts it runs to the end before the next one is looked at — Node has
+     one thread, and node:sqlite is synchronous. Two allocations cannot
+     interleave because there is no point at which one could yield.
+
+     Underneath that, challan_no is UNIQUE, so even a future change that
+     did introduce an await would be caught by the database rather than
+     quietly writing two bills with one number.
+
+     Measured, not assumed: 40 simultaneous saves produce 40 consecutive
+     numbers with no duplicate and no gap (see the concurrency suite).
+
+     The one thing to be careful of is putting an await between here and
+     the transaction below. Doing so would open exactly the window this
+     comment says does not exist. */
   const series = isChallan ? "challan" : "invoice";
   const autoOff = docNumber.config(series).auto_enabled !== 1;
   let challanNo;
@@ -392,11 +421,11 @@ router.post("/", (req, res) => {
     INSERT INTO invoices (id, challan_no, doc_type, date, created_at, customer_id, subtotal, discount_type, discount_value,
       discount_amount, tax_type, cgst, sgst, igst, transport, loading, gst_on_charges, gst_enabled, round_off, total, advance, balance_due,
       payment_method, paper_size, delivery_man, vehicle_number, delivery_address, remarks, location_id, area_id,
-      due_date, transport_mode, einvoice_wanted, ewb_wanted)
+      due_date, transport_mode, einvoice_wanted, ewb_wanted, created_by, updated_by, updated_at)
     VALUES (@id, @challanNo, @docType, @date, @createdAt, @customerId, @subtotal, @discountType, @discountValue,
       @discountAmount, @taxType, @cgst, @sgst, @igst, @transport, @loading, @gstOnCharges, @gstEnabled, @roundOffAmount, @total, @advance,
       @balanceDue, @paymentMethod, @paperSize, @deliveryMan, @vehicleNumber, @deliveryAddress, @remarks, @locationId, @areaId,
-      @dueDate, @transportMode, @einvoiceWanted, @ewbWanted)
+      @dueDate, @transportMode, @einvoiceWanted, @ewbWanted, @createdBy, @updatedBy, @updatedAt)
   `);
   const insertItem = db.prepare(`
     INSERT INTO invoice_items
@@ -417,6 +446,9 @@ router.post("/", (req, res) => {
       // Absent means off. A caller that says nothing is not asking to file.
       einvoiceWanted: req.body.einvoiceWanted === true ? 1 : 0,
       ewbWanted: req.body.ewbWanted === true ? 1 : 0,
+      /* Written once and never touched again on create; the edit handler
+         moves updated_by/updated_at and leaves created_by alone. */
+      createdBy: whoIs(req), updatedBy: whoIs(req), updatedAt: Date.now(),
       roundOffAmount: totals.roundOffAmount,
       total: totals.total, advance: totals.advance, balanceDue: totals.balanceDue,
       // A challan has no tender; store a dash rather than a misleading "Cash".
@@ -608,10 +640,15 @@ router.put("/:id", (req, res) => {
         balance_due=@balanceDue, payment_method=@paymentMethod, paper_size=@paperSize,
         delivery_man=@deliveryMan, vehicle_number=@vehicleNumber, delivery_address=@deliveryAddress,
         due_date=@dueDate, transport_mode=@transportMode,
-        remarks=@remarks, location_id=@locationId, area_id=@areaId, date=@date
+        remarks=@remarks, location_id=@locationId, area_id=@areaId, date=@date,
+        updated_by=@updatedBy, updated_at=@updatedAt
       WHERE id=@id
     `).run({
       id: inv.id, date: editedDate, customerId: customerId || null,
+      /* created_by is deliberately NOT touched. Who raised the bill and who
+         last changed it are two different questions, and overwriting the
+         first with the second loses the one the shop asks more often. */
+      updatedBy: whoIs(req), updatedAt: Date.now(),
       subtotal: totals.subtotal, discountType: discountType === "flat" ? "flat" : "pct",
       discountValue: isChallan ? 0 : (Number(discountValue) || 0), discountAmount: totals.discountAmount,
       taxType, cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst,

@@ -2682,6 +2682,61 @@ CREATE INDEX IF NOT EXISTS idx_sel_items_design ON selection_slip_items(design_n
 CREATE INDEX IF NOT EXISTS idx_sel_items_product ON selection_slip_items(product_id);
 `);
 
+
+/* ============================================================
+   WHICH GST PERIODS HAVE BEEN FILED
+
+   The financial-year lock beside this freezes a whole year and refuses
+   writes outright. GST is not that. Returns go monthly — GSTR-1 and
+   GSTR-3B, on different dates — and a shop very often does need to correct
+   a month it has already filed. The law has amendments for exactly that.
+
+   So this does not block anything. It answers one question: "the bill you
+   are about to delete falls in August, and you filed GSTR-1 for August on
+   the 9th of September — did you mean to?" An owner who did mean to
+   carries on and files an amendment. An owner who did not has just been
+   saved a reconciliation they would otherwise have discovered months later
+   from a notice.
+
+   Rows are never deleted, only re-opened. Whether a month was filed, and
+   when, is the record that explains a figure — throwing it away to tidy
+   the screen is how the question becomes unanswerable.
+   ============================================================ */
+db.exec(`
+CREATE TABLE IF NOT EXISTS gst_filings (
+  id          TEXT PRIMARY KEY,
+
+  -- 'YYYY-MM'. A GST period is a calendar month, never a financial year.
+  period      TEXT NOT NULL,
+
+  -- GSTR-1 (outward supplies) and GSTR-3B (summary + tax paid) are filed
+  -- separately and on different dates, so they are tracked separately. A
+  -- shop that has filed GSTR-1 but not 3B for a month is in a real and
+  -- common state, and one row per month could not describe it.
+  return_type TEXT NOT NULL,
+
+  filed_on    TEXT NOT NULL DEFAULT '',
+  -- The acknowledgement number the portal gives back. Optional, because a
+  -- shop that files through its accountant often does not have it to hand
+  -- and should not be stopped from recording that the month is done.
+  arn         TEXT DEFAULT '',
+  note        TEXT DEFAULT '',
+  filed_by    TEXT DEFAULT '',
+
+  -- 'filed' | 'reopened'. Re-opening keeps the row and its history rather
+  -- than deleting it, so "was August ever filed, and when" stays answerable.
+  status      TEXT NOT NULL DEFAULT 'filed',
+  reopened_on TEXT DEFAULT '',
+  reopened_by TEXT DEFAULT '',
+
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER,
+
+  UNIQUE (period, return_type)
+);
+CREATE INDEX IF NOT EXISTS idx_gst_filings_period ON gst_filings(period);
+`);
+
 // Where the data lives — the backup module needs the on-disk paths, and this
 // is the single place that knows them.
 db.dataDir = DATA_DIR;

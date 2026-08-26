@@ -9500,6 +9500,11 @@ async function renderReport(){
     }
     const max = Math.max(1, ...rows.map(r=>r.value));
     body.innerHTML = `<div style="font-weight:800;font-size:14px;">${title}</div><div class="muted" style="font-size:11.5px;margin-bottom:10px;">${subtitle}</div>` +
+      /* Recording what has been filed belongs where the owner is already
+         looking at GST, not buried in Settings. */
+      (state.reportType==="GST" && isOwner()
+        ? `<button class="btn btn-outline" id="gst-filings-btn" style="margin-bottom:12px;">Which returns have I filed?</button>`
+        : "") +
       (rows.length ? rows.map(r=>`
         <div style="margin-bottom:10px;">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px;font-weight:700;margin-bottom:4px;">
@@ -19176,10 +19181,14 @@ function wireDocActions(container){
 
 let DOC_ACTION_AFTER = null;      // what to redraw once something changes
 
-function openDocActions(kind, id, name){
+async function openDocActions(kind, id, name){
   const k = DOC_KINDS[kind];
   if(!k) return;
   if(!isOwner()){ toast("Only the shop owner can void or delete a record."); return; }
+
+  /* Asked BEFORE the sheet is drawn, so the warning is on screen while
+     the owner decides rather than in a toast after the bill has gone. */
+  const gst = await gstWarningFor(kind, id);
 
   const sheet = document.getElementById("sheet-doc-actions");
   const what = name ? `${k.noun} ${name}` : k.noun;
@@ -19188,6 +19197,10 @@ function openDocActions(kind, id, name){
     <div class="sheet-handle"></div>
     <button class="sheet-close" data-sheetclose>&#10005;</button>
     <div class="sheet-title">${escapeHtml(what.charAt(0).toUpperCase() + what.slice(1))}</div>
+
+    ${gst ? `<div class="card" style="margin-top:8px;font-size:12px;background:var(--warn-bg);border-color:var(--warn-text);color:var(--warn-text);font-weight:600;">
+      &#9888; ${escapeHtml(gst.message)}
+    </div>` : ""}
 
     <div class="card" style="margin-top:8px;font-size:12px;">
       ${escapeHtml(k.reverses)}
@@ -19213,7 +19226,7 @@ function openDocActions(kind, id, name){
   on("doc-act-open", () => { closeAllSheets(); k.open(id); });
 
   on("doc-act-void", async () => {
-    if(!confirm(`Void ${what}?\n\n${k.reverses}\n\nThe record stays in your books, struck through, with its number.`)) return;
+    if(!confirm(`${gst ? "⚠ " + gst.message + "\n\n" : ""}Void ${what}?\n\n${k.reverses}\n\nThe record stays in your books, struck through, with its number.`)) return;
     try{
       await api("POST", k.voidUrl(id));
       toast(`${what.charAt(0).toUpperCase() + what.slice(1)} voided.`, "ok");
@@ -19225,7 +19238,7 @@ function openDocActions(kind, id, name){
   on("doc-act-del", async () => {
     /* Two questions, not one. The first is the decision; the second is the
        pause. A single confirm on a financial record is one mis-tap. */
-    if(!confirm(`Delete ${what} for good?\n\n${k.reverses}\n\nThis cannot be undone. Voiding does the same to your stock and dues but keeps the record.`)) return;
+    if(!confirm(`${gst ? "⚠ " + gst.message + "\n\n" : ""}Delete ${what} for good?\n\n${k.reverses}\n\nThis cannot be undone. Voiding does the same to your stock and dues but keeps the record.`)) return;
     if(!confirm(`Last check — permanently delete ${what}?`)) return;
     try{
       const r = await api("DELETE", k.delUrl(id));
@@ -19430,6 +19443,135 @@ function decorateReportRows(container){
    below has no other way out. */
 async function finishReport(container){
   decorateReportRows(container);
+  const gstFilingsBtn = document.getElementById("gst-filings-btn");
+  if(gstFilingsBtn) gstFilingsBtn.addEventListener("click", openGstFilings);
+}
+
+
+/* ============================================================
+   "YOU HAVE ALREADY FILED THAT MONTH"
+
+   Shown in the action sheet, before the owner decides — not in a toast
+   afterwards, which would arrive once the bill was already gone.
+
+   It warns and does not block, because correcting a filed month is a real
+   thing a shop has to do; the law has amendments for it. What the owner
+   needs is to know they are doing it, not to be stopped.
+
+   Only documents whose figures reach a return are checked (see
+   server/gstFiling.js). A receipt against an old bill does not appear in
+   GSTR-1, and a warning that fires when it need not is one people learn to
+   click through — which would cost them the warning that mattered.
+   ============================================================ */
+async function gstWarningFor(kind, id){
+  try{
+    const r = await api("GET", `/gst-filings/check?kind=${encodeURIComponent(kind)}&id=${encodeURIComponent(id)}`);
+    return (r && r.filed) ? r : null;
+  }catch(e){
+    /* An older server, or one that has not been restarted, has no such
+       route. Silence beats a scary error on a screen about deleting: the
+       owner still gets the confirm, and the document is unaffected. */
+    return null;
+  }
+}
+
+/* ============================================================
+   RECORDING WHAT HAS BEEN FILED
+
+   The app cannot know this by itself — returns are filed on the portal —
+   so the owner says so once a month and is warned ever after.
+
+   GSTR-1 and GSTR-3B are tracked separately because they are filed
+   separately and on different dates, and "GSTR-1 done, 3B not yet" is an
+   ordinary state to be in for a week and a half of every month.
+   ============================================================ */
+async function openGstFilings(){
+  if(!isOwner()){ toast("Only the shop owner can record what has been filed."); return; }
+  const sheet = document.getElementById("sheet-gst-filings");
+
+  const draw = async () => {
+    let data;
+    try{ data = await api("GET", "/gst-filings"); }
+    catch(e){ sheet.innerHTML = `<div class="sheet-handle"></div><div class="empty-hint">${escapeHtml(e.message)}</div>`; return; }
+
+    const months = [];
+    const now = new Date();
+    for(let i = 0; i < 18; i++){
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+    }
+    const byPeriod = {};
+    (data.periods || []).forEach(p => { byPeriod[p.period] = p; });
+
+    const label = p => {
+      const [y, m] = p.split("-");
+      return ["January","February","March","April","May","June","July","August","September","October","November","December"][Number(m)-1] + " " + y;
+    };
+
+    sheet.innerHTML = `
+      <div class="sheet-handle"></div>
+      <button class="sheet-close" data-sheetclose>&#10005;</button>
+      <div class="sheet-title">GST Returns Filed</div>
+      <div class="muted" style="font-size:12px;margin-top:2px;">
+        Tick a return once you have filed it on the portal. After that, the app warns you before you
+        change any bill dated in that month — it never stops you, but you will know.
+      </div>
+      <div style="margin-top:12px;">
+        ${months.map(p => {
+          const rec = byPeriod[p];
+          const state = t => {
+            const row = rec && rec.returns.find(x => x.return_type === t);
+            return row && row.status === "filed" ? row : null;
+          };
+          const chip = t => {
+            const f = state(t);
+            return f
+              ? `<button class="chip sm selected" data-gst-reopen="${f.id}" title="Filed ${escapeHtml(f.filed_on||"")}${f.arn?" · ARN "+escapeHtml(f.arn):""} — tap to re-open">&#10003; ${t}</button>`
+              : `<button class="chip sm" data-gst-file="${p}" data-gst-type="${t}">${t}</button>`;
+          };
+          const any = state("GSTR-1") || state("GSTR-3B");
+          return `<div class="list-row" style="align-items:center;">
+            <div><div class="row-title">${escapeHtml(label(p))}</div>
+              ${any ? `<div class="row-sub">${rec.returns.filter(x=>x.status==="filed").map(x=>
+                  `${escapeHtml(x.return_type)} filed ${escapeHtml(x.filed_on||"—")}${x.arn?" · ARN "+escapeHtml(x.arn):""}`).join(" · ")}</div>`
+                : `<div class="row-sub muted">Not filed yet</div>`}
+            </div>
+            <div class="row-right" style="display:flex;gap:6px;">${chip("GSTR-1")}${chip("GSTR-3B")}</div>
+          </div>`;
+        }).join("")}
+      </div>`;
+
+    sheet.querySelectorAll("[data-sheetclose]").forEach(b => b.addEventListener("click", closeAllSheets));
+
+    sheet.querySelectorAll("[data-gst-file]").forEach(b => {
+      b.addEventListener("click", async () => {
+        const period = b.dataset.gstFile, type = b.dataset.gstType;
+        const when = prompt(`When did you file ${type} for ${label(period)}?\n\nLeave it as today's date if you are not sure.`, todayISO());
+        if(when === null) return;                       // cancelled
+        const arn = prompt(`ARN from the portal, if you have it.\n\nLeave blank if your accountant filed it.`, "");
+        if(arn === null) return;
+        try{
+          await api("POST", "/gst-filings", { period, returnType: type, filedOn: when.trim(), arn: arn.trim() });
+          toast(`${type} for ${label(period)} recorded as filed.`, "ok");
+          await draw();
+        }catch(e){ toast(e.message); }
+      });
+    });
+
+    sheet.querySelectorAll("[data-gst-reopen]").forEach(b => {
+      b.addEventListener("click", async () => {
+        if(!confirm("Re-open this return?\n\nThe record of it being filed is kept — you will simply stop being warned about that month.")) return;
+        try{
+          await api("POST", `/gst-filings/${b.dataset.gstReopen}/reopen`);
+          toast("Re-opened.", "ok");
+          await draw();
+        }catch(e){ toast(e.message); }
+      });
+    });
+  };
+
+  showSheet("sheet-gst-filings");
+  await draw();
 }
 
 })();

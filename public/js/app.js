@@ -20365,7 +20365,7 @@ function openPriceImport(partyName, side, after){
     </div>
     <div class="card" style="margin-top:10px;font-size:11.5px;">
       <b>Party &nbsp; Product or SKU &nbsp; Size &nbsp; Rate &nbsp; From</b><br>
-      <span class="muted">ABC Traders&nbsp;&nbsp;Swagat Ply&nbsp;&nbsp;8x4 18mm&nbsp;&nbsp;2100&nbsp;&nbsp;2026-08-26</span><br>
+      <span class="muted">ABC Traders&nbsp;&nbsp;Marine Ply&nbsp;&nbsp;8x4 18mm&nbsp;&nbsp;2100&nbsp;&nbsp;2026-08-26</span><br>
       <span class="muted">Leave Party blank for the general rate. Size and From are optional.</span>
     </div>
     <textarea id="pi-text" rows="10" style="margin-top:10px;font-family:monospace;font-size:12px;" placeholder="Paste here"></textarea>

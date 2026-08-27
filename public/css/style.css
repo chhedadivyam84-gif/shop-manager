@@ -564,6 +564,42 @@ table.erp-table th.c-size,table.erp-table td.c-size,
 table.erp-table th.c-unit,table.erp-table td.c-unit{white-space:nowrap;}
 table.erp-table th.c-num,table.erp-table td.c-num{text-align:right;white-space:nowrap;}
 table.erp-table td.c-amt,table.erp-table th.c-amt{font-weight:800;}
+
+/* Qty, Rate and Amount hold their width, so the money columns do not move.
+
+   Without this the browser sizes every column from its contents, so a long
+   product name on line three narrows Rate and Amount for the whole table —
+   and the same challan printed twice, once with "SMT-906" and once with a
+   full description, puts the figures in two different places. On a form
+   people read down the right-hand edge, that is the difference between
+   checking a column and reading every row.
+
+   Widths alone are only a SUGGESTION — measured, and they were not held:
+   the browser still sized columns from their contents, so a long product
+   name shrank Amount by two pixels and the same challan printed twice put
+   its figures in two places. table-layout:fixed is what makes the widths
+   binding; the product column then takes whatever is left. */
+table.erp-table{ table-layout:fixed; }
+/* The one thing fixed layout does worse is a long unbroken word, which
+   would overflow rather than widen its column — so text wraps... */
+table.erp-table td, table.erp-table th{ overflow-wrap:anywhere; }
+/* ...except where a break would be worse than a narrow column. A rate
+   split across two lines is not a rate. */
+table.erp-table .c-num, table.erp-table .c-unit, table.erp-table .c-size{ overflow-wrap:normal; }
+table.erp-table th.c-qty, table.erp-table td.c-qty  { width:46px; }
+table.erp-table th.c-rate,table.erp-table td.c-rate { width:74px; }
+table.erp-table th.c-amt, table.erp-table td.c-amt  { width:86px; }
+/* A5 is a narrower page; the same columns, proportionally. */
+.invoice-page.size-a5 table.erp-table th.c-qty, .invoice-page.size-a5 table.erp-table td.c-qty  { width:40px; }
+.invoice-page.size-a5 table.erp-table th.c-rate,.invoice-page.size-a5 table.erp-table td.c-rate { width:64px; }
+.invoice-page.size-a5 table.erp-table th.c-amt, .invoice-page.size-a5 table.erp-table td.c-amt  { width:74px; }
+
+/* The totals grid already sits in a fixed 42% column and right-aligns its
+   figures. Tabular numerals keep the digits themselves in line, so 250.00
+   and 1,250.00 stack with their decimal points level rather than drifting
+   by the width of a 1. */
+.erp-tb-row span:last-child{ font-variant-numeric: tabular-nums; }
+table.erp-table td.c-num{ font-variant-numeric: tabular-nums; }
 .c-pieces{font-size:0.8em;font-weight:400;color:#555;white-space:nowrap;}
 table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #178a6e;color:#000;}
 .invoice-page.size-a5 table.erp-table{font-size:8.5px;}

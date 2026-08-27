@@ -8069,10 +8069,19 @@ function billColumns(challan){
 
 /* The classes the stylesheet already targets, kept per column key so the
    themes and the print CSS keep working untouched. */
+/* Qty, Rate and Amount keep c-num for their alignment AND carry a column
+   class of their own, so the stylesheet can hold their width. Without one
+   they were all just c-num, the browser sized every column from its
+   contents, and a long product name on one line moved the money columns
+   for the whole table — so the same challan printed twice put its figures
+   in two different places. Added alongside, never instead of: c-num still
+   carries the right-align and the nowrap. */
 const BILL_CELL_CLASS = {
-  sn:"c-sn", size:"c-size", unit:"c-unit", qty:"c-num", rate:"c-num",
-  amount:"c-num c-amt", disc:"c-num", taxable:"c-num", gstPct:"c-num",
-  cgst:"c-num", sgst:"c-num", igst:"c-num"
+  sn:"c-sn", size:"c-size", unit:"c-unit",
+  qty:"c-num c-qty", rate:"c-num c-rate",
+  amount:"c-num c-amt", disc:"c-num c-disc", taxable:"c-num c-taxable",
+  gstPct:"c-num c-gstpct",
+  cgst:"c-num c-tax", sgst:"c-num c-tax", igst:"c-num c-tax"
 };
 
 /**
@@ -8257,7 +8266,14 @@ function renderTallyInvoiceHtml(inv, cust, cols, rowsHtml, ctx){
     s.bank_branch ? "Branch: " + s.bank_branch : ""
   ].filter(Boolean);
 
-  const shipTo = inv.delivery_address || (cust && cust.address) || "";
+  /* A consignee address is one that was entered as one. Falling back to
+     the buyer's address printed the block above a second time under a
+     label that claimed it was somewhere else. Same fix as the classic
+     layout below; the two must not disagree about what an address is. */
+  const shipTo = String(inv.delivery_address || "").trim();
+  const shipNorm = s => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const shipSameAsBuyer = !!shipTo && !!(cust && cust.address)
+    && shipNorm(shipTo) === shipNorm(cust.address);
   /* Same rule as the classic layout: the consignee address stays on screen for
      the office and off the paper unless "Print delivery address" is ticked. */
   const printShipTo = billPrefs().printDeliveryAddress === true;
@@ -8286,7 +8302,7 @@ function renderTallyInvoiceHtml(inv, cust, cols, rowsHtml, ctx){
           ${cust && cust.state ? `<div>State Name: ${escapeHtml(cust.state)}</div>` : ""}
           ${cust && cust.phone ? `<div>Mobile: ${escapeHtml(cust.phone)}</div>` : ""}
         </div>
-        ${shipTo ? `<div class="tly-party${printShipTo ? "" : " screen-only"}">
+        ${shipTo ? `<div class="tly-party${(printShipTo && !shipSameAsBuyer) ? "" : " screen-only"}">
           <div class="tly-lbl">Consignee (Ship to)</div>
           <div>${escapeHtml(shipTo)}</div>
         </div>` : ""}
@@ -8470,13 +8486,41 @@ function renderInvoicePageContent(){
     <div class="erp-tb-row" style="font-weight:800;"><span>Balance Due</span><span>${fmtPaise(inv.balance_due)}</span></div>` : ""}
   </div>`;
 
-  const deliveryAddr = inv.delivery_address || (cust && cust.address) || "";
+  /* A DELIVERY address is one that was actually entered as one.
+
+     This used to fall back to the customer's own address, which is the
+     address the Deliver To box above already prints — so a challan with
+     no separate delivery address printed the same lines twice, once
+     under Deliver To and once under Delivery Address. The fallback was
+     the whole of that bug.
+
+     Falling back also made the label a lie: "Delivery Address" on a
+     line that is simply the customer's registered address tells the
+     reader something that was never entered. */
+  const deliveryAddr = String(inv.delivery_address || "").trim();
+
+  /* And even when one WAS entered, it is only worth a second block if it
+     says something the Deliver To box does not. Compared loosely, because
+     the same address typed twice differs by a comma and a capital. */
+  const norm = s => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const addrAlreadyShown = !!deliveryAddr && !!(cust && cust.address)
+    && norm(deliveryAddr) === norm(cust.address);
   /* Where the goods went is the shop's own record. It stays visible in the
      preview so the office can check it, and is kept off the paper unless
      "Print Delivery Address" is ticked in Bill Print Settings. */
   const printAddr = billPrefs().printDeliveryAddress === true;
   const bottomLeft = `<div class="erp-bottom-left">
-    ${deliveryAddr ? `<div${printAddr ? "" : ` class="screen-only"`}><b>Delivery Address:</b> ${escapeHtml(deliveryAddr)}</div>` : ""}
+    ${/* Ticked -> printed, once. Unticked -> not on paper at all, but still
+         on screen, because the office needs to see where the goods went
+         whatever the customer's copy shows.
+
+         A delivery address identical to the one already under Deliver To
+         is kept off the paper either way: printing it twice is not more
+         information, it is the same information taking up the space the
+         remarks needed. */""}
+    ${deliveryAddr
+      ? `<div${(printAddr && !addrAlreadyShown) ? "" : ` class="screen-only"`}><b>Delivery Address:</b> ${escapeHtml(deliveryAddr)}</div>`
+      : ""}
     ${inv.remarks ? `<div><b>Remarks:</b> ${escapeHtml(inv.remarks)}</div>` : ""}
     ${/* Status and Acknowledgement are for the shop, not the customer. They
          track what the office still owes itself — raise the tax invoice, chase

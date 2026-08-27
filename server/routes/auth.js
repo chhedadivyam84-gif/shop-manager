@@ -44,6 +44,11 @@ const WRONG_LOGIN = "That user ID or password is not right.";
 router.get("/mode", (req, res) => {
   res.json({
     multiTenant: tenants.multiTenant(),
+    /* Whether a shop sign-in exists at all on this installation, so the
+       staff picker can offer a way back to it. Without one, somebody
+       who signed a shop in and then wants a different shop has to clear
+       their cookies to get there. */
+    canSignInAsShop: tenants.multiTenant(),
     /* Once a shop has signed in, the screen goes straight to its staff. */
     shop: req.session && req.session.tenant
       ? { name: req.session.tenant.shopName, plan: req.session.tenant.plan, expiresOn: req.session.tenant.expiresOn }

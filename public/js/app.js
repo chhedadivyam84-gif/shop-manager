@@ -249,6 +249,23 @@ async function initLogin(){
 
   if(needShop){ wireShopLogin(); return; }
 
+  /* A way back to the shop sign-in from the staff picker. Shown only
+     where one exists, so a single-shop copy never sees it — and always
+     shown where it does, so nobody is stranded on another shop's screen
+     with no way off it but clearing their cookies. */
+  const switchLink = document.getElementById("switch-shop-link");
+  if(switchLink){
+    switchLink.style.display = mode.canSignInAsShop ? "inline-block" : "none";
+    if(!switchLink.dataset.wired){
+      switchLink.dataset.wired = "1";
+      switchLink.addEventListener("click", async (e) => {
+        e.preventDefault();
+        try{ await fetch("/api/auth/shop-logout", { method: "POST" }); }catch(err){}
+        await initLogin();
+      });
+    }
+  }
+
   /* Whose staff list this is, so nobody signs in to the wrong shop's till
      without noticing. */
   const note = document.getElementById("shop-login-note");

@@ -125,15 +125,32 @@ function block(username, blocked) {
 /**
  * Is this installation serving more than one shop?
  *
- * A desktop buyer with one shop must never be shown a shop sign-in screen —
- * they have one shop, they know which one it is, and an extra page between
- * them and their till is a page they will resent every morning. So the
- * screen appears only where it means something: when tenants have actually
- * been registered here.
+ * A desktop buyer with one shop must never be shown a shop sign-in screen
+ * — they have one shop, they know which one it is, and a page between them
+ * and their till is one they resent every morning.
+ *
+ * SAID BY THE HOST, NOT INFERRED FROM WHETHER ANYBODY HAS SIGNED IN YET.
+ * This used to be `count() > 0`, which is a trap: the sign-in screen only
+ * appeared once a shop had signed in, and a shop could only sign in
+ * through that screen. The very first customer on a new installation was
+ * shown the staff picker of an empty shop and had no way to reach their
+ * own. Every test passed, because they all called the API directly and
+ * never went through the page.
+ *
+ * So the vendor sets MULTI_TENANT on the shared installation and says so
+ * outright. The count is still honoured underneath, so an installation
+ * that already has tenants keeps working whether or not anyone remembers
+ * the variable.
  */
+const DECLARED = /^(1|true|yes|on)$/i.test(String(process.env.MULTI_TENANT || "").trim());
 function multiTenant() {
-  return count() > 0;
+  return DECLARED || count() > 0;
 }
+
+/** Whether the shop sign-in is even reachable — used to offer a way back
+ *  to it from the staff picker, so nobody can be stranded on the wrong
+ *  shop's screen. */
+function declared() { return DECLARED; }
 
 /** Where the file is, so the backup can include it. */
 function file() {
@@ -160,4 +177,4 @@ function restoreFrom(srcPath) {
 }
 
 module.exports = { open, get, list, count, upsert, touch, block, verify, hash, multiTenant, norm,
-  file, snapshotTo, restoreFrom };
+  file, snapshotTo, restoreFrom, declared };

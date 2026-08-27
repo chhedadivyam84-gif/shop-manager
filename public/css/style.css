@@ -274,23 +274,59 @@ button, input, select{font-family:inherit;}
   box-shadow:0 12px 34px oklch(0 0 0 / .34);
   animation:splash-mark .52s cubic-bezier(.2,.9,.3,1.25) both;
 }
+/* The lockup sits above centre, because the ribbon travels through the
+   lower half and a name sitting in the middle of moving lines is a name
+   nobody can read. */
+#splash .splash-lockup{
+  display:flex; flex-direction:column; align-items:center; gap:12px;
+  margin-bottom:22vh; position:relative; z-index:2;
+}
 #splash .splash-name{
-  font-size:17px; font-weight:700; letter-spacing:.02em;
+  font-size:23px; font-weight:800; letter-spacing:.01em;
   animation:splash-rise .38s ease-out .16s both;
 }
-/* Indeterminate on purpose. Boot is one request; a bar claiming to know it
-   is 40% done would be inventing the number. This one only says "working". */
-#splash .splash-bar{
-  width:128px; height:3px; border-radius:3px; overflow:hidden;
-  background:oklch(1 0 0 / .18);
-  animation:splash-rise .38s ease-out .26s both;
+#splash .splash-rule{
+  width:132px; height:1px; background:oklch(1 0 0 / .42);
+  transform-origin:center;
+  animation:splash-rule .44s cubic-bezier(.3,.8,.3,1) .3s both;
 }
-#splash .splash-bar i{
-  display:block; width:40%; height:100%; border-radius:3px;
-  background:var(--gold);
-  animation:splash-sweep 1.15s ease-in-out .3s infinite;
+#splash .splash-sub{
+  font-size:12.5px; font-weight:500; letter-spacing:.05em;
+  color:oklch(0.88 0.02 258);
+  animation:splash-rise .38s ease-out .42s both;
+}
+#splash .splash-tag{
+  position:absolute; left:0; right:0; bottom:max(38px, 7vh);
+  font-size:12.5px; color:oklch(0.84 0.02 258); padding:0 28px;
+  animation:splash-rise .4s ease-out .55s both; z-index:2;
 }
 
+/* ---- the ribbon ----
+   Wide enough that a phone in portrait sees only the middle of it, so the
+   curve reads as part of something larger passing through rather than a
+   shape that starts and stops inside the screen. */
+#splash .splash-ribbon{
+  position:absolute; left:-25%; width:150%;
+  top:52%; height:42vh; min-height:210px;
+  z-index:1; pointer-events:none;
+  opacity:0; animation:splash-ribbon-in 1s ease-out .18s forwards;
+}
+/* Each band travels exactly one period, so the loop is seamless, and each
+   at its own speed — that is what makes the lines cross and the whole
+   thing look like cloth rather than a picture being dragged sideways. */
+#splash .sp-band{ will-change:transform; }
+#splash .sp-band-1{ animation:splash-flow 13s linear infinite; }
+#splash .sp-band-2{ animation:splash-flow 19s linear infinite; opacity:.75; }
+#splash .sp-band-3{ animation:splash-flow  9s linear infinite; opacity:.55; }
+
+@keyframes splash-flow{
+  from{ transform:translateX(0); }
+  to  { transform:translateX(-600px); }
+}
+@keyframes splash-ribbon-in{
+  from{ opacity:0; transform:translateY(26px); }
+  to  { opacity:1; transform:none; }
+}
 @keyframes splash-mark{
   from{ opacity:0; transform:scale(.72); }
   to  { opacity:1; transform:scale(1); }
@@ -299,9 +335,9 @@ button, input, select{font-family:inherit;}
   from{ opacity:0; transform:translateY(9px); }
   to  { opacity:1; transform:none; }
 }
-@keyframes splash-sweep{
-  0%  { transform:translateX(-105%); }
-  100%{ transform:translateX(255%); }
+@keyframes splash-rule{
+  from{ opacity:0; transform:scaleX(0); }
+  to  { opacity:1; transform:scaleX(1); }
 }
 
 /* Movement can trigger nausea and migraine, and someone who has asked their
@@ -310,8 +346,13 @@ button, input, select{font-family:inherit;}
 @media (prefers-reduced-motion:reduce){
   #splash .splash-mark,
   #splash .splash-name,
-  #splash .splash-bar{ animation:splash-fade .2s ease-out both; }
-  #splash .splash-bar i{ animation:none; width:100%; opacity:.55; }
+  #splash .splash-rule,
+  #splash .splash-sub,
+  #splash .splash-tag,
+  #splash .splash-ribbon{ animation:splash-fade .2s ease-out both; }
+  /* The ribbon stays — it is the picture. It simply stops travelling. */
+  #splash .sp-band{ animation:none; }
+  #splash .splash-rule{ transform:none; }
   #splash.is-done{ transform:none; }
   @keyframes splash-fade{ from{ opacity:0; } to{ opacity:1; } }
 }

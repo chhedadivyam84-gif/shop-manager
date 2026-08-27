@@ -135,4 +135,29 @@ function multiTenant() {
   return count() > 0;
 }
 
-module.exports = { open, get, list, count, upsert, touch, block, verify, hash, multiTenant, norm };
+/** Where the file is, so the backup can include it. */
+function file() {
+  return path.join(DATA_DIR, "tenants.db");
+}
+
+/** A consistent copy, written the way every other part of a backup is.
+ *  VACUUM INTO rather than a file copy: this database has a write-ahead
+ *  log beside it, and copying the main file alone yields something that
+ *  opens and is missing the last few sign-ins. */
+function snapshotTo(destPath) {
+  try { fs.unlinkSync(destPath); } catch (e) { /* not there, the normal case */ }
+  open().exec(`VACUUM INTO '${destPath.replace(/'/g, "''")}'`);
+  return destPath;
+}
+
+/** Put one back, from a restored backup. */
+function restoreFrom(srcPath) {
+  if (!fs.existsSync(srcPath)) return false;
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.copyFileSync(srcPath, file());
+  tdb = null;                     // reopened against the file just written
+  return true;
+}
+
+module.exports = { open, get, list, count, upsert, touch, block, verify, hash, multiTenant, norm,
+  file, snapshotTo, restoreFrom };

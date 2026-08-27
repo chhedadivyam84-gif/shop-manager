@@ -2307,6 +2307,18 @@ addColumn("settings", "po_wa_template", "TEXT DEFAULT ''");
    original navy and gold, so an existing shop sees no change. */
 addColumn("settings", "app_theme", "TEXT DEFAULT ''");
 
+/* WHOSE BOOKS THESE ARE.
+
+   The activation code of the shop this database belongs to, written
+   when they first sign in. It is redundant with the tenant map beside
+   it, and that redundancy is the point: the map is one file, and if it
+   is ever lost or restored a run out of step, this is what lets the app
+   find the right books instead of creating an empty company and leaving
+   the real ones orphaned.
+
+   Backed up automatically, because it lives inside the books. */
+addColumn("settings", "tenant_code", "TEXT DEFAULT ''");
+
 /* ============================================================
    WHO WROTE THIS BILL, AND WHO CHANGED IT
 

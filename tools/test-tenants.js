@@ -49,6 +49,8 @@ appSrv = spawn(process.execPath, ["--no-warnings", "server/index.js"], { cwd: AP
 appSrv.stdout.on("data", c => appOut += c); appSrv.stderr.on("data", c => appOut += c);
 
 process.on("exit", () => { try { panelSrv.kill(); } catch(e){} try { appSrv.kill(); } catch(e){} });
+const stopPanel = () => new Promise(r => { if(!panelSrv) return r();
+  panelSrv.once("exit", r); panelSrv.kill(); setTimeout(r, 3000); });
 const waitFor = async (fn, what) => {
   for (let i = 0; i < 100; i++) { try { await fn(); return; } catch (e) { await new Promise(r => setTimeout(r, 250)); } }
   throw new Error(what + " never came up\n" + panelOut + "\n" + appOut);
@@ -116,16 +118,42 @@ const waitFor = async (fn, what) => {
   console.log("\nA wrong password does not become a second chance at the panel\n");
   check("refused", (await app("A", "POST", "/api/auth/shop-login", { username: A.handover.login, password: "nope" })).status, 401);
 
-  console.log("\nAn expired demo is refused in the words promised\n");
+  console.log("\nA cached date is not a verdict\n");
   const { DatabaseSync } = require("node:sqlite");
-  const tdb = new DatabaseSync(path.join(appDir, "tenants.db"));
-  tdb.prepare("UPDATE tenants SET expires_on = ? WHERE username = ?")
-     .run(new Date(Date.now() - 86400000).toISOString().slice(0, 10), A.handover.login.toLowerCase());
-  tdb.close();
-  const dead = await app("A", "POST", "/api/auth/shop-login", { username: A.handover.login, password: A.handover.password });
-  check("refused", dead.status, 403);
-  check("IN THOSE WORDS", dead.body.error, "Demo License Expired – Please Contact Admin");
-  console.log("    checked locally, so it holds even when the panel is asleep");
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const expireLocally = () => {
+    const t = new DatabaseSync(path.join(appDir, "tenants.db"));
+    t.prepare("UPDATE tenants SET expires_on = ? WHERE username = ?")
+     .run(yesterday, A.handover.login.toLowerCase());
+    t.close();
+  };
+  const signIn = () => app("A", "POST", "/api/auth/shop-login",
+    { username: A.handover.login, password: A.handover.password });
+
+  /* THE CONVERSION CASE. This copy still holds the old demo date, but the
+     vendor has been paid. Refusing on the cache alone would lock a
+     customer out on the very day they started paying. */
+  expireLocally();
+  check("a stale date does not refuse while the vendor says otherwise",
+    (await signIn()).status, 200);
+  console.log("    the vendor is asked again before anybody is turned away");
+
+  /* AND WHEN THE VENDOR AGREES IT HAS ENDED. */
+  await panel("POST", "/api/login", { password: PANEL_PW });
+  const pdb = new DatabaseSync(path.join(panDir, "licences.db"));
+  pdb.prepare("UPDATE customers SET expires_on = ? WHERE id = ?").run(yesterday, A.id);
+  pdb.close();
+  expireLocally();
+  const dead = await signIn();
+  check("a finished demo is refused", dead.status, 403);
+  check("IN THE WORDS PROMISED", dead.body.error, "Demo License Expired – Please Contact Admin");
+
+  /* AND WITH THE VENDOR UNREACHABLE the cached date stands, so an expired
+     demo cannot be revived by pulling the plug. */
+  await stopPanel();
+  expireLocally();
+  check("with the vendor asleep, the cached date still refuses",
+    (await signIn()).status, 403);
 
   console.log(fails ? `\n${fails} FAILED\n` : "\nAll passed\n");
  } catch (e) {

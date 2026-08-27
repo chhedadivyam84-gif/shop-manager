@@ -59,6 +59,58 @@ router.get("/mode", (req, res) => {
  * vendor's panel is asked only when the login is one we have not seen,
  * which is the first sign-in and no other.
  */
+/**
+ * Ask the vendor about this login.
+ *
+ * Returns their answer, or null if the vendor could not be reached — the
+ * caller decides what to do with silence, because the right answer
+ * differs: for a login we have never seen there is nothing to fall back
+ * on, and for one whose subscription looks finished the cached date is
+ * the safe reading.
+ */
+async function askVendor(username, password) {
+  const server = checkin.serverUrl();
+  if (!server) return null;
+  try {
+    const r = await fetch(server.replace(/\/+$/, "") + "/api/tenant-login", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username, password }),
+      signal: AbortSignal.timeout(20000)
+    });
+    const body = await r.json().catch(() => null);
+    return { ok: r.ok, status: r.status, body };
+  } catch (e) { return null; }
+}
+
+/**
+ * Which company already holds this activation code?
+ *
+ * Asked before ever creating one. The tenant map normally answers this,
+ * but the map is a single file: lose it, or restore it a run out of step,
+ * and a shopkeeper whose books are sitting right there would be given a
+ * fresh empty company instead — with the real ones orphaned and no way
+ * back that does not involve me.
+ *
+ * So the code is also written inside each shop's own settings, which are
+ * backed up with the books themselves, and this reads it back. Slow — it
+ * opens every company — but it runs once, on a sign-in that was about to
+ * create a company anyway.
+ */
+function companyHoldingCode(code) {
+  const want = String(code || "").trim().toUpperCase();
+  if (!want) return null;
+  for (const c of db.companies.list()) {
+    try {
+      const found = db.companies.runAs(c.id, () => {
+        const row = db.prepare("SELECT tenant_code FROM settings WHERE id = 1").get();
+        return row && String(row.tenant_code || "").trim().toUpperCase() === want;
+      });
+      if (found) return c.id;
+    } catch (e) { /* a company that will not open is not the one */ }
+  }
+  return null;
+}
+
 router.post("/shop-login", async (req, res) => {
   const username = tenants.norm(req.body && req.body.username);
   const password = String((req.body && req.body.password) || "");
@@ -75,19 +127,46 @@ router.post("/shop-login", async (req, res) => {
 
   /* Known here: decided here, offline, every time. */
   if (row && !row.blocked && tenants.verify(password, row.password_hash)) {
-    /* The date is checked HERE, not only when the panel is asked. Without
-       this an expired demo would sign in for ever, because after the first
+    /* The date is checked HERE, not only when the panel is asked — without
+       it an expired demo would sign in for ever, because after the first
        sign-in the panel is never consulted again. */
     const ended = row.expires_on && row.expires_on < todayStr();
-    if (ended) {
-      return res.status(403).json({
-        error: row.plan === "demo"
-          ? "Demo License Expired – Please Contact Admin"
-          : "This subscription has ended. Please contact your supplier.",
-        expiredOn: row.expires_on, plan: row.plan
+    if (!ended) return finish(req, res, row);
+
+    /* BUT A CACHED DATE IS NOT A VERDICT.
+
+       A demo converted to a paid subscription is converted in the panel,
+       and this copy still holds the old thirty-day date. Refusing on it
+       would lock out a customer on the very day they started paying —
+       and they would have no way to tell us apart from a shop whose demo
+       really did end. So the vendor is asked once more before anybody is
+       turned away. */
+    const fresh = await askVendor(username, password);
+    if (fresh && fresh.ok && fresh.body) {
+      row = tenants.upsert({
+        username, companyId: row.company_id,
+        shopName: fresh.body.shop || row.shop_name,
+        code: fresh.body.code || row.code,
+        plan: fresh.body.plan || "paid",
+        expiresOn: fresh.body.expiresOn || "",
+        password
       });
+      if (!(row.expires_on && row.expires_on < todayStr())) return finish(req, res, row);
     }
-    return finish(req, res, row);
+    if (fresh && !fresh.ok && fresh.body && fresh.body.error) {
+      /* The vendor has something specific to say — expired, cancelled —
+         and those are the words the shopkeeper was promised. */
+      return res.status(403).json({ error: fresh.body.error });
+    }
+
+    /* Either the vendor agrees it has ended, or could not be reached. The
+       cached date stands. */
+    return res.status(403).json({
+      error: row.plan === "demo"
+        ? "Demo License Expired – Please Contact Admin"
+        : "This subscription has ended. Please contact your supplier.",
+      expiredOn: row.expires_on, plan: row.plan
+    });
   }
 
   /* Known here but the password did not match — do NOT fall through to the
@@ -139,14 +218,31 @@ router.post("/shop-login", async (req, res) => {
     });
   }
 
-  /* A shop we have not served before gets a company of its own. */
+  /* Three places to look before making anything new, because creating a
+     company for a shop that already has one is the one mistake here that
+     loses a customer's books. */
   let companyId = null;
+
+  /* 1. the tenant map, when it is intact */
   const known = tenants.list().find(t => t.code && answer.code && t.code === answer.code);
   if (known) companyId = known.company_id;
+
+  /* 2. the books themselves, when the map is not */
+  if (!companyId) companyId = companyHoldingCode(answer.code);
+
+  /* 3. and only then, a genuinely new shop */
   if (!companyId) {
     const created = db.companies.create({ name: answer.shop || "Shop" });
     companyId = created.id;
   }
+
+  /* Stamped into their own books, so step 2 can find them next time even
+     if the map is gone. */
+  try {
+    db.companies.runAs(companyId, () => {
+      db.prepare("UPDATE settings SET tenant_code = ? WHERE id = 1").run(String(answer.code || ""));
+    });
+  } catch (e) { /* the sign-in still stands; the map covers the usual case */ }
 
   row = tenants.upsert({
     username, companyId,

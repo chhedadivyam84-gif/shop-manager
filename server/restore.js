@@ -81,7 +81,13 @@ async function doRestore() {
   /* Everything else from the SAME run: the other businesses, then the registry
      that names them. The registry is written last so it never lists a business
      whose file has not landed. */
-  const others = all.filter(n => n.startsWith(`shop-${stamp}--`) && n.endsWith(".db"));
+  /* The login map is a part of the run, not a business. Left in this list
+     it would be restored as a company whose id is literally "tenants",
+     with the whole tenant database sitting in it as if it were somebody's
+     books — so it is named here and excluded by name. */
+  const TENANTS_PART = `shop-${stamp}--tenants.db`;
+  const others = all.filter(n =>
+    n.startsWith(`shop-${stamp}--`) && n.endsWith(".db") && n !== TENANTS_PART);
   const restoredCompanies = [];
   for (const name of others) {
     const id = /--(.+).db$/.exec(name)[1];
@@ -94,6 +100,25 @@ async function doRestore() {
     } catch (e) {
       return { restored: true, file: latest, size: buf.length,
         partial: `business ${id} could not be restored: ${e.message}` };
+    }
+  }
+
+  /* Restored from the SAME run as the books it points at. A map one run
+     out of step would send a shopkeeper to a company that no longer
+     exists — or to another shop's.
+
+     Its absence is not an error: a single-shop copy never had one. */
+  if (all.includes(TENANTS_PART)) {
+    try {
+      const tmp = path.join(DATA_DIR, "tenants.restore.db");
+      fs.writeFileSync(tmp, await cloudStore.download(TENANTS_PART));
+      require("./tenants").restoreFrom(tmp);
+      try { fs.unlinkSync(tmp); } catch (e) { /* harmless if it stays */ }
+    } catch (e) {
+      /* Reported, not fatal: the books are back and are the hard part. The
+         sign-in map rebuilds itself on the next successful sign-in. */
+      return { restored: true, file: latest, size: buf.length,
+        partial: `the shop sign-in list could not be restored: ${e.message}` };
     }
   }
 

@@ -40,6 +40,19 @@ const C = db.companies;
    naming a business whose file came from a different run would restore a
    business pointing at the wrong books. */
 const REGISTRY_SUFFIX = "--registry.json";
+
+/* The map from a shop's login to WHICH database is theirs.
+
+   Part of the same stamped run as the books it points at, and that is the
+   whole point: restored a run behind, it would send a shopkeeper to a
+   company that no longer exists, or worse, to somebody else's.
+
+   Without it in the backup at all, a redeploy brings every shop's books
+   back and loses the only record of whose they are — and the app, finding
+   no owner for a login it is told is valid, creates a fresh empty company
+   and leaves the real books orphaned. That is the failure this line
+   exists to prevent. */
+const TENANTS_SUFFIX = "--tenants.db";
 function partName(stamp, companyId) {
   return companyId === C.defaultId()
     ? `shop-${stamp}.db`
@@ -158,6 +171,19 @@ async function runBackup(trigger = "manual") {
     const dest = path.join(BACKUP_DIR, name);
     snapshotTo(dest, company.id);
     written.push({ name, path: dest, size: fs.statSync(dest).size });
+  }
+
+  /* The login map, if this installation has one. A single-shop copy never
+     creates the file and simply has nothing to add here. */
+  const tenantsSrc = require("./tenants").file();
+  if (tenantsSrc && fs.existsSync(tenantsSrc)) {
+    const tName = `shop-${s}${TENANTS_SUFFIX}`;
+    const tPath = path.join(BACKUP_DIR, tName);
+    /* Copied through the database rather than off the disk, for the same
+       reason every other part is: a file copied while it is being written
+       comes back torn. */
+    require("./tenants").snapshotTo(tPath);
+    written.push({ name: tName, path: tPath, size: fs.statSync(tPath).size });
   }
 
   const regName = `shop-${s}${REGISTRY_SUFFIX}`;

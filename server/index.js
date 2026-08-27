@@ -217,6 +217,30 @@ app.use("/api", (req, res, next) => {
   });
 });
 
+/* Bind the request to its business BEFORE any route runs — INCLUDING the
+   login. This used to sit below the auth mount, so /api/auth/staff-list
+   and /api/auth/login always read the DEFAULT company's staff table. On a
+   single-shop install that was invisible; the moment one installation
+   serves several shops it means everybody lands in the first shop's books
+   and signs in with the first shop's staff list.
+
+   The id comes from the SESSION, never from the request — anything the
+   browser can send, the browser can forge, and forging this would open
+   another business's books. */
+app.use("/api", (req, res, next) => {
+  /* A shop that signed in as a tenant is PINNED to its own company here,
+     ahead of anything else. businesses.js already refuses to switch a
+     tenant elsewhere; this is the second lock on the same door, so that a
+     bug in the first one is a bug and not a data breach. On an
+     installation serving a hundred shops the cost of being wrong once is
+     one shopkeeper reading another's books. */
+  const tenant = req.session && req.session.tenant;
+  const id = (tenant && tenant.companyId)
+    || (req.session && req.session.businessId)
+    || db.companies.defaultId();
+  db.companies.runAs(id, next);
+});
+
 app.use("/api/auth", require("./routes/auth"));
 
 /* A closed financial year stops accepting writes. Mounted after /api/auth so
@@ -262,15 +286,7 @@ app.use("/api", (req, res, next) => {
   });
 });
 app.use("/api/license", requireAuth, require("./routes/license"));
-/* Bind the request to its business BEFORE any route runs, so every
-   db.prepare() inside a handler already speaks to the right database. The id
-   comes from the SESSION, never from the request — anything the browser can
-   send, the browser can forge, and forging this would open another
-   business's books. */
-app.use("/api", (req, res, next) => {
-  const id = (req.session && req.session.businessId) || db.companies.defaultId();
-  db.companies.runAs(id, next);
-});
+
 
 app.use("/api/businesses", requireAuth, require("./routes/businesses"));
 app.use("/api/settings", requireAuth, require("./routes/settings"));

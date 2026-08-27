@@ -172,10 +172,90 @@ boot();
 let pinEntry = "";
 let staffList = [];
 let selectedStaff = null;
+/* ============================================================
+   SIGNING IN
+
+   Two stages where this installation serves more than one shop:
+
+     1. the SHOP — the user ID and password the supplier issued, which
+        decides whose books open
+     2. the PERSON — their own PIN, inside that shop
+
+   On a single-shop installation stage 1 never appears. A shopkeeper with
+   one shop knows which one it is, and a page between them and their till
+   is a page they resent every morning. The server says which kind of
+   installation this is; nothing here guesses.
+   ============================================================ */
+/** Stage 1. Wired once per showing of the step. */
+function wireShopLogin(){
+  const user = document.getElementById("shop-user");
+  const pass = document.getElementById("shop-pass");
+  const btn  = document.getElementById("shop-login-btn");
+  const note = document.getElementById("shop-login-note");
+  if(!btn || btn.dataset.wired) return;
+  btn.dataset.wired = "1";
+
+  const go = async () => {
+    const u = (user.value || "").trim();
+    const p = pass.value || "";
+    if(!u || !p){ note.textContent = "Enter both the user ID and the password."; return; }
+    btn.disabled = true;
+    note.textContent = "Checking…";
+    try{
+      const r = await fetch("/api/auth/shop-login", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ username: u, password: p })
+      });
+      const body = await r.json().catch(()=>({}));
+      if(!r.ok){
+        /* The server's words, not ours. "Demo License Expired – Please
+           Contact Admin" is the sentence the shopkeeper was promised, and
+           rewording it here would break that promise. */
+        note.textContent = body.error || "That user ID or password is not right.";
+        pass.value = "";
+        return;
+      }
+      note.textContent = "";
+      pass.value = "";
+      /* Straight on to the staff list of the shop that just signed in. */
+      await initLogin();
+    }catch(e){ note.textContent = "Could not reach the app. Check it is running."; }
+    finally{ btn.disabled = false; }
+  };
+
+  btn.addEventListener("click", go);
+  [user, pass].forEach(el => el.addEventListener("keydown", e => { if(e.key === "Enter") go(); }));
+  user.focus();
+}
+
 async function initLogin(){
   document.getElementById("login-step-pin").style.display = "none";
-  document.getElementById("login-step-staff").style.display = "block";
   document.getElementById("login-error").textContent = "";
+
+  let mode = { multiTenant: false, shop: null };
+  try{ mode = await fetch("/api/auth/mode").then(r=>r.json()); }
+  catch(e){ /* an older server has no such route: one shop, as before */ }
+
+  const shopStep = document.getElementById("login-step-shop");
+  const staffStep = document.getElementById("login-step-staff");
+
+  /* The shop step is shown only when there is a choice to make AND no shop
+     has been signed in yet. Once one has, the screen goes straight to its
+     staff — asking twice for something already answered is how a login
+     starts to feel like an obstacle. */
+  const needShop = !!mode.multiTenant && !mode.shop;
+  if(shopStep) shopStep.style.display = needShop ? "block" : "none";
+  staffStep.style.display = needShop ? "none" : "block";
+
+  if(needShop){ wireShopLogin(); return; }
+
+  /* Whose staff list this is, so nobody signs in to the wrong shop's till
+     without noticing. */
+  const note = document.getElementById("shop-login-note");
+  if(mode.shop && note) note.textContent = "";
+  const title = document.getElementById("login-title");
+  if(mode.shop && title) title.textContent = mode.shop.name || title.textContent;
+
   try{
     staffList = await fetch("/api/auth/staff-list").then(r=>r.json());
   }catch(e){ staffList = []; }

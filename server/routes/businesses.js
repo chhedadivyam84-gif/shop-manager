@@ -69,6 +69,22 @@ function canAddBusiness() {
  *  chip in the browser is a courtesy, not the lock. */
 function visibleTo(req) {
   const active = C.list().filter(b => b.active);
+
+  /* A SHOP THAT SIGNED IN AS A TENANT SEES ONLY ITS OWN BOOKS, whatever role
+     it holds inside them.
+
+     This is the line that makes one installation safe to serve a hundred
+     shops. Every shopkeeper is the OWNER of their own shop, so the rule
+     below would have handed each of them the whole list — and the switch
+     route trusts this function to say what is allowed. One tap and a demo
+     customer would have been reading another shop's customers, purchases
+     and margins.
+
+     Checked before the owner rule, deliberately: being an owner is about
+     what you may do INSIDE a business, never about which businesses exist. */
+  const tenant = req.session && req.session.tenant;
+  if (tenant && tenant.companyId) return active.filter(b => b.id === tenant.companyId);
+
   if (req.session.role === "owner") return active;
   const current = req.session.businessId || C.defaultId();
   return active.filter(b => b.id === current);

@@ -20,6 +20,17 @@
     <div class="logo" id="login-logo">SP</div>
     <h1 id="login-title">Shop Manager</h1>
 
+    <div id="login-step-shop" style="display:none;">
+      <p>Sign in to your shop with the user ID and password your supplier gave you.</p>
+      <label class="field-label" for="shop-user">User ID or Email</label>
+      <input type="text" id="shop-user" autocomplete="username" inputmode="email"
+             placeholder="Mobile number or email">
+      <label class="field-label" for="shop-pass" style="margin-top:10px;">Password</label>
+      <input type="password" id="shop-pass" autocomplete="current-password" placeholder="Password">
+      <button class="btn btn-primary" id="shop-login-btn" style="margin-top:14px;width:100%;">Continue</button>
+      <div id="shop-login-note" class="muted" style="font-size:11.5px;margin-top:10px;"></div>
+    </div>
+
     <div id="login-step-staff">
       <p>Staff access only. Select your name to continue.</p>
       <div id="staff-picker"></div>

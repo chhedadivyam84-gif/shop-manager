@@ -180,6 +180,8 @@ app.use(session({
    ------------------------------------------------------------ */
 const license = require("./license");
 const checkin = require("./licenseCheckin");
+const tenants = require("./tenants");
+const { todayStr } = require("./util");
 const LICENCE_EXEMPT = [
   "/api/auth",      // must be able to log in to see the renew screen
   "/api/license",   // entering the new key
@@ -189,6 +191,47 @@ app.use("/api", (req, res, next) => {
   if (!license.enabled()) return next();
   if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return next();
   if (LICENCE_EXEMPT.some(p => req.originalUrl.startsWith(p))) return next();
+
+  /* A SHOP THAT SIGNED IN WITH A USER ID HAS ALREADY BEEN JUDGED.
+     ------------------------------------------------------------
+     It was judged at /shop-login, against the panel, by name — and the
+     answer is in the tenant map. It has no activation code of its own and
+     was never asked for one, because nobody typed a code to get in.
+
+     This gate used to fall through to the activation check anyway, and did
+     it from ABOVE the company binder, so settings() read the DEFAULT
+     company's row rather than the shop's. Two consequences, and the second
+     is the one customers actually saw:
+
+       - every save came back "Enter the activation code from your
+         supplier", because that row's activation_code is empty and always
+         will be; and
+       - typing the code in Settings did not help. That writes into the
+         SHOP's row, correctly, but this gate was still reading the default
+         company's — so it asked again, and again, and again, and there was
+         no code on earth that would have stopped it.
+
+     Their subscription is still enforced, just from the thing that
+     actually knows it. The tenant row is read fresh rather than trusting
+     the session copy, so a demo converted to paid takes effect without
+     making them sign in again. */
+  const t = req.session && req.session.tenant;
+  if (t && t.username) {
+    let row = null;
+    try { row = tenants.get(t.username); } catch (e) { /* map unreadable; the session copy stands */ }
+    const until = (row && row.expires_on) || t.expiresOn || "";
+    if (!until || until >= todayStr()) return next();
+    const plan = (row && row.plan) || t.plan;
+    return res.status(403).json({
+      /* The words the shopkeeper was promised, unchanged. */
+      error: plan === "demo"
+        ? "Demo License Expired – Please Contact Admin"
+        : "This subscription has ended. Please contact your supplier. "
+          + "The app is read-only until this is sorted out — you can still view, print and back up your records.",
+      licenseExpired: true,
+      licenceStatus: "expired"
+    });
+  }
 
   // Through resolveKey, so LICENSE_KEY counts here too. This is the gate that
   // actually holds the app read-only: reading the database directly would keep

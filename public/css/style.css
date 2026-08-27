@@ -96,6 +96,20 @@
   --tbl-fs:        12px;
   --tbl-pad-y:      6px;
   --tbl-pad-x:      8px;
+
+  /* ---- the starting screen ----
+     Sized here like everything else rather than fixed in the component, so
+     the splash grows with the device instead of sitting as a small phone
+     graphic in the middle of a monitor. */
+  --sp-mark:       76px;   /* the rounded mark */
+  --sp-mark-fs:    27px;
+  --sp-name:       23px;
+  --sp-rule:      132px;   /* width of the line under the name */
+  --sp-sub:      12.5px;
+  --sp-tag:      12.5px;
+  --sp-lift:       22vh;   /* how far above centre the lockup sits */
+  --sp-ribbon-h:   42vh;   /* the band the ribbon travels through */
+  --sp-ribbon-min:210px;
 }
 
 /* ---------------------------------------------------------- TABLET
@@ -133,6 +147,13 @@
     --tbl-fs:      12.5px;
     --tbl-pad-y:      7px;
     --tbl-pad-x:      9px;
+    --sp-mark:       92px;
+    --sp-mark-fs:    33px;
+    --sp-name:       28px;
+    --sp-rule:      168px;
+    --sp-sub:      13.5px;
+    --sp-tag:      13.5px;
+    --sp-ribbon-min:260px;
   }
 }
 
@@ -169,6 +190,14 @@
     --tbl-fs:        13px;
     --tbl-pad-y:      8px;
     --tbl-pad-x:     10px;
+    --sp-mark:      104px;
+    --sp-mark-fs:    37px;
+    --sp-name:       32px;
+    --sp-rule:      196px;
+    --sp-sub:        14px;
+    --sp-tag:        14px;
+    --sp-lift:       20vh;
+    --sp-ribbon-min:300px;
   }
 }
 
@@ -198,6 +227,14 @@
     --qa-min:       128px;
     --dim-min:      170px;
     --tbl-pad-x:     12px;
+    --sp-mark:      120px;
+    --sp-mark-fs:    43px;
+    --sp-name:       38px;
+    --sp-rule:      232px;
+    --sp-sub:        15px;
+    --sp-tag:        15px;
+    --sp-lift:       19vh;
+    --sp-ribbon-min:340px;
   }
 }
 
@@ -267,10 +304,11 @@ button, input, select{font-family:inherit;}
 #splash.is-done{ opacity:0; transform:scale(1.03); pointer-events:none; }
 
 #splash .splash-mark{
-  width:76px; height:76px; border-radius:20px;
+  width:var(--sp-mark); height:var(--sp-mark);
+  border-radius:calc(var(--sp-mark) * .26);
   background:var(--gold); color:var(--navy);
   display:flex; align-items:center; justify-content:center;
-  font-weight:800; font-size:27px; letter-spacing:.02em;
+  font-weight:800; font-size:var(--sp-mark-fs); letter-spacing:.02em;
   box-shadow:0 12px 34px oklch(0 0 0 / .34);
   animation:splash-mark .52s cubic-bezier(.2,.9,.3,1.25) both;
 }
@@ -278,26 +316,27 @@ button, input, select{font-family:inherit;}
    lower half and a name sitting in the middle of moving lines is a name
    nobody can read. */
 #splash .splash-lockup{
-  display:flex; flex-direction:column; align-items:center; gap:12px;
-  margin-bottom:22vh; position:relative; z-index:2;
+  display:flex; flex-direction:column; align-items:center;
+  gap:calc(var(--sp-mark) * .16);
+  margin-bottom:var(--sp-lift); position:relative; z-index:2;
 }
 #splash .splash-name{
-  font-size:23px; font-weight:800; letter-spacing:.01em;
+  font-size:var(--sp-name); font-weight:800; letter-spacing:.01em;
   animation:splash-rise .38s ease-out .16s both;
 }
 #splash .splash-rule{
-  width:132px; height:1px; background:oklch(1 0 0 / .42);
+  width:var(--sp-rule); height:1px; background:oklch(1 0 0 / .42);
   transform-origin:center;
   animation:splash-rule .44s cubic-bezier(.3,.8,.3,1) .3s both;
 }
 #splash .splash-sub{
-  font-size:12.5px; font-weight:500; letter-spacing:.05em;
+  font-size:var(--sp-sub); font-weight:500; letter-spacing:.05em;
   color:oklch(0.88 0.02 258);
   animation:splash-rise .38s ease-out .42s both;
 }
 #splash .splash-tag{
   position:absolute; left:0; right:0; bottom:max(38px, 7vh);
-  font-size:12.5px; color:oklch(0.84 0.02 258); padding:0 28px;
+  font-size:var(--sp-tag); color:oklch(0.84 0.02 258); padding:0 28px;
   animation:splash-rise .4s ease-out .55s both; z-index:2;
 }
 
@@ -307,7 +346,12 @@ button, input, select{font-family:inherit;}
    shape that starts and stops inside the screen. */
 #splash .splash-ribbon{
   position:absolute; left:-25%; width:150%;
-  top:52%; height:42vh; min-height:210px;
+  /* The app-wide "img, svg, video, canvas { max-width:100%; height:auto }"
+     rule above applies here too, and it was quietly clamping this back to
+     the width of the screen — so the curve started and ended exactly at the
+     edges instead of passing through. Both are overridden deliberately. */
+  max-width:none; height:var(--sp-ribbon-h);
+  top:52%; min-height:var(--sp-ribbon-min);
   z-index:1; pointer-events:none;
   opacity:0; animation:splash-ribbon-in 1s ease-out .18s forwards;
 }
@@ -318,6 +362,41 @@ button, input, select{font-family:inherit;}
 #splash .sp-band-1{ animation:splash-flow 13s linear infinite; }
 #splash .sp-band-2{ animation:splash-flow 19s linear infinite; opacity:.75; }
 #splash .sp-band-3{ animation:splash-flow  9s linear infinite; opacity:.55; }
+
+/* SHORT SCREENS, which is mostly a phone turned sideways — 812x375 rather
+   than 375x812. The presets above key off width alone, so a landscape phone
+   is served the tablet or laptop sizes on a screen with a third of the
+   height: the lockup is pushed off the top and the ribbon runs past the
+   bottom. Everything is measured from the height it actually has. */
+@media (max-height: 560px){
+  :root{
+    --sp-mark:       52px;
+    --sp-mark-fs:    19px;
+    --sp-name:       19px;
+    --sp-rule:      110px;
+    --sp-sub:      11.5px;
+    --sp-tag:      11.5px;
+    --sp-lift:        8vh;
+    --sp-ribbon-h:   40vh;
+    --sp-ribbon-min:130px;
+  }
+  /* There is no room for both the strapline and the lockup down here, and
+     the lockup is the one that says whose app this is. */
+  #splash .splash-tag{ display:none; }
+  /* min-height was holding the ribbon at a phone-portrait size on a screen
+     a third as tall, which pushed its top edge up through the name. Here it
+     is measured from the height there actually is, and pinned below the
+     lockup rather than at a fraction of the screen. */
+  #splash .splash-ribbon{ top:auto; bottom:0; height:40vh; min-height:0; }
+}
+/* And a genuinely tiny window — a phone in landscape with the browser bars
+   showing, or a resized desktop window. The strapline under the name goes
+   before the name does. */
+@media (max-height: 420px){
+  :root{ --sp-lift:10vh; --sp-mark:44px; --sp-mark-fs:17px; }
+  #splash .splash-sub{ display:none; }
+  #splash .splash-ribbon{ height:38vh; }
+}
 
 @keyframes splash-flow{
   from{ transform:translateX(0); }

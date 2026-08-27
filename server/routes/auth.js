@@ -32,6 +32,15 @@ const router = express.Router();
 /** Which login the screen should show. Public — it reveals only whether
  *  this installation serves more than one shop, which anybody who can see
  *  the sign-in page can work out by looking at it. */
+/* The ONE sentence used for every refused sign-in.
+
+   It has to be identical whether the login is unknown here, unknown to
+   the vendor, or known with the wrong password. Two different sentences
+   is a way to ask this installation which of a hundred shop logins are
+   real — and it had two, because one came from here and one was passed
+   through from the panel. */
+const WRONG_LOGIN = "That user ID or password is not right.";
+
 router.get("/mode", (req, res) => {
   res.json({
     multiTenant: tenants.multiTenant(),
@@ -86,7 +95,7 @@ router.post("/shop-login", async (req, res) => {
      door, and the panel would answer the same anyway. */
   if (row && !row.blocked) {
     recordLoginFailure(req.ip);
-    return res.status(401).json({ error: "That user ID or password is not right." });
+    return res.status(401).json({ error: WRONG_LOGIN });
   }
 
   /* Not known here. Ask the vendor, and remember the answer so this is the
@@ -94,7 +103,7 @@ router.post("/shop-login", async (req, res) => {
   const server = checkin.serverUrl();
   if (!server) {
     recordLoginFailure(req.ip);
-    return res.status(401).json({ error: "That user ID or password is not right." });
+    return res.status(401).json({ error: WRONG_LOGIN });
   }
 
   let answer = null;
@@ -111,9 +120,14 @@ router.post("/shop-login", async (req, res) => {
       /* The panel's wording is passed through unchanged when it has
          something specific to say — "Demo License Expired – Please Contact
          Admin" is the sentence the shopkeeper was promised. */
-      return res.status(r.status === 403 ? 403 : 401).json({
-        error: (answer && answer.error) || "That user ID or password is not right."
-      });
+      /* 403 means the vendor has something specific to say — expired,
+         cancelled — and those words are the ones the shopkeeper was
+         promised, so they are passed through. Anything else is a
+         refusal, and every refusal says the same thing. */
+      if (r.status === 403) {
+        return res.status(403).json({ error: (answer && answer.error) || WRONG_LOGIN });
+      }
+      return res.status(401).json({ error: WRONG_LOGIN });
     }
   } catch (e) {
     /* The vendor is unreachable and we have never seen this login, so there

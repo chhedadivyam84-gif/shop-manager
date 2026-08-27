@@ -9,8 +9,54 @@
 <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/css/style.css">
 <style id="page-size-style"></style>
+<script>
+/* The chosen colour, before anything is drawn.
+
+   app.js reads the same remembered key, but it loads at the end of the
+   body — so until now the first thing painted was always navy, and a shop
+   on another colour watched their app change under them. The splash below
+   would have done it most visibly of all. Duplicated here on purpose:
+   four lines in the head are the only way to be right on the first frame. */
+try {
+  var t = localStorage.getItem("shopManagerAppTheme");
+  if (t && t !== "navy-gold") document.documentElement.setAttribute("data-theme", t);
+} catch (e) { /* private mode — the default is already correct */ }
+
+/* THE SPLASH COMES DOWN NO MATTER WHAT.
+
+   app.js takes it away as soon as there is something to show, and that is
+   the path that runs every morning. This is the other one. It lives here,
+   in the head, because a splash is the one piece of UI that can hide a
+   fault instead of revealing it: if app.js fails to parse — a bad deploy,
+   a half-cached file — nothing inside app.js runs, including its own
+   safety net, and the shop is left looking at a logo that never leaves,
+   with the login sitting underneath it the whole time.
+
+   Eight seconds, deliberately longer than the app's own six, so on a
+   healthy-but-slow start it is app.js that clears the screen and this
+   never fires. */
+setTimeout(function () {
+  var el = document.getElementById("splash");
+  if (!el || el.dataset.going) return;
+  el.dataset.going = "1";
+  el.classList.add("is-done");
+  setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 400);
+}, 8000);
+</script>
 </head>
 <body>
+
+<!-- ============ STARTING ============
+     Covers the gap between the page arriving and boot() knowing whether to
+     show the login or the app. Without it that gap shows a half-drawn login
+     screen with placeholder initials, which then changes. Removed from the
+     document once it has faded, so it can never sit over the app catching
+     taps. -->
+<div id="splash" role="status" aria-label="Shop Manager is starting">
+  <div class="splash-mark">SM</div>
+  <div class="splash-name">Shop Manager</div>
+  <div class="splash-bar"><i></i></div>
+</div>
 
 <div id="toast" style="display:none;"></div>
 <div id="shell">

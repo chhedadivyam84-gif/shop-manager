@@ -154,17 +154,62 @@ function initials(name){
 /* ============================================================
    BOOT / LOGIN
    ============================================================ */
+/* ============================================================
+   THE STARTING SCREEN
+
+   Shown from the first frame by index.html and taken away here, once
+   there is something real underneath it to look at.
+
+   Two rules it must obey, in this order of importance:
+
+     1. IT MUST ALWAYS GO. A splash that outlives a failed boot leaves the
+        shop staring at a logo with no way past it, and no idea the app is
+        even broken. So it is dismissed in a finally, and again by a timer
+        that does not care whether boot succeeded, threw, or hung on a
+        request that will never come back.
+
+     2. It must not flicker. On a warm start the session comes back in
+        forty milliseconds, and a splash that appears and vanishes inside
+        one blink looks like a glitch rather than a start. So it stays for
+        a short floor — long enough to read as deliberate, short enough
+        that nobody waits on it.
+   ============================================================ */
+const SPLASH_FLOOR_MS = 620;   /* least time on screen, so it never flickers */
+const SPLASH_LIMIT_MS = 6000;  /* most, whatever else happens */
+const splashStarted = Date.now();
+
+function hideSplash(){
+  const el = document.getElementById("splash");
+  if(!el || el.dataset.going) return;
+  el.dataset.going = "1";
+  const wait = Math.max(0, SPLASH_FLOOR_MS - (Date.now() - splashStarted));
+  setTimeout(() => {
+    el.classList.add("is-done");
+    /* Taken out of the document rather than left transparent over it —
+       an invisible layer at z-index 9999 would swallow every tap. */
+    setTimeout(() => { if(el.parentNode) el.parentNode.removeChild(el); }, 400);
+  }, wait);
+}
+
+/* The promise that nothing can break: if boot never finishes, this still
+   clears the way. */
+setTimeout(hideSplash, SPLASH_LIMIT_MS);
+
 async function boot(){
-  const sess = await fetch("/api/auth/session").then(r=>r.json()).catch(()=>({loggedIn:false}));
-  if(sess.loggedIn){
-    state.me = { staffName: sess.staffName, role: sess.role };
-    document.getElementById("login").style.display="none";
-    document.getElementById("app").style.display="block";
-    await initApp();
-  } else {
-    document.getElementById("login-title").textContent = sess.businessName || "Shop Manager";
-    document.getElementById("login-logo").textContent = initials(sess.businessName||"Shop Manager");
-    await initLogin();
+  try{
+    const sess = await fetch("/api/auth/session").then(r=>r.json()).catch(()=>({loggedIn:false}));
+    if(sess.loggedIn){
+      state.me = { staffName: sess.staffName, role: sess.role };
+      document.getElementById("login").style.display="none";
+      document.getElementById("app").style.display="block";
+      await initApp();
+    } else {
+      document.getElementById("login-title").textContent = sess.businessName || "Shop Manager";
+      document.getElementById("login-logo").textContent = initials(sess.businessName||"Shop Manager");
+      await initLogin();
+    }
+  } finally {
+    hideSplash();
   }
 }
 boot();

@@ -236,6 +236,86 @@ button, input, select{font-family:inherit;}
   flex-direction:column;
 }
 
+/* ============================================================
+   STARTING
+
+   The first half-second of the app, and the only part of it a shopkeeper
+   sees every single morning. It carries the same navy-and-gold as the
+   login screen behind it — including whichever colour the shop chose —
+   so the splash does not cut to a different-looking screen, it dissolves
+   into the one underneath.
+
+   Timing is deliberately short. This shop said the app felt like it was
+   halting; a splash that lingers to admire itself would be the same
+   complaint wearing better clothes. It covers work that is really
+   happening and gets out of the way.
+   ============================================================ */
+#splash{
+  position:fixed; inset:0; z-index:9999;
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:18px; color:#fff; text-align:center;
+  /* The login screen's own backdrop, so the two are the same room. */
+  background:
+    radial-gradient(circle at 18% 12%, oklch(0.62 0.13 85 / .38), transparent 52%),
+    radial-gradient(circle at 88% 20%, oklch(0.5 0.1 258 / .45), transparent 50%),
+    radial-gradient(circle at 25% 92%, oklch(0.55 0.11 258 / .4), transparent 55%),
+    var(--navy);
+  transition:opacity .34s ease, transform .34s ease;
+}
+/* Lifting away rather than blinking out: the mark grows very slightly as it
+   fades, which reads as the screen opening instead of a panel closing. */
+#splash.is-done{ opacity:0; transform:scale(1.03); pointer-events:none; }
+
+#splash .splash-mark{
+  width:76px; height:76px; border-radius:20px;
+  background:var(--gold); color:var(--navy);
+  display:flex; align-items:center; justify-content:center;
+  font-weight:800; font-size:27px; letter-spacing:.02em;
+  box-shadow:0 12px 34px oklch(0 0 0 / .34);
+  animation:splash-mark .52s cubic-bezier(.2,.9,.3,1.25) both;
+}
+#splash .splash-name{
+  font-size:17px; font-weight:700; letter-spacing:.02em;
+  animation:splash-rise .38s ease-out .16s both;
+}
+/* Indeterminate on purpose. Boot is one request; a bar claiming to know it
+   is 40% done would be inventing the number. This one only says "working". */
+#splash .splash-bar{
+  width:128px; height:3px; border-radius:3px; overflow:hidden;
+  background:oklch(1 0 0 / .18);
+  animation:splash-rise .38s ease-out .26s both;
+}
+#splash .splash-bar i{
+  display:block; width:40%; height:100%; border-radius:3px;
+  background:var(--gold);
+  animation:splash-sweep 1.15s ease-in-out .3s infinite;
+}
+
+@keyframes splash-mark{
+  from{ opacity:0; transform:scale(.72); }
+  to  { opacity:1; transform:scale(1); }
+}
+@keyframes splash-rise{
+  from{ opacity:0; transform:translateY(9px); }
+  to  { opacity:1; transform:none; }
+}
+@keyframes splash-sweep{
+  0%  { transform:translateX(-105%); }
+  100%{ transform:translateX(255%); }
+}
+
+/* Movement can trigger nausea and migraine, and someone who has asked their
+   phone for less of it has asked every app, including this one. They still
+   get the screen and the colour — only the motion goes. */
+@media (prefers-reduced-motion:reduce){
+  #splash .splash-mark,
+  #splash .splash-name,
+  #splash .splash-bar{ animation:splash-fade .2s ease-out both; }
+  #splash .splash-bar i{ animation:none; width:100%; opacity:.55; }
+  #splash.is-done{ transform:none; }
+  @keyframes splash-fade{ from{ opacity:0; } to{ opacity:1; } }
+}
+
 /* ---------- Login ---------- */
 #login{
   min-height:100vh;

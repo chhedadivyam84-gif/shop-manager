@@ -199,6 +199,26 @@ router.put("/app-theme", requireRole("owner"), (req, res) => {
   res.json({ ok: true, theme: t, themes: APP_THEMES });
 });
 
+/**
+ * Which Home tiles this shop has put away.
+ *
+ * Owner only: it is the whole shop's front screen, not one person's, and a
+ * counter hand rearranging it for everybody is a support call.
+ *
+ * Stored as the HIDDEN list. Nothing is validated against a fixed set of
+ * keys on purpose — the tiles are the app's own markup and a version that
+ * adds one should not need this route changed too. A key that no longer
+ * matches a tile simply hides nothing, which is the harmless outcome.
+ */
+router.put("/home-tiles", requireRole("owner"), (req, res) => {
+  const raw = Array.isArray(req.body.hidden) ? req.body.hidden : [];
+  const hidden = [...new Set(raw.map(x => String(x).trim())
+    .filter(k => /^[a-z0-9-]{1,32}$/.test(k)))].sort();
+  db.prepare("UPDATE settings SET home_tiles_hidden = ? WHERE id = 1").run(hidden.join(","));
+  logAction(req, "settings.homeTiles", hidden.length ? `${hidden.length} put away` : "all shown");
+  res.json({ ok: true, hidden });
+});
+
 router.put("/logo", requireRole("owner"), (req, res) => {
   const { logo } = req.body;
 

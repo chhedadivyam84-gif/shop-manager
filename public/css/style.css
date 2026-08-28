@@ -2169,3 +2169,22 @@ html[data-theme="plum-rose"]{
 .theme-card.selected{ border-color: var(--navy); box-shadow: 0 0 0 2px var(--navy) inset; }
 .theme-card .theme-name{ font-weight: 700; font-size: var(--fs-row-title); }
 .theme-card .theme-sub{ font-size: var(--fs-row-sub); color: var(--muted); }
+
+/* ---- editing the Home tiles ---------------------------------------- */
+.qa-head{ display:flex; align-items:center; gap:8px; margin:var(--section-mt) 0 6px; }
+.qa-head .muted{ flex:1; font-size:11.5px; }
+/* 40px, because it is pressed with a thumb like everything else here. */
+.qa-edit-btn{ font:inherit; font-size:12px; font-weight:700; color:var(--muted);
+  background:var(--card); border:1px solid var(--border); border-radius:8px;
+  min-height:40px; padding:0 14px; cursor:pointer; }
+.qa-edit-btn:hover{ color:var(--text); border-color:var(--muted); }
+.qa-edit-btn.primary{ background:var(--gold); border-color:transparent; color:var(--navy); }
+/* In edit mode every tile the shop is entitled to is on screen, and the
+   ones put away are shown faded with a + rather than removed — you cannot
+   bring back a tile you cannot see. */
+.quick-actions.editing .qa-btn{ position:relative; }
+.quick-actions.editing .qa-btn::after{
+  content:"✕"; position:absolute; top:4px; right:6px; font-size:11px;
+  color:var(--danger); font-weight:800; }
+.quick-actions.editing .qa-btn.tile-off{ opacity:.42; }
+.quick-actions.editing .qa-btn.tile-off::after{ content:"+"; color:var(--ok); font-size:14px; }

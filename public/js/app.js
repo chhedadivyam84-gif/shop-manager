@@ -246,6 +246,97 @@ function applyFeatureAccess(){
   });
 }
 
+/* ============================================================
+   THE SHOP'S OWN HOME SCREEN
+
+   Two different questions, kept apart on purpose:
+
+     the VENDOR decides what this shop was sold  (FEATURES_OFF, above)
+     the SHOP decides what it wants on its front screen  (here)
+
+   So a tile the vendor did not sell can never be brought back by the
+   shopkeeper, and a tile the shopkeeper puts away is theirs to bring back
+   whenever they like. Putting one away hides nothing else: the screen is
+   still there and still reachable from the menu — this is a front screen
+   being tidied, not a feature being removed.
+   ============================================================ */
+let HIDDEN_TILES = [];
+let tileEditing = false;
+
+/* Which feature each tile belongs to, so the editor cannot offer a tile
+   for something this shop was never sold. */
+const TILE_FEATURE = {
+  billing:"billing", purchase:"purchase", po:"po", quotation:"quotation", so:"so",
+  bankbook:"bankbook", inquiries:"inquiries",
+  shop:"inventory", warehouse:"inventory",
+  scan:"barcode", labels:"barcode", "product-search":"psearch", pquery:"pquery",
+  printmgr:"printmgr", cheque:"cheque", accounts:"accounts", payment:"accounts",
+  notes:"notes"
+};
+
+function tileSold(key){ return hasFeature(TILE_FEATURE[key]); }
+
+function applyHomeTiles(){
+  const grid = document.querySelector(".quick-actions");
+  if(!grid) return;
+  grid.classList.toggle("editing", tileEditing);
+
+  grid.querySelectorAll("[data-tile]").forEach(el => {
+    const key = el.dataset.tile;
+    const away = HIDDEN_TILES.indexOf(key) >= 0;
+    if(!tileSold(key)){ el.style.display = "none"; return; }   /* not theirs to choose */
+    el.style.display = (tileEditing || !away) ? "" : "none";
+    el.classList.toggle("tile-off", away);
+  });
+
+  const note = document.getElementById("qa-edit-note");
+  if(note){
+    const away = HIDDEN_TILES.filter(k => tileSold(k)).length;
+    note.textContent = tileEditing
+      ? "Tap a tile to put it away or bring it back."
+      : (away ? `${away} tile${away === 1 ? "" : "s"} put away` : "");
+  }
+}
+
+function wireTileEditor(){
+  const grid = document.querySelector(".quick-actions");
+  const edit = document.getElementById("qa-edit");
+  const done = document.getElementById("qa-edit-done");
+  if(!grid || !edit || !done) return;
+
+  /* Only the owner arranges the shop's front screen. */
+  if(!isOwner()){ edit.style.display = "none"; return; }
+
+  const setMode = on => {
+    tileEditing = on;
+    edit.style.display = on ? "none" : "";
+    done.style.display = on ? "" : "none";
+    applyHomeTiles();
+  };
+  edit.addEventListener("click", () => setMode(true));
+  done.addEventListener("click", async () => {
+    setMode(false);
+    try{
+      await api("PUT", "/settings/home-tiles", { hidden: HIDDEN_TILES });
+      toast("Saved.");
+    }catch(e){ toast(e.message || "Could not save.", true); }
+  });
+
+  /* Capture, so a tap in edit mode arranges the screen instead of opening
+     it — the tile's own click handler is still attached and would otherwise
+     fire as well. */
+  grid.addEventListener("click", (e) => {
+    if(!tileEditing) return;
+    const btn = e.target.closest("[data-tile]");
+    if(!btn) return;
+    e.preventDefault(); e.stopPropagation();
+    const key = btn.dataset.tile;
+    const at = HIDDEN_TILES.indexOf(key);
+    if(at >= 0) HIDDEN_TILES.splice(at, 1); else HIDDEN_TILES.push(key);
+    applyHomeTiles();
+  }, true);
+}
+
 async function boot(){
   try{
     const sess = await fetch("/api/auth/session").then(r=>r.json()).catch(()=>({loggedIn:false}));
@@ -506,12 +597,22 @@ async function initApp(){
   /* The device remembered a colour at boot so the app did not flash;
      this is the shop's actual answer, and it wins. */
   applyAppTheme((state.settings && state.settings.app_theme) || "navy-gold");
+  /* The shop's own arrangement of its front screen. Applied on every load
+     of the app, and re-applied whenever the vendor's list changes, because
+     what is on offer to hide depends on what they were sold. */
+  HIDDEN_TILES = String((state.settings && state.settings.home_tiles_hidden) || "")
+    .split(",").map(x => x.trim()).filter(Boolean);
+  applyHomeTiles();
   document.title = state.settings.business_name + " — Shop Manager";
   document.getElementById("avatar-btn").textContent = initials(state.settings.business_name);
   await refreshLicenseBanner();
 
   if(appInited){ await renderAll(); return; }
   appInited = true;
+  /* Wired once, after isOwner() is known — the Edit control belongs to the
+     owner, and asking before the person is signed in would hide it from
+     them too. */
+  wireTileEditor();
 
   // Marks #screen-home "active" (every .screen starts display:none in CSS
   // until switchTab does this) — without it, a fresh login renders a blank

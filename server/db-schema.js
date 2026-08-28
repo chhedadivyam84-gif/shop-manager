@@ -2332,6 +2332,20 @@ addColumn("settings", "app_theme", "TEXT DEFAULT ''");
    Backed up automatically, because it lives inside the books. */
 addColumn("settings", "tenant_code", "TEXT DEFAULT ''");
 
+/* WHICH HOME TILES THIS SHOP HAS PUT AWAY.
+
+   The shop's own choice, and nothing to do with what the vendor sold
+   them — those are two different questions and they are kept apart: the
+   vendor decides what EXISTS, the shop decides what it wants on its own
+   front screen.
+
+   The hidden list, not the shown list, for the same reason as everywhere
+   else here: a tile added in a later version then appears by itself
+   instead of being invisible to every shop that saved a list before it
+   existed. Putting a tile away never touches the screen behind it, which
+   stays reachable from the menu. */
+addColumn("settings", "home_tiles_hidden", "TEXT DEFAULT ''");
+
 /* ============================================================
    WHO WROTE THIS BILL, AND WHO CHANGED IT
 

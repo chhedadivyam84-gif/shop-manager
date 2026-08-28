@@ -136,7 +136,23 @@ router.post("/shop-login", async (req, res) => {
        it an expired demo would sign in for ever, because after the first
        sign-in the panel is never consulted again. */
     const ended = row.expires_on && row.expires_on < todayStr();
-    if (!ended) return finish(req, res, row);
+    if (!ended) {
+      /* THE VENDOR MAY HAVE CHANGED WHAT THIS SHOP IS SOLD.
+
+         A returning shop is decided here, offline, without asking anyone —
+         which is the whole point, and must stay that way: a sleeping
+         licence server cannot be allowed to stop a shop opening its own
+         books. But it also means a feature switched off in the panel would
+         never reach them, because nothing ever asks again.
+
+         So the vendor is asked in the BACKGROUND, and the sign-in does not
+         wait for the answer. If it comes, the list is updated for the next
+         request — which in practice is a second or two later, while the
+         staff PIN is still being typed. If it never comes, the shop signs
+         in exactly as before on what it already knew. */
+      refreshFeatures(username, password, row);
+      return finish(req, res, row);
+    }
 
     /* BUT A CACHED DATE IS NOT A VERDICT.
 
@@ -153,6 +169,7 @@ router.post("/shop-login", async (req, res) => {
         shopName: fresh.body.shop || row.shop_name,
         code: fresh.body.code || row.code,
         plan: fresh.body.plan || "paid",
+        featuresOff: fresh.body.featuresOff,
         expiresOn: fresh.body.expiresOn || "",
         password
       });
@@ -254,6 +271,7 @@ router.post("/shop-login", async (req, res) => {
     shopName: answer.shop || "",
     code: answer.code || "",
     plan: answer.plan || "paid",
+    featuresOff: answer.featuresOff,
     expiresOn: answer.expiresOn || "",
     /* Hashed here from what they just typed. The panel never sends a hash
        and never sends the password back — this is the only moment the
@@ -264,6 +282,54 @@ router.post("/shop-login", async (req, res) => {
   return finish(req, res, row);
 });
 
+/**
+ * Ask the vendor what this shop is sold now, and remember the answer.
+ *
+ * Deliberately not awaited by the caller and deliberately unable to refuse
+ * anybody: the worst this can do is nothing. A failure here — the panel
+ * asleep, the line down, the answer malformed — leaves the shop signed in
+ * on exactly what it knew before.
+ */
+function refreshFeatures(username, password, row) {
+  askVendor(username, password)
+    .then(fresh => {
+      if (!fresh || !fresh.ok || !fresh.body) return;
+      if (!Array.isArray(fresh.body.featuresOff)) return;
+      tenants.upsert({
+        username, companyId: row.company_id,
+        shopName: fresh.body.shop || row.shop_name,
+        code: fresh.body.code || row.code,
+        plan: fresh.body.plan || row.plan,
+        expiresOn: fresh.body.expiresOn || row.expires_on,
+        passwordHash: row.password_hash,
+        featuresOff: fresh.body.featuresOff
+      });
+    })
+    .catch(() => { /* the shop is already signed in; this changes nothing */ });
+}
+
+/** A stored comma-separated list as an array. */
+function featureList(v) {
+  return String(v || "").split(",").map(x => x.trim()).filter(Boolean);
+}
+
+/**
+ * What this request's shop may not use, from the tenant map.
+ *
+ * The map is the truth, not the session: the vendor switching a feature
+ * off should not need the shopkeeper to sign out and back in before it
+ * takes effect. A copy with no tenant at all is a single-shop install and
+ * is entitled to everything.
+ */
+function currentFeaturesOff(req) {
+  const t = req.session && req.session.tenant;
+  if (!t || !t.username) return [];
+  try {
+    const row = tenants.get(t.username);
+    return featureList(row && row.features_off);
+  } catch (e) { return featureList(t.featuresOff && t.featuresOff.join(",")); }
+}
+
 function finish(req, res, row) {
   clearLoginFailures(req.ip);
   tenants.touch(row.username);
@@ -273,7 +339,8 @@ function finish(req, res, row) {
   req.session.businessId = row.company_id;
   req.session.tenant = {
     username: row.username, companyId: row.company_id,
-    shopName: row.shop_name, plan: row.plan, expiresOn: row.expires_on
+    shopName: row.shop_name, plan: row.plan, expiresOn: row.expires_on,
+    featuresOff: featureList(row.features_off)
   };
   /* Stage 1 is not stage 2. Signing the shop in must never leave anybody
      signed in as a person — the staff PIN is still to come. */
@@ -346,7 +413,14 @@ router.get("/session", (req, res) => {
   res.json({
     loggedIn, businessName: settings.business_name,
     staffName: loggedIn ? req.session.staffName : null,
-    role: loggedIn ? req.session.role : null
+    role: loggedIn ? req.session.role : null,
+    /* WHAT THIS SHOP HAS NOT PAID FOR.
+
+       Read fresh from the tenant map rather than the session copy, so a
+       change made in the panel takes effect on the next page load instead
+       of waiting for them to sign out. A single-shop copy has no tenant
+       and gets an empty list — it has everything, as it always has. */
+    featuresOff: currentFeaturesOff(req)
   });
 });
 

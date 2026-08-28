@@ -328,6 +328,11 @@ app.use("/api", (req, res, next) => {
     error: "Only the shop owner can delete records. Ask the owner, or cancel the document instead."
   });
 });
+/* What this shop was sold. Mounted here, above every business route and
+   below the company binder, so one line covers the whole app rather than
+   forty routes each remembering to check. Reads are never refused. */
+app.use("/api", require("./featureGate").gate());
+
 app.use("/api/license", requireAuth, require("./routes/license"));
 
 

@@ -195,13 +195,66 @@ function hideSplash(){
    clears the way. */
 setTimeout(hideSplash, SPLASH_LIMIT_MS);
 
+/* ============================================================
+   FEATURE ACCESS
+
+   The vendor decides, per shop, in the licence panel. What arrives is the
+   list of what this shop has NOT paid for; anything not in it, they have.
+
+   Hiding is done here so the app reads as a smaller product rather than a
+   broken one — a tile that opens a screen saying "not included" is worse
+   than no tile. The refusing is done on the server (featureGate.js), which
+   is the half that is real; this half is manners.
+   ============================================================ */
+let FEATURES_OFF = [];
+
+function hasFeature(key){ return !key || FEATURES_OFF.indexOf(key) < 0; }
+
+/* Which feature each way in belongs to. Keyed by what the markup already
+   carries — the tab name, the data-goto, or the tile's id — so no tile
+   needed rewriting to be gated. */
+const FEATURE_OF = {
+  quotation:"quotation", so:"so", selection:"selection", delivery:"delivery",
+  purchase:"purchase", po:"po",
+  pquery:"pquery",
+  cashbook:"cashbook", bankbook:"bankbook", accounts:"accounts",
+  outstanding:"outstanding", cheque:"cheque",
+  ewb:"ewb", inquiries:"inquiries", printmgr:"printmgr", notes:"notes",
+  /* tiles that carry an id rather than a destination */
+  "qa-scan":"barcode", "qa-labels":"barcode",
+  "qa-product-search":"psearch", "qa-payment":"accounts"
+};
+
+/**
+ * Take away every way in to a feature this shop does not have.
+ *
+ * Run after sign-in and again whenever the list could have changed. It
+ * only ever HIDES: nothing is deleted, and switching a feature back on in
+ * the panel brings the tile back with every record still behind it.
+ */
+function applyFeatureAccess(){
+  const gone = el => { if(el) el.style.display = "none"; };
+
+  document.querySelectorAll("[data-goto]").forEach(el => {
+    if(!hasFeature(FEATURE_OF[el.dataset.goto])) gone(el);
+  });
+  document.querySelectorAll("nav.bottom .tab[data-tab]").forEach(el => {
+    if(!hasFeature(FEATURE_OF[el.dataset.tab])) gone(el);
+  });
+  Object.keys(FEATURE_OF).forEach(id => {
+    if(id.startsWith("qa-") && !hasFeature(FEATURE_OF[id])) gone(document.getElementById(id));
+  });
+}
+
 async function boot(){
   try{
     const sess = await fetch("/api/auth/session").then(r=>r.json()).catch(()=>({loggedIn:false}));
+    FEATURES_OFF = Array.isArray(sess.featuresOff) ? sess.featuresOff : [];
     if(sess.loggedIn){
       state.me = { staffName: sess.staffName, role: sess.role };
       document.getElementById("login").style.display="none";
       document.getElementById("app").style.display="block";
+      applyFeatureAccess();
       await initApp();
     } else {
       document.getElementById("login-title").textContent = sess.businessName || "Shop Manager";
@@ -395,6 +448,14 @@ async function handleKey(k){
         document.getElementById("login").style.display="none";
         document.getElementById("app").style.display="block";
         pinEntry="";
+        /* Signing in is the moment the list is freshest — the shop step just
+           asked the vendor. Read it again here rather than trusting whatever
+           boot() saw before anybody had signed in. */
+        try{
+          const sess = await fetch("/api/auth/session").then(r=>r.json());
+          FEATURES_OFF = Array.isArray(sess.featuresOff) ? sess.featuresOff : [];
+        }catch(e){ /* keep what boot() had */ }
+        applyFeatureAccess();
         await initApp();
       } else {
         errEl.textContent = data.error || "Incorrect PIN. Try again.";
@@ -1070,6 +1131,13 @@ function greeting(){
   return "Good Evening";
 }
 async function switchTab(tab){
+  /* A hidden tile is not a lock. Anything that can still call switchTab —
+     an alert row, a deep link, a stale button — is turned back here. */
+  if(!hasFeature(FEATURE_OF[tab])){
+    toast("That is not included in your subscription.");
+    if(tab !== "home") return switchTab("home");
+    return;
+  }
   document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));
   document.getElementById("screen-"+tab).classList.add("active");
   document.querySelectorAll("nav.bottom .tab").forEach(t=>t.classList.toggle("active", t.dataset.tab===tab));

@@ -54,7 +54,11 @@ function open() {
       last_seen_at  INTEGER,
       -- Set when the vendor cancels. The row stays: who had which books is
       -- not a question a deleted row can answer.
-      blocked       INTEGER NOT NULL DEFAULT 0
+      blocked       INTEGER NOT NULL DEFAULT 0,
+      -- Comma-separated feature keys this shop has NOT paid for, as the
+      -- vendor set them. Blank means everything, which is what a shop that
+      -- predates the setting already has.
+      features_off  TEXT DEFAULT ''
     );
     CREATE INDEX IF NOT EXISTS idx_tenants_company ON tenants(company_id);
   `);
@@ -94,14 +98,14 @@ function list() {
 }
 
 /** Remember a shop, or update what we know about it. */
-function upsert({ username, companyId, shopName, code, plan, expiresOn, password, passwordHash }) {
+function upsert({ username, companyId, shopName, code, plan, expiresOn, password, passwordHash, featuresOff }) {
   const u = norm(username);
   const existing = get(u);
   const ph = passwordHash || (password ? hash(password) : (existing && existing.password_hash));
   if (!ph) throw new Error("A shop cannot be remembered without a password.");
   open().prepare(`
-    INSERT INTO tenants (username, company_id, shop_name, code, plan, expires_on, password_hash, created_at, last_seen_at, blocked)
-    VALUES (?,?,?,?,?,?,?,?,?,0)
+    INSERT INTO tenants (username, company_id, shop_name, code, plan, expires_on, password_hash, created_at, last_seen_at, blocked, features_off)
+    VALUES (?,?,?,?,?,?,?,?,?,0,?)
     ON CONFLICT(username) DO UPDATE SET
       company_id = excluded.company_id,
       shop_name  = excluded.shop_name,
@@ -109,8 +113,14 @@ function upsert({ username, companyId, shopName, code, plan, expiresOn, password
       plan       = excluded.plan,
       expires_on = excluded.expires_on,
       password_hash = excluded.password_hash,
-      blocked    = 0
-  `).run(u, companyId, shopName || "", code || "", plan || "paid", expiresOn || "", ph, Date.now(), Date.now());
+      blocked    = 0,
+      /* Only when the caller actually knows: a sign-in decided offline has
+         not spoken to the vendor and must not wipe what the vendor last
+         said by writing a blank over it. */
+      features_off = CASE WHEN excluded.features_off IS NULL THEN tenants.features_off ELSE excluded.features_off END
+  `).run(u, companyId, shopName || "", code || "", plan || "paid", expiresOn || "", ph, Date.now(), Date.now(),
+         featuresOff === undefined || featuresOff === null ? null
+           : (Array.isArray(featuresOff) ? featuresOff.join(",") : String(featuresOff)));
   return get(u);
 }
 

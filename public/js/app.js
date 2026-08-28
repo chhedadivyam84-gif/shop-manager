@@ -5302,6 +5302,11 @@ async function openCameraScan(){
       <button class="btn btn-gold" id="sc-go">Find it</button>
       <button class="btn btn-outline" data-sheetclose>Close</button>
     </div>
+    <!-- Why it is or is not working, in plain words on the screen itself.
+         "The camera does not work" can mean three unrelated things and they
+         have three unrelated fixes; without this, finding out which costs a
+         phone call and a lot of guessing. -->
+    <div class="muted" id="sc-diag" style="font-size:11px;margin-top:14px;line-height:1.5;"></div>
   `;
   sheet.querySelectorAll("[data-sheetclose]").forEach(b => b.addEventListener("click", ()=>{ stopCameraScan(); closeAllSheets(); }));
   const go = () => {
@@ -5313,6 +5318,19 @@ async function openCameraScan(){
   sheet.querySelector("#sc-manual").addEventListener("keydown", e => { if(e.key === "Enter") go(); });
 
   const body = sheet.querySelector("#sc-body");
+  const diag = sheet.querySelector("#sc-diag");
+  const say = (label, ok, detail) =>
+    `<div>${ok ? "&#10003;" : "&#10007;"} ${label}${detail ? " — " + escapeHtml(String(detail)) : ""}</div>`;
+
+  const showDiag = (extra) => {
+    diag.innerHTML =
+      say("Secure page", secure, location.protocol + "//" + location.host) +
+      say("Reading", true, supported
+          ? "this browser's own reader, and the app's"
+          : "the app's own reader (this browser has none)") +
+      (extra || "");
+  };
+  showDiag();
   showSheet("sheet-scan");
 
   if(!secure){
@@ -5328,13 +5346,10 @@ async function openCameraScan(){
       straight to the bill.</div>`;
     return;
   }
-  if(!supported){
-    body.innerHTML = `<div class="empty-hint" style="text-align:left;">
-      This browser cannot read barcodes with the camera. Chrome on Android can;
-      Safari on iPhone cannot.<br><br>
-      A handheld scanner works here, and the code can be typed in below.</div>`;
-    return;
-  }
+  /* No longer a dead end. Where the browser has no reader of its own —
+     every iPhone, and desktop browsers — the app reads its own labels
+     itself. It only has to manage Code 128, which is all this app ever
+     prints. */
 
   body.innerHTML = `<video id="sc-video" playsinline muted
       style="width:100%;border-radius:12px;background:#000;aspect-ratio:4/3;object-fit:cover;"></video>
@@ -5369,7 +5384,24 @@ async function openCameraScan(){
   video.srcObject = scanStream;
   await video.play().catch(()=>{});
 
-  const detector = new window.BarcodeDetector({ formats: ["code_128", "ean_13", "code_39", "ean_8", "upc_a"] });
+  /* The resolution ASKED for and the one actually granted are often very
+     different, and that difference is usually the answer: a barcode at
+     640 wide is about two pixels a bar and will hunt for ever. */
+  const track = scanStream.getVideoTracks()[0];
+  const got = (track && track.getSettings) ? track.getSettings() : {};
+  let looks = 0, since = Date.now();
+  showDiag(say("Camera", (got.width || 0) >= 1000,
+    (got.width || "?") + " x " + (got.height || "?") +
+    ((got.width || 0) < 1000 ? " — too few pixels for fine bars" : "")));
+
+  /* The browser's reader when it has one — it is better, and it knows the
+     manufacturers' symbologies this app never prints. Ours as well, always,
+     because on a poor frame one of them often sees what the other misses. */
+  const detector = supported
+    ? new window.BarcodeDetector({ formats: ["code_128", "ean_13", "code_39", "ean_8", "upc_a"] })
+    : null;
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
   /* LOOK AT EVERY FRAME IT CAN, not on a timer.
      ------------------------------------------------------------------
      A 300ms interval threw away four frames in five, and on top of that
@@ -5384,16 +5416,42 @@ async function openCameraScan(){
   scanning = true;
   const look = async () => {
     if(!scanning) return;
+    let code = null;
     try{
-      const found = await detector.detect(video);
-      if(found && found.length && found[0].rawValue){
-        const code = found[0].rawValue;
-        stopCameraScan();
-        closeAllSheets();
-        resolveScan(code);
-        return;
+      if(detector){
+        const found = await detector.detect(video);
+        if(found && found.length && found[0].rawValue) code = found[0].rawValue;
       }
     }catch(e){ /* a frame that could not be read is not worth showing */ }
+
+    if(!code && video.videoWidth){
+      try{
+        /* Read at a sensible width whatever the camera gave us: more pixels
+           than this is slower per frame without reading anything a printed
+           label did not already show. */
+        const w = Math.min(1280, video.videoWidth);
+        const h = Math.round(video.videoHeight * (w / video.videoWidth));
+        if(canvas.width !== w){ canvas.width = w; canvas.height = h; }
+        ctx.drawImage(video, 0, 0, w, h);
+        const img = ctx.getImageData(0, 0, w, h);
+        code = Barcode.decodeImageData(img.data, w, h);
+      }catch(e){ /* a frame we could not read is simply the next frame */ }
+    }
+
+    if(code){
+      stopCameraScan();
+      closeAllSheets();
+      resolveScan(code);
+      return;
+    }
+    /* Looking and not finding is a different fault from not looking, and
+       from the outside they are identical. */
+    looks++;
+    if(looks % 10 === 0){
+      const fps = Math.round(looks / Math.max(1, (Date.now() - since) / 1000));
+      showDiag(say("Camera", (got.width || 0) >= 1000, (got.width || "?") + " x " + (got.height || "?")) +
+               say("Looking", true, looks + " frames checked, about " + fps + " a second"));
+    }
     if(scanning) scanTimer = setTimeout(look, 40);
   };
   look();

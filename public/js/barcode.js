@@ -172,6 +172,174 @@
     return Math.min(cap, fits);
   }
 
+  /* ============================================================
+     READING ONE BACK
+
+     The browser has a barcode reader of its own, and where it exists it is
+     better than this — it is written in C++ and knows a dozen symbologies.
+     But it does not exist on an iPhone at all, and not on a desktop
+     browser either, and a shop holding a phone that cannot scan does not
+     care whose fault that is.
+
+     This only has to read the labels this app prints, which are Code 128
+     and nothing else, so it can be small: measure the bars, turn the
+     widths into symbols, check the checksum. It is used when the browser
+     has nothing of its own, and as a second opinion when it does.
+     ============================================================ */
+
+  /** The pattern table, keyed by its six digits, so a lookup is one step. */
+  var BY_PATTERN = null;
+  function patternIndex() {
+    if (BY_PATTERN) return BY_PATTERN;
+    BY_PATTERN = {};
+    for (var i = 0; i < PATTERNS.length; i++) BY_PATTERN[PATTERNS[i]] = i;
+    return BY_PATTERN;
+  }
+
+  /**
+   * Decode a run-length list — the widths of alternating dark and light
+   * bars, starting with dark — into the text it spells.
+   *
+   * Returns null for anything at all wrong. A barcode read wrongly is far
+   * worse than one not read: it puts a different product on the bill.
+   */
+  function decodeRuns(runs, startsDark) {
+    if (!startsDark || runs.length < 6 * 3 + 7) return null;
+    var table = patternIndex();
+
+    /* The start symbol is eleven modules across six bars, so those six give
+       the module width to measure the rest against. Re-estimated as it goes,
+       because a label photographed at an angle is wider at one end. */
+    var unit = 0;
+    for (var i = 0; i < 6; i++) unit += runs[i];
+    unit /= 11;
+    if (unit <= 0) return null;
+
+    var symbols = [];
+    var at = 0;
+    while (at + 6 <= runs.length) {
+      /* The stop symbol is seven bars, not six. */
+      var isStop = false;
+      if (at + 7 <= runs.length) {
+        var stopKey = quantise(runs, at, 7, unit);
+        if (stopKey && table[stopKey] === STOP) { symbols.push(STOP); isStop = true; at += 7; }
+      }
+      if (isStop) break;
+
+      var key = quantise(runs, at, 6, unit);
+      if (!key) return null;
+      var v = table[key];
+      if (v === undefined || v === STOP) return null;
+      symbols.push(v);
+
+      /* Follow the drift: this symbol was eleven modules wide, whatever it
+         measured, so the next one is measured against that. */
+      var span = 0;
+      for (var j = 0; j < 6; j++) span += runs[at + j];
+      unit = (unit * 3 + span / 11) / 4;
+      at += 6;
+    }
+
+    if (symbols.length < 4) return null;
+    if (symbols[symbols.length - 1] !== STOP) return null;
+    if (symbols[0] !== START_B) return null;          /* only what we print */
+
+    var data = symbols.slice(1, -2);
+    var claimed = symbols[symbols.length - 2];
+    var sum = START_B;
+    for (var k = 0; k < data.length; k++) sum += data[k] * (k + 1);
+    if (sum % 103 !== claimed) return null;           /* THE guard */
+
+    var text = "";
+    for (var n = 0; n < data.length; n++) {
+      if (data[n] > 94) return null;                  /* a shift or a set change */
+      text += String.fromCharCode(data[n] + 32);
+    }
+    return text;
+  }
+
+  /** `count` runs from `at`, as a pattern key, or null if they do not round
+   *  cleanly to whole modules. */
+  function quantise(runs, at, count, unit) {
+    var key = "", total = 0;
+    for (var i = 0; i < count; i++) {
+      var n = Math.round(runs[at + i] / unit);
+      if (n < 1 || n > 4) return null;
+      /* A bar more than a third off a whole number of modules is not a bar
+         that was read properly. */
+      if (Math.abs(runs[at + i] / unit - n) > 0.35) return null;
+      key += n; total += n;
+    }
+    if (total !== (count === 7 ? 13 : 11)) return null;
+    return key;
+  }
+
+  /**
+   * Find a barcode anywhere in an image.
+   *
+   * Reads several horizontal lines rather than one: a label is rarely
+   * straight on and one line through it may cross a finger, a crease or the
+   * printed text. Each line is thresholded on its own, because one side of
+   * a photograph is usually brighter than the other.
+   */
+  function decodeImageData(px, width, height, opts) {
+    opts = opts || {};
+    var lines = opts.lines || 15;
+    var tryBoth = opts.reversed !== false;
+
+    for (var n = 0; n < lines; n++) {
+      /* Spread over the middle half, where a held label sits. */
+      var y = Math.floor(height * (0.25 + 0.5 * (n / Math.max(1, lines - 1))));
+      if (y < 0 || y >= height) continue;
+
+      var row = new Array(width);
+      var min = 255, max = 0;
+      var base = y * width * 4;
+      for (var x = 0; x < width; x++) {
+        var o = base + x * 4;
+        /* Green alone is a good enough stand-in for brightness and a third
+           of the work of a proper luminance. */
+        var lum = px[o + 1];
+        row[x] = lum;
+        if (lum < min) min = lum;
+        if (lum > max) max = lum;
+      }
+      if (max - min < 40) continue;            /* flat: no barcode on this line */
+      var mid = (min + max) / 2;
+
+      var runs = [], cur = row[0] < mid, len = 0;
+      for (var x2 = 0; x2 < width; x2++) {
+        var dark = row[x2] < mid;
+        if (dark === cur) { len++; }
+        else { runs.push(len); cur = dark; len = 1; }
+      }
+      runs.push(len);
+
+      var startsDark = row[0] < mid;
+      var got = scanFrom(runs, startsDark);
+      if (got) return got;
+      if (tryBoth) {
+        /* Photographed upside down, which happens constantly. */
+        var rev = runs.slice().reverse();
+        var revStartsDark = (runs.length % 2 === 1) ? startsDark : !startsDark;
+        got = scanFrom(rev, revStartsDark);
+        if (got) return got;
+      }
+    }
+    return null;
+  }
+
+  /** Try every plausible starting bar on one line. */
+  function scanFrom(runs, startsDark) {
+    for (var i = 0; i + 40 <= runs.length + 6; i++) {
+      var thisIsDark = startsDark ? (i % 2 === 0) : (i % 2 === 1);
+      if (!thisIsDark) continue;
+      var got = decodeRuns(runs.slice(i), true);
+      if (got) return got;
+    }
+    return null;
+  }
+
   function round(n) { return Math.round(n * 1000) / 1000; }
   function esc(s) {
     return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
@@ -179,7 +347,8 @@
   }
 
   global.Barcode = { svg: svg, widths: widths, values: values, encodable: encodable,
-                     modulesFor: modulesFor, fitModule: fitModule };
+                     modulesFor: modulesFor, fitModule: fitModule,
+                     decodeRuns: decodeRuns, decodeImageData: decodeImageData };
 
   if (typeof module !== "undefined" && module.exports) module.exports = global.Barcode;
 

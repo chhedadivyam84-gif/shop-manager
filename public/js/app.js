@@ -5351,9 +5351,20 @@ async function openCameraScan(){
      itself. It only has to manage Code 128, which is all this app ever
      prints. */
 
-  body.innerHTML = `<video id="sc-video" playsinline muted
-      style="width:100%;border-radius:12px;background:#000;aspect-ratio:4/3;object-fit:cover;"></video>
-    <div class="muted" style="font-size:11.5px;margin-top:6px;text-align:center;">Hold the label steady in the frame.</div>`;
+  /* The window is not decoration: it is exactly the part of the picture
+     that gets read, so aiming through it is what makes it quick. Its
+     proportions and SCAN_BAND below are the same numbers. */
+  body.innerHTML = `
+    <div class="sc-view">
+      <video id="sc-video" playsinline muted></video>
+      <div class="sc-mask"></div>
+      <div class="sc-win">
+        <i class="c tl"></i><i class="c tr"></i><i class="c bl"></i><i class="c br"></i>
+        <div class="sc-beam"></div>
+      </div>
+    </div>
+    <div class="muted" style="font-size:11.5px;margin-top:8px;text-align:center;">
+      Fill the window with the barcode. Closer is better than further.</div>`;
 
   try{
     /* ASK FOR PIXELS. Left to itself a browser hands back 640x480, and at
@@ -5426,22 +5437,42 @@ async function openCameraScan(){
 
     if(!code && video.videoWidth){
       try{
-        /* Read at a sensible width whatever the camera gave us: more pixels
-           than this is slower per frame without reading anything a printed
-           label did not already show. */
-        const w = Math.min(1280, video.videoWidth);
-        const h = Math.round(video.videoHeight * (w / video.videoWidth));
-        if(canvas.width !== w){ canvas.width = w; canvas.height = h; }
-        ctx.drawImage(video, 0, 0, w, h);
+        /* ONLY THE WINDOW, not the whole picture.
+           ----------------------------------------------------------
+           Reading a full 1280x720 frame means pulling nearly a million
+           pixels out of the GPU and walking fifteen lines across all of
+           them, every time. The barcode is never in the top corner or
+           along the bottom edge — it is in the window the person is
+           aiming through — so only that strip is copied and read.
+
+           About a tenth of the pixels, which is most of the speed, and
+           it also stops the reader being distracted by print elsewhere
+           on the page. These proportions are the same ones .sc-win is
+           drawn with, or people would aim at the wrong place. */
+        const vw = video.videoWidth, vh = video.videoHeight;
+        const sw = Math.round(vw * 0.86), sh = Math.round(vh * 0.36);
+        const sx = Math.round((vw - sw) / 2), sy = Math.round((vh - sh) / 2);
+
+        /* Downscaled only if the camera is generous: 1000 pixels across
+           the window is plenty for any label a phone can hold steady. */
+        const w = Math.min(1000, sw);
+        const h = Math.max(24, Math.round(sh * (w / sw)));
+        if(canvas.width !== w || canvas.height !== h){ canvas.width = w; canvas.height = h; }
+        ctx.drawImage(video, sx, sy, sw, sh, 0, 0, w, h);
         const img = ctx.getImageData(0, 0, w, h);
-        code = Barcode.decodeImageData(img.data, w, h);
+        code = Barcode.decodeImageData(img.data, w, h, { lines: 11 });
       }catch(e){ /* a frame we could not read is simply the next frame */ }
     }
 
     if(code){
+      /* A moment that says WHICH one, before the screen changes under
+         them: the window turns green, the sweep stops, and the phone
+         gives the short buzz every scanner in every shop gives. */
+      const view = sheet.querySelector(".sc-view");
+      if(view) view.classList.add("hit");
+      try{ if(navigator.vibrate) navigator.vibrate(35); }catch(e){}
       stopCameraScan();
-      closeAllSheets();
-      resolveScan(code);
+      setTimeout(() => { closeAllSheets(); resolveScan(code); }, 180);
       return;
     }
     /* Looking and not finding is a different fault from not looking, and
@@ -5452,7 +5483,12 @@ async function openCameraScan(){
       showDiag(say("Camera", (got.width || 0) >= 1000, (got.width || "?") + " x " + (got.height || "?")) +
                say("Looking", true, looks + " frames checked, about " + fps + " a second"));
     }
-    if(scanning) scanTimer = setTimeout(look, 40);
+    if(!scanning) return;
+    /* requestVideoFrameCallback fires exactly when a NEW frame is ready,
+       so nothing is spent re-reading a picture already looked at. Where
+       it is missing, a short timer does the same job less precisely. */
+    if(video.requestVideoFrameCallback) video.requestVideoFrameCallback(() => look());
+    else scanTimer = setTimeout(look, 30);
   };
   look();
 }

@@ -2188,3 +2188,38 @@ html[data-theme="plum-rose"]{
   color:var(--danger); font-weight:800; }
 .quick-actions.editing .qa-btn.tile-off{ opacity:.42; }
 .quick-actions.editing .qa-btn.tile-off::after{ content:"+"; color:var(--ok); font-size:14px; }
+
+/* ---- the scanning window --------------------------------------------
+   The clear rectangle is exactly the part of the frame that is read, so
+   aiming through it is not a hint — it is what makes scanning quick. */
+.sc-view{ position:relative; width:100%; aspect-ratio:4/3; border-radius:14px;
+  overflow:hidden; background:#000; }
+.sc-view video{ width:100%; height:100%; object-fit:cover; display:block; }
+/* Everything outside the window darkened, so the eye goes where the app
+   is looking. One element with a huge shadow rather than four strips. */
+.sc-win{ position:absolute; left:7%; top:32%; width:86%; height:36%;
+  box-shadow:0 0 0 100vmax oklch(0 0 0 / .55); border-radius:10px; }
+.sc-mask{ position:absolute; inset:0; pointer-events:none; }
+.sc-win .c{ position:absolute; width:22px; height:22px; border:3px solid var(--gold); }
+.sc-win .c.tl{ left:-2px;  top:-2px;    border-right:0; border-bottom:0; border-radius:8px 0 0 0; }
+.sc-win .c.tr{ right:-2px; top:-2px;    border-left:0;  border-bottom:0; border-radius:0 8px 0 0; }
+.sc-win .c.bl{ left:-2px;  bottom:-2px; border-right:0; border-top:0;    border-radius:0 0 0 8px; }
+.sc-win .c.br{ right:-2px; bottom:-2px; border-left:0;  border-top:0;    border-radius:0 0 8px 0; }
+/* A line sweeping the window, which is the one thing that says "it is
+   looking" while nothing else on screen moves. */
+.sc-beam{ position:absolute; left:6px; right:6px; height:2px; border-radius:2px;
+  background:linear-gradient(90deg, transparent, var(--gold), transparent);
+  box-shadow:0 0 10px var(--gold);
+  animation:sc-sweep 1.6s ease-in-out infinite; }
+@keyframes sc-sweep{
+  0%,100%{ top:8%;  opacity:.35; }
+  50%    { top:88%; opacity:1; }
+}
+/* Found it. The window turns green and stops, so there is a moment that
+   says "that one" before the screen changes. */
+.sc-view.hit .sc-win{ box-shadow:0 0 0 100vmax oklch(0 0 0 / .55), 0 0 0 3px var(--ok) inset; }
+.sc-view.hit .sc-win .c{ border-color:var(--ok); }
+.sc-view.hit .sc-beam{ animation:none; opacity:0; }
+@media (prefers-reduced-motion:reduce){
+  .sc-beam{ animation:none; top:48%; opacity:.9; }
+}

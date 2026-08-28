@@ -5102,7 +5102,11 @@ function printLabels(){
   const perPage = stock.cols * stock.rows;
   const cellList = stickers.map(it => {
     const module = Barcode.fitModule(it.code, usable);
-    const barHeight = Math.max(6, stock.h * 0.42);
+    /* Taller bars are easier to read: a scanner only needs ONE clean
+       horizontal line across them, and a tall barcode gives it many more
+       chances at an angle. Half the label height, which still leaves room
+       for the two lines of text above it. */
+    const barHeight = Math.max(7, stock.h * 0.5);
     const svg = module ? Barcode.svg(it.code, { module, height: barHeight, fontSize: 2.3 }) : "";
     return `<div class="lb"><div class="lb-name">${escapeHtml(it.name)}</div>` +
            `<div class="lb-sub">${escapeHtml(it.sub || "")}${(labelShowPrice && it.price!=null) ? " · " + fmt(it.price) : ""}</div>` +
@@ -5216,10 +5220,22 @@ async function resolveScan(code){
 function wireWedgeScanner(){
   let buf = "";
   let last = 0;
-  const MAX_GAP = 40;   /* ms between keys. 25 characters a second, held for
-                           a whole code — about 300 words a minute. Nobody
-                           types like that; a scanner does nothing else. */
   const MIN_LEN = 4;
+
+  /* HOW FAST IS FAST ENOUGH?
+     ------------------------------------------------------------------
+     40ms a character was too strict and it was the wrong kind of wrong:
+     a scanner slower than that — most Bluetooth ones, and any wired one
+     with an inter-character delay configured — never registered as a scan
+     at all. It just typed its code into whatever was focused and pressed
+     Enter, which looks exactly like the scanner not working.
+
+     So the limit depends on what is at stake. With nothing focused there
+     is no typing to protect and it can afford to be generous. Inside a
+     field it stays strict, because that is the only place where mistaking
+     a fast typist for a scanner would cost anything. */
+  const GAP_LOOSE = 220;   /* nothing focused: catches even a slow Bluetooth one */
+  const GAP_TYPING = 60;   /* in a field: still far beyond human speed */
 
   /* CAPTURE PHASE, and it listens even while a field has the focus.
      ------------------------------------------------------------------
@@ -5237,8 +5253,12 @@ function wireWedgeScanner(){
   document.addEventListener("keydown", (e) => {
     if(e.ctrlKey || e.altKey || e.metaKey) return;
 
+    const el = document.activeElement;
+    const typing = el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+    const maxGap = typing ? GAP_TYPING : GAP_LOOSE;
+
     const now = Date.now();
-    if(now - last > MAX_GAP) buf = "";
+    if(now - last > maxGap) buf = "";
     last = now;
 
     if(e.key === "Enter"){
@@ -5251,7 +5271,6 @@ function wireWedgeScanner(){
 
       /* Take the scanned text back out of whatever it was typed into, so a
          search box is not left filtered by a barcode nobody can read. */
-      const el = document.activeElement;
       if(el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")
          && typeof el.value === "string" && el.value.endsWith(code)){
         el.value = el.value.slice(0, -code.length);
@@ -5322,7 +5341,26 @@ async function openCameraScan(){
     <div class="muted" style="font-size:11.5px;margin-top:6px;text-align:center;">Hold the label steady in the frame.</div>`;
 
   try{
-    scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+    /* ASK FOR PIXELS. Left to itself a browser hands back 640x480, and at
+       that size a barcode filling half the frame gives about two pixels per
+       bar — which is why it hunts, and why it feels slow rather than
+       broken. At 1920 wide the same bar is six or seven pixels and it
+       reads almost at once.
+
+       Every constraint here is `ideal`, never `exact`: a phone that cannot
+       manage this must still give us its best camera rather than refusing
+       outright and leaving the shop with nothing. */
+    scanStream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: "environment" },
+        width:  { ideal: 1920 },
+        height: { ideal: 1080 },
+        /* A label held close is the whole use case, and a camera locked on
+           infinity reads nothing at 15cm. */
+        focusMode: { ideal: "continuous" },
+        advanced: [{ focusMode: "continuous" }]
+      }
+    });
   } catch(e){
     body.innerHTML = `<div class="empty-hint">The camera was not allowed. Check the permission for this site, or type the code below.</div>`;
     return;
@@ -5332,22 +5370,42 @@ async function openCameraScan(){
   await video.play().catch(()=>{});
 
   const detector = new window.BarcodeDetector({ formats: ["code_128", "ean_13", "code_39", "ean_8", "upc_a"] });
-  scanTimer = setInterval(async () => {
+  /* LOOK AT EVERY FRAME IT CAN, not on a timer.
+     ------------------------------------------------------------------
+     A 300ms interval threw away four frames in five, and on top of that
+     it fired again whether or not the last detect() had finished — so on a
+     slow phone the calls piled up behind each other and it got worse the
+     longer you held it there.
+
+     This waits for each detect() to finish before asking for the next, so
+     it runs exactly as fast as the phone can manage and never queues. On a
+     good phone that is every frame; on a poor one it degrades by itself
+     instead of falling over. */
+  scanning = true;
+  const look = async () => {
+    if(!scanning) return;
     try{
       const found = await detector.detect(video);
-      if(found && found.length){
+      if(found && found.length && found[0].rawValue){
         const code = found[0].rawValue;
         stopCameraScan();
         closeAllSheets();
         resolveScan(code);
+        return;
       }
-    }catch(e){ /* a frame that could not be read is not an error worth showing */ }
-  }, 300);
+    }catch(e){ /* a frame that could not be read is not worth showing */ }
+    if(scanning) scanTimer = setTimeout(look, 40);
+  };
+  look();
 }
 
-let scanStream = null, scanTimer = null;
+let scanStream = null, scanTimer = null, scanning = false;
 function stopCameraScan(){
-  if(scanTimer){ clearInterval(scanTimer); scanTimer = null; }
+  /* `scanning` stops the loop even if a detect() is already in flight —
+     clearing the timer alone would let one more round schedule itself
+     after the camera had been handed back. */
+  scanning = false;
+  if(scanTimer){ clearTimeout(scanTimer); scanTimer = null; }
   if(scanStream){ scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
 }
 

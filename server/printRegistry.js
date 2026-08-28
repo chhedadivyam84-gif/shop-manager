@@ -241,6 +241,11 @@ function defaultConfig(doc) {
                             : { top: 10, right: 10, bottom: 10, left: 10 },
     fontSize: doc.autoWidths ? 0 : 10.5,
     title: doc.defaultTitle || doc.label,
+    /* The height of one row in the item table, in the same pixels the
+       column widths use. 0 means "whatever the text needs", which is how
+       every bill has printed until now — so a template nobody has dragged
+       looks exactly as it always did. */
+    rowHeight: 0,
     showRate: true,
     showLogo: true,
     showCompany: true,

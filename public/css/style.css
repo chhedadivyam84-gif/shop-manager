@@ -2223,3 +2223,24 @@ html[data-theme="plum-rose"]{
 @media (prefers-reduced-motion:reduce){
   .sc-beam{ animation:none; top:48%; opacity:.9; }
 }
+
+/* ---- dragging the template's table lines ---------------------------
+   The grip sits ON the divider, a few pixels wide, so the line itself is
+   what you grab. Invisible until the pointer is near it: a preview
+   peppered with handles stops looking like the page it is previewing. */
+.tpl-grip{ position:absolute; z-index:5; touch-action:none; }
+.tpl-items th{ position:relative; }
+.tpl-grip-col{ top:0; right:-3px; width:7px; height:100%; cursor:col-resize; }
+.tpl-grip-row{ left:0; bottom:-3px; width:100%; height:7px; cursor:row-resize; }
+.tpl-grip::after{
+  content:""; position:absolute; background:var(--gold); opacity:0; border-radius:2px;
+  transition:opacity .12s ease;
+}
+.tpl-grip-col::after{ top:0; bottom:0; left:2px; width:3px; }
+.tpl-grip-row::after{ left:0; right:0; top:2px; height:3px; }
+.tpl-grip:hover::after, .tpl-grip.dragging::after{ opacity:1; }
+/* While dragging, the whole page takes the resize cursor — losing it the
+   moment the pointer slips off a 7px strip reads as the drag having
+   stopped when it has not. */
+.tpl-grip-col.dragging ~ *, body:has(.tpl-grip-col.dragging){ cursor:col-resize; }
+body:has(.tpl-grip-row.dragging){ cursor:row-resize; }

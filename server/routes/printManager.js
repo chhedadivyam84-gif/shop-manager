@@ -134,6 +134,14 @@ router.put("/templates/:id", requireRole("owner"), (req, res) => {
   let config = JSON.parse(t.config);
   if (req.body.config && typeof req.body.config === "object") {
     config = { ...config, ...req.body.config };
+    /* Clamped, like the column widths below. A row height arriving as
+       nonsense — a string, a negative, or 4000 — would be written straight
+       into the template and print a bill one row to the page, and the only
+       way back would be Reset Layout. 0 keeps its meaning: whatever the
+       text needs. */
+    if (req.body.config.rowHeight !== undefined) {
+      config.rowHeight = Math.max(0, Math.min(120, Number(req.body.config.rowHeight) || 0));
+    }
     /* Columns are replaced wholesale, not merged. They are an ORDERED list
        and the designer's whole job is reordering them — merging index by
        index would quietly resurrect the old order. */

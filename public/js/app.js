@@ -9244,6 +9244,16 @@ function billColumns(challan){
   ];
 }
 
+/** The row height this document's template was saved with, or 0 for
+ *  "whatever the text needs" — which is how every bill printed before the
+ *  designer could drag one. Read from the same template billColumns() uses,
+ *  so the widths and the height can never come from two different places. */
+function billRowHeightFor(challan){
+  const cfg = billConfig(challan);
+  const h = cfg && Number(cfg.rowHeight);
+  return Number.isFinite(h) && h > 0 ? Math.min(120, h) : 0;
+}
+
 /* The classes the stylesheet already targets, kept per column key so the
    themes and the print CSS keep working untouched. */
 /* Qty, Rate and Amount keep c-num for their alignment AND carry a column
@@ -9596,6 +9606,7 @@ function renderInvoicePageContent(){
   // classic seven exactly; billColumns() falls back to them outright if no
   // template has loaded, so printing never depends on the Print Manager.
   const cols = billColumns(challan);
+  const billRowHeight = billRowHeightFor(challan);
   const head = cols.map(billHeadCell).join("");
   const rows = inv.items.map((it,i)=>{
     const mode = it.mode || "UNIT";
@@ -9619,7 +9630,12 @@ function renderInvoicePageContent(){
       qtyCellOf: () => qtyCell,
       lineAmount: x => (Number(x.qty)||0) * (Number(x.rate)||0) * (1 - (Number(x.discount_pct)||0)/100)
     };
-    return `<tr>${cols.map(c => billBodyCell(c, billCellFor(c.key, it, i, cellCtx))).join("")}</tr>`;
+    /* The height dragged in the designer. Set on the row itself rather
+       than in a stylesheet, because this markup is what goes to the
+       printer and to the PDF — a rule in the app's CSS would not travel
+       with it. */
+    const rowStyle = billRowHeight ? ` style="height:${billRowHeight}px;"` : "";
+    return `<tr${rowStyle}>${cols.map(c => billBodyCell(c, billCellFor(c.key, it, i, cellCtx))).join("")}</tr>`;
   }).join("");
   // Total Quantity is the physical piece count across all items, not the
   // billed area/length sum — matching what gets counted at load/unload,
@@ -17010,7 +17026,8 @@ const pmState = {
   warnings: [],
   openDocKey: null,      // which document's templates are open
   templates: [],
-  editing: null          // the template being designed
+  editing: null,         // the template being designed
+  previewScale: 1        // what the preview was shrunk by, for the drag handles
 };
 
 async function renderPrintManager(){
@@ -17490,13 +17507,21 @@ function buildTemplatePreviewHtml(cfg, docLabel){
   }, { gross:0, net:0, tax:0 });
   const money = v => cfg.showRate ? "₹" + v.toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2}) : "";
 
-  const th = cols.map(c=>
-    `<th style="text-align:${c.align};${c.width ? `width:${c.width}px;` : ""}">${escapeHtml(c.label)}</th>`).join("");
+  /* A dragged row height, applied to every row so the table keeps one
+     rhythm. 0 is what every bill has always printed: whatever the text
+     needs. */
+  const rowH = Number(cfg.rowHeight) > 0 ? `height:${Number(cfg.rowHeight)}px;` : "";
+
+  /* data-ci is the column's index in the SHOWN list, which is what the drag
+     handles below key off — the config index would be wrong the moment a
+     column is hidden. */
+  const th = cols.map((c,i)=>
+    `<th data-ci="${i}" style="text-align:${c.align};${c.width ? `width:${c.width}px;` : ""}">${escapeHtml(c.label)}</th>`).join("");
   const rows = PM_SAMPLE_ITEMS.map(it=>
-    `<tr>${cols.map(c=>`<td style="text-align:${c.align};">${escapeHtml(pmCellFor(c.key, it, cfg))}</td>`).join("")}</tr>`).join("");
+    `<tr style="${rowH}">${cols.map(c=>`<td style="text-align:${c.align};">${escapeHtml(pmCellFor(c.key, it, cfg))}</td>`).join("")}</tr>`).join("");
   // A few ruled blanks, the way the real page fills to the foot.
   const filler = Array.from({length:4}, ()=>
-    `<tr>${cols.map(c=>`<td style="text-align:${c.align};">&nbsp;</td>`).join("")}</tr>`).join("");
+    `<tr style="${rowH}">${cols.map(c=>`<td style="text-align:${c.align};">&nbsp;</td>`).join("")}</tr>`).join("");
 
   const bank = [s.bank_name, s.bank_account_no && "A/c " + s.bank_account_no,
                 s.bank_ifsc && "IFSC " + s.bank_ifsc, s.bank_branch].filter(Boolean);
@@ -17583,15 +17608,156 @@ function renderTemplatePreview(){
   const natural = rect.width, naturalHeight = rect.height;
   if(natural > 0 && avail > 0){
     const scale = Math.min(1, avail / natural);
+    /* Kept, because the drag handles have to divide by it. */
+    pmState.previewScale = scale;
     scaler.style.transform = `scale(${scale})`;
     // A scaled element still reserves its UNSCALED height, which would leave
     // a tall gap below it; the wrapper is set to the scaled height instead.
     host.style.height = (naturalHeight * scale) + "px";
   }
   host.style.cursor = "zoom-in";
-  host.title = "Tap to view full size";
-  host.onclick = () => openPreviewZoom(host.innerHTML,
-    (doc ? doc.label : "Document") + " — " + pmState.editing.name);
+  host.title = "Tap to view full size — or drag any line in the table";
+  host.onclick = (e) => {
+    /* A drag that ends on the page must not also open the zoom. */
+    if(pmDragged){ pmDragged = false; return; }
+    if(e.target.closest(".tpl-grip")) return;
+    /* Without the handles. The zoom is a still picture of the page, and a
+       grip there is a thing that looks draggable and is not. */
+    const still = host.cloneNode(true);
+    still.querySelectorAll(".tpl-grip").forEach(g => g.remove());
+    openPreviewZoom(still.innerHTML,
+      (doc ? doc.label : "Document") + " — " + pmState.editing.name);
+  };
+
+  wireTemplateGrips(host, pmState.previewScale);
+}
+
+/* ============================================================
+   DRAGGING THE TABLE'S OWN LINES
+
+   The widths were always editable — as a number typed into a box, which is
+   the wrong way round for a thing you judge by eye. Here the lines
+   themselves are the handle: take the divider between two headings and pull
+   it, and the column moves under your finger.
+
+   THE PREVIEW IS SCALED. It is drawn at true millimetre size and then
+   shrunk with a transform to fit the panel, so a finger moving 40 screen
+   pixels has not moved the page 40 pixels — it has moved it 40 ÷ scale.
+   Getting that conversion wrong is what makes a resize feel like it is
+   fighting you, and it is invisible until somebody with a small screen
+   tries it.
+
+   Pointer events, not mouse events, so a finger on a tablet works with the
+   same code and no second path to keep in step.
+   ============================================================ */
+let pmDragged = false;
+
+function wireTemplateGrips(host, scale){
+  const table = host.querySelector(".tpl-items");
+  if(!table || !pmState.editing) return;
+  const cfg = pmState.editing.config;
+  const shown = (cfg.columns || []).filter(c => c.show);
+  const heads = [...table.querySelectorAll("thead th")];
+  const k = scale && scale > 0 ? scale : 1;
+
+  /* One grip per divider BETWEEN columns. The last column has no divider
+     of its own — its right edge is the page — so dragging it would mean
+     resizing the table rather than a column. */
+  heads.forEach((th, i) => {
+    if(i >= heads.length - 1) return;
+    const grip = document.createElement("span");
+    grip.className = "tpl-grip tpl-grip-col";
+    grip.title = "Drag to set this column's width";
+    th.appendChild(grip);
+
+    grip.addEventListener("pointerdown", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      /* Best effort, never fatal. setPointerCapture throws for any pointer
+         the browser does not consider active, and it used to be called
+         BEFORE the move listeners were attached — so one throw killed the
+         whole drag in silence, which looks exactly like a handle that does
+         not work. */
+      try{ grip.setPointerCapture(e.pointerId); }catch(err){ /* carry on */ }
+      const startX = e.clientX;
+      /* Its CURRENT width on screen, whether it came from the config or
+         from the browser working it out — dragging a column that has never
+         been given a width must start from where it actually is, not from
+         zero. */
+      const startW = th.getBoundingClientRect().width / k;
+      const col = shown[i];
+      grip.classList.add("dragging");
+
+      const move = (ev) => {
+        pmDragged = true;
+        const next = Math.max(14, Math.min(400, Math.round(startW + (ev.clientX - startX) / k)));
+        col.width = next;
+        th.style.width = next + "px";
+      };
+      const up = () => {
+        try{ grip.releasePointerCapture(e.pointerId); }catch(err){ /* never captured */ }
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        window.removeEventListener("pointercancel", up);
+        grip.classList.remove("dragging");
+        /* The column list on the left shows widths as numbers; it has to
+           agree with what was just dragged. */
+        renderPmColumns();
+        markLayoutUnsaved();
+      };
+      /* On the window, not the grip: a finger or mouse that slips off a
+         seven-pixel strip mid-drag must not end the drag. */
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+      window.addEventListener("pointercancel", up);
+    });
+  });
+
+  /* And the row lines. One height for every row rather than one per row:
+     a bill with rows of different heights is not a layout somebody chose,
+     it is one they gave up on — and the printed page repeats these rows
+     for however many lines the document has, so a per-row height could not
+     survive the second bill anyway. */
+  const firstRow = table.querySelector("tbody tr");
+  if(firstRow){
+    const grip = document.createElement("span");
+    grip.className = "tpl-grip tpl-grip-row";
+    grip.title = "Drag to set the height of every row";
+    const cell = firstRow.querySelector("td");
+    if(cell){
+      cell.style.position = "relative";
+      cell.appendChild(grip);
+      grip.addEventListener("pointerdown", (e) => {
+        e.preventDefault(); e.stopPropagation();
+        try{ grip.setPointerCapture(e.pointerId); }catch(err){ /* carry on */ }
+        const startY = e.clientY;
+        const startH = firstRow.getBoundingClientRect().height / k;
+        grip.classList.add("dragging");
+
+        const move = (ev) => {
+          pmDragged = true;
+          const next = Math.max(10, Math.min(120, Math.round(startH + (ev.clientY - startY) / k)));
+          cfg.rowHeight = next;
+          table.querySelectorAll("tbody tr").forEach(tr => { tr.style.height = next + "px"; });
+        };
+        const up = () => {
+          try{ grip.releasePointerCapture(e.pointerId); }catch(err){ /* never captured */ }
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", up);
+          window.removeEventListener("pointercancel", up);
+          grip.classList.remove("dragging");
+          markLayoutUnsaved();
+        };
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", up);
+        window.addEventListener("pointercancel", up);
+      });
+    }
+  }
+}
+
+function markLayoutUnsaved(){
+  const el = document.getElementById("pm-layout-note");
+  if(el) el.textContent = "Layout changed — press Save Layout to keep it.";
 }
 
 /* ============================================================
@@ -17817,6 +17983,18 @@ function openPmDesigner(tpl){
     <div class="section-title">Document Title</div>
     <input type="text" data-pm-c="title" value="${escapeHtml(c.title||"")}" placeholder="${escapeHtml(doc.label.toUpperCase())}">
 
+    <div class="section-title">Table Layout</div>
+    <p class="muted" style="font-size:11px;margin-bottom:8px;">
+      Drag the lines in the preview above: pull a divider between two headings left or
+      right to set that column's width, or the line under the first row up or down to set
+      the height of every row. Then press Save Layout — it is kept for this template only,
+      and printed exactly as you leave it.</p>
+    <div class="acts" style="margin-bottom:4px;">
+      <button class="btn btn-gold" id="pm-layout-save">Save Layout</button>
+      <button class="btn btn-outline" id="pm-layout-reset">Reset Layout</button>
+    </div>
+    <div class="muted" id="pm-layout-note" style="font-size:11px;min-height:15px;"></div>
+
     <div class="section-title">Item Columns</div>
     <p class="muted" style="font-size:11px;margin-bottom:8px;">
       Drag a row to reorder, or use the arrows. Rename any heading, set its width and alignment.
@@ -17872,6 +18050,31 @@ function openPmDesigner(tpl){
   renderPmColumns();
   renderTemplatePreview();
   document.getElementById("pm-d-save").addEventListener("click", savePmTemplate);
+
+  /* Save Layout saves the same template as Save Template — there is one
+     config and the widths live in it. It exists as its own button because
+     after dragging a line, "Save Template" reads like it might be about
+     to do something else. */
+  document.getElementById("pm-layout-save").addEventListener("click", async () => {
+    const note = document.getElementById("pm-layout-note");
+    if(note) note.textContent = "Saving…";
+    await savePmTemplate({ keepOpen: true });
+    if(note) note.textContent = "Layout saved. It will print exactly like this.";
+  });
+
+  document.getElementById("pm-layout-reset").addEventListener("click", () => {
+    const c = pmState.editing.config;
+    /* Back to "whatever the text needs", which is how the bill printed
+       before anybody dragged anything. Only the sizes go: the columns
+       chosen, their order and their headings are not layout and are not
+       touched. */
+    (c.columns || []).forEach(col => { col.width = 0; });
+    c.rowHeight = 0;
+    renderPmColumns();
+    renderTemplatePreview();
+    const note = document.getElementById("pm-layout-note");
+    if(note) note.textContent = "Back to the default sizes — press Save Layout to keep it.";
+  });
   showSheet("sheet-pm-designer");
 }
 
@@ -17937,7 +18140,14 @@ function renderPmColumns(){
   });
 }
 
-async function savePmTemplate(){
+/**
+ * @param opts.keepOpen leave the designer up afterwards.
+ *   Save Template is a full stop — the sheet closes. Save Layout is not:
+ *   somebody nudging a column into place will press it several times, and
+ *   throwing them out of the designer each time would make the work of
+ *   getting a table right almost impossible.
+ */
+async function savePmTemplate(opts){
   const btn = document.getElementById("pm-d-save");
   btn.disabled = true;
   try{
@@ -17946,9 +18156,14 @@ async function savePmTemplate(){
       config: pmState.editing.config
     });
     pmState.templates = pmState.templates.map(t=>t.id===saved.id ? saved : t);
+    /* THE BILL HAS ITS OWN COPY OF THIS TEMPLATE, fetched once when the app
+       started. Without refreshing it, a layout saved here reached the
+       printed page only after a reload — so somebody would drag a column,
+       save, print, see the old width, and reasonably conclude that saving
+       does not work. */
+    await loadBillTemplates();
     renderPmTemplateList();
-    closeAllSheets();
-    toast("Template saved.", "ok");
+    if(!(opts && opts.keepOpen)){ closeAllSheets(); toast("Template saved.", "ok"); }
   }catch(e){ toast(e.message); }
   btn.disabled = false;
 }

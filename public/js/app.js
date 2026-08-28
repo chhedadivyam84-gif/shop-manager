@@ -18392,22 +18392,83 @@ async function renderGstProviderPanel(){
     <button class="btn btn-outline" id="gst-test-btn" style="margin-top:10px;">Test connection</button>
     <div id="gst-test-result" style="margin-top:8px;"></div>
 
-    <div class="section-title" style="margin-top:16px;">How to connect your GSP</div>
-    <div class="card" style="padding:12px 14px;font-size:12px;line-height:1.7;">
-      <b>1.</b> Get from your GSP: the provider name, API credentials, and their
-      sandbox and production URLs.<br>
-      <b>2.</b> Confirm your GSTIN is enabled for e-invoicing / e-way bill on the
-      government portal, and linked to that GSP.<br>
-      <b>3.</b> Add the credentials as <b>environment variables</b> on the server —
-      on Render that is your service's <i>Environment</i> tab. Never in this app,
-      never in a message, never in the code.<br>
-      <b>4.</b> Set <code>EWB_PROVIDER</code> to the provider's name and
-      <code>GST_ENV</code> to <code>sandbox</code> until it is proven.<br>
-      <b>5.</b> Come back here and press <b>Test connection</b>.
+    <div class="section-title" style="margin-top:16px;">Connect your GSP</div>
+    ${s.lockedByHost ? `<div class="pm-warn">
+      This copy's provider is fixed by its host (<code>EWB_PROVIDER</code>), so it
+      cannot be changed here. Change it there, or remove that setting to control it
+      from this screen.</div>` : ""}
+
+    <div class="card" style="padding:12px 14px;">
+      <label class="field-label">Provider</label>
+      <select id="gst-provider" ${s.lockedByHost ? "disabled" : ""}>
+        ${(s.knownProviders || []).map(p =>
+          `<option value="${escapeHtml(p)}"${p === s.provider ? " selected" : ""}>${escapeHtml(p)}</option>`).join("")}
+      </select>
+
+      <label class="field-label" style="margin-top:10px;">Environment</label>
+      <select id="gst-env" ${s.environmentLockedByHost ? "disabled" : ""}>
+        <option value="sandbox"${s.environment === "sandbox" ? " selected" : ""}>Sandbox — nothing real is sent</option>
+        <option value="production"${s.environment === "production" ? " selected" : ""}>Production — live GST portal</option>
+      </select>
+
+      ${(s.credentials || []).length ? `
+        <div class="section-title" style="margin-top:12px;">Credentials</div>
+        ${s.credentials.map(c => `
+          <label class="field-label" style="margin-top:8px;">${escapeHtml(c.name)}
+            <span class="muted" style="font-weight:400;">
+              — ${c.set ? (c.source === "environment" ? "set on the host" : "saved") : "not set"}</span>
+          </label>
+          <input type="password" data-gst-cred="${escapeHtml(c.name)}" autocomplete="new-password"
+                 placeholder="${c.set ? "leave blank to keep the saved one" : "paste the value"}"
+                 ${c.source === "environment" ? "disabled" : ""}>`).join("")}
+        <p class="muted" style="font-size:11px;margin-top:8px;line-height:1.6;">
+          Typed in here, these are stored on the server and <b>never sent back to any
+          screen</b> — not even this one. It can tell you a key is saved; it cannot
+          show you what it is.</p>
+      ` : `
+        <p class="muted" style="font-size:11.5px;margin-top:10px;line-height:1.6;">
+          <b>${escapeHtml(s.provider)}</b> needs no credentials. Credential boxes appear
+          here as soon as this copy carries an adapter for a real GSP — and an adapter
+          has to be written against that GSP's own documentation, never guessed at.
+        </p>`}
+
+      <button class="btn btn-gold" id="gst-save-btn" style="margin-top:12px;">Save provider settings</button>
+      <div id="gst-save-result" style="margin-top:8px;"></div>
     </div>
-    <p class="muted" style="font-size:11px;margin-top:8px;line-height:1.6;">
-      The app has no field for an API key on purpose. Anything saved in Settings
-      is readable by the browser, so a key here would be a key published.</p>`;
+
+    <p class="muted" style="font-size:11px;margin-top:10px;line-height:1.6;">
+      A key set on the host (an environment variable) still wins over one saved here,
+      and stays out of the nightly backup — these settings are copied to the cloud with
+      the rest of the database. Either works; the host is the safer of the two.
+    </p>`;
+
+  const saveBtn = document.getElementById("gst-save-btn");
+  if(saveBtn) saveBtn.addEventListener("click", async (ev)=>{
+    const out = document.getElementById("gst-save-result");
+    ev.currentTarget.disabled = true;
+    /* Only boxes somebody actually typed into are sent. An empty box means
+       "leave it", never "clear it" — otherwise changing the environment
+       would wipe a working key every time. */
+    const credentials = {};
+    document.querySelectorAll("[data-gst-cred]").forEach(i => {
+      if(i.value.trim()) credentials[i.dataset.gstCred] = i.value.trim();
+    });
+    try{
+      await api("PUT", "/gst/provider", {
+        provider: document.getElementById("gst-provider").value,
+        environment: document.getElementById("gst-env").value,
+        credentials
+      });
+      /* Cleared from the screen the moment they are saved: a key left
+         sitting in a box is a key in the next screenshot. */
+      document.querySelectorAll("[data-gst-cred]").forEach(i => { i.value = ""; });
+      out.innerHTML = `<div class="muted" style="font-size:12px;">Saved. Press Test connection to see whether it works.</div>`;
+      await renderGstProviderPanel();
+    }catch(e){
+      out.innerHTML = `<div class="pm-warn">${escapeHtml(e.message)}</div>`;
+    }
+    ev.currentTarget.disabled = false;
+  });
 
   document.getElementById("gst-test-btn").addEventListener("click", async (ev)=>{
     const out = document.getElementById("gst-test-result");

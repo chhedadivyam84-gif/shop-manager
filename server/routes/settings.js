@@ -5,9 +5,22 @@ const { requireRole } = require("../auth");
 
 const router = express.Router();
 
+/**
+ * The settings row as the BROWSER may see it.
+ *
+ * Everything this returns is handed to any signed-in person, staff
+ * included — so anything secret has to be removed here, by name, and this
+ * is the only place that decision is made.
+ *
+ * gst_credentials holds a GSP's API secret. It is written from the Settings
+ * screen and never read back: the screen asks the status endpoint whether a
+ * credential is SET, which is all anybody needs to see. A screen that
+ * displays "sk_live_abc…" also teaches people it is normal for a key to be
+ * on screen, which is how keys end up in screenshots and WhatsApp messages.
+ */
 function publicSettings() {
   const s = db.prepare("SELECT * FROM settings WHERE id = 1").get();
-  const { pin_hash, ...rest } = s;
+  const { pin_hash, gst_credentials, ...rest } = s;
   return rest;
 }
 

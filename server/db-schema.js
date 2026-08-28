@@ -2397,6 +2397,28 @@ addColumn("settings", "home_tiles_hidden", "TEXT DEFAULT ''");
    have to guess which a key meant every time the built-in set changed. */
 addColumn("settings", "home_tiles_added", "TEXT DEFAULT ''");
 
+/* THE GST PROVIDER, SET FROM INSIDE THE APP.
+
+   Provider and environment are not secrets — the shop can see which GSP it
+   is pointed at and whether it is on sandbox.
+
+   gst_credentials IS a secret, and the rule that governs it is absolute:
+   it is written here and NEVER read back out to a browser. publicSettings()
+   in routes/settings.js strips it, and the status endpoint answers only
+   "set" or "not set". The screen used to have no field for a key at all,
+   for the good reason that everything else in this table is handed to any
+   signed-in staff member; this column is the exception and has to be
+   treated as one every time something new reads from settings.
+
+   AN ENVIRONMENT VARIABLE STILL WINS over anything stored here. A hosted
+   copy that already sets EWB_PROVIDER keeps working untouched, and a secret
+   kept in the host rather than the database stays out of the nightly backup
+   — which is a real difference, because these rows are copied to the cloud
+   and restored on every redeploy. */
+addColumn("settings", "gst_provider", "TEXT DEFAULT ''");
+addColumn("settings", "gst_env", "TEXT DEFAULT ''");
+addColumn("settings", "gst_credentials", "TEXT DEFAULT ''");
+
 /* ============================================================
    WHO WROTE THIS BILL, AND WHO CHANGED IT
 

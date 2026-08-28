@@ -94,13 +94,18 @@ const ADAPTERS = { mock };
  * browser, and an API secret must never be.
  */
 function currentAdapter() {
-  const want = (process.env.EWB_PROVIDER || "mock").toLowerCase();
+  /* The provider may now be chosen on the Settings screen as well as from
+     the environment, and the environment still wins — see ewb/config.js.
+     The rule that a SECRET must never be readable by the browser has not
+     been relaxed at all: credentials are write-only, stripped from the
+     settings the browser is handed, and reported only as set or not set. */
+  const want = require("./config").provider();
   const a = ADAPTERS[want];
   if (!a) {
     // Falling back silently to mock would let a misconfigured production
     // box quietly issue fake numbers. Refuse instead.
     throw new Error(
-      `EWB_PROVIDER is "${want}", which is not a known provider. ` +
+      `The GST provider is set to "${want}", which this copy does not know. ` +
       `Known: ${Object.keys(ADAPTERS).join(", ")}.`
     );
   }

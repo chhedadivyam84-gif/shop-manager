@@ -11,6 +11,7 @@
    ============================================================ */
 const express = require("express");
 const { currentAdapter, ADAPTERS } = require("../ewb/adapters");
+const gstConfig = require("../ewb/config");
 const { requireRole } = require("../auth");
 const { logAction } = require("../util");
 
@@ -29,23 +30,84 @@ router.get("/status", requireRole("owner"), (req, res) => {
   try { adapter = currentAdapter(); }
   catch (e) { error = e.message; }
 
-  const provider = (process.env.EWB_PROVIDER || "mock").toLowerCase();
+  const provider = gstConfig.provider();
   const needed = REQUIRED_ENV[provider] || [];
-  const missing = needed.filter(k => !process.env[k]);
+  /* Missing means missing from BOTH places — a key set on the host counts
+     exactly as much as one typed into the app. */
+  const missing = needed.filter(k => !gstConfig.isSet(k));
 
   res.json({
     provider,
     providerLabel: adapter ? adapter.label : provider,
     knownProviders: Object.keys(ADAPTERS),
-    environment: (process.env.GST_ENV || "sandbox").toLowerCase(),
-    // Set or not set — never the value.
-    credentials: needed.map(k => ({ name: k, set: !!process.env[k] })),
+    environment: gstConfig.environment(),
+    /* Whether the HOST is deciding, for each of the two. Without this the
+       owner can change a screen that an environment variable is quietly
+       overruling, which is the most confusing kind of settings screen
+       there is. */
+    lockedByHost: gstConfig.providerFromEnv(),
+    environmentLockedByHost: gstConfig.environmentFromEnv(),
+    // Set or not set, and WHERE from — never the value.
+    credentials: needed.map(k => ({ name: k, set: gstConfig.isSet(k), source: gstConfig.sourceOf(k) })),
     missing,
     // "Connected" means a real provider with everything it asked for. The
     // mock is deliberately never connected, however well it works.
     connected: !error && provider !== "mock" && missing.length === 0,
     isMock: provider === "mock",
     error
+  });
+});
+
+/**
+ * Set the provider, the environment and its credentials — from the app.
+ *
+ * OWNER ONLY, and write-only. Nothing here echoes a credential back, not
+ * even the one just sent: the response says what is SET, which is what the
+ * screen needs and the most a screen should ever know.
+ *
+ * A blank credential leaves the stored one alone. A form posts every box it
+ * has, and most of the time the boxes are empty because the key is already
+ * saved — treating that as "clear it" would wipe a working connection every
+ * time somebody changed the environment from sandbox to production.
+ */
+router.put("/provider", requireRole("owner"), (req, res) => {
+  const b = req.body || {};
+  const want = String(b.provider || "").trim().toLowerCase();
+
+  if (want && !ADAPTERS[want]) {
+    return res.status(400).json({
+      error: `"${want}" is not a provider this copy knows. Known: ${Object.keys(ADAPTERS).join(", ")}.`
+    });
+  }
+
+  /* Refusing rather than silently ignoring. If the host sets EWB_PROVIDER,
+     it wins — and an owner who changes this screen and sees no effect will
+     reasonably decide the screen is broken. */
+  if (gstConfig.providerFromEnv() && want && want !== gstConfig.provider()) {
+    return res.status(409).json({
+      error: "This copy's provider is fixed by its host (EWB_PROVIDER). "
+           + "Change it there, or remove that setting to control it from here."
+    });
+  }
+
+  if (want) gstConfig.saveProvider(want, b.environment);
+  else if (b.environment) gstConfig.saveProvider(gstConfig.provider(), b.environment);
+
+  if (b.credentials && typeof b.credentials === "object") {
+    gstConfig.saveCredentials(want || gstConfig.provider(), b.credentials,
+      Array.isArray(b.remove) ? b.remove : []);
+  }
+
+  /* The values never appear in the log either. */
+  logAction(req, "gst.provider",
+    `${gstConfig.provider()} / ${gstConfig.environment()}`);
+
+  const needed = REQUIRED_ENV[gstConfig.provider()] || [];
+  res.json({
+    ok: true,
+    provider: gstConfig.provider(),
+    environment: gstConfig.environment(),
+    credentials: needed.map(k => ({ name: k, set: gstConfig.isSet(k), source: gstConfig.sourceOf(k) }))
   });
 });
 

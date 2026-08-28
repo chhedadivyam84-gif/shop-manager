@@ -5167,15 +5167,25 @@ function printLabels(){
 
    Both end in the same place: the billing screen, with the line added.
    ============================================================ */
-async function resolveScan(code){
+/**
+ * Turn a scanned code into a line on the bill.
+ *
+ * Returns what it did, so a caller scanning one label after another can
+ * show a running list instead of a toast for every one.  stops the
+ * toasts for exactly that reason: forty scans is forty toasts stacked over
+ * the very list that is already saying it better.
+ */
+async function resolveScan(code, opts){
+  opts = opts || {};
+  const quiet = !!opts.quiet;
   const c = String(code || "").trim();
-  if(!c) return;
+  if(!c) return { ok:false };
   let r;
   try {
     r = await api("GET", "/products/scan?code=" + encodeURIComponent(c));
   } catch (e) {
-    toast(e.message || `Nothing carries the code ${c}`, true);
-    return;
+    if(!quiet) toast(e.message || `Nothing carries the code ${c}`, true);
+    return { ok:false, code:c, why:"unknown" };
   }
 
   /* Straight to billing, which is what a scan is for. The screen itself is
@@ -5192,21 +5202,28 @@ async function resolveScan(code){
        another till would not be in it. Refreshed only when it is missing,
        rather than on every scan. */
     if(!state.products.some(x => x.id === p.id)) await loadProducts();
+    const size = (p.sizes[r.sizeIndex] || {}).label || "";
     if(addToCart(p.id, r.sizeIndex)){
       renderBillingProducts();
-      focusNewCartLine();
-      toast(`${p.name} · ${(p.sizes[r.sizeIndex]||{}).label || ""}`);
-    } else {
-      toast("That's all the stock at this location.", true);
+      /* Not while scanning: pulling the focus into a quantity box on every
+         scan would put the next barcode into that box instead of the bill. */
+      if(!quiet) focusNewCartLine();
+      if(!quiet) toast(`${p.name} · ${size}`);
+      return { ok:true, code:c, name:p.name, size };
     }
-    return;
+    if(!quiet) toast("That's all the stock at this location.", true);
+    return { ok:false, code:c, name:p.name, size, why:"stock" };
   }
 
   /* A product-level code cannot become a line on its own — the rate lives
      on the size — so it opens the product with its sizes to choose from. */
   if(!state.products.some(x => x.id === r.product.id)) await loadProducts();
+  /* A product-level code names no rate, so somebody has to choose a size.
+     That ends a run of scanning by its nature — the sheet has to come down
+     for the choice to be made. */
   openProductDetail(r.product.id, "billing");
-  toast(`${r.product.name} — choose a size`);
+  if(!quiet) toast(`${r.product.name} — choose a size`);
+  return { ok:false, code:c, name:r.product.name, why:"needs-size" };
 }
 
 /**
@@ -5299,8 +5316,8 @@ async function openCameraScan(){
       <span>&#9000;</span><input type="text" id="sc-manual" placeholder="e.g. QPD4E4-2" autocomplete="off">
     </div>
     <div class="acts" style="margin-top:12px;">
-      <button class="btn btn-gold" id="sc-go">Find it</button>
-      <button class="btn btn-outline" data-sheetclose>Close</button>
+      <button class="btn btn-gold" id="sc-go">Add it</button>
+      <button class="btn btn-primary" data-sheetclose>Done — go to the bill</button>
     </div>
     <!-- Why it is or is not working, in plain words on the screen itself.
          "The camera does not work" can mean three unrelated things and they
@@ -5309,16 +5326,34 @@ async function openCameraScan(){
     <div class="muted" id="sc-diag" style="font-size:11px;margin-top:14px;line-height:1.5;"></div>
   `;
   sheet.querySelectorAll("[data-sheetclose]").forEach(b => b.addEventListener("click", ()=>{ stopCameraScan(); closeAllSheets(); }));
-  const go = () => {
-    const v = (sheet.querySelector("#sc-manual").value || "").trim();
+  /* Typed by hand — a smudged label, or no camera at all — behaves exactly
+     like a scan: it goes on the bill, it joins the list, and the sheet
+     stays open for the next one. */
+  const go = async () => {
+    const box = sheet.querySelector("#sc-manual");
+    const v = (box.value || "").trim();
     if(!v) return;
-    stopCameraScan(); closeAllSheets(); resolveScan(v);
+    box.value = "";
+    const r = await resolveScan(v, { quiet: true });
+    addScanRow(r);
+    if(r && r.why === "needs-size"){ stopCameraScan(); closeAllSheets(); }
   };
   sheet.querySelector("#sc-go").addEventListener("click", go);
   sheet.querySelector("#sc-manual").addEventListener("keydown", e => { if(e.key === "Enter") go(); });
 
   const body = sheet.querySelector("#sc-body");
   const diag = sheet.querySelector("#sc-diag");
+
+  /* Filled in when the camera starts. Until then — and on a phone whose
+     camera never opens at all — there is no list to write into, so it says
+     the same thing as a toast. Typing a code must never be silent just
+     because the camera is the thing that failed. */
+  let addScanRow = (r) => {
+    if(!r) return;
+    if(r.ok) toast(`${r.name}${r.size ? " · " + r.size : ""}`);
+    else if(r.why === "stock")   toast("That's all the stock at this location.", true);
+    else if(r.why === "unknown") toast(`Nothing carries the code ${r.code}`, true);
+  };
   const say = (label, ok, detail) =>
     `<div>${ok ? "&#10003;" : "&#10007;"} ${label}${detail ? " — " + escapeHtml(String(detail)) : ""}</div>`;
 
@@ -5364,7 +5399,12 @@ async function openCameraScan(){
       </div>
     </div>
     <div class="muted" style="font-size:11.5px;margin-top:8px;text-align:center;">
-      Fill the window with the barcode. Closer is better than further.</div>`;
+      Fill the window with the barcode. Keep going — it stays open.</div>
+    <!-- What has gone on the bill so far, newest at the top, right under
+         the window where the eye already is. Scanning a rack means looking
+         at the labels, not at the screen, so the last one read has to be
+         findable in a glance without scrolling anywhere. -->
+    <div id="sc-list" style="margin-top:10px;"></div>`;
 
   try{
     /* ASK FOR PIXELS. Left to itself a browser hands back 640x480, and at
@@ -5425,6 +5465,51 @@ async function openCameraScan(){
      good phone that is every frame; on a poor one it degrades by itself
      instead of falling over. */
   scanning = true;
+  lastCode = ""; lastCodeAt = 0; scanRuns = [];
+
+  /* requestVideoFrameCallback fires exactly when a NEW frame is ready, so
+     nothing is spent re-reading a picture already looked at. Where it is
+     missing, a short timer does the same job less precisely. */
+  const scheduleLook = () => {
+    if(!scanning) return;
+    if(video.requestVideoFrameCallback) video.requestVideoFrameCallback(() => look());
+    else scanTimer = setTimeout(look, 30);
+  };
+
+  /* One line per label read, newest first, and a repeat of something
+     already scanned raises ITS count rather than adding a second line —
+     three of the same board is one line saying three, which is also what
+     the bill will say. */
+  addScanRow = (r) => {
+    const box = sheet.querySelector("#sc-list");
+    if(!box || !r) return;
+    if(r.ok){
+      const key = r.code;
+      const seen = scanRuns.find(x => x.key === key);
+      if(seen) seen.n += 1;
+      else scanRuns.unshift({ key, n:1, name:r.name, size:r.size, bad:false });
+    } else {
+      const why = r.why === "stock" ? "no stock here"
+                : r.why === "unknown" ? "not recognised" : "needs a size";
+      scanRuns.unshift({ key:r.code + "|" + why, n:1, name:r.name || r.code, size:why, bad:true });
+    }
+    const total = scanRuns.filter(x => !x.bad).reduce((a,b) => a + b.n, 0);
+    box.innerHTML =
+      `<div class="muted" style="font-size:11px;margin-bottom:6px;">` +
+        (total ? `${total} on the bill so far` : "Nothing added yet") + `</div>` +
+      `<div class="card" style="max-height:34vh;overflow:auto;">` +
+      scanRuns.slice(0, 40).map(x => `
+        <div class="list-row" style="padding:7px 10px;">
+          <div style="min-width:0;">
+            <div class="row-title" style="font-size:12.5px;">${escapeHtml(x.name || "")}</div>
+            <div class="row-sub">${escapeHtml(x.size || "")}</div>
+          </div>
+          <div class="row-right">${x.bad
+            ? `<span class="pill danger">not added</span>`
+            : `<span class="pill ok">${x.n}</span>`}</div>
+        </div>`).join("") + `</div>`;
+  };
+
   const look = async () => {
     if(!scanning) return;
     let code = null;
@@ -5465,14 +5550,33 @@ async function openCameraScan(){
     }
 
     if(code){
-      /* A moment that says WHICH one, before the screen changes under
-         them: the window turns green, the sweep stops, and the phone
-         gives the short buzz every scanner in every shop gives. */
+      /* THE SAME LABEL, STILL IN FRAME, IS NOT A SECOND ONE.
+         A label held in the window reads sixty times a second, and without
+         this one board would go on the bill sixty times before anybody
+         could move their hand. The same code is ignored for two seconds;
+         a DIFFERENT one is taken at once, because moving on to the next
+         board is exactly what the shop is doing. */
+      if(code === lastCode && Date.now() - lastCodeAt < 2000){
+        if(scanning) scheduleLook();
+        return;
+      }
+      lastCode = code; lastCodeAt = Date.now();
+
       const view = sheet.querySelector(".sc-view");
       if(view) view.classList.add("hit");
       try{ if(navigator.vibrate) navigator.vibrate(35); }catch(e){}
-      stopCameraScan();
-      setTimeout(() => { closeAllSheets(); resolveScan(code); }, 180);
+
+      const r = await resolveScan(code, { quiet: true });
+      addScanRow(r);
+
+      /* A product code with several sizes cannot be answered here — the
+         sheet has to come down so somebody can choose one. */
+      if(r && r.why === "needs-size"){ stopCameraScan(); closeAllSheets(); return; }
+
+      /* Long enough to see the green, short enough that a hand moving to
+         the next board is never waiting for it. */
+      setTimeout(() => { if(view) view.classList.remove("hit"); }, 260);
+      if(scanning) scanTimer = setTimeout(look, 300);
       return;
     }
     /* Looking and not finding is a different fault from not looking, and
@@ -5483,17 +5587,15 @@ async function openCameraScan(){
       showDiag(say("Camera", (got.width || 0) >= 1000, (got.width || "?") + " x " + (got.height || "?")) +
                say("Looking", true, looks + " frames checked, about " + fps + " a second"));
     }
-    if(!scanning) return;
-    /* requestVideoFrameCallback fires exactly when a NEW frame is ready,
-       so nothing is spent re-reading a picture already looked at. Where
-       it is missing, a short timer does the same job less precisely. */
-    if(video.requestVideoFrameCallback) video.requestVideoFrameCallback(() => look());
-    else scanTimer = setTimeout(look, 30);
+    scheduleLook();
   };
   look();
 }
 
 let scanStream = null, scanTimer = null, scanning = false;
+/* Kept across one run of scanning: the last code taken (so a label held
+   in frame is not read over and over) and what has gone on the bill. */
+let lastCode = "", lastCodeAt = 0, scanRuns = [];
 function stopCameraScan(){
   /* `scanning` stops the loop even if a detect() is already in flight —
      clearing the timer alone would let one more round schedule itself

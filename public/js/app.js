@@ -9289,6 +9289,21 @@ function billCellFor(key, it, i, ctx){
       const L = Number(it.length_ft);
       return Number.isFinite(L) && L > 0 ? String(round2(L)) : "";
     }
+    /* With their unit, because it depends on how the line was priced —
+       feet on a Sq.ft line, inches on a CFT one — and the two can sit in
+       the same bill. Blank, never 0, where the line has no such dimension. */
+    case "width": {
+      const W = Number(it.width_val);
+      if(!Number.isFinite(W) || W <= 0) return "";
+      const m = Pricing.MODES[Pricing.normaliseMode(it.mode)] || {};
+      return round2(W) + (m.widthUnit ? " " + m.widthUnit : "");
+    }
+    case "thickness": {
+      const T = Number(it.thickness_in);
+      if(!Number.isFinite(T) || T <= 0) return "";
+      const m = Pricing.MODES[Pricing.normaliseMode(it.mode)] || {};
+      return round2(T) + (m.thicknessUnit ? " " + m.thicknessUnit : "");
+    }
     case "unit": return escapeHtml(ctx.unitOf(it));
     case "qty":  return ctx.qtyCellOf(it);
     // Rate prints bare, the way the bill always has — the currency symbol
@@ -17401,10 +17416,10 @@ async function refreshPmDocCounts(){
 
 const PM_SAMPLE_ITEMS = [
   { sn:1, category:"Plywood", brand:"Century", name:"Commercial Plywood", code:"CP-18",
-    hsn:"4412", size:"8 x 4 Feet, 18mm", length:"8", qty:"10", unit:"Sheet",
+    hsn:"4412", size:"8 x 4 Feet, 18mm", length:"8", width:"4 ft", thickness:"", qty:"10", unit:"Sheet",
     rate:1850, disc:0, gstPct:18, remarks:"" },
   { sn:2, category:"Laminate", brand:"Merino", name:"Laminate Sheet", code:"LM-125",
-    hsn:"4823", size:"1.25mm, Matte", length:"8", qty:"15", unit:"Sheet",
+    hsn:"4823", size:"1.25mm, Matte", length:"8", width:"18 in", thickness:"0.75 in", qty:"15", unit:"Sheet",
     rate:650, disc:5, gstPct:18, remarks:"" },
   { sn:3, category:"Hardware", brand:"Hettich", name:"Edge Band", code:"EB-22",
     /* No length on purpose: a roll is sold by the piece, and the preview
@@ -17437,6 +17452,8 @@ function pmCellFor(key, it, cfg){
     case "hsn": return it.hsn;
     case "size": return it.size;
     case "length": return it.length || "";
+    case "width": return it.width || "";
+    case "thickness": return it.thickness || "";
     case "qty": return it.qty;
     case "unit": return it.unit;
     case "rate": return money(it.rate);

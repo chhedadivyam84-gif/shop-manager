@@ -261,6 +261,7 @@ function applyFeatureAccess(){
    being tidied, not a feature being removed.
    ============================================================ */
 let HIDDEN_TILES = [];
+let ADDED_TILES = [];
 let tileEditing = false;
 
 /* Which feature each tile belongs to, so the editor cannot offer a tile
@@ -274,14 +275,36 @@ const TILE_FEATURE = {
   notes:"notes"
 };
 
-function tileSold(key){ return hasFeature(TILE_FEATURE[key]); }
+/* SCREENS WITH NO TILE OF THEIR OWN, which the shop can put on Home.
+   Everything here is somewhere the app can already go — this only offers a
+   short way to it. Nothing new is built, and nothing here can be added by a
+   shop that was not sold it. */
+const ADDABLE_TILES = [
+  { key:"customers",   label:"Customers",      icon:"&#128101;", goto:"customers" },
+  { key:"reports",     label:"Reports",        icon:"&#128200;", goto:"reports",     feature:"reports" },
+  { key:"cashbook",    label:"Cash Book",      icon:"&#128181;", goto:"cashbook",    feature:"cashbook" },
+  { key:"outstanding", label:"Outstanding",    icon:"&#9203;",   goto:"outstanding", feature:"outstanding" },
+  { key:"delivery",    label:"Delivery",       icon:"&#128667;", goto:"delivery",    feature:"delivery" },
+  { key:"selection",   label:"Selection Slip", icon:"&#128203;", goto:"selection",   feature:"selection" },
+  { key:"ewb",         label:"E-Way Bill",     icon:"&#128739;", goto:"ewb",         feature:"ewb" },
+  { key:"alerts",      label:"Reminders",      icon:"&#128276;", goto:"alerts" },
+  { key:"backups",     label:"Cloud Backups",  icon:"&#9729;",   goto:"backups",     feature:"backups" },
+  { key:"fyear",       label:"Financial Year", icon:"&#128197;", goto:"fyear" }
+];
+
+function tileSold(key){
+  const extra = ADDABLE_TILES.find(t => t.key === key);
+  if(extra) return hasFeature(extra.feature);
+  return hasFeature(TILE_FEATURE[key]);
+}
 
 function applyHomeTiles(){
   const grid = document.querySelector(".quick-actions");
   if(!grid) return;
   grid.classList.toggle("editing", tileEditing);
 
-  grid.querySelectorAll("[data-tile]").forEach(el => {
+  /* The tiles that ship with the app. */
+  grid.querySelectorAll("[data-tile]:not([data-extra])").forEach(el => {
     const key = el.dataset.tile;
     const away = HIDDEN_TILES.indexOf(key) >= 0;
     if(!tileSold(key)){ el.style.display = "none"; return; }   /* not theirs to choose */
@@ -289,12 +312,40 @@ function applyHomeTiles(){
     el.classList.toggle("tile-off", away);
   });
 
+  /* And the ones the shop asked for. Built here rather than sitting in the
+     markup hidden, because the whole point is that they were never on Home
+     — and in edit mode ALL of them appear, faded, or there would be no way
+     to discover that they can be added at all. */
+  ADDABLE_TILES.forEach(t => {
+    const on = ADDED_TILES.indexOf(t.key) >= 0;
+    let el = grid.querySelector(`[data-extra][data-tile="${t.key}"]`);
+    const wanted = tileSold(t.key) && (on || tileEditing);
+
+    if(!wanted){ if(el) el.remove(); return; }
+    if(!el){
+      el = document.createElement("button");
+      el.className = "qa-btn";
+      el.dataset.tile = t.key;
+      el.dataset.extra = "1";
+      el.innerHTML = `<span class="ic">${t.icon}</span>${t.label}`;
+      /* Wired on creation: the app binds [data-goto] once at start-up, and
+         a tile made afterwards would never have been listened to. */
+      el.addEventListener("click", () => { if(!tileEditing) switchTab(t.goto); });
+      grid.appendChild(el);
+    }
+    el.classList.toggle("tile-off", !on);
+  });
+
   const note = document.getElementById("qa-edit-note");
   if(note){
     const away = HIDDEN_TILES.filter(k => tileSold(k)).length;
+    const extra = ADDED_TILES.filter(k => tileSold(k)).length;
+    const bits = [];
+    if(away)  bits.push(`${away} put away`);
+    if(extra) bits.push(`${extra} added`);
     note.textContent = tileEditing
-      ? "Tap a tile to put it away or bring it back."
-      : (away ? `${away} tile${away === 1 ? "" : "s"} put away` : "");
+      ? "Tap to add or remove. Faded ones are off your Home screen."
+      : bits.join(" · ");
   }
 }
 
@@ -317,7 +368,7 @@ function wireTileEditor(){
   done.addEventListener("click", async () => {
     setMode(false);
     try{
-      await api("PUT", "/settings/home-tiles", { hidden: HIDDEN_TILES });
+      await api("PUT", "/settings/home-tiles", { hidden: HIDDEN_TILES, added: ADDED_TILES });
       toast("Saved.");
     }catch(e){ toast(e.message || "Could not save.", true); }
   });
@@ -331,8 +382,15 @@ function wireTileEditor(){
     if(!btn) return;
     e.preventDefault(); e.stopPropagation();
     const key = btn.dataset.tile;
-    const at = HIDDEN_TILES.indexOf(key);
-    if(at >= 0) HIDDEN_TILES.splice(at, 1); else HIDDEN_TILES.push(key);
+    if(btn.dataset.extra){
+      /* One of the app's other screens: the list says which are ON. */
+      const at = ADDED_TILES.indexOf(key);
+      if(at >= 0) ADDED_TILES.splice(at, 1); else ADDED_TILES.push(key);
+    } else {
+      /* A tile that ships on Home: the list says which are OFF. */
+      const at = HIDDEN_TILES.indexOf(key);
+      if(at >= 0) HIDDEN_TILES.splice(at, 1); else HIDDEN_TILES.push(key);
+    }
     applyHomeTiles();
   }, true);
 }
@@ -600,8 +658,9 @@ async function initApp(){
   /* The shop's own arrangement of its front screen. Applied on every load
      of the app, and re-applied whenever the vendor's list changes, because
      what is on offer to hide depends on what they were sold. */
-  HIDDEN_TILES = String((state.settings && state.settings.home_tiles_hidden) || "")
-    .split(",").map(x => x.trim()).filter(Boolean);
+  const asList = v => String(v || "").split(",").map(x => x.trim()).filter(Boolean);
+  HIDDEN_TILES = asList(state.settings && state.settings.home_tiles_hidden);
+  ADDED_TILES  = asList(state.settings && state.settings.home_tiles_added);
   applyHomeTiles();
   document.title = state.settings.business_name + " — Shop Manager";
   document.getElementById("avatar-btn").textContent = initials(state.settings.business_name);

@@ -2346,6 +2346,13 @@ addColumn("settings", "tenant_code", "TEXT DEFAULT ''");
    stays reachable from the menu. */
 addColumn("settings", "home_tiles_hidden", "TEXT DEFAULT ''");
 
+/* And the other direction: screens the shop has PUT ON Home that were not
+   there to begin with. Kept as its own list rather than inverting the one
+   above, because the two mean different things — that one is "I do not
+   want this", this one is "I want this as well" — and a single list would
+   have to guess which a key meant every time the built-in set changed. */
+addColumn("settings", "home_tiles_added", "TEXT DEFAULT ''");
+
 /* ============================================================
    WHO WROTE THIS BILL, AND WHO CHANGED IT
 

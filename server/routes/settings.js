@@ -211,12 +211,15 @@ router.put("/app-theme", requireRole("owner"), (req, res) => {
  * matches a tile simply hides nothing, which is the harmless outcome.
  */
 router.put("/home-tiles", requireRole("owner"), (req, res) => {
-  const raw = Array.isArray(req.body.hidden) ? req.body.hidden : [];
-  const hidden = [...new Set(raw.map(x => String(x).trim())
+  const keys = v => [...new Set((Array.isArray(v) ? v : []).map(x => String(x).trim())
     .filter(k => /^[a-z0-9-]{1,32}$/.test(k)))].sort();
-  db.prepare("UPDATE settings SET home_tiles_hidden = ? WHERE id = 1").run(hidden.join(","));
-  logAction(req, "settings.homeTiles", hidden.length ? `${hidden.length} put away` : "all shown");
-  res.json({ ok: true, hidden });
+  const hidden = keys(req.body.hidden);
+  const added  = keys(req.body.added);
+  db.prepare("UPDATE settings SET home_tiles_hidden = ?, home_tiles_added = ? WHERE id = 1")
+    .run(hidden.join(","), added.join(","));
+  logAction(req, "settings.homeTiles",
+    `${hidden.length} put away, ${added.length} added`);
+  res.json({ ok: true, hidden, added });
 });
 
 router.put("/logo", requireRole("owner"), (req, res) => {

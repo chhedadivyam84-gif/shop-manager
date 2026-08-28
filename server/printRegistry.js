@@ -29,6 +29,12 @@ const ITEM_FIELDS = {
   code:      { label: "Product Code",   align: "left",   width: 62 },
   hsn:       { label: "HSN/SAC",        align: "left",   width: 58 },
   size:      { label: "Size",           align: "left",   width: 90 },
+  /* The length actually billed on this line, in feet.
+     Not the same thing as Size beside it: Size is the variant the board
+     came from ("8x4"), while this is what was measured and charged for,
+     and in a shop that sells by the square foot those two differ on most
+     lines. Blank on a line sold by the piece, which has no length. */
+  length:    { label: "Length (ft)",    align: "right",  width: 56 },
   qty:       { label: "Quantity",       align: "right",  width: 48 },
   unit:      { label: "Unit",           align: "left",   width: 44 },
   rate:      { label: "Rate",           align: "right",  width: 74, money: true, hideWithoutRate: true },
@@ -45,7 +51,10 @@ const ITEM_FIELDS = {
 /* Column sets, so the common shapes are named once.
    Unit precedes Qty to match the order the bill actually prints in. */
 const GOODS_COLUMNS   = ["sn","name","size","unit","qty","rate","disc","taxable","gstPct","cgst","sgst","igst","amount"];
-const GOODS_EXTRAS    = ["category","brand","code","hsn","remarks"];
+/* Length joins the EXTRAS, not the default set: a column appearing on every
+   shop's bills without being asked for is a change to their paperwork that
+   nobody chose. It is one tick away in the template. */
+const GOODS_EXTRAS    = ["category","brand","code","hsn","length","remarks"];
 const CHALLAN_COLUMNS = ["sn","name","size","unit","qty","rate","amount"];
 
 const ALL_GOODS = [...GOODS_COLUMNS, ...GOODS_EXTRAS];

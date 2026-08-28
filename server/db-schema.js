@@ -1403,6 +1403,50 @@ CREATE INDEX IF NOT EXISTS idx_txn_categories_kind ON txn_categories(kind, activ
    Narrow in the same way as the order fix: a column is only rewritten when
    its label still equals the OLD generic default, i.e. nobody has renamed it.
    A header the owner typed themselves is never touched. */
+/* A COLUMN ADDED TO THE REGISTRY HAS TO REACH THE TEMPLATES ALREADY SAVED.
+   ------------------------------------------------------------------------
+   The designer edits a template's STORED column list, and a shop's template
+   was written when it was created. So a column added to the registry later
+   — Length is the first — would exist for a brand new template and be
+   invisible to every shop that already had one, which reads exactly like
+   the feature not working.
+
+   Missing columns are appended, HIDDEN, in registry order. Hidden because
+   a bill must not grow a column on its own: that is the shop's paperwork
+   changing without anybody asking for it. Appended rather than inserted so
+   an order somebody arranged by hand is never rearranged, and existing
+   entries are not touched at all — a renamed header, a chosen width and a
+   column deliberately switched off all survive. */
+(function offerNewColumnsToExistingTemplates() {
+  const reg = require("./printRegistry");
+  const rows = db.prepare("SELECT id, doc_type, config FROM doc_templates").all();
+  const upd = db.prepare("UPDATE doc_templates SET config = ? WHERE id = ?");
+  for (const r of rows) {
+    const doc = reg.getDoc(r.doc_type);
+    if (!doc || !Array.isArray(doc.items)) continue;
+    let cfg;
+    try { cfg = JSON.parse(r.config); } catch (e) { continue; }
+    if (!cfg || !Array.isArray(cfg.columns)) continue;
+
+    const have = new Set(cfg.columns.map(c => c && c.key));
+    let added = 0;
+    for (const key of doc.items) {
+      if (have.has(key)) continue;
+      const f = reg.ITEM_FIELDS[key];
+      if (!f) continue;
+      cfg.columns.push({
+        key,
+        label: (doc.labels && doc.labels[key]) || f.label,
+        show: 0,
+        width: doc.autoWidths ? 0 : f.width,
+        align: f.align
+      });
+      added++;
+    }
+    if (added) upd.run(JSON.stringify(cfg), r.id);
+  }
+})();
+
 (function alignTemplateLabelsAndWidths() {
   const reg = require("./printRegistry");
   const rows = db.prepare("SELECT id, doc_type, config FROM doc_templates").all();

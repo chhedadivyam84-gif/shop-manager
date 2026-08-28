@@ -9281,6 +9281,14 @@ function billCellFor(key, it, i, ctx){
     case "sn":   return String(i + 1);
     case "name": return escapeHtml(it.name);
     case "size": return escapeHtml(it.size_label || "—");
+    /* What was measured on this line, not the variant it came from. Blank
+       rather than a 0 on a line sold by the piece: a zero in a Length
+       column reads as a board of no length, which is a different claim
+       from "this one was not sold by length". */
+    case "length": {
+      const L = Number(it.length_ft);
+      return Number.isFinite(L) && L > 0 ? String(round2(L)) : "";
+    }
     case "unit": return escapeHtml(ctx.unitOf(it));
     case "qty":  return ctx.qtyCellOf(it);
     // Rate prints bare, the way the bill always has — the currency symbol
@@ -17393,12 +17401,15 @@ async function refreshPmDocCounts(){
 
 const PM_SAMPLE_ITEMS = [
   { sn:1, category:"Plywood", brand:"Century", name:"Commercial Plywood", code:"CP-18",
-    hsn:"4412", size:"8 x 4 Feet, 18mm", qty:"10", unit:"Sheet",
+    hsn:"4412", size:"8 x 4 Feet, 18mm", length:"8", qty:"10", unit:"Sheet",
     rate:1850, disc:0, gstPct:18, remarks:"" },
   { sn:2, category:"Laminate", brand:"Merino", name:"Laminate Sheet", code:"LM-125",
-    hsn:"4823", size:"1.25mm, Matte", qty:"15", unit:"Sheet",
+    hsn:"4823", size:"1.25mm, Matte", length:"8", qty:"15", unit:"Sheet",
     rate:650, disc:5, gstPct:18, remarks:"" },
   { sn:3, category:"Hardware", brand:"Hettich", name:"Edge Band", code:"EB-22",
+    /* No length on purpose: a roll is sold by the piece, and the preview
+       should show what a blank Length cell looks like rather than pretend
+       every line has one. */
     hsn:"3919", size:"22mm, Brown", qty:"5", unit:"Roll",
     rate:180, disc:0, gstPct:18, remarks:"" }
 ];
@@ -17425,6 +17436,7 @@ function pmCellFor(key, it, cfg){
     case "code": return it.code;
     case "hsn": return it.hsn;
     case "size": return it.size;
+    case "length": return it.length || "";
     case "qty": return it.qty;
     case "unit": return it.unit;
     case "rate": return money(it.rate);

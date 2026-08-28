@@ -192,6 +192,12 @@ setTimeout(function () {
           <button class="qa-btn" data-inv-location-goto="warehouse"><span class="ic">&#127974;</span>Warehouse Stock</button>
           
           
+          <!-- Not the same thing as Product Query beside it, and the two are
+               easy to confuse. This answers the question shouted across a
+               counter — "what's the rate, have we got it" — in one tap and
+               one line per size. Product Query answers "everything that has
+               ever moved this", which is a report and takes filters. -->
+          <button class="qa-btn" id="qa-product-search"><span class="ic">&#128270;</span>Product Search</button>
           <button class="qa-btn" data-goto="pquery"><span class="ic">&#128269;</span>Product Query</button>
           <button class="qa-btn" data-goto="printmgr"><span class="ic">&#128424;</span>Print Manager</button>
           <button class="qa-btn" data-goto="cheque"><span class="ic">&#128179;</span>Print Cheque</button>
@@ -1397,6 +1403,7 @@ setTimeout(function () {
   <div class="sheet" id="sheet-gst-filings"></div>
   <div class="sheet" id="sheet-app-theme"></div>
   <div class="sheet" id="sheet-price-list"></div>
+  <div class="sheet" id="sheet-product-search"></div>
   <div class="sheet" id="sheet-set-rate"></div>
   <div class="sheet" id="sheet-price-import"></div>
   <div class="sheet" id="sheet-menu"></div>

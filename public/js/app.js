@@ -478,6 +478,7 @@ async function initApp(){
     });
   });
   document.getElementById("qa-payment").addEventListener("click", openQuickPayment);
+  document.getElementById("qa-product-search").addEventListener("click", openProductSearch);
   document.getElementById("wa-fab-btn").addEventListener("click", ()=>openWhatsApp());
 
   document.querySelectorAll("[data-close-fs]").forEach(b=>{
@@ -4570,6 +4571,120 @@ async function renderInventoryList(){
     el.addEventListener("click", ()=>openProductDetail(el.dataset.openInvProduct, "inventory"));
   });
 }
+/* ============================================================
+   PRODUCT SEARCH
+
+   The question shouted across a counter is "what's the rate, and have we
+   got it". Answering it used to mean abandoning whatever was on screen,
+   opening Shop Stock, and searching there — then finding your way back.
+   This answers it from Home without leaving the screen you were on.
+
+   NOT the same as Product Query beside it on the tiles, and the two are
+   easy to confuse: that is a movement report with date filters and an
+   export, for "everything that has ever moved this". This is a lookup, and
+   it gives the two numbers a counter actually needs — the rate, and how
+   many are where.
+   ============================================================ */
+function sizeStockTotal(s){
+  const rows = s.byLocation || [];
+  /* byLocation is the truth once a product has moved anywhere. A product
+     that never has carries its opening figure on the size itself, and
+     summing an empty list would report it as nothing in stock. */
+  return rows.length ? rows.reduce((n, l) => n + (l.quantity || 0), 0) : (s.stock || 0);
+}
+
+function openProductSearch(){
+  const sheet = document.getElementById("sheet-product-search");
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>&#10005;</button>
+    <div class="sheet-title">Product Search</div>
+    <div class="searchbar" style="margin-top:8px;">
+      <span>&#128269;</span>
+      <input type="text" id="ps-q" placeholder="Name, brand, SKU or a size like 8x4"
+             autocomplete="off" autocapitalize="none" spellcheck="false">
+    </div>
+    <div id="ps-results" style="margin-top:10px;"></div>
+  `;
+  sheet.querySelectorAll("[data-sheetclose]").forEach(b => b.addEventListener("click", closeAllSheets));
+  const input = sheet.querySelector("#ps-q");
+  input.addEventListener("input", renderProductSearch);
+  renderProductSearch();
+  showSheet("sheet-product-search");
+  /* Focused after the panel has finished sliding up, or on a phone the
+     keyboard opens against a sheet that is still moving. */
+  setTimeout(()=>{ try{ input.focus(); }catch(e){} }, 220);
+}
+
+function renderProductSearch(){
+  const box = document.getElementById("ps-results");
+  if(!box) return;
+  const q = (document.getElementById("ps-q").value || "").trim().toLowerCase();
+
+  if(!q){
+    box.innerHTML = `<div class="empty-hint">Type a name, brand, SKU — or a size like 8x4.</div>`;
+    return;
+  }
+
+  /* Size is in here because in a plywood shop half the questions arrive as
+     a size rather than a name. Everything else matches what the stock
+     screen already searches on, so the two do not disagree. */
+  const list = state.products.filter(p =>
+       (p.name || "").toLowerCase().includes(q)
+    || (p.brand || "").toLowerCase().includes(q)
+    || (p.sku || "").toLowerCase().includes(q)
+    || (p.sizes || []).some(z => (z.label || "").toLowerCase().includes(q))
+  );
+
+  if(!list.length){
+    box.innerHTML = `<div class="empty-hint">Nothing matches “${escapeHtml(q)}”.</div>`;
+    return;
+  }
+
+  box.innerHTML = `<div class="card">` + list.map(p => {
+    const total = p.stock;
+    const perLocation = (state.locations || []).map(l => {
+      const n = productLocationStock(p, l.code);
+      return `${escapeHtml(l.name)} ${n}`;
+    }).join(" · ");
+
+    const sizes = (p.sizes || []).length
+      ? `<div class="row-sub" style="margin-top:3px;">` + p.sizes.map(z => {
+          const n = sizeStockTotal(z);
+          return `<span style="display:inline-block;margin-right:10px;white-space:nowrap;">
+            <b>${escapeHtml(z.label || "")}</b> ${fmt(z.price)} · ${n} ${escapeHtml(p.unit || "pc")}</span>`;
+        }).join("") + `</div>`
+      : `<div class="row-sub" style="margin-top:3px;">⚠ No size or price set yet</div>`;
+
+    return `<div class="list-row" data-ps-open="${p.id}" style="cursor:pointer;${p.active===0?"opacity:.55;":""}">
+      <div class="swatch"></div>
+      <div style="min-width:0;">
+        <div class="row-title">${escapeHtml(p.name)}${p.active===0?' <span class="pill">Inactive</span>':''}</div>
+        <div class="row-sub">${escapeHtml(p.brand || "")}${perLocation ? " · " + perLocation : ""}</div>
+        ${sizes}
+      </div>
+      <div class="row-right">
+        <span class="pill ${stockLevel(total)}">${stockLabel(total)}</span>
+      </div>
+    </div>`;
+  }).join("") + `</div>`;
+
+  box.querySelectorAll("[data-ps-open]").forEach(el => {
+    /* Straight into the product's own sheet, which is where you change a
+       rate or take stock in — so a search can be acted on, not just read.
+
+       This sheet is closed FIRST. Sheets here are not a stack: they all sit
+       at the same z-index and the later one in the document paints on top.
+       This one is declared after the product sheet, so leaving it open left
+       it covering the product that had just been opened — a tap that looked
+       like it had done nothing at all. */
+    el.addEventListener("click", ()=>{
+      closeAllSheets();
+      openProductDetail(el.dataset.psOpen, "inventory");
+    });
+  });
+}
+
 function printInventoryStock(){
   const list = filteredInventoryList();
   const locName = (state.locations.find(l=>l.code===state.invLocationCode)||{}).name || "";

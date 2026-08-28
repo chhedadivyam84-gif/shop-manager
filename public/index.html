@@ -197,6 +197,8 @@ setTimeout(function () {
                counter — "what's the rate, have we got it" — in one tap and
                one line per size. Product Query answers "everything that has
                ever moved this", which is a report and takes filters. -->
+          <button class="qa-btn" id="qa-scan"><span class="ic">&#128247;</span>Scan Barcode</button>
+          <button class="qa-btn" id="qa-labels"><span class="ic">&#127991;</span>Barcode Labels</button>
           <button class="qa-btn" id="qa-product-search"><span class="ic">&#128270;</span>Product Search</button>
           <button class="qa-btn" data-goto="pquery"><span class="ic">&#128269;</span>Product Query</button>
           <button class="qa-btn" data-goto="printmgr"><span class="ic">&#128424;</span>Print Manager</button>
@@ -1404,6 +1406,8 @@ setTimeout(function () {
   <div class="sheet" id="sheet-app-theme"></div>
   <div class="sheet" id="sheet-price-list"></div>
   <div class="sheet" id="sheet-product-search"></div>
+  <div class="sheet" id="sheet-labels"></div>
+  <div class="sheet" id="sheet-scan"></div>
   <div class="sheet" id="sheet-set-rate"></div>
   <div class="sheet" id="sheet-price-import"></div>
   <div class="sheet" id="sheet-menu"></div>
@@ -1566,6 +1570,7 @@ setTimeout(function () {
 <!-- Shared with the server (server/routes/invoices.js requires this same file),
      so the browser's arithmetic and the stored invoice can never disagree.
      Must load before app.js, which uses window.Pricing at startup. -->
+<script src="/js/barcode.js"></script>
 <script src="/js/pricing.js"></script>
 <script src="/js/printEngine.js"></script>
 <script src="/js/app.js"></script>

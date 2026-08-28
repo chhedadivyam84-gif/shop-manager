@@ -1851,6 +1851,19 @@ addColumn("purchases", "area_id", "TEXT REFERENCES areas(id) ON DELETE SET NULL"
 addColumn("products", "barcode", "TEXT DEFAULT ''");
 addColumn("products", "sub_category", "TEXT DEFAULT ''");
 
+/* THE BARCODE WE PRINT, which is not the same thing as the one above.
+   `products.barcode` is free text for the manufacturer's number, typed off
+   whatever the supplier printed. This is the shop's own code, generated,
+   and it is per SIZE because a size is what carries a rate and a count: an
+   8x4 sheet and a 6x4 sheet of the same board are different money and
+   different stock, so a label that only said which product it was would
+   still leave the counter choosing by hand.
+
+   Derived from the product's SKU, which is already unique, so a shop can
+   read a label aloud down a phone and it still means something. Backfilled
+   below for every size that predates this. */
+addColumn("product_sizes", "barcode", "TEXT DEFAULT ''");
+
 // Multi-location inventory. A scalable Location model — not hardcoded to
 // Shop/Warehouse — so a third, fourth, etc. location can be added later with
 // zero schema changes. `code` is a stable machine key ("shop", "warehouse")
@@ -2876,6 +2889,22 @@ CREATE INDEX IF NOT EXISTS idx_pl_log_product ON price_list_log(product_id, at);
    deliberately: one spelling of a name across the app beats a second list
    of names drifting from the first. */
 addColumn("customers", "salesman", "TEXT DEFAULT ''");
+
+/* Every size that predates the printed barcode gets one now, so a shop that
+   has been trading for a year can print labels for its whole rack on the
+   first day rather than only for what it adds afterwards.
+
+   SKU + the size's own row id. The SKU is unique per product and the id is
+   unique per size, so the pair cannot collide, and it stays put when a size
+   is renamed or reordered — a label already stuck to a board must not stop
+   meaning what it meant when it was printed. Only blank ones are filled:
+   anything already carrying a code keeps it. */
+db.prepare(`
+  UPDATE product_sizes
+     SET barcode = REPLACE((SELECT p.sku FROM products p WHERE p.id = product_sizes.product_id), 'SKU-', '') || '-' || product_sizes.id
+   WHERE COALESCE(barcode, '') = ''
+     AND EXISTS (SELECT 1 FROM products p WHERE p.id = product_sizes.product_id AND COALESCE(p.sku,'') != '')
+`).run();
 
 // Where the data lives — the backup module needs the on-disk paths, and this
 // is the single place that knows them.

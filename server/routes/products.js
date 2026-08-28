@@ -20,9 +20,35 @@ function dim(v, fallback) {
 // purely additive, the per-location breakdown the Inventory screen's
 // Shop/Warehouse tabs need.
 function loadSizes(productId) {
-  const sizes = db.prepare("SELECT id, label, price, stock, cost_price FROM product_sizes WHERE product_id = ? ORDER BY sort_order ASC, id ASC").all(productId);
+  const sizes = db.prepare("SELECT id, label, price, stock, cost_price, barcode FROM product_sizes WHERE product_id = ? ORDER BY sort_order ASC, id ASC").all(productId);
   sizes.forEach(s => { s.byLocation = inventory.getStockByLocation(s.id); });
   return sizes;
+}
+
+/**
+ * A SKU as it goes on a label: "SKU-FK2EZB" becomes "FK2EZB".
+ *
+ * Those four characters carry no information — the random part is already
+ * unique — and a barcode does not wrap, so they cost about 15mm of printed
+ * width. That is the whole difference between a code that fits a 38mm
+ * address label and one that fits nothing smaller than 66mm.
+ */
+function labelCode(sku) { return String(sku || "").replace(/^SKU-/i, ""); }
+
+/**
+ * The code that goes on this size's printed label.
+ *
+ * Stamped after the row exists, because it is built from the row's own id —
+ * that is what makes it unique without a second uniqueness check, and what
+ * makes it survive the size being renamed or reordered. A label already
+ * stuck to a board has to go on meaning what it meant when it was printed.
+ *
+ * Never overwrites one that is already there.
+ */
+function stampSizeBarcode(sizeId, sku) {
+  if (!sku) return;
+  db.prepare("UPDATE product_sizes SET barcode = ? WHERE id = ? AND COALESCE(barcode,'') = ''")
+    .run(labelCode(sku) + "-" + sizeId, sizeId);
 }
 
 function serialize(p) {
@@ -46,7 +72,7 @@ function serialize(p) {
  */
 function serializeAll(products) {
   const sizes = db.prepare(
-    "SELECT id, label, price, stock, cost_price, product_id FROM product_sizes ORDER BY sort_order ASC, id ASC"
+    "SELECT id, label, price, stock, cost_price, barcode, product_id FROM product_sizes ORDER BY sort_order ASC, id ASC"
   ).all();
 
   /* getStockByLocation() calls ensureAllLocationRows() first, so reading the
@@ -175,6 +201,74 @@ router.get("/", (req, res) => {
   res.json(serializeAll(products));
 });
 
+/**
+ * What did that scan just point at?
+ *
+ * Declared before "/:id" on purpose — Express takes the first route that
+ * matches, and "/:id" would swallow "/scan" and go looking for a product
+ * whose id is the word scan.
+ *
+ * FOUR PLACES ARE TRIED, most specific first, because a shop ends up with
+ * codes from more than one source and the counter should not have to know
+ * which kind it is holding:
+ *
+ *   1. the size's own printed code   — the useful one: names a rate and a
+ *                                      count, so it becomes a bill line
+ *   2. the product's manufacturer barcode — typed in by hand off the
+ *                                      supplier's sticker
+ *   3. the product's SKU            — what the label prints when a product
+ *                                      has no sizes worth separating
+ *   4. the product's own code        — the shop's internal reference
+ *
+ * Only 1 identifies a size. The rest identify a product, and the caller then
+ * has to ask which size — which is why the answer says which it found rather
+ * than pretending they are the same thing.
+ */
+router.get("/scan", (req, res) => {
+  const raw = String(req.query.code || "").trim();
+  if (!raw) return res.status(400).json({ error: "No code given." });
+
+  /* Scanners append a newline and some prepend whitespace; case varies by how
+     the code was typed in. Matching is done on the trimmed, case-folded form
+     so a label read by a machine and one typed by a person agree. */
+  const code = raw.toUpperCase();
+
+  const size = db.prepare(`
+    SELECT s.id, s.product_id, s.label, s.sort_order
+      FROM product_sizes s
+     WHERE UPPER(TRIM(COALESCE(s.barcode,''))) = ?
+     LIMIT 1
+  `).get(code);
+
+  if (size) {
+    const p = db.prepare("SELECT * FROM products WHERE id = ?").get(size.product_id);
+    if (p) {
+      const full = serialize(p);
+      /* The INDEX, not the id: addToCart on the client takes a position in
+         the product's own size list, and that list is ordered the same way
+         loadSizes orders it. */
+      const idx = full.sizes.findIndex(s => Number(s.id) === Number(size.id));
+      return res.json({ found: "size", product: full, sizeId: size.id, sizeIndex: idx < 0 ? 0 : idx });
+    }
+  }
+
+  const p = db.prepare(`
+    SELECT * FROM products
+     WHERE UPPER(TRIM(COALESCE(barcode,''))) = ?
+        OR UPPER(TRIM(COALESCE(sku,'')))     = ?
+        OR UPPER(TRIM(COALESCE(sku,'')))     = 'SKU-' || ?
+        OR UPPER(TRIM(COALESCE(code,'')))    = ?
+     LIMIT 1
+  `).get(code, code, code, code);
+
+  if (p) return res.json({ found: "product", product: serialize(p), sizeId: null, sizeIndex: null });
+
+  /* 404 with the code echoed back, so the screen can say WHAT it did not
+     recognise. "Not found" alone sends somebody hunting for a fault in the
+     scanner when the real answer is that this board was never labelled. */
+  res.status(404).json({ error: "No product carries the code " + raw, code: raw });
+});
+
 router.post("/", (req, res) => {
   const { name, brand, category, unit, gst, godown, rack, sizes,
           defaultMode, lengthFt, widthVal, thicknessIn, hsnCode, code, openingStockDate,
@@ -217,6 +311,7 @@ router.post("/", (req, res) => {
     validSizes.forEach((s, i) => {
       const info = insertSize.run(id, String(s.label).trim(), parseFloat(s.price), stockNum(s.stock), i, stockNum(s.cost));
       const sid150 = Number(info.lastInsertRowid);
+      stampSizeBarcode(sid150, sku);
       if (hasLocationStock(s)) applyTypedLocationStock(sid150, { shop: s.shopStock, warehouse: s.warehouseStock });
       else applyTypedStock(sid150, s.stock);
     });
@@ -292,6 +387,7 @@ router.put("/:id", (req, res) => {
         } else {
           const info = insertSize.run(p.id, String(s.label).trim(), parseFloat(s.price), stockNum(s.stock), i, stockNum(s.cost));
           const sid209 = Number(info.lastInsertRowid);
+          stampSizeBarcode(sid209, p.sku);
           if (hasLocationStock(s)) applyTypedLocationStock(sid209, { shop: s.shopStock, warehouse: s.warehouseStock });
           else applyTypedStock(sid209, s.stock);
         }
@@ -690,7 +786,13 @@ router.post("/:id/duplicate", (req, res) => {
       id, name, p.brand, p.category, sku, p.unit, p.gst_rate, p.godown, p.rack,
       p.default_mode, p.length_ft, p.width_val, p.thickness_in, Date.now()
     );
-    sizes.forEach((s, i) => insertSize.run(id, s.label, s.price, i));
+    /* A duplicate is a DIFFERENT product with its own SKU, so its sizes get
+       their own codes rather than inheriting the original's — two products
+       sharing a barcode would put the wrong one on the bill. */
+    sizes.forEach((s, i) => {
+      const info = insertSize.run(id, s.label, s.price, i);
+      stampSizeBarcode(Number(info.lastInsertRowid), sku);
+    });
   })();
 
   logAction(req, "product.duplicate", `${p.name} -> ${name}`);

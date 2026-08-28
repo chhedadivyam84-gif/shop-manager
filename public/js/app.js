@@ -479,6 +479,11 @@ async function initApp(){
   });
   document.getElementById("qa-payment").addEventListener("click", openQuickPayment);
   document.getElementById("qa-product-search").addEventListener("click", openProductSearch);
+  document.getElementById("qa-labels").addEventListener("click", openLabelMaker);
+  document.getElementById("qa-scan").addEventListener("click", openCameraScan);
+  /* The handheld scanner listens everywhere, not just on one screen — it
+     is a keyboard, and the counter uses it from wherever they happen to be. */
+  wireWedgeScanner();
   document.getElementById("wa-fab-btn").addEventListener("click", ()=>openWhatsApp());
 
   document.querySelectorAll("[data-close-fs]").forEach(b=>{
@@ -4683,6 +4688,439 @@ function renderProductSearch(){
       openProductDetail(el.dataset.psOpen, "inventory");
     });
   });
+}
+
+/* ============================================================
+   BARCODE LABELS
+
+   A label carries the SIZE's code, not the product's, because a size is
+   what carries a rate and a count — an 8x4 sheet and a 6x4 sheet of the
+   same board are different money. Scanning a size makes a complete bill
+   line; scanning a product still leaves somebody choosing.
+
+   A product-level label is offered too, for stock where the sizes are not
+   worth separating.
+   ============================================================ */
+
+/* Real label stationery, in millimetres. Page margins and the gaps between
+   labels matter as much as the label itself: a sheet laid out a millimetre
+   out prints half a barcode across the perforation on every row. */
+const LABEL_STOCKS = [
+  { id:"a4-65", kind:"sheet", name:"A4 sheet — 65 labels (38 × 21 mm)",
+    page:[210,297], w:38.1, h:21.2, cols:5, rows:13, mx:4.75, my:10.7, gx:2.5, gy:0 },
+  { id:"a4-24", kind:"sheet", name:"A4 sheet — 24 labels (70 × 37 mm)",
+    page:[210,297], w:70, h:37, cols:3, rows:8, mx:0, my:0.5, gx:0, gy:0 },
+  { id:"a4-14", kind:"sheet", name:"A4 sheet — 14 labels (99 × 38 mm)",
+    page:[210,297], w:99.1, h:38.1, cols:2, rows:7, mx:5.5, my:15.1, gx:0, gy:0 },
+  { id:"roll-50", kind:"roll", name:"Label printer — 50 × 25 mm roll",
+    page:[50,25], w:50, h:25, cols:1, rows:1, mx:0, my:0, gx:0, gy:0 },
+  { id:"roll-38", kind:"roll", name:"Label printer — 38 × 25 mm roll",
+    page:[38,25], w:38, h:25, cols:1, rows:1, mx:0, my:0, gx:0, gy:0 }
+];
+
+let labelQty = {};        /* code -> how many labels, kept while the sheet is open */
+let labelStockId = "a4-65";
+let labelShowPrice = true;
+
+function labelStock(){ return LABEL_STOCKS.find(s => s.id === labelStockId) || LABEL_STOCKS[0]; }
+
+/** Everything currently asked for, as flat rows ready to print. */
+function labelBasket(){
+  const out = [];
+  for (const p of state.products) {
+    const short = String(p.sku || "").replace(/^SKU-/i, "");
+    if (short && labelQty[short] > 0) {
+      out.push({ code: short, name: p.name, sub: p.brand || "", price: null, qty: labelQty[short] });
+    }
+    for (const z of (p.sizes || [])) {
+      const c = z.barcode;
+      if (c && labelQty[c] > 0) {
+        out.push({ code: c, name: p.name, sub: z.label, price: z.price, qty: labelQty[c] });
+      }
+    }
+  }
+  return out;
+}
+
+function openLabelMaker(){
+  labelQty = {};
+  const sheet = document.getElementById("sheet-labels");
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>&#10005;</button>
+    <div class="sheet-title">Barcode Labels</div>
+
+    <div class="searchbar" style="margin-top:8px;">
+      <span>&#128269;</span>
+      <input type="text" id="lb-q" placeholder="Find a product to label" autocomplete="off">
+    </div>
+
+    <div class="charge-grid" style="margin-top:10px;">
+      <label class="dim" style="flex:1 1 100%;"><span>Label stationery</span>
+        <select id="lb-stock">
+          ${LABEL_STOCKS.map(s => `<option value="${s.id}" ${s.id===labelStockId?"selected":""}>${escapeHtml(s.name)}</option>`).join("")}
+        </select>
+      </label>
+    </div>
+    <label style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:12.5px;">
+      <input type="checkbox" id="lb-price" ${labelShowPrice?"checked":""}>
+      <span>Print the rate on the label
+        <span class="muted">— it will be wrong the day you change the price</span></span>
+    </label>
+
+    <div id="lb-results" style="margin-top:10px;"></div>
+
+    <div class="acts" style="margin-top:14px;">
+      <button class="btn btn-gold" id="lb-print">Print labels</button>
+      <button class="btn btn-outline" data-sheetclose>Close</button>
+    </div>
+    <div class="muted" id="lb-count" style="font-size:11.5px;margin-top:8px;text-align:center;"></div>
+  `;
+  sheet.querySelectorAll("[data-sheetclose]").forEach(b => b.addEventListener("click", closeAllSheets));
+  sheet.querySelector("#lb-q").addEventListener("input", renderLabelPicker);
+  sheet.querySelector("#lb-stock").addEventListener("change", e => { labelStockId = e.target.value; renderLabelPicker(); });
+  sheet.querySelector("#lb-price").addEventListener("change", e => { labelShowPrice = e.target.checked; });
+  sheet.querySelector("#lb-print").addEventListener("click", printLabels);
+  renderLabelPicker();
+  showSheet("sheet-labels");
+  setTimeout(()=>{ try{ sheet.querySelector("#lb-q").focus(); }catch(e){} }, 220);
+}
+
+function renderLabelPicker(){
+  const box = document.getElementById("lb-results");
+  if(!box) return;
+  const q = (document.getElementById("lb-q").value || "").trim().toLowerCase();
+  const stock = labelStock();
+
+  const list = !q ? state.products.slice(0, 12) : state.products.filter(p =>
+       (p.name || "").toLowerCase().includes(q)
+    || (p.brand || "").toLowerCase().includes(q)
+    || (p.sku || "").toLowerCase().includes(q)
+    || (p.sizes || []).some(z => (z.label || "").toLowerCase().includes(q)));
+
+  if(!list.length){ box.innerHTML = `<div class="empty-hint">Nothing matches “${escapeHtml(q)}”.</div>`; updateLabelCount(); return; }
+
+  /* Whether the code physically fits this stationery is decided here, per
+     code, and said on the row. A barcode does not wrap or shrink to fit:
+     if it will not go on at a bar width the shop's scanner can read, the
+     honest answer is to say so rather than print a sheet that fails at
+     the counter. */
+  /* Only the sticker edge needs clearance here — Code 128 quiet zones are
+     already drawn inside the SVG. Taking 4mm off a 38mm label stole exactly
+     the width the barcode needed and reported every code as too long. */
+  const usable = stock.w - 2;
+  const row = (code, title, sub, price) => {
+    const fits = code ? Barcode.fitModule(code, usable) : 0;
+    const n = labelQty[code] || 0;
+    return `<div class="list-row" style="align-items:center;">
+      <div style="min-width:0;">
+        <div class="row-title">${escapeHtml(title)}</div>
+        <div class="row-sub">${escapeHtml(sub)}${price!=null?" · "+fmt(price):""}
+          · <code>${escapeHtml(code || "—")}</code></div>
+        ${!code ? `<div class="row-sub" style="color:var(--danger);">No code yet — save the product once to give it one</div>`
+          : !fits ? `<div class="row-sub" style="color:var(--danger);">Too long for this label — choose a wider one</div>` : ""}
+      </div>
+      <div class="row-right">
+        <input type="number" min="0" max="999" value="${n}" data-lb-qty="${escapeHtml(code||"")}"
+               ${(!code||!fits)?"disabled":""} style="width:64px;text-align:center;">
+      </div>
+    </div>`;
+  };
+
+  box.innerHTML = `<div class="card">` + list.map(p => {
+    const short = String(p.sku || "").replace(/^SKU-/i, "");
+    return (p.sizes || []).map(z => row(z.barcode, p.name, z.label, z.price)).join("")
+         + row(short, p.name, "Whole product — any size", null);
+  }).join("") + `</div>`;
+
+  box.querySelectorAll("[data-lb-qty]").forEach(inp => {
+    inp.addEventListener("input", () => {
+      const c = inp.dataset.lbQty;
+      const v = Math.max(0, Math.min(999, Number(inp.value) || 0));
+      if(v) labelQty[c] = v; else delete labelQty[c];
+      updateLabelCount();
+    });
+  });
+  updateLabelCount();
+}
+
+function updateLabelCount(){
+  const el = document.getElementById("lb-count");
+  if(!el) return;
+  const items = labelBasket();
+  const total = items.reduce((n, i) => n + i.qty, 0);
+  const stock = labelStock();
+  const perPage = stock.cols * stock.rows;
+  const sheets = Math.ceil(total / perPage);
+  el.textContent = !total ? "Nothing selected yet."
+    : stock.kind === "roll"
+      ? `${total} label${total===1?"":"s"} on the roll`
+      : `${total} label${total===1?"":"s"} · ${sheets} sheet${sheets===1?"":"s"}`;
+}
+
+function printLabels(){
+  const items = labelBasket();
+  if(!items.length){ toast("Choose how many labels you want first."); return; }
+  const stock = labelStock();
+  /* Only the sticker edge needs clearance here — Code 128 quiet zones are
+     already drawn inside the SVG. Taking 4mm off a 38mm label stole exactly
+     the width the barcode needed and reported every code as too long. */
+  const usable = stock.w - 2;
+
+  /* One entry per physical sticker. */
+  const stickers = [];
+  for(const it of items) for(let i = 0; i < it.qty; i++) stickers.push(it);
+
+  const perPage = stock.cols * stock.rows;
+  const cellList = stickers.map(it => {
+    const module = Barcode.fitModule(it.code, usable);
+    const barHeight = Math.max(6, stock.h * 0.42);
+    const svg = module ? Barcode.svg(it.code, { module, height: barHeight, fontSize: 2.3 }) : "";
+    return `<div class="lb"><div class="lb-name">${escapeHtml(it.name)}</div>` +
+           `<div class="lb-sub">${escapeHtml(it.sub || "")}${(labelShowPrice && it.price!=null) ? " · " + fmt(it.price) : ""}</div>` +
+           `<div class="lb-bc">${svg}</div></div>`;
+  });
+  const pageHtml = [];
+  for(let i = 0; i < cellList.length; i += perPage){
+    pageHtml.push(`<div class="pg">${cellList.slice(i, i + perPage).join("")}</div>`);
+  }
+
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Barcode Labels</title>
+    <style>
+      /* Sized in millimetres throughout: a label sheet is a physical object
+         and pixels do not survive a printer's own scaling. */
+      @page { size: ${stock.page[0]}mm ${stock.page[1]}mm; margin: 0; }
+      html,body{ margin:0; padding:0; background:#fff; }
+      body{ font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif; }
+      .pg{
+        width:${stock.page[0]}mm; height:${stock.page[1]}mm;
+        padding:${stock.my}mm ${stock.mx}mm; box-sizing:border-box;
+        display:grid; grid-template-columns:repeat(${stock.cols}, ${stock.w}mm);
+        grid-auto-rows:${stock.h}mm; column-gap:${stock.gx}mm; row-gap:${stock.gy}mm;
+        page-break-after:always; break-after:page;
+      }
+      .pg:last-child{ page-break-after:auto; break-after:auto; }
+      .lb{
+        width:${stock.w}mm; height:${stock.h}mm; overflow:hidden;
+        display:flex; flex-direction:column; align-items:center; justify-content:center;
+        box-sizing:border-box; padding:1mm 2mm; text-align:center;
+      }
+      .lb-name{ font-size:2.5mm; font-weight:700; line-height:1.1;
+                white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; }
+      .lb-sub{ font-size:2.2mm; line-height:1.1; margin-top:.3mm;
+               white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; }
+      .lb-bc{ margin-top:.6mm; line-height:0; }
+      .lb-bc svg{ display:block; }
+      /* On screen only, so the sheet can be checked against the stationery
+         before a hundred stickers are wasted. */
+      @media screen { .pg{ outline:1px dashed #bbb; margin:10px auto; } .lb{ outline:1px dotted #ddd; } }
+    </style></head><body>${pageHtml.join("")}</body></html>`;
+
+  openPrintWindow(html, { title: `${stickers.length} label${stickers.length===1?"":"s"} — ${stock.name}` });
+}
+
+/* ============================================================
+   SCANNING
+
+   Two ways in, because a shop has two kinds of scanner:
+
+   A HANDHELD SCANNER on the counter PC is a keyboard. It types the code
+   and presses Enter, faster than any human. That is what is detected
+   below — no permissions, no camera, and it works on the LAN.
+
+   A PHONE CAMERA uses the browser's own BarcodeDetector. It needs a
+   SECURE page: https, or localhost. Reached over WiFi as http://192.168...
+   the camera is blocked by the browser and there is nothing this app can
+   do about it — so that case is explained rather than left to fail.
+
+   Both end in the same place: the billing screen, with the line added.
+   ============================================================ */
+async function resolveScan(code){
+  const c = String(code || "").trim();
+  if(!c) return;
+  let r;
+  try {
+    r = await api("GET", "/products/scan?code=" + encodeURIComponent(c));
+  } catch (e) {
+    toast(e.message || `Nothing carries the code ${c}`, true);
+    return;
+  }
+
+  /* Straight to billing, which is what a scan is for. The screen itself is
+     what says where we are — the app tracks the current tab by which
+     .screen carries .active, and switchTab re-renders the whole billing
+     screen, so calling it when already there would rebuild the cart on
+     every scan of a long bill. */
+  const onBilling = document.getElementById("screen-billing").classList.contains("active");
+  if(!onBilling) await switchTab("billing");
+
+  if(r.found === "size"){
+    const p = r.product;
+    /* The catalogue in memory can be older than the scan — a size added on
+       another till would not be in it. Refreshed only when it is missing,
+       rather than on every scan. */
+    if(!state.products.some(x => x.id === p.id)) await loadProducts();
+    if(addToCart(p.id, r.sizeIndex)){
+      renderBillingProducts();
+      focusNewCartLine();
+      toast(`${p.name} · ${(p.sizes[r.sizeIndex]||{}).label || ""}`);
+    } else {
+      toast("That's all the stock at this location.", true);
+    }
+    return;
+  }
+
+  /* A product-level code cannot become a line on its own — the rate lives
+     on the size — so it opens the product with its sizes to choose from. */
+  if(!state.products.some(x => x.id === r.product.id)) await loadProducts();
+  openProductDetail(r.product.id, "billing");
+  toast(`${r.product.name} — choose a size`);
+}
+
+/**
+ * A handheld scanner, told apart from a person typing by SPEED.
+ *
+ * A scanner delivers a whole code in a few milliseconds per character and
+ * finishes with Enter; nobody types like that. Keys are only collected
+ * when the focus is not in a field, so this can never eat what somebody is
+ * deliberately typing into a search box or a quantity.
+ */
+function wireWedgeScanner(){
+  let buf = "";
+  let last = 0;
+  const MAX_GAP = 40;   /* ms between keys. 25 characters a second, held for
+                           a whole code — about 300 words a minute. Nobody
+                           types like that; a scanner does nothing else. */
+  const MIN_LEN = 4;
+
+  /* CAPTURE PHASE, and it listens even while a field has the focus.
+     ------------------------------------------------------------------
+     The obvious version ignores keystrokes whenever something is focused,
+     so it cannot eat what somebody is deliberately typing. That version is
+     wrong in the one place this matters most: the counter taps the billing
+     search box, then scans. The code types itself into the search, Enter
+     reaches the app's own handler, and that handler adds THE FIRST PRODUCT
+     IN THE LIST — the wrong item, on a real bill, with nothing to show it
+     went wrong.
+
+     So speed decides, not focus. If a whole code arrived at scanner speed
+     the Enter is swallowed before any other handler sees it, whatever is
+     focused, and the field is put back the way it was. */
+  document.addEventListener("keydown", (e) => {
+    if(e.ctrlKey || e.altKey || e.metaKey) return;
+
+    const now = Date.now();
+    if(now - last > MAX_GAP) buf = "";
+    last = now;
+
+    if(e.key === "Enter"){
+      const code = buf;
+      buf = "";
+      if(code.length < MIN_LEN) return;      /* a person pressing Enter */
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      /* Take the scanned text back out of whatever it was typed into, so a
+         search box is not left filtered by a barcode nobody can read. */
+      const el = document.activeElement;
+      if(el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")
+         && typeof el.value === "string" && el.value.endsWith(code)){
+        el.value = el.value.slice(0, -code.length);
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+
+      resolveScan(code);
+      return;
+    }
+    if(e.key.length === 1) buf += e.key;
+  }, true);
+}
+
+async function openCameraScan(){
+  const sheet = document.getElementById("sheet-scan");
+  const secure = window.isSecureContext;
+  const supported = typeof window.BarcodeDetector !== "undefined";
+
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>&#10005;</button>
+    <div class="sheet-title">Scan a barcode</div>
+    <div id="sc-body" style="margin-top:8px;"></div>
+    <label class="field-label" style="margin-top:12px;">Or type the code</label>
+    <div class="searchbar" style="margin-top:0;">
+      <span>&#9000;</span><input type="text" id="sc-manual" placeholder="e.g. QPD4E4-2" autocomplete="off">
+    </div>
+    <div class="acts" style="margin-top:12px;">
+      <button class="btn btn-gold" id="sc-go">Find it</button>
+      <button class="btn btn-outline" data-sheetclose>Close</button>
+    </div>
+  `;
+  sheet.querySelectorAll("[data-sheetclose]").forEach(b => b.addEventListener("click", ()=>{ stopCameraScan(); closeAllSheets(); }));
+  const go = () => {
+    const v = (sheet.querySelector("#sc-manual").value || "").trim();
+    if(!v) return;
+    stopCameraScan(); closeAllSheets(); resolveScan(v);
+  };
+  sheet.querySelector("#sc-go").addEventListener("click", go);
+  sheet.querySelector("#sc-manual").addEventListener("keydown", e => { if(e.key === "Enter") go(); });
+
+  const body = sheet.querySelector("#sc-body");
+  showSheet("sheet-scan");
+
+  if(!secure){
+    /* The exact case this shop hits: the app opened from a phone over WiFi
+       at http://192.168.x.x. Browsers refuse the camera on an insecure
+       page, so say which page would work rather than showing a dead
+       button. */
+    body.innerHTML = `<div class="empty-hint" style="text-align:left;">
+      The camera needs a secure page. This one is <b>${escapeHtml(location.protocol)}//${escapeHtml(location.host)}</b>.<br><br>
+      It works on the shop's web address (https), or on this computer itself at
+      <b>localhost</b> — but not over WiFi by IP address.<br><br>
+      A handheld scanner works here with no camera at all: just scan, and it goes
+      straight to the bill.</div>`;
+    return;
+  }
+  if(!supported){
+    body.innerHTML = `<div class="empty-hint" style="text-align:left;">
+      This browser cannot read barcodes with the camera. Chrome on Android can;
+      Safari on iPhone cannot.<br><br>
+      A handheld scanner works here, and the code can be typed in below.</div>`;
+    return;
+  }
+
+  body.innerHTML = `<video id="sc-video" playsinline muted
+      style="width:100%;border-radius:12px;background:#000;aspect-ratio:4/3;object-fit:cover;"></video>
+    <div class="muted" style="font-size:11.5px;margin-top:6px;text-align:center;">Hold the label steady in the frame.</div>`;
+
+  try{
+    scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+  } catch(e){
+    body.innerHTML = `<div class="empty-hint">The camera was not allowed. Check the permission for this site, or type the code below.</div>`;
+    return;
+  }
+  const video = sheet.querySelector("#sc-video");
+  video.srcObject = scanStream;
+  await video.play().catch(()=>{});
+
+  const detector = new window.BarcodeDetector({ formats: ["code_128", "ean_13", "code_39", "ean_8", "upc_a"] });
+  scanTimer = setInterval(async () => {
+    try{
+      const found = await detector.detect(video);
+      if(found && found.length){
+        const code = found[0].rawValue;
+        stopCameraScan();
+        closeAllSheets();
+        resolveScan(code);
+      }
+    }catch(e){ /* a frame that could not be read is not an error worth showing */ }
+  }, 300);
+}
+
+let scanStream = null, scanTimer = null;
+function stopCameraScan(){
+  if(scanTimer){ clearInterval(scanTimer); scanTimer = null; }
+  if(scanStream){ scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
 }
 
 function printInventoryStock(){

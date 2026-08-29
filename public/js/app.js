@@ -8858,6 +8858,10 @@ function setPaper(size){
 let lastPreviewInvoice = null;
 function openInvoicePreview(existingInvoice){
   if(!existingInvoice && !state.cart.length){ toast("Add items to the invoice first."); return; }
+  /* Sizes dragged on the last bill do not follow you to this one. They were
+     a nudge for that sheet; carrying them over would mean a shop could not
+     work out where its own column widths were coming from. */
+  billLayoutClear();
   // Re-read on every open so a template edited in the Designer shows on the
   // very next bill, then redraw once it lands.
   loadBillTemplates().then(() => { if(lastPreviewInvoice) renderInvoicePageContent(); });
@@ -9254,6 +9258,29 @@ function billRowHeightFor(challan){
   return Number.isFinite(h) && h > 0 ? Math.min(120, h) : 0;
 }
 
+/**
+ * The height of ONE row — its own, if it was dragged individually.
+ *
+ * Three answers in order, and the order is the whole design:
+ *   1. this row's own height, set by dragging that line;
+ *   2. the height every row shares, set by Apply to All Rows;
+ *   3. nothing, which leaves the row exactly as tall as its text — how
+ *      every bill printed before any of this existed.
+ *
+ * @param i  the row's position in the table, which is how the template
+ *           stores it: a template prints against a different document each
+ *           time, so "the third row" is the only thing that carries over.
+ */
+function billRowHeightAt(challan, i, fallback){
+  const cfg = billConfig(challan);
+  const map = cfg && cfg.rowHeights;
+  if(map && typeof map === "object"){
+    const own = Number(map[i]);
+    if(Number.isFinite(own) && own > 0) return Math.min(120, own);
+  }
+  return fallback || 0;
+}
+
 /* The classes the stylesheet already targets, kept per column key so the
    themes and the print CSS keep working untouched. */
 /* Qty, Rate and Amount keep c-num for their alignment AND carry a column
@@ -9561,6 +9588,182 @@ function renderTallyInvoiceHtml(inv, cust, cols, rowsHtml, ctx){
     <div class="tly-computer">This is a Computer Generated Invoice</div>`;
 }
 
+/* ============================================================
+   RESIZING THE BILL AT PRINTING TIME
+
+   The Designer is where a shop settles what its paperwork looks like. This
+   is the other half: the challan is on screen, it is about to go to the
+   printer, and the Product column is one word too narrow FOR THIS ONE.
+   Going back to Settings, opening the Designer, dragging a line, saving
+   and finding the bill again is not something anybody does at a counter
+   with a customer waiting — so the lines on the bill itself are draggable,
+   and what is dragged is the sheet that prints.
+
+   THIS IS A NUDGE, NOT AN EDIT. It applies to the bill in front of you and
+   is dropped when you leave it. The template is untouched unless the owner
+   presses Save to Template, which is a deliberate act with its own button
+   — otherwise adjusting one awkward challan would quietly change the shape
+   of every bill the shop prints afterwards, which is not what anybody
+   dragging a line at a counter means to do.
+
+   Held apart from the template rather than written into the cached copy of
+   it, because that cached copy is what the NEXT bill renders from.
+   ============================================================ */
+let billLayout = null;
+
+function billLayoutWorking(){
+  if(!billLayout) billLayout = { cols: {}, rows: {} };
+  return billLayout;
+}
+function billLayoutTouched(){
+  return !!(billLayout && (Object.keys(billLayout.cols).length || Object.keys(billLayout.rows).length));
+}
+function billLayoutClear(){ billLayout = null; }
+
+/** Redraws the print panel only if it is actually open.
+ *  renderBillPanel() reads billPanelPrefs without checking it, so calling it
+ *  with the panel closed throws — and it would be thrown from inside a drag,
+ *  where the only symptom is the line stopping dead halfway. */
+function billPanelRefresh(){
+  const panel = document.getElementById("bill-panel");
+  if(panel && panel.classList.contains("open") && billPanelPrefs) renderBillPanel();
+}
+
+/**
+ * Puts a handle on every line of the bill's item table.
+ *
+ * The drag plumbing is pmGripDrag, the same one the Designer uses. It is
+ * safe here: every designer-only thing it touches (the undo stack, the
+ * lock, the unsaved note) checks for a template being edited first and does
+ * nothing when there is not one. One implementation of "hold a line and
+ * move it" is worth more than two that drift apart.
+ */
+function wireBillGrips(challan){
+  const page = document.getElementById("invoice-page-content");
+  if(!page) return;
+  const table = page.querySelector("table.erp-table");
+  if(!table) return;
+
+  /* A locked template is locked here too. The lock exists so a layout
+     somebody settled cannot be nudged by accident, and the bill preview is
+     exactly where that accident would happen. */
+  const cfg = billConfig(challan);
+  if(cfg && cfg.locked) return;
+
+  /* The preview is drawn at its natural size on a desktop and scaled down
+     to fit on a phone. Measuring the scale from the element itself covers
+     both without this code needing to know which is happening: a finger
+     that moves 40 screen pixels on a scaled page has not moved the paper
+     40 pixels, and getting that conversion wrong is what makes a resize
+     feel like it is fighting you. */
+  const k = table.offsetWidth ? (table.getBoundingClientRect().width / table.offsetWidth) : 1;
+  const scale = k > 0 ? k : 1;
+
+  const cols = billColumns(challan);
+  const work = billLayoutWorking();
+
+  [...table.querySelectorAll("thead th")].forEach((th, i) => {
+    const col = cols[i];
+    if(!col) return;
+    const grip = document.createElement("span");
+    grip.className = "bill-grip bill-grip-col";
+    grip.title = "Drag to set the " + (col.label || "column") + " width for this print";
+    th.appendChild(grip);
+    pmGripDrag(grip, {
+      /* Start from the width this column is SET to, and only fall back to
+         what it measures on screen when it has never been given one.
+
+         The two are the same on a desktop and are not on a phone, where the
+         bill is reflowed to the width of the handset instead of being a
+         scaled-down A4 sheet. Measuring there hands the drag a number from
+         a 343px page and then writes it onto a 210mm one — so a column set
+         to 74 began its drag at 40, and one nudge threw it somewhere the
+         shopkeeper had not asked for. */
+      start: e => {
+        const set = (billLayout && Number(billLayout.cols[col.key])) || Number(col.width) || 0;
+        return { x: e.clientX, w: set > 0 ? set : th.getBoundingClientRect().width / scale };
+      },
+      move: (ev, s) => {
+        const next = Math.max(14, Math.min(400, Math.round(s.w + (ev.clientX - s.x) / scale)));
+        work.cols[col.key] = next;
+        th.style.width = next + "px";
+      },
+      end: () => billPanelRefresh()
+    });
+  });
+
+  [...table.querySelectorAll("tbody tr")].forEach((tr, ri) => {
+    const cells = [...tr.querySelectorAll("td")];
+    if(!cells.length) return;
+
+    // One set of handlers, a handle in every cell — the whole line under the
+    // row is the target, which is the only version of this a thumb can use.
+    const opts = {
+      /* Same reasoning as the column above. This one was worse: on a phone
+         every row measures far taller than it prints, so a drag started at
+         about 107 and the first nudge upward hit the 120 ceiling — making
+         it impossible to set a short row from a handset at all. */
+      start: e => {
+        const set = (billLayout && Number(billLayout.rows[ri])) || billRowHeightAt(challan, ri, 0);
+        return { y: e.clientY, h: set > 0 ? set : tr.getBoundingClientRect().height / scale };
+      },
+      move: (ev, s) => {
+        const next = Math.max(10, Math.min(120, Math.round(s.h + (ev.clientY - s.y) / scale)));
+        work.rows[ri] = next;
+        /* The same custom property the template writes, so the cell rule in
+           the stylesheet resolves both without knowing which one set it. */
+        tr.style.setProperty("--row-h", next + "px");
+      },
+      end: () => billPanelRefresh()
+    };
+
+    cells.forEach(cell => {
+      cell.style.position = "relative";
+      const grip = document.createElement("span");
+      grip.className = "bill-grip bill-grip-row";
+      grip.title = "Drag to set row " + (ri + 1) + "'s height for this print";
+      cell.appendChild(grip);
+      pmGripDrag(grip, opts);
+    });
+  });
+}
+
+/**
+ * Makes the nudge permanent, for the owner who decides the bill was wrong
+ * rather than this one bill being awkward.
+ *
+ * Written into the DEFAULT template of this document type — the one the
+ * bill was rendered from — so what is saved is what is on screen. The
+ * server refuses this for anyone but an owner, and the message says so
+ * rather than the button appearing to have done nothing.
+ */
+async function saveBillLayoutToTemplate(challan){
+  const key = challan ? "delivery_challan" : "sales_invoice";
+  const t = (state.billTemplates || {})[key];
+  if(!t){ toast("This document has no template yet to save into."); return; }
+  if(!billLayoutTouched()){ toast("Nothing has been dragged yet."); return; }
+
+  const cfg = JSON.parse(JSON.stringify(t.config));
+  (cfg.columns || []).forEach(c => {
+    const w = billLayout.cols[c.key];
+    if(w) c.width = w;
+  });
+  /* Merged onto what the template already holds, not replacing it: rows the
+     shopkeeper did not touch on this bill keep whatever the Designer set. */
+  cfg.rowHeights = { ...(cfg.rowHeights || {}), ...billLayout.rows };
+
+  try{
+    await api("PUT", "/print-manager/templates/" + t.id, { name: t.name, config: cfg });
+    await loadBillTemplates();
+    billLayoutClear();
+    renderInvoicePageContent();
+    renderBillPanel();
+    toast("Saved. Every bill of this kind will print with these sizes.", "ok");
+  }catch(e){
+    toast(e.message || "Could not save these sizes to the template.");
+  }
+}
+
 function renderInvoicePageContent(){
   const inv = lastPreviewInvoice; if(!inv) return;
   const cfg = state.settings;
@@ -9578,9 +9781,17 @@ function renderInvoicePageContent(){
     const c = billConfig(challan);
     pageEl.style.fontSize = c && c.fontSize ? c.fontSize + "pt" : "";
     pageEl.style.padding  = c && c.margins && c.margins.top ? c.margins.top + "mm" : "";
-    // Row height is a floor, not a fixed height: a long product name must
-    // still be free to wrap onto a second line rather than be clipped.
-    pageEl.style.setProperty("--bill-row-h", c && c.rowHeight ? c.rowHeight + "mm" : "");
+    /* Row height is a floor, not a fixed height: a long product name must
+       still be free to wrap onto a second line rather than be clipped.
+
+       PIXELS, not millimetres. It used to be written out as mm while the
+       Designer measured, showed and clamped the very same number in px —
+       so a row dragged to 30 in the preview printed at 30mm, which is
+       113px, nearly four times what the shop had just looked at and
+       approved. The preview was not lying about the width of a column and
+       then telling the truth about the height of a row; one of the two
+       units simply had to go, and px is the one the Designer speaks. */
+    pageEl.style.setProperty("--bill-row-h", c && c.rowHeight ? c.rowHeight + "px" : "");
     pageEl.classList.toggle("no-rules", !!(c && c.showBorders === false));
   }
 
@@ -9605,7 +9816,14 @@ function renderInvoicePageContent(){
   // come from the active template now. A default template reproduces the
   // classic seven exactly; billColumns() falls back to them outright if no
   // template has loaded, so printing never depends on the Print Manager.
-  const cols = billColumns(challan);
+  /* The template's columns, with anything dragged on THIS bill laid over
+     the top. A copy per column, never a write into the template's own
+     objects — those are the cached copy the next bill renders from, and
+     editing them here would make a one-off nudge silently permanent. */
+  const cols = billColumns(challan).map(c => {
+    const nudged = billLayout && billLayout.cols[c.key];
+    return nudged ? { ...c, width: nudged } : c;
+  });
   const billRowHeight = billRowHeightFor(challan);
   const head = cols.map(billHeadCell).join("");
   const rows = inv.items.map((it,i)=>{
@@ -9634,7 +9852,18 @@ function renderInvoicePageContent(){
        than in a stylesheet, because this markup is what goes to the
        printer and to the PDF — a rule in the app's CSS would not travel
        with it. */
-    const rowStyle = billRowHeight ? ` style="height:${billRowHeight}px;"` : "";
+    /* As a CUSTOM PROPERTY on the row, not a height on it.
+       The stylesheet puts the height on the CELL — a height on a <tr> is
+       advisory and a table that has been stretched to fill the page simply
+       ignores it, which is exactly what happened: four rows dragged to
+       four different heights all printed at the same 113px. The cell rule
+       reads this variable first and falls back to the shared height, so
+       the three-way fallback lives in one place in the CSS. */
+    const nudgedH = billLayout && Number(billLayout.rows[i]);
+    const thisRowH = (Number.isFinite(nudgedH) && nudgedH > 0)
+      ? nudgedH
+      : billRowHeightAt(challan, i, 0);
+    const rowStyle = thisRowH ? ` style="--row-h:${thisRowH}px;"` : "";
     return `<tr${rowStyle}>${cols.map(c => billBodyCell(c, billCellFor(c.key, it, i, cellCtx))).join("")}</tr>`;
   }).join("");
   // Total Quantity is the physical piece count across all items, not the
@@ -9765,6 +9994,7 @@ function renderInvoicePageContent(){
       renderTallyInvoiceHtml(inv, cust, cols, rows, {
         showRate, displayTotal, gstEnabled, isIGST
       });
+    wireBillGrips(challan);
     return;
   }
   document.getElementById("invoice-page-content").innerHTML = `
@@ -9815,6 +10045,7 @@ function renderInvoicePageContent(){
       ? `<strong>PLYWOOD, BLACKBOARD, ARE MANUFACTURED FROM NATURAL WOOD WHICH IS BELOW BIO DEGRADEBLE, WE DONOT GUARANTEE AGAINST ANY NATURAL DECAY DEFICIENTY, DETORATION AND LIKE INCLUDING MANUFACTURING DEFACT AND/OR IMPERFACT QUALITY</strong>`
       : `<strong>NO GURANTEE AND WARRANTY FOR DECORATIVE PRODUCTS AND AIR BUBBLES IN LAMMINATES, ACRYLIC AND PVC LAMINATES OR ANY SHADE VARIATION AFTER INSTALLATION. NO EXCHANGE. NO RETURN IN ANY CONDITION. PLEASE CHECK THE MATERIAL ON DELIVERY.</strong>`}</div>
   `;
+  wireBillGrips(challan);
 }
 
 /* ============================================================
@@ -10280,6 +10511,26 @@ function renderBillPanel(){
       <div class="bp-hint bp-hint-block">Saved for every bill, not just this one.</div>
     </div>
 
+    <div class="bp-group">
+      <div class="bp-label">Column &amp; Row Sizes</div>
+      ${(billConfig(challan) || {}).locked
+        ? `<div class="bp-hint bp-hint-block">This document's layout is locked, so the
+            lines on the bill cannot be dragged. An owner can unlock it in
+            Print Management &rsaquo; Templates.</div>`
+        : `<div class="bp-hint bp-hint-block">Drag the lines on the bill itself: a
+            <b>vertical</b> line in the heading row sets that <b>column's width</b>, and the
+            line under any row sets <b>that row's height</b>. It changes the sheet you are
+            about to print${isOwner() ? " and is forgotten afterwards, unless you save it below."
+                                      : " and is forgotten afterwards."}</div>
+           <div class="bp-row" style="gap:8px;margin-top:8px;">
+             <button class="btn btn-outline" id="bp-size-reset"${billLayoutTouched() ? "" : " disabled"}>Reset sizes</button>
+             ${isOwner() ? `<button class="btn btn-outline" id="bp-size-save"${billLayoutTouched() ? "" : " disabled"}>Save to template</button>` : ""}
+           </div>
+           ${billLayoutTouched()
+             ? `<div class="bp-hint bp-hint-block" style="margin-top:6px;">Sizes changed for this print.</div>`
+             : ""}`}
+    </div>
+
     <div class="bp-group bp-actions">
       <button class="btn btn-gold" id="bp-save">Save as Default</button>
     </div>
@@ -10318,6 +10569,17 @@ function renderBillPanel(){
     closeInvoicePreview();
     openExistingInvoice(inv.id);
   });
+
+  const sizeReset = document.getElementById("bp-size-reset");
+  if(sizeReset) sizeReset.addEventListener("click", ()=>{
+    billLayoutClear();
+    renderInvoicePageContent();
+    renderBillPanel();
+    toast("Back to the sizes this document's template prints at.", "ok");
+  });
+
+  const sizeSave = document.getElementById("bp-size-save");
+  if(sizeSave) sizeSave.addEventListener("click", ()=> saveBillLayoutToTemplate(challan));
 
   document.getElementById("bp-save").addEventListener("click", async ()=>{
     const title = document.getElementById("bp-title").value.trim();
@@ -17486,6 +17748,119 @@ function pmCellFor(key, it, cfg){
   }
 }
 
+/* ============================================================
+   WHAT IS SELECTED, AND HOW FAR BACK YOU CAN GO
+
+   Two small pieces of state that everything else in the designer reads.
+
+   SELECTION is what makes the numbers on screen mean something. Dragging a
+   line is how you judge a width by eye; typing 74 into a box is how you
+   make two documents match. Both need the designer to know which column or
+   row is being talked about, and to SHOW which one, or the number box is
+   just a box.
+
+   HISTORY is snapshots of the whole config, not a list of undoable verbs.
+   A verb list has to be extended every time the designer grows a control,
+   and the one that gets forgotten is the one somebody needs to undo. A
+   snapshot cannot be forgotten: anything that calls pmPushHistory() before
+   changing the config is undoable, whatever it changed.
+   ============================================================ */
+let pmSel = { kind: null, index: -1 };
+
+const pmHistory = { undo: [], redo: [], limit: 60 };
+
+/** Call BEFORE changing the config. Cheap — a template config is small. */
+function pmPushHistory(){
+  if(!pmState.editing) return;
+  pmHistory.undo.push(JSON.stringify(pmState.editing.config));
+  /* Bounded, because the drag handlers push once per drag and an afternoon
+     of nudging a table should not sit in memory forever. */
+  if(pmHistory.undo.length > pmHistory.limit) pmHistory.undo.shift();
+  /* A new change abandons whatever was undone — the standard rule, and the
+     only one that cannot produce a redo that no longer fits the config. */
+  pmHistory.redo.length = 0;
+  pmSyncHistory();
+}
+
+function pmResetHistory(){
+  pmHistory.undo.length = 0;
+  pmHistory.redo.length = 0;
+  pmSyncHistory();
+}
+
+function pmUndo(){
+  if(!pmHistory.undo.length || !pmState.editing) return;
+  pmHistory.redo.push(JSON.stringify(pmState.editing.config));
+  pmState.editing.config = JSON.parse(pmHistory.undo.pop());
+  pmAfterHistory();
+}
+
+function pmRedo(){
+  if(!pmHistory.redo.length || !pmState.editing) return;
+  pmHistory.undo.push(JSON.stringify(pmState.editing.config));
+  pmState.editing.config = JSON.parse(pmHistory.redo.pop());
+  pmAfterHistory();
+}
+
+/* The selection is dropped rather than kept: the config that just came back
+   may not have the column that was selected in it. */
+function pmAfterHistory(){
+  pmSel = { kind: null, index: -1 };
+  pmSyncPageControls();
+  renderPmColumns();
+  renderTemplatePreview();
+  pmSyncHistory();
+  markLayoutUnsaved();
+}
+
+function pmSyncHistory(){
+  const u = document.getElementById("pm-undo"), r = document.getElementById("pm-redo");
+  if(u) u.disabled = !pmHistory.undo.length;
+  if(r) r.disabled = !pmHistory.redo.length;
+}
+
+/** A locked template is read-only until an owner unlocks it. */
+function pmLocked(){
+  return !!(pmState.editing && pmState.editing.config && pmState.editing.config.locked);
+}
+
+/**
+ * The page in millimetres.
+ *
+ * Landscape swaps the two rather than scaling them, which is what
+ * landscape actually is. The old code multiplied the width by the aspect
+ * ratio and divided the height by it — the same answer for A4 and A5, but
+ * not for a custom size, and this now has to serve custom sizes.
+ */
+function pmPaperMm(cfg){
+  let w, h;
+  if(cfg.paper === "custom"){
+    w = Number(cfg.paperW) > 0 ? Number(cfg.paperW) : 210;
+    h = Number(cfg.paperH) > 0 ? Number(cfg.paperH) : 297;
+  }else if(cfg.paper === "A5"){ w = 148; h = 210; }
+  else { w = 210; h = 297; }
+  return cfg.orientation === "landscape" ? { w: h, h: w } : { w, h };
+}
+
+/** One row's height in the preview: its own, then the shared one, then
+ *  nothing. The same order billRowHeightAt() uses on the printed page, and
+ *  deliberately so — a preview that resolved these differently from the
+ *  printer would be worse than no preview. */
+function pmRowHeightAt(cfg, i){
+  const map = cfg.rowHeights || {};
+  const own = Number(map[i]);
+  if(Number.isFinite(own) && own > 0) return Math.min(120, own);
+  const all = Number(cfg.rowHeight);
+  return Number.isFinite(all) && all > 0 ? Math.min(120, all) : 0;
+}
+
+/** Rounds a dragged value to the grid, when snapping is on. */
+function pmSnapTo(v, cfg){
+  if(!cfg.snapOn) return Math.round(v);
+  const g = Math.max(1, Number(cfg.gridSize) || 5);
+  return Math.round(v / g) * g;
+}
+
 /**
  * The preview markup for a template config.
  *
@@ -17496,10 +17871,8 @@ function pmCellFor(key, it, cfg){
 function buildTemplatePreviewHtml(cfg, docLabel){
   const s = state.settings || {};
   const cols = (cfg.columns || []).filter(c => c.show);
-  const isA4 = cfg.paper !== "A5";
-  const landscape = cfg.orientation === "landscape";
-  const pageW = (isA4 ? 210 : 148) * (landscape ? (isA4 ? 297/210 : 210/148) : 1);
-  const pageH = (isA4 ? 297 : 210) / (landscape ? (isA4 ? 297/210 : 210/148) : 1);
+  const paper = pmPaperMm(cfg);
+  const pageW = paper.w, pageH = paper.h;
 
   const totals = PM_SAMPLE_ITEMS.reduce((a,it)=>{
     const m = pmSampleLine(it);
@@ -17510,26 +17883,40 @@ function buildTemplatePreviewHtml(cfg, docLabel){
   /* A dragged row height, applied to every row so the table keeps one
      rhythm. 0 is what every bill has always printed: whatever the text
      needs. */
-  const rowH = Number(cfg.rowHeight) > 0 ? `height:${Number(cfg.rowHeight)}px;` : "";
-
   /* data-ci is the column's index in the SHOWN list, which is what the drag
      handles below key off — the config index would be wrong the moment a
      column is hidden. */
   const th = cols.map((c,i)=>
-    `<th data-ci="${i}" style="text-align:${c.align};${c.width ? `width:${c.width}px;` : ""}">${escapeHtml(c.label)}</th>`).join("");
-  const rows = PM_SAMPLE_ITEMS.map(it=>
-    `<tr style="${rowH}">${cols.map(c=>`<td style="text-align:${c.align};">${escapeHtml(pmCellFor(c.key, it, cfg))}</td>`).join("")}</tr>`).join("");
-  // A few ruled blanks, the way the real page fills to the foot.
-  const filler = Array.from({length:4}, ()=>
-    `<tr style="${rowH}">${cols.map(c=>`<td style="text-align:${c.align};">&nbsp;</td>`).join("")}</tr>`).join("");
+    `<th data-ci="${i}" class="${pmSel.kind === "col" && pmSel.index === i ? "tpl-picked" : ""}"` +
+    ` style="text-align:${c.align};${c.width ? `width:${c.width}px;` : ""}">${escapeHtml(c.label)}</th>`).join("");
+
+  /* Every row the table draws, in one list, so the sample lines and the
+     ruled blanks below them share ONE run of indexes. They have to: the
+     printed bill has however many lines the document has, and "row 4" must
+     mean the same row here as it does there. Splitting the numbering at
+     the end of the samples would make the blanks undraggable in any way
+     that survived printing. */
+  const bodyRows = [
+    ...PM_SAMPLE_ITEMS.map(it => ({ it })),
+    // A few ruled blanks, the way the real page fills to the foot.
+    ...Array.from({ length: 4 }, () => ({ it: null }))
+  ];
+  const tbody = bodyRows.map((r, ri) => {
+    const h = pmRowHeightAt(cfg, ri);
+    const picked = pmSel.kind === "row" && pmSel.index === ri ? " tpl-picked" : "";
+    const cells = cols.map(c =>
+      `<td style="text-align:${c.align};">${r.it ? escapeHtml(pmCellFor(c.key, r.it, cfg)) : "&nbsp;"}</td>`).join("");
+    return `<tr data-ri="${ri}" class="tpl-row${picked}" style="${h ? `height:${h}px;` : ""}">${cells}</tr>`;
+  }).join("");
 
   const bank = [s.bank_name, s.bank_account_no && "A/c " + s.bank_account_no,
                 s.bank_ifsc && "IFSC " + s.bank_ifsc, s.bank_branch].filter(Boolean);
 
   return `
-    <div class="tpl-page${cfg.showBorders ? "" : " no-rules"}"
+    <div class="tpl-page${cfg.showBorders ? "" : " no-rules"}${cfg.gridOn ? " tpl-gridded" : ""}"
          style="width:${pageW}mm;min-height:${pageH}mm;padding:${cfg.margins?cfg.margins.top:10}mm;
-                font-size:${cfg.fontSize || 10.5}pt;">
+                font-size:${cfg.fontSize || 10.5}pt;
+                --tpl-grid:${Math.max(1, Number(cfg.gridSize) || 5)}px;">
       ${cfg.header ? `<div class="tpl-header-line">${escapeHtml(cfg.header)}</div>` : ""}
       <div class="tpl-top">
         ${cfg.showLogo && s.logo_data ? `<img class="tpl-logo" src="${s.logo_data}" alt="">` : ""}
@@ -17549,7 +17936,7 @@ function buildTemplatePreviewHtml(cfg, docLabel){
       </div>` : ""}
 
       <table class="tpl-items"><thead><tr>${th}</tr></thead>
-        <tbody>${rows}${filler}</tbody></table>
+        <tbody>${tbody}</tbody></table>
 
       <div class="tpl-lower">
         <div class="tpl-lower-l">
@@ -17616,11 +18003,16 @@ function renderTemplatePreview(){
     host.style.height = (naturalHeight * scale) + "px";
   }
   host.style.cursor = "zoom-in";
-  host.title = "Tap to view full size — or drag any line in the table";
+  host.title = "Tap the page to view it full size — or drag any line in the table";
   host.onclick = (e) => {
     /* A drag that ends on the page must not also open the zoom. */
     if(pmDragged){ pmDragged = false; return; }
     if(e.target.closest(".tpl-grip")) return;
+    /* The item table is the WORKING SURFACE now — tapping a heading or a
+       row selects it. Opening a full-size still picture on top of that
+       would make the table the one part of the page you cannot touch. The
+       rest of the page still zooms. */
+    if(e.target.closest(".tpl-items")) return;
     /* Without the handles. The zoom is a still picture of the page, and a
        grip there is a thing that looks draggable and is not. */
     const still = host.cloneNode(true);
@@ -17658,101 +18050,276 @@ function wireTemplateGrips(host, scale){
   const cfg = pmState.editing.config;
   const shown = (cfg.columns || []).filter(c => c.show);
   const heads = [...table.querySelectorAll("thead th")];
+  const rows  = [...table.querySelectorAll("tbody tr")];
   const k = scale && scale > 0 ? scale : 1;
 
-  /* One grip per divider BETWEEN columns. The last column has no divider
-     of its own — its right edge is the page — so dragging it would mean
-     resizing the table rather than a column. */
+  /* ---- picking one, which is what makes the number boxes mean something ---- */
+  heads.forEach((th, i) => th.addEventListener("click", e => {
+    if(e.target.closest(".tpl-grip")) return;
+    e.stopPropagation();
+    pmSelect("col", i);
+  }));
+  rows.forEach(tr => tr.addEventListener("click", e => {
+    if(e.target.closest(".tpl-grip")) return;
+    e.stopPropagation();
+    pmSelect("row", Number(tr.dataset.ri));
+  }));
+
+  /* A locked template can still be READ and selected — seeing what a column
+     is set to is not editing it — but nothing gets a handle. */
+  if(pmLocked()) return;
+
+  /* ---- the vertical lines: COLUMN WIDTH ----
+     Every column, including the last. Its right edge is the page edge, so
+     dragging that one takes space from the columns set to 0 rather than
+     from a neighbour — which is what somebody pulling on the Amount column
+     actually wants. It used to be skipped for that reason; being unable to
+     size the money column was the worse of the two problems. */
   heads.forEach((th, i) => {
-    if(i >= heads.length - 1) return;
+    const col = shown[i];
+    if(!col) return;
     const grip = document.createElement("span");
     grip.className = "tpl-grip tpl-grip-col";
-    grip.title = "Drag to set this column's width";
+    grip.title = "Drag left or right to set this column's width";
     th.appendChild(grip);
 
-    grip.addEventListener("pointerdown", (e) => {
-      e.preventDefault(); e.stopPropagation();
-      /* Best effort, never fatal. setPointerCapture throws for any pointer
-         the browser does not consider active, and it used to be called
-         BEFORE the move listeners were attached — so one throw killed the
-         whole drag in silence, which looks exactly like a handle that does
-         not work. */
-      try{ grip.setPointerCapture(e.pointerId); }catch(err){ /* carry on */ }
-      const startX = e.clientX;
-      /* Its CURRENT width on screen, whether it came from the config or
-         from the browser working it out — dragging a column that has never
-         been given a width must start from where it actually is, not from
-         zero. */
-      const startW = th.getBoundingClientRect().width / k;
-      const col = shown[i];
-      grip.classList.add("dragging");
-
-      const move = (ev) => {
-        pmDragged = true;
-        const next = Math.max(14, Math.min(400, Math.round(startW + (ev.clientX - startX) / k)));
+    pmGripDrag(grip, {
+      /* Its CURRENT width on screen, whether that came from the config or
+         from the browser working it out — a column that has never been
+         given a width must start from where it actually is, not from 0. */
+      start: e => ({ x: e.clientX, w: th.getBoundingClientRect().width / k }),
+      move: (ev, s) => {
+        const next = Math.max(14, Math.min(400, pmSnapTo(s.w + (ev.clientX - s.x) / k, cfg)));
         col.width = next;
         th.style.width = next + "px";
-      };
-      const up = () => {
-        try{ grip.releasePointerCapture(e.pointerId); }catch(err){ /* never captured */ }
-        window.removeEventListener("pointermove", move);
-        window.removeEventListener("pointerup", up);
-        window.removeEventListener("pointercancel", up);
-        grip.classList.remove("dragging");
-        /* The column list on the left shows widths as numbers; it has to
+        pmLiveSize(next, null);
+      },
+      end: () => {
+        pmMark(host, "col", i);
+        /* The column list further down shows widths as numbers; it has to
            agree with what was just dragged. */
         renderPmColumns();
-        markLayoutUnsaved();
-      };
-      /* On the window, not the grip: a finger or mouse that slips off a
-         seven-pixel strip mid-drag must not end the drag. */
-      window.addEventListener("pointermove", move);
-      window.addEventListener("pointerup", up);
-      window.addEventListener("pointercancel", up);
+        pmSyncSelPanel();
+      }
     });
   });
 
-  /* And the row lines. One height for every row rather than one per row:
-     a bill with rows of different heights is not a layout somebody chose,
-     it is one they gave up on — and the printed page repeats these rows
-     for however many lines the document has, so a per-row height could not
-     survive the second bill anyway. */
-  const firstRow = table.querySelector("tbody tr");
-  if(firstRow){
-    const grip = document.createElement("span");
-    grip.className = "tpl-grip tpl-grip-row";
-    grip.title = "Drag to set the height of every row";
-    const cell = firstRow.querySelector("td");
-    if(cell){
-      cell.style.position = "relative";
-      cell.appendChild(grip);
-      grip.addEventListener("pointerdown", (e) => {
-        e.preventDefault(); e.stopPropagation();
-        try{ grip.setPointerCapture(e.pointerId); }catch(err){ /* carry on */ }
-        const startY = e.clientY;
-        const startH = firstRow.getBoundingClientRect().height / k;
-        grip.classList.add("dragging");
+  /* ---- the horizontal lines: ROW HEIGHT, ONE ROW AT A TIME ----
 
-        const move = (ev) => {
-          pmDragged = true;
-          const next = Math.max(10, Math.min(120, Math.round(startH + (ev.clientY - startY) / k)));
-          cfg.rowHeight = next;
-          table.querySelectorAll("tbody tr").forEach(tr => { tr.style.height = next + "px"; });
-        };
-        const up = () => {
-          try{ grip.releasePointerCapture(e.pointerId); }catch(err){ /* never captured */ }
-          window.removeEventListener("pointermove", move);
-          window.removeEventListener("pointerup", up);
-          window.removeEventListener("pointercancel", up);
-          grip.classList.remove("dragging");
-          markLayoutUnsaved();
-        };
-        window.addEventListener("pointermove", move);
-        window.addEventListener("pointerup", up);
-        window.addEventListener("pointercancel", up);
-      });
-    }
+     Each row carries its own handle and its own height. Pulling the line
+     under row 3 moves row 3 and nothing else — which is the point, and the
+     thing this could not do before, when one drag set every row at once.
+
+     "Apply to All Rows" in the panel is still there for when that IS what
+     is wanted. It is now a deliberate press rather than the only
+     behaviour available.
+
+     The height is stored against the row's POSITION. A template prints
+     against a different document every time, so "the third row" is the
+     only handle that means anything on the next bill. */
+  rows.forEach(tr => {
+    const ri = Number(tr.dataset.ri);
+    if(!Number.isInteger(ri)) return;
+    const cells = [...tr.querySelectorAll("td")];
+    if(!cells.length) return;
+
+    /* A handle in EVERY cell of the row, so the whole line under it can be
+       taken hold of. On the first cell alone the target was the Sr. No.
+       column — about twenty pixels wide, which is a reasonable mouse target
+       and no target at all for a thumb. They share one set of handlers, so
+       whichever cell is grabbed moves the same row. */
+    const opts = {
+      start: e => ({ y: e.clientY, h: tr.getBoundingClientRect().height / k }),
+      move: (ev, s) => {
+        const next = Math.max(10, Math.min(120, pmSnapTo(s.h + (ev.clientY - s.y) / k, cfg)));
+        cfg.rowHeights = cfg.rowHeights || {};
+        cfg.rowHeights[ri] = next;
+        tr.style.height = next + "px";
+        pmLiveSize(null, next);
+      },
+      end: () => { pmMark(host, "row", ri); pmSyncSelPanel(); }
+    };
+
+    cells.forEach(cell => {
+      cell.style.position = "relative";
+      const grip = document.createElement("span");
+      grip.className = "tpl-grip tpl-grip-row";
+      grip.title = "Drag up or down to set row " + (ri + 1) + "'s height";
+      cell.appendChild(grip);
+      pmGripDrag(grip, opts);
+    });
+  });
+}
+
+/**
+ * The pointer plumbing every handle shares.
+ *
+ * Written once rather than per handle, because the two awkward parts are
+ * easy to get subtly different in two copies, and the difference does not
+ * show up until somebody is mid-drag:
+ *
+ *   setPointerCapture THROWS for any pointer the browser does not consider
+ *   active. It used to be called before the move listeners were attached,
+ *   so one throw killed the drag in silence — which looks exactly like a
+ *   handle that does not work.
+ *
+ *   The move and up listeners go on the WINDOW, not the handle. A finger or
+ *   a mouse that slips off a seven-pixel strip mid-drag must not end the
+ *   drag, and on a phone it always slips off.
+ *
+ * History is pushed on the FIRST MOVE, not on pointerdown: a tap that
+ * selects a column without moving it is not a change, and filling the undo
+ * stack with those would make Undo appear to do nothing.
+ */
+function pmGripDrag(grip, opts){
+  grip.addEventListener("pointerdown", (e) => {
+    if(pmLocked()) return;
+    e.preventDefault(); e.stopPropagation();
+    try{ grip.setPointerCapture(e.pointerId); }catch(err){ /* carry on */ }
+    const start = opts.start(e);
+    let pushed = false;
+    grip.classList.add("dragging");
+
+    const move = (ev) => {
+      if(!pushed){ pmPushHistory(); pushed = true; }
+      pmDragged = true;
+      opts.move(ev, start);
+    };
+    const up = () => {
+      try{ grip.releasePointerCapture(e.pointerId); }catch(err){ /* never captured */ }
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      grip.classList.remove("dragging");
+      if(opts.end) opts.end();
+      if(pushed) markLayoutUnsaved();
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  });
+}
+
+/** Paints the selection box WITHOUT redrawing the preview — a redraw
+ *  mid-drag would throw away the very element being dragged. */
+function pmMark(host, kind, index){
+  pmSel = { kind, index };
+  if(!host) return;
+  host.querySelectorAll(".tpl-picked").forEach(x => x.classList.remove("tpl-picked"));
+  const el = kind === "col"
+    ? host.querySelector(".tpl-items thead th[data-ci='" + index + "']")
+    : host.querySelector(".tpl-items tbody tr[data-ri='" + index + "']");
+  if(el) el.classList.add("tpl-picked");
+}
+
+function pmSelect(kind, index){
+  pmMark(document.getElementById("pm-d-preview"), kind, index);
+  pmSyncSelPanel();
+}
+
+/** Live numbers while a line is moving. Writes straight into the boxes
+ *  rather than re-rendering the panel, for the same reason pmMark does not
+ *  redraw the preview. */
+function pmLiveSize(w, h){
+  if(w !== null){ const el = document.getElementById("pm-sel-w"); if(el) el.value = w; }
+  if(h !== null){ const el = document.getElementById("pm-sel-h"); if(el) el.value = h; }
+}
+
+/* ============================================================
+   THE SELECTED THING, AS NUMBERS
+
+   Dragging is how a width is judged by eye. Typing is how two documents
+   are made to match each other exactly, and how somebody working on a
+   phone gets 74 instead of 71. Whatever is selected shows its size here,
+   and changing it here moves the line.
+   ============================================================ */
+function pmSyncSelPanel(){
+  const el = document.getElementById("pm-sel-panel");
+  if(!el || !pmState.editing) return;
+  const cfg = pmState.editing.config;
+  const shown = (cfg.columns || []).filter(c => c.show);
+  const dis = pmLocked() ? " disabled" : "";
+
+  if(pmSel.kind === "col" && shown[pmSel.index]){
+    const col = shown[pmSel.index];
+    el.innerHTML =
+      '<div class="pm-sel-head">Column: <b>' + escapeHtml(col.label) + '</b></div>' +
+      '<div class="pm-sel-grid">' +
+        '<label class="pm-field"><span>Width (px)</span>' +
+          '<input type="number" id="pm-sel-w" value="' + (col.width || 0) + '" min="0" max="400"' + dis + '></label>' +
+        '<div class="pm-field"><span>Align</span><div class="pm-align">' +
+          ["left","center","right"].map(function(A){
+            return '<button type="button" data-pm-align="' + A + '" class="' + (col.align === A ? "on" : "") + '"' + dis + '>' +
+                   (A === "left" ? "Left" : A === "center" ? "Centre" : "Right") + '</button>';
+          }).join("") +
+        '</div></div>' +
+      '</div>' +
+      '<p class="pm-sel-hint">Width 0 lets this column share whatever space is left.</p>';
+
+    const w = el.querySelector("#pm-sel-w");
+    if(w) w.addEventListener("change", () => {
+      pmPushHistory();
+      col.width = Math.max(0, Math.min(400, Number(w.value) || 0));
+      renderPmColumns(); renderTemplatePreview(); pmSelect("col", pmSel.index); markLayoutUnsaved();
+    });
+    el.querySelectorAll("[data-pm-align]").forEach(b => b.addEventListener("click", () => {
+      pmPushHistory();
+      col.align = b.dataset.pmAlign;
+      renderPmColumns(); renderTemplatePreview(); pmSelect("col", pmSel.index); markLayoutUnsaved();
+    }));
+    return;
   }
+
+  if(pmSel.kind === "row" && pmSel.index >= 0){
+    const ri = pmSel.index;
+    const own = Number((cfg.rowHeights || {})[ri]) || 0;
+    el.innerHTML =
+      '<div class="pm-sel-head">Row <b>' + (ri + 1) + '</b></div>' +
+      '<div class="pm-sel-grid"><label class="pm-field"><span>Height (px)</span>' +
+        '<input type="number" id="pm-sel-h" value="' + (own || pmRowHeightAt(cfg, ri)) + '" min="0" max="120"' + dis + '></label></div>' +
+      '<div class="acts" style="margin-top:6px;">' +
+        '<button class="btn btn-outline" id="pm-row-all"' + dis + '>Apply to All Rows</button>' +
+        '<button class="btn btn-outline" id="pm-row-clear"' + dis + '>Clear this row</button>' +
+      '</div>' +
+      '<p class="pm-sel-hint">' + (own
+        ? "This row has its own height. The others are not affected."
+        : "This row follows the height every row shares.") +
+        ' Height 0 means whatever the text needs.</p>';
+
+    const h = el.querySelector("#pm-sel-h");
+    if(h) h.addEventListener("change", () => {
+      pmPushHistory();
+      const v = Math.max(0, Math.min(120, Number(h.value) || 0));
+      cfg.rowHeights = cfg.rowHeights || {};
+      if(v > 0) cfg.rowHeights[ri] = v; else delete cfg.rowHeights[ri];
+      renderTemplatePreview(); pmSelect("row", ri); markLayoutUnsaved();
+    });
+
+    /* Applying to all really does mean ALL — the individual heights are
+       cleared, not left underneath to contradict it. A button called
+       "Apply to All Rows" that leaves three rows at some other height is
+       lying about what it just did. */
+    const all = el.querySelector("#pm-row-all");
+    if(all) all.addEventListener("click", () => {
+      pmPushHistory();
+      const v = Math.max(0, Math.min(120, Number(h && h.value) || 0));
+      cfg.rowHeight = v;
+      cfg.rowHeights = {};
+      renderTemplatePreview(); pmSelect("row", ri); markLayoutUnsaved();
+      toast(v ? ("Every row set to " + v + "px.") : "Every row back to whatever its text needs.", "ok");
+    });
+
+    const clear = el.querySelector("#pm-row-clear");
+    if(clear) clear.addEventListener("click", () => {
+      pmPushHistory();
+      if(cfg.rowHeights) delete cfg.rowHeights[ri];
+      renderTemplatePreview(); pmSelect("row", ri); markLayoutUnsaved();
+    });
+    return;
+  }
+
+  el.innerHTML = '<p class="pm-sel-hint">Tap a heading or a row in the page above to select it — ' +
+    'its size appears here and can be typed exactly.</p>';
 }
 
 function markLayoutUnsaved(){
@@ -17956,6 +18523,17 @@ function openPmDesigner(tpl){
     <p class="muted" style="font-size:11.5px;margin-top:-6px;">Everything below applies to this template only.</p>
     <div class="section-title">Preview</div>
     <div class="tpl-preview-host" id="pm-d-preview"></div>
+    <div class="pm-toolbar">
+      <button class="btn btn-outline pm-tb" id="pm-undo" title="Undo the last layout change" disabled>&#8630; Undo</button>
+      <button class="btn btn-outline pm-tb" id="pm-redo" title="Redo" disabled>&#8631; Redo</button>
+      <label class="pm-tb-check"><input type="checkbox" id="pm-grid-on"><span>Grid</span></label>
+      <label class="pm-tb-check"><input type="checkbox" id="pm-snap-on"><span>Snap</span></label>
+      <label class="pm-tb-num"><span>Step</span>
+        <input type="number" id="pm-grid-size" min="1" max="50" step="1"></label>
+      ${isOwner() ? `<button class="btn btn-outline pm-tb" id="pm-lock"></button>` : ""}
+    </div>
+    <div class="muted" id="pm-lock-note" style="font-size:11px;"></div>
+    <div class="pm-sel" id="pm-sel-panel"></div>
     <p class="muted" style="font-size:11px;margin-top:6px;">
       Sample figures on your own letterhead. Every change below redraws it.</p>
 
@@ -17969,6 +18547,7 @@ function openPmDesigner(tpl){
         <select data-pm-c="paper">
           <option value="A4"${c.paper==="A4"?" selected":""}>A4</option>
           <option value="A5"${c.paper==="A5"?" selected":""}>A5</option>
+          <option value="custom"${c.paper==="custom"?" selected":""}>Custom size</option>
         </select></label>
       <label class="pm-field"><span>Orientation</span>
         <select data-pm-c="orientation">
@@ -17979,16 +18558,24 @@ function openPmDesigner(tpl){
       <label class="pm-field"><span>Margins (mm)</span>
         <input type="number" id="pm-d-margin" value="${c.margins.top}" min="0" max="40"></label>
     </div>
+    <div class="pm-filter-grid" id="pm-custom-paper" style="display:none;">
+      <label class="pm-field"><span>Paper width (mm)</span>
+        <input type="number" id="pm-paper-w" min="0" max="1200" step="1"></label>
+      <label class="pm-field"><span>Paper height (mm)</span>
+        <input type="number" id="pm-paper-h" min="0" max="1200" step="1"></label>
+    </div>
+    <p class="muted" style="font-size:11px;" id="pm-paper-note"></p>
 
     <div class="section-title">Document Title</div>
     <input type="text" data-pm-c="title" value="${escapeHtml(c.title||"")}" placeholder="${escapeHtml(doc.label.toUpperCase())}">
 
     <div class="section-title">Table Layout</div>
     <p class="muted" style="font-size:11px;margin-bottom:8px;">
-      Drag the lines in the preview above: pull a divider between two headings left or
-      right to set that column's width, or the line under the first row up or down to set
-      the height of every row. Then press Save Layout — it is kept for this template only,
-      and printed exactly as you leave it.</p>
+      Drag the lines in the page above. A <b>vertical</b> line between two headings sets that
+      <b>column's width</b>; the <b>horizontal</b> line under any row sets <b>that row's height</b>,
+      and that row only — use Apply to All Rows if you want every row the same.
+      Tap a heading or a row to select it and type the exact size.
+      Then press Save Layout: it is kept for this template alone and printed exactly as you leave it.</p>
     <div class="acts" style="margin-bottom:4px;">
       <button class="btn btn-gold" id="pm-layout-save">Save Layout</button>
       <button class="btn btn-outline" id="pm-layout-reset">Reset Layout</button>
@@ -18032,23 +18619,35 @@ function openPmDesigner(tpl){
   sheet.querySelectorAll("[data-pm-c]").forEach(inp=>{
     const key = inp.dataset.pmC;
     inp.addEventListener("change", ()=>{
+      pmPushHistory();
       if(inp.type === "checkbox") c[key] = inp.checked ? 1 : 0;
       else if(inp.type === "number") c[key] = Number(inp.value);
       else c[key] = inp.value;
       if(key === "showRate") renderPmColumns();   // greys the money columns
+      // Custom size has two more boxes, which only exist while it is chosen.
+      if(key === "paper") pmSyncPageControls();
       renderTemplatePreview();
     });
   });
   // One margin box sets all four — four separate boxes for a value almost
   // nobody sets asymmetrically is more work than it is worth.
   document.getElementById("pm-d-margin").addEventListener("change", e=>{
+    pmPushHistory();
     const v = Math.max(0, Math.min(40, Number(e.target.value)||0));
     c.margins = { top:v, right:v, bottom:v, left:v };
     renderTemplatePreview();
   });
 
+  /* A fresh template is a fresh history. Carrying the previous template's
+     undo stack over would let Undo paste one document's layout into
+     another, which is not an undo of anything the user did. */
+  pmResetHistory();
+  pmSel = { kind: null, index: -1 };
+  pmWireDesignerTools();
+  pmSyncPageControls();
   renderPmColumns();
   renderTemplatePreview();
+  pmSyncSelPanel();
   document.getElementById("pm-d-save").addEventListener("click", savePmTemplate);
 
   /* Save Layout saves the same template as Save Template — there is one
@@ -18068,14 +18667,130 @@ function openPmDesigner(tpl){
        before anybody dragged anything. Only the sizes go: the columns
        chosen, their order and their headings are not layout and are not
        touched. */
+    pmPushHistory();
     (c.columns || []).forEach(col => { col.width = 0; });
     c.rowHeight = 0;
+    /* The individual heights go too. Leaving them would make Reset Layout
+       put the columns back and leave four rows at heights nobody could
+       then explain — and the only way out would be to find each one. */
+    c.rowHeights = {};
+    pmSel = { kind: null, index: -1 };
     renderPmColumns();
     renderTemplatePreview();
+    pmSyncSelPanel();
     const note = document.getElementById("pm-layout-note");
     if(note) note.textContent = "Back to the default sizes — press Save Layout to keep it.";
   });
   showSheet("sheet-pm-designer");
+}
+
+/* ============================================================
+   THE DESIGNER'S OWN CONTROLS
+
+   Undo, redo, the grid, the snap step and the lock. None of them changes
+   what a document says — they are how the page is worked on, not what
+   comes out of it — but they live in the template so a shop that likes a
+   5mm grid keeps it, and so a layout somebody spent an afternoon getting
+   right can be locked against the next thumb that lands on it.
+   ============================================================ */
+function pmWireDesignerTools(){
+  /* READ THE CONFIG WHEN THE BUTTON IS PRESSED, never once at wiring time.
+   *
+   * Undo and Redo REPLACE pmState.editing.config with a fresh object. A
+   * handler that captured the old one goes on quietly editing a config
+   * that is no longer attached to anything: the click appears to work —
+   * it even toasts — and then nothing on screen changes and nothing is
+   * saved. That is exactly what Lock did before this line existed, and it
+   * is the kind of bug that looks like "the button is broken" for weeks.
+   *
+   * Everything else in the designer is re-wired on each redraw and so
+   * cannot go stale; these controls are wired once, when the sheet opens,
+   * so they have to fetch it themselves. */
+  const C = () => pmState.editing.config;
+  const on = (id, ev, fn) => { const el = document.getElementById(id); if(el) el.addEventListener(ev, fn); };
+
+  on("pm-undo", "click", pmUndo);
+  on("pm-redo", "click", pmRedo);
+
+  /* The grid is drawn behind the page, so it redraws; snap only changes
+     what the next drag rounds to, so it does not. */
+  on("pm-grid-on", "change", e => { C().gridOn = e.target.checked ? 1 : 0; renderTemplatePreview(); });
+  on("pm-snap-on", "change", e => { C().snapOn = e.target.checked ? 1 : 0; });
+  on("pm-grid-size", "change", e => {
+    C().gridSize = Math.max(1, Math.min(50, Number(e.target.value) || 5));
+    e.target.value = C().gridSize;
+    renderTemplatePreview();
+  });
+
+  const paperChanged = () => {
+    const w = document.getElementById("pm-paper-w"), h = document.getElementById("pm-paper-h");
+    pmPushHistory();
+    C().paperW = Math.max(0, Math.min(1200, Number(w && w.value) || 0));
+    C().paperH = Math.max(0, Math.min(1200, Number(h && h.value) || 0));
+    pmSyncPageControls();
+    renderTemplatePreview();
+    markLayoutUnsaved();
+  };
+  on("pm-paper-w", "change", paperChanged);
+  on("pm-paper-h", "change", paperChanged);
+
+  /* The button is only rendered for an owner, but the check is made here
+     too. A control that is merely absent from the markup is not a
+     permission — the server decides that, and this agrees with it rather
+     than relying on the button being missing. */
+  on("pm-lock", "click", () => {
+    if(!isOwner()){ toast("Only the owner can lock or unlock a layout."); return; }
+    pmPushHistory();
+    C().locked = C().locked ? 0 : 1;
+    pmSyncPageControls();
+    renderPmColumns();
+    renderTemplatePreview();
+    pmSyncSelPanel();
+    markLayoutUnsaved();
+    toast(C().locked
+      ? "Layout locked. Press Save Layout to keep it locked."
+      : "Layout unlocked.", "ok");
+  });
+}
+
+/** Puts every page control back in step with the config — after an undo,
+ *  after a lock, after a paper change. Called rather than duplicating the
+ *  same six lines in each of those places. */
+function pmSyncPageControls(){
+  const c = pmState.editing && pmState.editing.config;
+  if(!c) return;
+  const locked = pmLocked();
+
+  const sel = document.querySelector("#sheet-pm-designer [data-pm-c='paper']");
+  if(sel) sel.value = c.paper || "A4";
+  const box = document.getElementById("pm-custom-paper");
+  if(box) box.style.display = c.paper === "custom" ? "" : "none";
+  const w = document.getElementById("pm-paper-w"); if(w) w.value = c.paperW || 0;
+  const h = document.getElementById("pm-paper-h"); if(h) h.value = c.paperH || 0;
+  const note = document.getElementById("pm-paper-note");
+  if(note) note.textContent = c.paper === "custom"
+    ? (c.paperW && c.paperH
+        ? "The page is drawn " + c.paperW + " \u00d7 " + c.paperH + " mm."
+        : "Set both, in millimetres. Either one left at 0 falls back to A4 for that side.")
+    : "";
+
+  const g  = document.getElementById("pm-grid-on");   if(g)  g.checked = !!c.gridOn;
+  const s  = document.getElementById("pm-snap-on");   if(s)  s.checked = !!c.snapOn;
+  const gs = document.getElementById("pm-grid-size"); if(gs) gs.value = c.gridSize || 5;
+
+  const lk = document.getElementById("pm-lock");
+  if(lk){
+    lk.textContent = locked ? "Unlock Layout" : "Lock Layout";
+    lk.classList.toggle("btn-gold", locked);
+  }
+  const ln = document.getElementById("pm-lock-note");
+  if(ln) ln.textContent = locked
+    ? "Locked. The lines cannot be dragged and the sizes cannot be typed until an owner unlocks it \u2014 everything else on this template can still be edited."
+    : "";
+  const reset = document.getElementById("pm-layout-reset");
+  if(reset) reset.disabled = locked;
+
+  pmSyncHistory();
 }
 
 function renderPmColumns(){
@@ -18105,14 +18820,31 @@ function renderPmColumns(){
       </span>
     </div>`).join("");
 
+  /* Width and alignment are LAYOUT, so a locked template refuses them.
+     Showing, renaming and reordering a column are not layout — they change
+     what the document says — so the lock leaves them alone. */
+  if(pmLocked()){
+    wrap.querySelectorAll("[data-pm-col-w], [data-pm-col-a]").forEach(x => { x.disabled = true; });
+  }
+
   wrap.querySelectorAll("[data-pm-col-show]").forEach(x=>x.addEventListener("change", ()=>{
-    c.columns[+x.dataset.pmColShow].show = x.checked ? 1 : 0; renderTemplatePreview(); }));
+    pmPushHistory();
+    c.columns[+x.dataset.pmColShow].show = x.checked ? 1 : 0;
+    /* The shown-column indexes just moved under the selection. Dropping it
+       is honest; keeping it would leave the panel editing whichever column
+       happened to slide into that position. */
+    pmSel = { kind:null, index:-1 };
+    renderTemplatePreview(); pmSyncSelPanel(); }));
   wrap.querySelectorAll("[data-pm-col-label]").forEach(x=>x.addEventListener("input", ()=>{
     c.columns[+x.dataset.pmColLabel].label = x.value; renderTemplatePreview(); }));
   wrap.querySelectorAll("[data-pm-col-w]").forEach(x=>x.addEventListener("change", ()=>{
-    c.columns[+x.dataset.pmColW].width = Math.max(0, Math.min(400, Number(x.value)||0)); renderTemplatePreview(); }));
+    pmPushHistory();
+    c.columns[+x.dataset.pmColW].width = Math.max(0, Math.min(400, Number(x.value)||0));
+    renderTemplatePreview(); markLayoutUnsaved(); }));
   wrap.querySelectorAll("[data-pm-col-a]").forEach(x=>x.addEventListener("change", ()=>{
-    c.columns[+x.dataset.pmColA].align = x.value; renderTemplatePreview(); }));
+    pmPushHistory();
+    c.columns[+x.dataset.pmColA].align = x.value;
+    renderTemplatePreview(); markLayoutUnsaved(); }));
 
   const move = (from, to)=>{
     if(to < 0 || to >= c.columns.length) return;

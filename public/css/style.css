@@ -1711,7 +1711,44 @@ select.pm-col-a{ width:48px; flex:none; padding:5px 2px; font-size:12px; }
    a long product name still wraps onto a second line instead of being
    clipped. Unset (the default) leaves rows exactly as the padding makes
    them, which is how the bill has always printed. */
-table.erp-table tbody td{ height: var(--bill-row-h, auto); }
+/* One row's own height first, then the height every row shares, then
+   whatever the text needs. The same three answers, in the same order, that
+   billRowHeightAt() gives the preview — written here rather than in the
+   renderer so the printed page and the PDF cannot drift from it. */
+table.erp-table tbody tr td{ height: var(--row-h, var(--bill-row-h, auto)); }
+
+/* ---- dragging the BILL's own lines, at printing time ------------------
+   The same handles as the Designer, on the sheet that is about to print.
+   Invisible until the pointer is on one, so the preview still looks like
+   paper, and removed outright from the printed page.
+
+   The row handle sits in every cell of its row, so the whole line under a
+   row can be taken hold of rather than only the Sr. No. column. */
+table.erp-table th{ position:relative; }
+.bill-grip{ position:absolute; z-index:6; touch-action:none; }
+.bill-grip-col{ top:0; right:-3px; width:7px; height:100%; cursor:col-resize; }
+.bill-grip-row{ left:0; bottom:-3px; width:100%; height:7px; cursor:row-resize; }
+.bill-grip::after{
+  content:""; position:absolute; background:var(--gold); opacity:0; border-radius:2px;
+  transition:opacity .12s ease;
+}
+.bill-grip-col::after{ top:0; bottom:0; left:2px; width:3px; }
+.bill-grip-row::after{ left:0; right:0; top:2px; height:3px; }
+.bill-grip:hover::after, .bill-grip.dragging::after{ opacity:1; }
+/* While a line is moving the whole window takes the resize cursor: losing
+   it the moment the pointer slips off a seven-pixel strip reads as the drag
+   having stopped when it has not. */
+body:has(.bill-grip-col.dragging){ cursor:col-resize; }
+body:has(.bill-grip-row.dragging){ cursor:row-resize; }
+@media (pointer: coarse){
+  .bill-grip-col{ right:-9px; width:19px; }
+  .bill-grip-row{ bottom:-9px; height:19px; }
+}
+/* Belt and braces. The handles are transparent unless held, so they were
+   never going to mark the paper — but a handle is not part of a document
+   and has no business being sent to a printer at all. */
+@media print{ .bill-grip{ display:none !important; } }
+
 /* "Show borders" off in the Designer strips the rules from the item table
    the same way the Minimal theme does, rather than only from the preview. */
 .invoice-page.no-rules table.erp-table th,
@@ -2244,3 +2281,60 @@ html[data-theme="plum-rose"]{
    stopped when it has not. */
 .tpl-grip-col.dragging ~ *, body:has(.tpl-grip-col.dragging){ cursor:col-resize; }
 body:has(.tpl-grip-row.dragging){ cursor:row-resize; }
+
+/* ---- what is selected ------------------------------------------------
+   An outline, not a fill. The whole point of the preview is that it looks
+   like the paper; a coloured block laid over a column stops it doing that,
+   and then the thing being judged by eye cannot be judged. */
+.tpl-items th.tpl-picked,
+.tpl-items tr.tpl-picked > td{ outline:2px solid var(--gold); outline-offset:-2px; }
+.tpl-items tr.tpl-row{ cursor:pointer; }
+
+/* The grid the drags snap to. Painted BEHIND the page content and only
+   ever in the designer — .tpl-gridded exists nowhere near a printer. */
+.tpl-page.tpl-gridded{
+  background-image:
+    linear-gradient(to right, rgba(22,41,77,.10) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(22,41,77,.10) 1px, transparent 1px);
+  background-size: var(--tpl-grid,5px) var(--tpl-grid,5px);
+}
+
+/* A finger is not a mouse pointer. On a touch screen the grips grow to
+   something that can actually be caught. It costs nothing to look at,
+   because what grows is an invisible strip — the gold line it draws when
+   held stays exactly where the real border is. */
+@media (pointer: coarse){
+  .tpl-grip-col{ right:-9px; width:19px; }
+  .tpl-grip-row{ bottom:-9px; height:19px; }
+}
+
+/* ---- the designer toolbar ------------------------------------------- */
+.pm-toolbar{ display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-top:8px; }
+/* .btn is a full-width block everywhere else in the app, which is right for
+   a form and wrong for a row of small tools — left alone, Undo, Redo and
+   Lock each took a line of their own and the toolbar was 200px tall on a
+   phone, taller than the page it was meant to be a toolbar for. */
+.pm-toolbar .pm-tb{ padding:5px 10px; font-size:12px; width:auto; flex:0 0 auto; }
+.pm-tb-check, .pm-tb-num{
+  display:flex; align-items:center; gap:5px; font-size:12px; color:var(--muted);
+  border:1px solid var(--border); border-radius:8px; padding:4px 9px;
+}
+.pm-tb-num input{ width:52px; padding:2px 4px; font-size:12px; }
+
+/* ---- the selected thing, as numbers ---------------------------------- */
+.pm-sel{
+  margin-top:8px; border:1px solid var(--border); border-radius:9px;
+  padding:9px 11px; background:var(--card);
+}
+.pm-sel-head{ font-size:12.5px; margin-bottom:7px; }
+.pm-sel-grid{ display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; }
+.pm-sel-grid .pm-field{ min-width:112px; }
+.pm-sel-hint{ font-size:11px; color:var(--muted); margin:7px 0 0; line-height:1.45; }
+.pm-align{ display:flex; gap:4px; }
+.pm-align button{
+  border:1px solid var(--border); background:transparent; color:inherit;
+  border-radius:7px; padding:5px 10px; font-size:12px; cursor:pointer;
+}
+.pm-align button.on{ background:var(--gold); border-color:var(--gold); color:#1a1a1a; }
+.pm-align button:disabled{ opacity:.5; cursor:default; }
+

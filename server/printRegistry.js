@@ -246,6 +246,31 @@ function defaultConfig(doc) {
        every bill has printed until now — so a template nobody has dragged
        looks exactly as it always did. */
     rowHeight: 0,
+    /* And the heights of INDIVIDUAL rows, keyed by the row's position in
+       the table: { "0": 34, "3": 22 }. A row with no entry falls back to
+       rowHeight above, and rowHeight of 0 falls back to what the text
+       needs — so a template nobody has dragged still prints exactly as it
+       always did, and one where only the third line was pulled taller
+       keeps every other line where it was.
+
+       Keyed by POSITION, not by any line's id. The template is printed
+       against a different document every time; "the third row" is the only
+       thing that means anything across all of them. */
+    rowHeights: {},
+    /* Locked layouts cannot be dragged or typed into until an owner
+       unlocks them. It stops a layout somebody spent an afternoon getting
+       right from being nudged by a thumb on a phone. */
+    locked: 0,
+    /* Only read when paper is "custom". Millimetres, because that is what
+       paper is sold in and what @page takes. */
+    paperW: 0,
+    paperH: 0,
+    /* Designer aids. They change nothing that prints — they are how the
+       page is worked on, not what comes out of it — but they belong to the
+       template so a shop that likes a 5mm grid keeps it. */
+    gridOn: 0,
+    snapOn: 1,
+    gridSize: 5,
     showRate: true,
     showLogo: true,
     showCompany: true,

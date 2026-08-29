@@ -142,6 +142,51 @@ router.put("/templates/:id", requireRole("owner"), (req, res) => {
     if (req.body.config.rowHeight !== undefined) {
       config.rowHeight = Math.max(0, Math.min(120, Number(req.body.config.rowHeight) || 0));
     }
+    /* Individual row heights, same clamp and the same reason.
+     *
+     * REBUILT, never merged: the designer sends the whole map, and a row
+     * whose own height was cleared has to actually disappear from it. A
+     * merge would leave that row stuck at its old height with no way back
+     * short of Reset Layout.
+     *
+     * Keys are row positions, so anything that is not a small whole number
+     * is dropped rather than stored — the map is read straight into style
+     * attributes at print time, and it is not the place to find out that
+     * something arbitrary got written into it. A height of 0 means "use
+     * the table's height", which is a real answer, so it is kept.
+     */
+    if (req.body.config.rowHeights !== undefined) {
+      const src = req.body.config.rowHeights;
+      const out = {};
+      if (src && typeof src === "object" && !Array.isArray(src)) {
+        for (const [k, v] of Object.entries(src)) {
+          const i = Number(k);
+          if (!Number.isInteger(i) || i < 0 || i > 999) continue;
+          const h = Math.max(0, Math.min(120, Number(v) || 0));
+          if (h > 0) out[i] = h;
+        }
+      }
+      config.rowHeights = out;
+    }
+    if (req.body.config.locked !== undefined) config.locked = req.body.config.locked ? 1 : 0;
+    if (req.body.config.gridOn !== undefined)  config.gridOn  = req.body.config.gridOn ? 1 : 0;
+    if (req.body.config.snapOn !== undefined)  config.snapOn  = req.body.config.snapOn ? 1 : 0;
+    if (req.body.config.gridSize !== undefined) {
+      config.gridSize = Math.max(1, Math.min(50, Number(req.body.config.gridSize) || 5));
+    }
+    /* Custom paper. 0 means "not set", which is what every non-custom
+     * template carries. The ceiling is A0-ish rather than unlimited: a
+     * paper size of 90000mm is a typo, and honouring it would produce a
+     * preview the designer cannot draw and an @page no printer can use. */
+    if (req.body.config.paperW !== undefined) {
+      config.paperW = Math.max(0, Math.min(1200, Number(req.body.config.paperW) || 0));
+    }
+    if (req.body.config.paperH !== undefined) {
+      config.paperH = Math.max(0, Math.min(1200, Number(req.body.config.paperH) || 0));
+    }
+    if (req.body.config.paper !== undefined) {
+      config.paper = ["A4", "A5", "custom"].includes(req.body.config.paper) ? req.body.config.paper : "A4";
+    }
     /* Columns are replaced wholesale, not merged. They are an ORDERED list
        and the designer's whole job is reordering them — merging index by
        index would quietly resurrect the old order. */

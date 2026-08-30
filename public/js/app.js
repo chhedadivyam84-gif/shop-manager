@@ -8954,8 +8954,48 @@ function printInvoiceOnePage(){
   // so the printable height is the sheet less both margins.
   const availablePx = (pageH - margin * 2) * MM_TO_PX;
 
+  /* ============================================================
+     MEASURE AT THE WIDTH THE PAPER GIVES IT, NOT THE WIDTH OF THE SCREEN.
+
+     This is the whole bug. Every measurement below decides whether the bill
+     needs shrinking, and they were all taken against the bill AS IT SITS ON
+     SCREEN — which is not the shape it prints in:
+
+       - .invoice-page.size-a5 caps the preview at 360px so an A5 bill looks
+         like A5 on a phone. A real A5 sheet is 148mm, about 559px.
+       - narrower than that again on an actual phone, or in a split window.
+
+     Narrow means text wraps more, and more wrapping means a taller page. On
+     a bill measured here the on-screen height was 885px against a 752px
+     sheet — 133px over, apparently a bill that could not fit. Laid out at
+     the true sheet width, the very same bill measured 752px exactly: a
+     perfect fit, no overflow at all.
+
+     So printInvoiceOnePage was shrinking bills that did not need shrinking,
+     and the amount it shrank them by depended on how wide the operator's
+     window happened to be. The same bill printed at different sizes on
+     different machines, and nothing said why.
+
+     The print stylesheet already lifts the 360px cap (see .invoice-page
+     .size-a5 under @media print), so the printer was always going to lay
+     this out at full sheet width. Measuring it that way here simply asks
+     the question the printer is going to answer.
+     ============================================================ */
+  const printableWpx = (paper.w - margin * 2) * MM_TO_PX;
   const previousZoom = page.style.zoom;
+  const savedWidth = page.style.width;
+  const savedMaxWidth = page.style.maxWidth;
+  const measureAtSheetWidth = () => {
+    page.style.maxWidth = "none";
+    page.style.width = printableWpx + "px";
+  };
+  const backToScreenWidth = () => {
+    page.style.width = savedWidth;
+    page.style.maxWidth = savedMaxWidth;
+  };
+
   page.style.zoom = "";                       // measure unscaled
+  measureAtSheetWidth();
   const naturalPx = page.scrollHeight;
 
   /* Converged, not calculated in one shot.
@@ -9005,6 +9045,11 @@ function printInvoiceOnePage(){
       note = "This bill has a lot of items — it fits one page, but the print is small.";
     }
   }
+  /* Back to the screen's own width. The zoom stays — that is the decision
+     this function exists to make, and the printer needs it — but the forced
+     width was only ever a measuring jig and must not be left on the page,
+     or the preview would sit at sheet width inside a phone-width column. */
+  backToScreenWidth();
 
   const restore = () => { page.style.zoom = previousZoom; window.removeEventListener("afterprint", restore); };
   window.addEventListener("afterprint", restore);

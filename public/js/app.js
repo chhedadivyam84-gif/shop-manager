@@ -8719,11 +8719,43 @@ function wireLicenseSettings(){
  * print from), so the selected paper size's @page block is injected fresh
  * here instead — always exactly one @page rule in effect at print time.
  */
+/**
+ * The sheet this bill is going onto, in millimetres.
+ *
+ * A4 and A5 come from state.paperSize, because those are a per-bill choice
+ * with buttons of their own. ORIENTATION and a CUSTOM SIZE have no such
+ * control anywhere else, so they come from the document's template — which
+ * is why they used to reach nothing at all: a template designed landscape,
+ * or on 200x140 paper, previewed correctly in the Designer and then printed
+ * A4 portrait like everything else.
+ */
+function activePaperMm(){
+  const inv = lastPreviewInvoice;
+  const cfg = billConfig(inv ? inv.doc_type === "challan" : state.docType === "challan") || {};
+  const orientation = cfg.orientation === "landscape" ? "landscape" : "portrait";
+
+  let w, h, kind;
+  if(cfg.paper === "custom" && Number(cfg.paperW) > 0 && Number(cfg.paperH) > 0){
+    kind = "custom"; w = Number(cfg.paperW); h = Number(cfg.paperH);
+  }else if(state.paperSize === "A4"){
+    kind = "A4"; w = 210; h = 297;
+  }else{
+    kind = "A5"; w = 148; h = 210;
+  }
+  // Landscape SWAPS the sheet, it does not scale it.
+  return orientation === "landscape"
+    ? { kind, orientation, w: h, h: w }
+    : { kind, orientation, w, h };
+}
+
 function applyPageSizeStyle(){
   const style = document.getElementById("page-size-style");
   if(!style) return;
-  const isA4 = state.paperSize === "A4";
-  const pageH = isA4 ? 297 : 210, margin = isA4 ? 6 : 3;
+  const paper = activePaperMm();
+  // The margin followed the paper: 6mm on A4, 3mm on the smaller A5. Keyed
+  // off the actual sheet height now, so a landscape or custom sheet gets a
+  // sensible one instead of A4's by default.
+  const pageH = paper.h, margin = paper.h > 250 ? 6 : 3;
   // A real safety margin, not just the @page margin — a physical printer's
   // own default margins, "shrink to fit" being off, or a paper-size
   // mismatch (Letter vs A4) can all shrink the actual printable area below
@@ -8751,8 +8783,13 @@ function applyPageSizeStyle(){
   // to reach it. flex-shrink stays disabled everywhere in this chain so a
   // LONG item list is still free to grow past one page rather than being
   // squeezed to fit (that was the "shit" print the row-shrinking caused).
+  /* A named size for A4/A5 so the browser's own paper picker still agrees
+     with us; explicit millimetres for a custom sheet, which has no name. */
+  const sizeRule = paper.kind === "custom"
+    ? `${paper.w}mm ${paper.h}mm`
+    : `${paper.kind} ${paper.orientation}`;
   style.textContent = `
-    @page{ size:${isA4 ? "A4" : "A5"} portrait; margin:${margin}mm; }
+    @page{ size:${sizeRule}; margin:${margin}mm; }
     .invoice-page{ min-height:${contentH}mm; }
   `;
 }
@@ -8779,8 +8816,12 @@ function printInvoiceOnePage(){
   const page = document.getElementById("invoice-page-content");
   if(!page){ window.print(); return; }
 
-  const isA4 = state.paperSize === "A4";
-  const pageH = isA4 ? 297 : 210, margin = isA4 ? 6 : 3;
+  /* The SAME sheet applyPageSizeStyle() just wrote. These were two separate
+     copies of "is it A4?", so a landscape or custom template would have been
+     measured against A4 portrait and shrunk to fit a sheet it was never
+     going onto. */
+  const paper = activePaperMm();
+  const pageH = paper.h, margin = paper.h > 250 ? 6 : 3;
   const MM_TO_PX = 96 / 25.4;
   // The @page margin is the only thing between content and the sheet edge,
   // so the printable height is the sheet less both margins.
@@ -8864,13 +8905,43 @@ function openInvoicePreview(existingInvoice){
   billLayoutClear();
   // Re-read on every open so a template edited in the Designer shows on the
   // very next bill, then redraw once it lands.
-  loadBillTemplates().then(() => { if(lastPreviewInvoice) renderInvoicePageContent(); });
+  loadBillTemplates().then(() => {
+    if(!lastPreviewInvoice) return;
+    /* The PAPER as well as the bill. The template arrives after the preview
+       has already drawn itself, and redrawing the bill alone left the sheet
+       computed from the PREVIOUS template — so a template switched to
+       landscape (or to a custom size) printed portrait A4 on the next bill
+       and only took effect on the one after that. The orientation and the
+       custom size live in the @page rule, which only applyPageSizeStyle()
+       writes, so it has to be re-run once the real template is in hand. */
+    applyPageSizeStyle();
+    renderInvoicePageContent();
+  });
   setTimeout(renderInvoiceGstPanel, 0);   // after lastPreviewInvoice is set
-  /* The shop's saved paper preference SEEDS the session here, once, so it is
-     what a preview opens on — while the A4 / A5 buttons and the print panel
-     stay free to change it for this bill without the seed fighting back. */
-  const savedPaper = billPrefs().paper;
-  if(savedPaper && savedPaper !== state.paperSize) setPaper(savedPaper);
+  /* WHAT PAPER THIS BILL OPENS ON, in order:
+
+       1. An existing bill's OWN saved size. A challan raised on A5 has to
+          reprint on A5 — a reprint that changes shape is not a reprint of
+          the same document, and the copy in the customer's file will not
+          match the copy in yours. This was being overwritten by the shop
+          default below, so every A5 bill in the book reprinted as A4.
+
+       2. For a NEW bill, whatever the document's template was designed on.
+          Otherwise designing a template as A5 and then billing on A4 is a
+          trap nobody would guess at.
+
+       3. Failing both, the shop's saved preference.
+
+     The A4 / A5 buttons still override any of it for the bill in hand. */
+  const tplPaper = (() => {
+    const cfg = billConfig(state.docType === "challan");
+    return cfg && (cfg.paper === "A4" || cfg.paper === "A5") ? cfg.paper : null;
+  })();
+  const seedPaper = (existingInvoice && existingInvoice.paper_size)
+    || tplPaper
+    || billPrefs().paper;
+  if(seedPaper && seedPaper !== state.paperSize) setPaper(seedPaper);
+  else applyPageSizeStyle();   // same size, but the rule may never have been written
   if(existingInvoice){
     lastPreviewInvoice = existingInvoice;
   } else {
@@ -9111,7 +9182,15 @@ function applyPrintTheme(el, challan){
    column here is the only edit needed — the header, the body and the blank
    filler rows below are all generated from this one list, so they can never
    disagree about how many columns there are. */
-function billColumns(ctx){
+/* RENAMED from billColumns, which was this file's second function of that
+   name. The other one — the live one, further down — wins, because a later
+   function declaration replaces an earlier one. So this body was already
+   unreachable, and renderBillBookLayout() below was calling the WRONG
+   function: it passes a context object where the live one expects a boolean,
+   and every column it got back lacks the .cell() this layout calls. Bringing
+   the bill-book layout back would have thrown "c.cell is not a function" on
+   the first bill. */
+function billBookColumns(ctx){
   const p = ctx.prefs, money = v => ctx.showRate ? fmtMoney(v) : "";
   return [
     { key:"sn",     label:"Sr.",                cls:"c-sn",   show:p.cols.sn,
@@ -9223,8 +9302,23 @@ async function loadBillTemplates(){
   }
 }
 
+/* A template picked BY HAND in Print Management, for one document only.
+   Print Management offers a Template dropdown above Open Preview. It used to
+   be read once, written into the print log, and then ignored — the bill
+   rendered from the document's DEFAULT template no matter which one was
+   chosen, so a shop with a "Without Rate" or a "Duplicate Copy" template
+   could select it and get the ordinary bill. Pinned to the document id so
+   the choice applies to the bill it was made for and nothing after it. */
+let billTemplatePick = null;
+
 function billConfig(challan){
   const key = challan ? "delivery_challan" : "sales_invoice";
+  if(billTemplatePick
+     && billTemplatePick.docType === key
+     && lastPreviewInvoice
+     && billTemplatePick.docId === lastPreviewInvoice.id){
+    return billTemplatePick.config;
+  }
   const t = (state.billTemplates || {})[key];
   return (t && t.config) || null;
 }
@@ -10097,7 +10191,7 @@ function renderBillBookLayout(){
   const isIGST = gstEnabled && inv.tax_type === "IGST";
   const ctx = { prefs, showRate, gstEnabled, isIGST };
 
-  const cols = billColumns(ctx);
+  const cols = billBookColumns(ctx);
   const items = inv.items || [];
 
   const headRow = cols.map(c=>`<th class="${c.cls}">${escapeHtml(c.label)}</th>`).join("");
@@ -10545,8 +10639,13 @@ function renderBillPanel(){
   el.querySelectorAll('[name="bp-paper"]').forEach(r=>{
     r.addEventListener("change", ()=>{
       panelPrefs().paper = r.value;
-      state.paperSize = r.value;
-      renderInvoicePageContent();
+      /* setPaper, NOT a bare assignment to state.paperSize.
+         This used to set the variable and redraw the bill, which changed
+         nothing anybody could see: the paper size lives in an injected
+         @page rule and a min-height, and only applyPageSizeStyle() writes
+         those. setPaper() does both. So picking A5 moved the variable and
+         left the sheet on A4 — on screen AND at the printer. */
+      setPaper(r.value);
     });
   });
   el.querySelectorAll('[name="bp-rate"]').forEach(r=>{
@@ -10606,6 +10705,15 @@ function toggleBillPanel(){
     // abandoned edit never leaks into the next bill.
     billPanelPrefs = null;
     panelPrefs();
+    /* EXCEPT the paper size, which must show the paper this bill is ACTUALLY
+       on — not the shop's default.
+       A challan saved on A5 opened on A5 while the panel drew A4 as the
+       selected one. The two disagreed on screen, and worse: tapping A4 to
+       "fix" it changed nothing, because A4 was already the checked radio and
+       an already-checked radio fires no change event. The size looked stuck
+       and the button looked broken, when the only thing wrong was which of
+       them the panel had been told to tick. */
+    billPanelPrefs.paper = state.paperSize === "A5" ? "A5" : "A4";
     renderBillPanel();
   }else{
     billPanelPrefs = null;
@@ -17540,9 +17648,18 @@ Stock, the party’s outstanding and GST are reversed. The document stays on fil
   });
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
   document.getElementById("pm-pv-open").addEventListener("click", async ()=>{
+    const sel = document.getElementById("pm-pv-template");
+    /* Whatever is selected in the dropdown actually drives the bill now.
+       Nothing selected, or no templates at all, leaves it null and the
+       document's default is used exactly as before. */
+    const chosen = sel ? templates.find(t => t.id === sel.value) : null;
+    billTemplatePick = chosen
+      ? { docId: row.id, docType: row.docType,
+          config: typeof chosen.config === "string" ? JSON.parse(chosen.config) : chosen.config }
+      : null;
     closeAllSheets();
     await openExistingInvoice(row.id);
-    logPmPrint(row, document.getElementById("pm-pv-template") ? document.getElementById("pm-pv-template").value : null, "preview");
+    logPmPrint(row, sel ? sel.value : null, "preview");
   });
   document.getElementById("pm-pv-mark").addEventListener("click", async ()=>{
     await logPmPrint(row, document.getElementById("pm-pv-template").value, "manual");

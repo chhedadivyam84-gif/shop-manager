@@ -843,6 +843,103 @@ table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #178a6e;color:#0
 .erp-stamp-box{border:1px dashed #999 !important;min-height:20px;display:flex;align-items:center;justify-content:center;color:#999 !important;}
 
 /* ============================================================
+   THE PRINTED BILL, TIDIED
+
+   Layout untouched — same blocks, same order, same boxes, same column
+   widths, same one-page fitting — and, deliberately, THE SAME HEIGHT. Every
+   rule below is free: it changes colour, weight or letter-spacing, none of
+   which costs a millimetre of paper.
+
+   That constraint is not fussiness. Measured on a real bill, an A4 sheet
+   already runs about 112px past its own target before anything here, and
+   printInvoiceOnePage() quietly shrinks the whole document to make it fit.
+   Spending more of that budget on whitespace would have shrunk the type
+   further to pay for it, so the padding stays exactly as it was.
+
+   What actually made a well-built form look homemade was that it printed in
+   THREE unrelated inks:
+
+     - the outer form ruled in black
+     - the item table ruled in GREEN (#178a6e)
+     - the item figures set in NAVY (#1e3a70) under black headings
+
+   On a colour printer that is a green grid full of blue text inside a black
+   box. On a mono laser the green and the navy both render as washed grey,
+   so the FIGURES print fainter than the headings above them — and the
+   figures are the one thing on a bill that must not look faint.
+
+   So: one ink in three weights. Black for the form and the headings, a
+   near-black for the figures, and a grey hairline for the internal grid so
+   the table reads as a table rather than a wall of boxes.
+
+   PLAIN HEX ONLY, never oklch() — html2canvas 1.4.1 rasterises this exact
+   markup for Download PDF and throws on oklch. Same rule as the block above.
+   ============================================================ */
+
+/* Figures line up in their columns. On an invoice this is worth more than
+   any other single change here: in a proportional face a 1 is narrower than
+   a 7, so a column of money sits a little differently on every row and the
+   eye cannot run down it. Set on the page so it reaches the totals box and
+   the footer too, not only the item table. */
+.invoice-page{ font-variant-numeric: tabular-nums; }
+
+/* One ink for the whole form. */
+.invoice-page .erp-table-wrap{ border-color:#000; }
+.invoice-page table.erp-table th{
+  border-color:#000;
+  /* A quiet band behind the headings, so the head of the table is findable
+     at a glance without needing a heavy rule under it. */
+  background:#f2f2f2;
+  color:#000;
+  letter-spacing:.06em;
+}
+/* The internal grid steps back to a hairline. The outer edge is already
+   drawn by .erp-table-wrap, so the cells need not draw it twice. */
+.invoice-page table.erp-table td{ border-color:#c9c9c9; color:#111; }
+/* Except where the grid meets the box, which must not look as though it has
+   come loose from the border around it. */
+.invoice-page table.erp-table td:first-child{ border-left-color:#000; }
+.invoice-page table.erp-table td:last-child{ border-right-color:#000; }
+.invoice-page table.erp-table tfoot td{ border-top-color:#000; color:#000; }
+/* The money column carries full weight: it is what the customer checks
+   first and what gets reconciled against the ledger. */
+.invoice-page table.erp-table td.c-amt{ color:#000; }
+
+/* Uppercase labels need letter-spacing to stay legible at 8.5px, and a grey
+   that is actually grey keeps them subordinate to the values beside them. */
+.invoice-page .erp-box-label{ color:#555; letter-spacing:.09em; }
+.invoice-page .erp-kv span{ color:#555; }
+.invoice-page .erp-tag{ color:#555; }
+.invoice-page .erp-addr{ color:#333; }
+
+/* Large type wants tighter tracking, small uppercase wants more. Sizes are
+   unchanged — only the spacing between the letters. */
+.invoice-page .erp-biz-name{ letter-spacing:-.005em; }
+.invoice-page .erp-banner{ letter-spacing:.16em; }
+
+/* The grand total is the answer to the whole document, so it reads as a
+   conclusion rather than one more row. Tone, not extra height. */
+.invoice-page .erp-tb-row{ border-bottom-color:#ddd; }
+.invoice-page .erp-tb-grand{ border-top:1.5px solid #000; background:#f2f2f2; }
+
+/* Signature rules should look like something to sign on, not like another
+   table border. */
+.invoice-page .erp-sign-row span{ border-top-color:#000; color:#333; }
+
+/* The Tally theme rules everything in black on purpose. It keeps its own
+   heavier grid rather than inheriting the hairline above, which is the very
+   thing that makes it look like Tally. */
+.invoice-page.theme-tally table.erp-table td{ border-color:#000; }
+.invoice-page.theme-tally table.erp-table th{ background:#f0f0f0; }
+
+/* The Tally theme already ruled everything in black on purpose. It keeps
+   its own heavier grid rather than inheriting the hairline above, which
+   would undo the thing that makes it look like Tally. */
+.invoice-page.theme-tally table.erp-table td{ border-color:#000; }
+.invoice-page.theme-tally table.erp-table th{ background:#f0f0f0; }
+
+
+/* ============================================================
    PRINTED DOCUMENT THEMES
    ------------------------------------------------------------
    Everything above is the CLASSIC theme and carries no theme

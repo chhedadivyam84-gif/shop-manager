@@ -5,23 +5,29 @@
    Everything above this file speaks the app's own vocabulary, so adding a
    GSP is one new object here and a config value — not a rewrite.
 
-   No real provider is implemented yet, and none will be written from
-   memory. NIC's API is not callable directly by arbitrary software: access
-   needs either direct enrolment with whitelisted IPs or an authorised GSP,
-   and whichever GSP is chosen, THEIR documented contract is what gets coded
-   — not a guess at NIC's raw one. A fabricated endpoint produces software
-   that looks finished and fails at the counter.
+   TWO ADAPTERS NOW.
 
-   So the mock below is not a placeholder to be embarrassed about: it is how
-   the entire workflow, including every failure path, gets built and tested
-   before credentials exist.
+   `mock` is offline and deterministic, and is how the whole workflow —
+   including every failure path — gets built and tested before any shop has
+   credentials. It is deliberately never reported as "connected".
+
+   `nic` (see nic.js) does the real e-way bill LOGIN. Authentication is a
+   published NIC contract that every GSP resells the same way, so it can be
+   written honestly, and every value that differs between GSPs is a
+   credential the shop types in rather than something guessed at here.
+
+   What nic.js deliberately does NOT do is generate, cancel or update. Those
+   carry payloads whose shape, encryption and error codes genuinely differ
+   between GSPs; writing them from memory would produce software that looks
+   finished and fails at a checkpoint with a lorry waiting. They refuse
+   plainly until the shop's own GSP documentation is in hand.
    ============================================================ */
 
-/** Shape every adapter returns, so callers never branch on provider. */
-function ok(data, raw) { return { ok: true, data, raw }; }
-function fail(code, message, field, raw) {
-  return { ok: false, error: { code, message, field: field || null }, raw };
-}
+/* The shape every adapter returns, so callers never branch on provider.
+   Moved to its own file: each adapter needs it, and an adapter requiring it
+   back from here would be a cycle. Re-exported below, so nothing that
+   already imports { ok, fail } from this file has to change. */
+const { ok, fail } = require("./adapters-shared");
 
 /* ------------------------------------------------------------------
    MOCK — deterministic, offline, and deliberately capable of failing.
@@ -86,7 +92,7 @@ const mock = {
    Registry. A real provider is added as another object with the same four
    methods; nothing else in the app changes.
    ------------------------------------------------------------------ */
-const ADAPTERS = { mock };
+const ADAPTERS = { mock, nic: require("./nic") };
 
 /**
  * The configured adapter. Credentials and provider choice come from the

@@ -17,13 +17,23 @@ const { logAction } = require("../util");
 
 const router = express.Router();
 
-/** Which environment variables a given provider needs. Mock needs none —
- *  that is what makes it usable before anyone has signed anything. */
-const REQUIRED_ENV = {
-  mock: []
-  // A real provider adds its own list here at the same time as its adapter,
-  // so the screen can say precisely what is missing rather than "not working".
-};
+/**
+ * What a provider needs, asked of the provider.
+ *
+ * This used to be a table here that had to be kept in step with the
+ * adapters by hand — two places to edit, and the one that gets forgotten is
+ * the one that makes the screen lie about what is missing. An adapter now
+ * declares its own `fields`, and this reads them.
+ *
+ * A field is { name, label, secret, hint }. The label is what a shopkeeper
+ * reads; the name is the variable it is stored under, which they never need
+ * to see. `secret: false` marks the ones that are not passwords — a base
+ * URL behind a password box is an invitation to typos nobody can proofread.
+ */
+function fieldsFor(adapter) {
+  if (adapter && Array.isArray(adapter.fields)) return adapter.fields;
+  return [];
+}
 
 router.get("/status", requireRole("owner"), (req, res) => {
   let adapter, error = null;
@@ -31,10 +41,10 @@ router.get("/status", requireRole("owner"), (req, res) => {
   catch (e) { error = e.message; }
 
   const provider = gstConfig.provider();
-  const needed = REQUIRED_ENV[provider] || [];
+  const needed = fieldsFor(adapter);
   /* Missing means missing from BOTH places — a key set on the host counts
      exactly as much as one typed into the app. */
-  const missing = needed.filter(k => !gstConfig.isSet(k));
+  const missing = needed.filter(f => !gstConfig.isSet(f.name)).map(f => f.label);
 
   res.json({
     provider,
@@ -48,7 +58,11 @@ router.get("/status", requireRole("owner"), (req, res) => {
     lockedByHost: gstConfig.providerFromEnv(),
     environmentLockedByHost: gstConfig.environmentFromEnv(),
     // Set or not set, and WHERE from — never the value.
-    credentials: needed.map(k => ({ name: k, set: gstConfig.isSet(k), source: gstConfig.sourceOf(k) })),
+    credentials: needed.map(f => ({
+      name: f.name, label: f.label || f.name, hint: f.hint || "",
+      secret: f.secret !== false,
+      set: gstConfig.isSet(f.name), source: gstConfig.sourceOf(f.name)
+    })),
     missing,
     // "Connected" means a real provider with everything it asked for. The
     // mock is deliberately never connected, however well it works.
@@ -102,12 +116,20 @@ router.put("/provider", requireRole("owner"), (req, res) => {
   logAction(req, "gst.provider",
     `${gstConfig.provider()} / ${gstConfig.environment()}`);
 
-  const needed = REQUIRED_ENV[gstConfig.provider()] || [];
+  /* Asked of the adapter, like /status does. This line still read from the
+     old REQUIRED_ENV table after that table was removed, so every save threw
+     — the credentials were written, then the response blew up on the way
+     out and the screen reported a failure. */
+  const needed = fieldsFor(ADAPTERS[gstConfig.provider()]);
   res.json({
     ok: true,
     provider: gstConfig.provider(),
     environment: gstConfig.environment(),
-    credentials: needed.map(k => ({ name: k, set: gstConfig.isSet(k), source: gstConfig.sourceOf(k) }))
+    credentials: needed.map(f => ({
+      name: f.name, label: f.label || f.name, hint: f.hint || "",
+      secret: f.secret !== false,
+      set: gstConfig.isSet(f.name), source: gstConfig.sourceOf(f.name)
+    }))
   });
 });
 

@@ -19870,23 +19870,41 @@ async function renderGstProviderPanel(){
 
       ${(s.credentials || []).length ? `
         <div class="section-title" style="margin-top:12px;">Credentials</div>
-        ${s.credentials.map(c => `
-          <label class="field-label" style="margin-top:8px;">${escapeHtml(c.name)}
-            <span class="muted" style="font-weight:400;">
-              — ${c.set ? (c.source === "environment" ? "set on the host" : "saved") : "not set"}</span>
+        ${s.credentials.map(c => {
+          const saved = c.set ? (c.source === "environment" ? "set on the host" : "saved") : "not set";
+          const ph = c.set ? "leave blank to keep the saved one" : "";
+          const off = c.source === "environment" ? " disabled" : "";
+          /* A key is a wall of base64 across several lines — a single-line
+             box makes it impossible to see whether the paste came through
+             whole, which is the commonest reason a login fails. */
+          const isKey = /PUBLIC_KEY/.test(c.name);
+          const box = isKey
+            ? `<textarea data-gst-cred="${escapeHtml(c.name)}" rows="4" spellcheck="false"
+                 style="font-family:ui-monospace,Consolas,monospace;font-size:11px;"
+                 placeholder="${escapeHtml(ph || "-----BEGIN PUBLIC KEY-----")}"${off}></textarea>`
+            /* Only the actual passwords are masked. A GSTIN or an API
+               address behind dots is an invitation to a typo nobody can
+               proofread — and neither is a secret. */
+            : `<input type="${c.secret ? "password" : "text"}" data-gst-cred="${escapeHtml(c.name)}"
+                 autocomplete="${c.secret ? "new-password" : "off"}" spellcheck="false"
+                 placeholder="${escapeHtml(ph)}"${off}>`;
+          return `
+          <label class="field-label" style="margin-top:10px;">${escapeHtml(c.label || c.name)}
+            <span class="muted" style="font-weight:400;"> — ${saved}</span>
           </label>
-          <input type="password" data-gst-cred="${escapeHtml(c.name)}" autocomplete="new-password"
-                 placeholder="${c.set ? "leave blank to keep the saved one" : "paste the value"}"
-                 ${c.source === "environment" ? "disabled" : ""}>`).join("")}
+          ${box}
+          ${c.hint ? `<p class="muted" style="font-size:11px;margin-top:4px;">${escapeHtml(c.hint)}</p>` : ""}`;
+        }).join("")}
         <p class="muted" style="font-size:11px;margin-top:8px;line-height:1.6;">
           Typed in here, these are stored on the server and <b>never sent back to any
           screen</b> — not even this one. It can tell you a key is saved; it cannot
           show you what it is.</p>
       ` : `
         <p class="muted" style="font-size:11.5px;margin-top:10px;line-height:1.6;">
-          <b>${escapeHtml(s.provider)}</b> needs no credentials. Credential boxes appear
-          here as soon as this copy carries an adapter for a real GSP — and an adapter
-          has to be written against that GSP's own documentation, never guessed at.
+          <b>${escapeHtml(s.provider)}</b> needs no credentials and sends nothing to the
+          GST portal. To connect for real, choose <b>nic</b> above — then your own
+          e-way bill username, password and the details your GSP gave you go in here,
+          and <b>Test connection</b> logs in and tells you whether they worked.
         </p>`}
 
       <button class="btn btn-gold" id="gst-save-btn" style="margin-top:12px;">Save provider settings</button>

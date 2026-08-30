@@ -10225,7 +10225,7 @@ function renderInvoicePageContent(){
   // identical to each other, since it's absent from both.
   const totalsBox = `<div class="erp-totals-box">
     <div class="erp-tb-row"><span>Subtotal</span><span>${showRate ? fmtPaise(challan?challanSubtotal:inv.subtotal) : ""}</span></div>
-    <div class="erp-tb-row"><span>Discount</span><span>${showRate ? (discountAmt>0?"-":"")+fmtPaise(discountAmt) : ""}</span></div>
+    ${discountAmt > 0 ? `<div class="erp-tb-row"><span>Discount</span><span>${showRate ? "-"+fmtPaise(discountAmt) : ""}</span></div>` : ""}
     ${inv.transport ? `<div class="erp-tb-row"><span>Transport</span><span>${fmtPaise(inv.transport)}</span></div>` : ""}
     ${inv.loading ? `<div class="erp-tb-row"><span>Additional Charges</span><span>${fmtPaise(inv.loading)}</span></div>` : ""}
     ${!gstEnabled ? "" : isIGST
@@ -10300,7 +10300,6 @@ function renderInvoicePageContent(){
       renderTallyInvoiceHtml(inv, cust, cols, rows, {
         showRate, displayTotal, gstEnabled, isIGST
       });
-    wireBillGrips(challan);
     return;
   }
   document.getElementById("invoice-page-content").innerHTML = `
@@ -10309,12 +10308,20 @@ function renderInvoicePageContent(){
       <div class="erp-biz-name">${escapeHtml(cfg.business_name)}</div>
       ${cfg.tagline ? `<div class="erp-tag">${escapeHtml(cfg.tagline)}</div>` : ""}
       ${cfg.address ? `<div class="erp-addr">${escapeHtml(cfg.address)}</div>` : ""}
-      <div class="erp-contact-line">${[
-        cfg.gstin ? `GSTIN: ${escapeHtml(cfg.gstin)}` : "",
-        cfg.phones ? `Ph: ${escapeHtml(cfg.phones)}` : "",
-        cfg.email ? `Email: ${escapeHtml(cfg.email)}` : "",
-        cfg.website ? `Website: ${escapeHtml(cfg.website)}` : ""
-      ].filter(Boolean).join("  |  ")}</div>
+      ${(() => {
+        /* Only when there is something to put in it. An empty div still
+           takes a line of height, which on a bill for a shop that has not
+           filled in its GSTIN or phone leaves an unexplained gap under the
+           shop name — the sort of thing that reads as a fault in the
+           paperwork rather than a blank field. */
+        const line = [
+          cfg.gstin ? `GSTIN: ${escapeHtml(cfg.gstin)}` : "",
+          cfg.phones ? `Ph: ${escapeHtml(cfg.phones)}` : "",
+          cfg.email ? `Email: ${escapeHtml(cfg.email)}` : "",
+          cfg.website ? `Website: ${escapeHtml(cfg.website)}` : ""
+        ].filter(Boolean).join("  |  ");
+        return line ? `<div class="erp-contact-line">${line}</div>` : "";
+      })()}
     </div>
 
     <div class="erp-parties">
@@ -10351,7 +10358,6 @@ function renderInvoicePageContent(){
       ? `<strong>PLYWOOD, BLACKBOARD, ARE MANUFACTURED FROM NATURAL WOOD WHICH IS BELOW BIO DEGRADEBLE, WE DONOT GUARANTEE AGAINST ANY NATURAL DECAY DEFICIENTY, DETORATION AND LIKE INCLUDING MANUFACTURING DEFACT AND/OR IMPERFACT QUALITY</strong>`
       : `<strong>NO GURANTEE AND WARRANTY FOR DECORATIVE PRODUCTS AND AIR BUBBLES IN LAMMINATES, ACRYLIC AND PVC LAMINATES OR ANY SHADE VARIATION AFTER INSTALLATION. NO EXCHANGE. NO RETURN IN ANY CONDITION. PLEASE CHECK THE MATERIAL ON DELIVERY.</strong>`}</div>
   `;
-  wireBillGrips(challan);
 }
 
 /* ============================================================
@@ -10817,25 +10823,11 @@ function renderBillPanel(){
       <div class="bp-hint bp-hint-block">Saved for every bill, not just this one.</div>
     </div>
 
-    <div class="bp-group">
+    ${isOwner() ? `<div class="bp-group">
       <div class="bp-label">Column &amp; Row Sizes</div>
-      ${(billConfig(challan) || {}).locked
-        ? `<div class="bp-hint bp-hint-block">This document's layout is locked, so the
-            lines on the bill cannot be dragged. An owner can unlock it in
-            Print Management &rsaquo; Templates.</div>`
-        : `<div class="bp-hint bp-hint-block">Drag the lines on the bill itself: a
-            <b>vertical</b> line in the heading row sets that <b>column's width</b>, and the
-            line under any row sets <b>that row's height</b>. It changes the sheet you are
-            about to print${isOwner() ? " and is forgotten afterwards, unless you save it below."
-                                      : " and is forgotten afterwards."}</div>
-           <div class="bp-row" style="gap:8px;margin-top:8px;">
-             <button class="btn btn-outline" id="bp-size-reset"${billLayoutTouched() ? "" : " disabled"}>Reset sizes</button>
-             ${isOwner() ? `<button class="btn btn-outline" id="bp-size-save"${billLayoutTouched() ? "" : " disabled"}>Save to template</button>` : ""}
-           </div>
-           ${billLayoutTouched()
-             ? `<div class="bp-hint bp-hint-block" style="margin-top:6px;">Sizes changed for this print.</div>`
-             : ""}`}
-    </div>
+      <div class="bp-hint bp-hint-block">Set in <b>Print Management &rsaquo; Templates</b>, on a
+        computer. Whatever the template is saved with is what prints here.</div>
+    </div>` : ""}
 
     <div class="bp-group bp-actions">
       <button class="btn btn-gold" id="bp-save">Save as Default</button>
@@ -10880,17 +10872,6 @@ function renderBillPanel(){
     closeInvoicePreview();
     openExistingInvoice(inv.id);
   });
-
-  const sizeReset = document.getElementById("bp-size-reset");
-  if(sizeReset) sizeReset.addEventListener("click", ()=>{
-    billLayoutClear();
-    renderInvoicePageContent();
-    renderBillPanel();
-    toast("Back to the sizes this document's template prints at.", "ok");
-  });
-
-  const sizeSave = document.getElementById("bp-size-save");
-  if(sizeSave) sizeSave.addEventListener("click", ()=> saveBillLayoutToTemplate(challan));
 
   document.getElementById("bp-save").addEventListener("click", async ()=>{
     const title = document.getElementById("bp-title").value.trim();
@@ -18715,7 +18696,9 @@ function renderTemplatePreview(){
     host.style.height = (naturalHeight * scale) + "px";
   }
   host.style.cursor = "zoom-in";
-  host.title = "Tap the page to view it full size — or drag any line in the table";
+  host.title = pmCanDrag()
+    ? "Tap the page to view it full size — or drag any line in the table"
+    : "Tap the page to view it full size — or tap a heading or row to size it";
   host.onclick = (e) => {
     /* A drag that ends on the page must not also open the zoom. */
     if(pmDragged){ pmDragged = false; return; }
@@ -18756,6 +18739,29 @@ function renderTemplatePreview(){
    ============================================================ */
 let pmDragged = false;
 
+/**
+ * Is this a machine you can actually drag a hairline on?
+ *
+ * A fine pointer (a mouse or trackpad) AND a screen with room for the page
+ * and the panel beside it. Both, not either: a tablet with a stylus reports
+ * a fine pointer and still has nowhere to put the preview, and a phone in a
+ * desktop-width browser window is still a phone.
+ *
+ * Dragging a seven-pixel line with a thumb was never going to be precise,
+ * and a mis-grab on a touch screen looks like the app broke. The numeric
+ * Width and Height boxes do the same job on every device, exactly, so
+ * nothing is lost by leaving the handles off — only the guessing.
+ */
+function pmCanDrag(){
+  try{
+    return window.matchMedia("(pointer: fine)").matches && window.innerWidth >= 1024;
+  }catch(e){
+    /* An old browser that cannot answer gets the boxes, not the handles:
+       the wrong guess costs precision, the other way costs a broken drag. */
+    return false;
+  }
+}
+
 function wireTemplateGrips(host, scale){
   const table = host.querySelector(".tpl-items");
   if(!table || !pmState.editing) return;
@@ -18780,6 +18786,9 @@ function wireTemplateGrips(host, scale){
   /* A locked template can still be READ and selected — seeing what a column
      is set to is not editing it — but nothing gets a handle. */
   if(pmLocked()) return;
+  /* Nor does a phone or a tablet. The handles are a mouse tool; every device
+     still gets the exact same sizes through the number boxes. */
+  if(!pmCanDrag()) return;
 
   /* ---- the vertical lines: COLUMN WIDTH ----
      Every column, including the last. Its right edge is the page edge, so
@@ -19282,11 +19291,15 @@ function openPmDesigner(tpl){
     <input type="text" data-pm-c="title" value="${escapeHtml(c.title||"")}" placeholder="${escapeHtml(doc.label.toUpperCase())}">
 
     <div class="section-title">Table Layout</div>
-    <p class="muted" style="font-size:11px;margin-bottom:8px;">
-      Drag the lines in the page above. A <b>vertical</b> line between two headings sets that
-      <b>column's width</b>; the <b>horizontal</b> line under any row sets <b>that row's height</b>,
-      and that row only — use Apply to All Rows if you want every row the same.
-      Tap a heading or a row to select it and type the exact size.
+    <p class="muted" style="font-size:11px;margin-bottom:8px;">${pmCanDrag()
+      ? `Drag the lines in the page above. A <b>vertical</b> line between two headings sets that
+         <b>column's width</b>; the <b>horizontal</b> line under any row sets <b>that row's height</b>,
+         and that row only — use Apply to All Rows if you want every row the same.
+         Or click a heading or a row and type the exact size.`
+      : `Tap a heading or a row in the page above, then type its exact width or height.
+         <b>Dragging the lines needs a mouse</b>, so it is switched off on phones and tablets —
+         a hairline is not something a thumb can catch, and a mis-grab moves the wrong column.
+         The sizes you type here are the same sizes, exactly.`}
       Then press Save Layout: it is kept for this template alone and printed exactly as you leave it.</p>
     <div class="acts" style="margin-bottom:4px;">
       <button class="btn btn-gold" id="pm-layout-save">Save Layout</button>

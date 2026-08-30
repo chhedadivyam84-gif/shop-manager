@@ -9,6 +9,48 @@ const Pricing = require("../../public/js/pricing.js");
 
 const router = express.Router();
 
+/**
+ * Offer a document to the Tally queue.
+ *
+ * WRAPPED IN EVERYTHING. This runs at the tail of saving a bill, and a
+ * sync problem must never be able to fail a sale — not a missing module,
+ * not a broken require, not a database error. The bill is already saved
+ * and the customer is already waiting; the worst this may do is nothing.
+ *
+ * It only QUEUES. Sending happens separately, so Tally being off, slow or
+ * mid-dialog cannot make a shopkeeper wait at the counter.
+ */
+function offerToTally(req, docType, doc, opts) {
+  try {
+    const svc = require("../tally/service");
+    const r = svc.enqueue(docType, doc, {
+      ...(opts || {}),
+      staff: (req.session && req.session.staffName) || ""
+    });
+    /* "Immediately after saving" means immediately after — but on the next
+       turn of the event loop, so the till gets its response back before
+       anything starts talking to Tally. */
+    if (r && r.queued) {
+      try { require("../tally/autosync").nudge(); } catch (e) { /* never fatal */ }
+    }
+    return r;
+  } catch (e) {
+    /* Deliberately silent. There is nowhere useful to report this to at
+       the moment a bill is being handed over, and the queue can be run by
+       hand afterwards. */
+    return { queued: false, reason: e.message };
+  }
+}
+
+/** Cancelling in Tally, on the same terms: never able to fail the void. */
+function offerCancelToTally(req, docType, doc) {
+  try {
+    const svc = require("../tally/service");
+    return svc.enqueueCancel(docType, doc,
+      { staff: (req.session && req.session.staffName) || "" });
+  } catch (e) { return { queued: false, reason: e.message }; }
+}
+
 function getSettingsRow() {
   return db.prepare("SELECT * FROM settings WHERE id = 1").get();
 }
@@ -492,6 +534,21 @@ router.post("/", (req, res) => {
     isChallan ? challanNo : `${challanNo} — ${totals.total}`);
   const invoice = db.prepare("SELECT * FROM invoices WHERE id = ?").get(id);
   const savedItems = db.prepare("SELECT * FROM invoice_items WHERE invoice_id = ?").all(id);
+
+  /* AFTER the bill is saved and safe, never before.
+     "Pakka" here means a real tax invoice: a challan carries no GST and an
+     estimate is not a sale, and sending either to Tally books money that
+     was never billed. The owner can switch those on deliberately. */
+  offerToTally(req, "sales_invoice", invoice, {
+    docNo: invoice.challan_no,
+    pakka: !isChallan && invoice.gst_enabled !== 0,
+    /* Hashed on what a voucher would actually contain, so re-saving a bill
+       with an unchanged total does not rewrite Tally for nothing. */
+    hashOn: { t: invoice.total, c: invoice.cgst, s: invoice.sgst, i: invoice.igst,
+              d: invoice.date, p: invoice.customer_id,
+              items: savedItems.map(x => [x.product_id, x.qty, x.rate, x.discount_amount]) }
+  });
+
   res.status(201).json({ ...withStatus(invoice), items: savedItems });
 });
 
@@ -848,6 +905,9 @@ router.post("/:id/void", requireRole("owner"), (req, res) => {
   })();
 
   logAction(req, "invoice.void", `${inv.challan_no}`);
+  /* The Tally voucher is cancelled in place, never deleted — a hole in a
+     numbered voucher book is a question an auditor will ask. */
+  offerCancelToTally(req, "sales_invoice", inv);
   res.json({ ok: true });
 });
 

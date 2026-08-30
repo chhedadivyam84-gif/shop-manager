@@ -144,6 +144,119 @@ CREATE TABLE IF NOT EXISTS wa_send_log (
 );
 CREATE INDEX IF NOT EXISTS idx_wa_log_at ON wa_send_log(at);
 
+-- ============================================================
+-- SHOP MANAGER -> TALLY, ONE WAY
+--
+-- Shop Manager is the master. Nothing in this app ever reads a figure
+-- back from Tally, and there is deliberately no table here that could
+-- hold one: the only direction data moves is out.
+--
+-- WHY THIS CAN ONLY WORK ON A LOCAL COPY. Tally exposes its XML
+-- interface on the machine it runs on, usually port 9000 on the shop PC.
+-- A server in a data centre cannot reach that — there is no route from
+-- the internet to a PC behind a shop's router, and there should not be.
+-- So this syncs from the copy running on the same network as Tally.
+-- ============================================================
+
+-- One row. Where Tally is, and what is allowed to go to it.
+CREATE TABLE IF NOT EXISTS tally_settings (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  host TEXT NOT NULL DEFAULT 'localhost',
+  port INTEGER NOT NULL DEFAULT 9000,
+  company TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 0,
+  auto_sync INTEGER NOT NULL DEFAULT 0,
+  -- immediate | 1m | 5m | 15m | manual
+  auto_mode TEXT NOT NULL DEFAULT 'immediate',
+  /* Which documents may go. Off by default, every one of them: a sync
+     that starts sending the moment it is switched on, before anybody has
+     checked a single voucher, is how a Tally company gets filled with
+     rubbish that then has to be deleted by hand. */
+  modules TEXT NOT NULL DEFAULT '{}',
+  /* A tax invoice goes; an estimate or a challan does not, unless the
+     owner deliberately says so. Sending an estimate to Tally books a sale
+     that was never made. */
+  sync_pakka INTEGER NOT NULL DEFAULT 1,
+  sync_kachha INTEGER NOT NULL DEFAULT 0,
+  last_ok_at INTEGER,
+  last_fail_at INTEGER,
+  last_error TEXT NOT NULL DEFAULT ''
+);
+INSERT OR IGNORE INTO tally_settings (id) VALUES (1);
+
+-- What a Shop Manager record is called in Tally.
+--
+-- Keyed on the Shop Manager id, never on the name. Names change — a
+-- customer gets renamed, a product gets a longer description — and a
+-- mapping that lives on the name silently starts pointing at nothing, or
+-- worse, creates a second ledger for the same party.
+CREATE TABLE IF NOT EXISTS tally_map (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,             -- ledger | stockitem | group | unit
+  local_id TEXT NOT NULL,         -- customers.id, suppliers.id, products.id
+  local_name TEXT NOT NULL DEFAULT '',   -- what it was called when mapped
+  tally_name TEXT NOT NULL,       -- the exact name in Tally
+  /* ignore = deliberately never synced. A shop has products it does not
+     want in Tally at all, and "no mapping yet" must not look the same as
+     "decided not to". */
+  action TEXT NOT NULL DEFAULT 'map' CHECK (action IN ('map','create','ignore')),
+  created_at INTEGER NOT NULL,
+  UNIQUE (kind, local_id)
+);
+
+-- The queue. One row per document that wants to reach Tally.
+--
+-- sync_id IS UNIQUE, AND THAT IS THE WHOLE DUPLICATE DEFENCE. It is
+-- derived from the document, so the same bill can only ever produce one
+-- row however many times it is saved, retried or re-queued — the database
+-- refuses the second one rather than relying on code to remember.
+CREATE TABLE IF NOT EXISTS tally_queue (
+  id TEXT PRIMARY KEY,
+  sync_id TEXT NOT NULL UNIQUE,
+  doc_type TEXT NOT NULL,         -- sales_invoice, purchase_invoice, receipt, payment...
+  doc_id TEXT NOT NULL,
+  doc_no TEXT NOT NULL DEFAULT '',
+  doc_date TEXT NOT NULL DEFAULT '',
+  fy TEXT NOT NULL DEFAULT '',    -- the financial year it belongs to, fixed at queue time
+  status TEXT NOT NULL DEFAULT 'PENDING'
+    CHECK (status IN ('PENDING','PROCESSING','SUCCESS','FAILED','RETRY','CANCELLED')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT NOT NULL DEFAULT '',
+  /* What Tally called it back. Held so an edit updates that voucher
+     instead of writing a second one. */
+  voucher_no TEXT NOT NULL DEFAULT '',
+  voucher_type TEXT NOT NULL DEFAULT '',
+  /* Changes when the document changes, so an edited bill can be told
+     apart from one that has not moved since it was sent. */
+  payload_hash TEXT NOT NULL DEFAULT '',
+  queued_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  synced_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_tally_queue_status ON tally_queue(status);
+CREATE INDEX IF NOT EXISTS idx_tally_queue_doc ON tally_queue(doc_type, doc_id);
+
+-- Every attempt, kept. Not deletable from any screen.
+--
+-- The queue holds where a document stands NOW; this holds what happened.
+-- When a voucher is questioned months later, "it says SUCCESS" is not an
+-- answer — who sent it, when, on which attempt and what Tally replied is.
+CREATE TABLE IF NOT EXISTS tally_log (
+  id TEXT PRIMARY KEY,
+  at INTEGER NOT NULL,
+  staff_name TEXT NOT NULL DEFAULT '',
+  sync_id TEXT NOT NULL DEFAULT '',
+  doc_type TEXT NOT NULL DEFAULT '',
+  doc_id TEXT NOT NULL DEFAULT '',
+  doc_no TEXT NOT NULL DEFAULT '',
+  action TEXT NOT NULL DEFAULT '',   -- queue | send | retry | cancel | test
+  status TEXT NOT NULL DEFAULT '',
+  voucher_no TEXT NOT NULL DEFAULT '',
+  attempt INTEGER NOT NULL DEFAULT 0,
+  message TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_tally_log_at ON tally_log(at);
+
 CREATE TABLE IF NOT EXISTS invoices (
   id TEXT PRIMARY KEY,
   challan_no TEXT UNIQUE NOT NULL,
@@ -803,6 +916,12 @@ addColumn("customers", "whatsapp", "TEXT NOT NULL DEFAULT ''");
 /* individual | group | both — how this customer prefers to be sent to, so
    the send dialog can default sensibly rather than asking every time. */
 addColumn("customers", "wa_contact_type", "TEXT NOT NULL DEFAULT 'individual'");
+
+/* Which Tally ledgers a voucher posts against. A shop whose sales ledger
+   is called "Sales A/c" or "Sales - Local" changes it once, here, instead
+   of every voucher failing on a name Tally does not have. JSON so a new
+   ledger can be named later without another migration. */
+addColumn("tally_settings", "ledgers", "TEXT NOT NULL DEFAULT '{}'");
 
 if (addedItemMode) {
   // Every invoice raised before this feature existed was priced per piece, so

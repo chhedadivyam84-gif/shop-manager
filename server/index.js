@@ -365,6 +365,14 @@ app.use("/api/purchases", requireAuth, require("./routes/purchases"));
 app.use("/api/purchase-orders", requireAuth, require("./routes/purchaseOrders"));
 app.use("/api/selection-slips", requireAuth, require("./routes/selectionSlips"));
 app.use("/api/whatsapp", requireAuth, require("./routes/whatsapp"));
+/* Tally sync. Owner-only inside the router, and one-way by construction —
+   nothing under it reads a value out of Tally into Shop Manager. */
+app.use("/api/tally", requireAuth, require("./routes/tally"));
+/* The auto-sync timer, started once the tables exist. Wrapped because a
+   sync timer must never be able to stop the shop from billing — if this
+   throws, the app still serves. */
+try { require("./tally/autosync").reschedule(); }
+catch (e) { console.log("[tally] auto-sync not started: " + e.message); }
 app.use("/api/gst-filings", requireAuth, require("./routes/gstFilings"));
 app.use("/api/price-lists", requireAuth, require("./routes/priceLists"));
 app.use("/api/quotations", requireAuth, require("./routes/quotations"));

@@ -2007,6 +2007,7 @@ function openMenu(){
     <div class="menu-group">Shop</div>
     ${isOwner() ? `<button class="menu-item" id="menu-permissions"><span class="ic">&#128100;</span>Staff Access</button>` : ""}
     <button class="menu-item" id="menu-wa-history"><span class="ic">&#128172;</span>WhatsApp History</button>
+    ${isOwner() ? `<button class="menu-item" id="menu-tally"><span class="ic">&#128202;</span>Tally Sync</button>` : ""}
     <button class="menu-item" id="menu-settings"><span class="ic">&#9881;</span>Settings</button>
     <button class="menu-item" id="menu-logout" style="color:var(--danger);">
       <span class="ic">&#128682;</span>Log out${state.me.staffName ? " (" + escapeHtml(state.me.staffName) + ")" : ""}</button>`;
@@ -2017,6 +2018,9 @@ function openMenu(){
       closeAllSheets();
       await switchTab(b.dataset.menu);
     }));
+  const tallyBtn = document.getElementById("menu-tally");
+  if(tallyBtn) tallyBtn.addEventListener("click", () => { closeAllSheets(); openTallySync(); });
+
   const waHistBtn = document.getElementById("menu-wa-history");
   if(waHistBtn) waHistBtn.addEventListener("click", () => { closeAllSheets(); openWaHistory(null); });
 
@@ -11251,6 +11255,299 @@ function waLog(entry){
  * @param o.customer  the party, already looked up
  * @param o.message   optional override; otherwise built from the document
  */
+/* ============================================================
+   TALLY SYNC — the screen
+
+   Owner only. One sheet with three tabs: where Tally is, what has been
+   sent, and what things are called at the other end.
+
+   THE SCREEN NEVER SENDS A SYNC ID. Everything it asks for is a document
+   or a queue row the server looks up itself, so nothing here can aim one
+   bill's voucher at another bill.
+   ============================================================ */
+const tallyState = { tab: "setup", data: null, queue: [], mapKind: "ledger", maps: [] };
+
+async function openTallySync(){
+  if(!isOwner()){ toast("Only the owner can set up Tally sync."); return; }
+  const sheet = document.getElementById("sheet-tally");
+  if(!sheet) return;
+  sheet.innerHTML = `<div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">Tally Sync</div>
+    <div class="empty-hint">Loading…</div>`;
+  showSheet("sheet-tally");
+  try{ tallyState.data = await api("GET", "/tally/dashboard"); }
+  catch(e){ toast(e.message || "Could not load Tally settings."); return; }
+  renderTally();
+}
+
+function renderTally(){
+  const sheet = document.getElementById("sheet-tally");
+  const d = tallyState.data;
+  if(!sheet || !d) return;
+  const s = d.settings, c = d.counts, conn = d.connection;
+
+  const light = !s.enabled ? ["#9aa3af", "Off"]
+    : conn && conn.ok ? ["#1f9d55", "Connected"]
+    : conn ? ["#c0392b", "Not connected"]
+    : ["#9aa3af", "Not checked"];
+
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">Tally Sync</div>
+    <p class="muted" style="font-size:11.5px;margin-top:-6px;">
+      Shop Manager sends to Tally. Nothing is ever read back.</p>
+
+    <div class="row" style="align-items:center;gap:8px;margin-top:10px;">
+      <span style="width:10px;height:10px;border-radius:50%;background:${light[0]};
+        display:inline-block;flex:0 0 auto;"></span>
+      <b style="font-size:13px;">${escapeHtml(light[1])}</b>
+      <span class="muted" style="font-size:11.5px;">${escapeHtml(
+        conn && conn.ok ? (conn.message || "") : (conn ? conn.error : ""))}</span>
+    </div>
+
+    <div class="chip-row" style="margin-top:12px;">
+      ${[["setup","Setup"],["queue","Queue"],["map","Names in Tally"]].map(([k,l])=>
+        `<button class="chip ${tallyState.tab===k?"selected":""}" data-tally-tab="${k}">${l}</button>`).join("")}
+    </div>
+
+    <div id="tally-body" style="margin-top:14px;"></div>`;
+
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  sheet.querySelectorAll("[data-tally-tab]").forEach(b=>b.addEventListener("click", ()=>{
+    tallyState.tab = b.dataset.tallyTab; renderTally();
+  }));
+
+  if(tallyState.tab === "setup") renderTallySetup();
+  else if(tallyState.tab === "queue") renderTallyQueue();
+  else renderTallyMap();
+}
+
+/* ---- setup ---- */
+function renderTallySetup(){
+  const el = document.getElementById("tally-body");
+  const s = tallyState.data.settings;
+  const conn = tallyState.data.connection;
+  const companies = (conn && conn.companies) || [];
+
+  el.innerHTML = `
+    <div class="pm-filter-grid">
+      <label class="pm-field"><span>Tally computer</span>
+        <input type="text" id="tly-host" value="${escapeHtml(s.host||"localhost")}"></label>
+      <label class="pm-field"><span>Port</span>
+        <input type="number" id="tly-port" value="${Number(s.port)||9000}"></label>
+    </div>
+    <p class="muted" style="font-size:11px;margin-top:5px;">
+      <b>localhost</b> if Tally runs on this computer. Otherwise the IP address of the PC it
+      is on. In Tally press <b>F12 &rsaquo; Advanced Configuration</b> and set
+      <b>Enable ODBC/HTTP</b> to Yes.</p>
+
+    <button class="btn btn-outline" id="tly-test" style="margin-top:10px;">Test connection</button>
+    <div id="tly-test-out" style="margin-top:8px;"></div>
+
+    <label class="field-label" style="margin-top:14px;">Tally company</label>
+    ${companies.length
+      ? `<select id="tly-company">${["", ...companies].map(c=>
+          `<option value="${escapeHtml(c)}"${c===s.company?" selected":""}>${escapeHtml(c||"— choose —")}</option>`).join("")}</select>`
+      : `<input type="text" id="tly-company" value="${escapeHtml(s.company||"")}"
+           placeholder="Test the connection to list the open companies">`}
+    <p class="muted" style="font-size:11px;margin-top:5px;">
+      The company must be OPEN in Tally. Nothing can be written into a closed one.</p>
+
+    <div class="section-title">What may be sent</div>
+    <label class="pm-check"><input type="checkbox" id="tly-enabled"${s.enabled?" checked":""}>
+      <span>Sync to Tally is on</span></label>
+    ${s.docTypes.map(t=>`
+      <label class="pm-check"><input type="checkbox" data-tly-mod="${t.module}"
+        ${s.modules[t.module]?" checked":""}${t.ready?"":" disabled"}>
+        <span>${escapeHtml(t.label)} &rarr; ${escapeHtml(t.voucher)}
+        ${t.ready?"":`<span class="pm-hint">not wired yet</span>`}</span></label>`).join("")}
+
+    <div class="section-title">When to send</div>
+    <label class="pm-check"><input type="checkbox" id="tly-auto"${s.autoSync?" checked":""}>
+      <span>Send on its own</span></label>
+    <label class="pm-field" style="margin-top:8px;"><span>How often</span>
+      <select id="tly-automode">${[["immediate","As soon as a bill is saved"],
+        ["1m","Every minute"],["5m","Every 5 minutes"],["15m","Every 15 minutes"],
+        ["manual","Only when I press Sync now"]].map(([k,l])=>
+        `<option value="${k}"${s.autoMode===k?" selected":""}>${l}</option>`).join("")}</select></label>
+    <p class="muted" style="font-size:11px;margin-top:5px;">
+      ${tallyState.data.autoSync && tallyState.data.autoSync.running
+        ? "Running now." + (tallyState.data.autoSync.failures
+            ? " Paused after " + tallyState.data.autoSync.failures + " failed run(s) — it widens the gap while Tally is unreachable and goes back to normal on the first success."
+            : "")
+        : "Not running."}
+      A bill is never held up by this: it is saved first and queued after, so Tally being
+      off cannot slow down the counter.</p>
+
+    <div class="section-title">Which bills</div>
+    <label class="pm-check"><input type="checkbox" id="tly-pakka"${s.syncPakka?" checked":""}>
+      <span>Tax invoices (pakka)</span></label>
+    <label class="pm-check"><input type="checkbox" id="tly-kachha"${s.syncKachha?" checked":""}>
+      <span>Estimates and challans (kachha)<span class="pm-hint">off by default — sending one books a sale that was never made</span></span></label>
+
+    <div class="section-title">Ledger names in Tally</div>
+    <div class="pm-filter-grid">
+      ${Object.entries(s.ledgers).map(([k,v])=>`
+        <label class="pm-field"><span>${escapeHtml(k)}</span>
+          <input type="text" data-tly-led="${escapeHtml(k)}" value="${escapeHtml(v)}"></label>`).join("")}
+    </div>
+
+    <button class="btn btn-gold" id="tly-save" style="margin-top:14px;">Save settings</button>
+    <div id="tly-save-out" style="margin-top:8px;"></div>`;
+
+  document.getElementById("tly-test").addEventListener("click", async (ev)=>{
+    const out = document.getElementById("tly-test-out");
+    out.innerHTML = `<div class="muted" style="font-size:12px;">Asking Tally…</div>`;
+    ev.currentTarget.disabled = true;
+    try{
+      const r = await api("POST", "/tally/test", {
+        host: document.getElementById("tly-host").value.trim(),
+        port: document.getElementById("tly-port").value,
+        company: document.getElementById("tly-company").value.trim()
+      });
+      out.innerHTML = r.ok
+        ? `<div class="pm-ok">${escapeHtml(r.message||"Connected.")}</div>`
+        : `<div class="pm-warn">${escapeHtml(r.error)}</div>`;
+      if(r.companies){ tallyState.data.connection = r; renderTally(); }
+    }catch(e){ out.innerHTML = `<div class="pm-warn">${escapeHtml(e.message)}</div>`; }
+    ev.currentTarget.disabled = false;
+  });
+
+  document.getElementById("tly-save").addEventListener("click", async (ev)=>{
+    const out = document.getElementById("tly-save-out");
+    const modules = {};
+    document.querySelectorAll("[data-tly-mod]").forEach(i=>{ if(i.checked) modules[i.dataset.tlyMod]=true; });
+    const ledgers = {};
+    document.querySelectorAll("[data-tly-led]").forEach(i=>{ ledgers[i.dataset.tlyLed]=i.value.trim(); });
+    ev.currentTarget.disabled = true;
+    try{
+      await api("PUT", "/tally/settings", {
+        host: document.getElementById("tly-host").value.trim(),
+        port: document.getElementById("tly-port").value,
+        company: document.getElementById("tly-company").value.trim(),
+        enabled: document.getElementById("tly-enabled").checked,
+        autoSync: document.getElementById("tly-auto").checked,
+        autoMode: document.getElementById("tly-automode").value,
+        syncPakka: document.getElementById("tly-pakka").checked,
+        syncKachha: document.getElementById("tly-kachha").checked,
+        modules, ledgers
+      });
+      tallyState.data = await api("GET", "/tally/dashboard");
+      renderTally();
+      toast("Tally settings saved.", "ok");
+    }catch(e){ out.innerHTML = `<div class="pm-warn">${escapeHtml(e.message)}</div>`; }
+    ev.currentTarget.disabled = false;
+  });
+}
+
+/* ---- queue ---- */
+async function renderTallyQueue(){
+  const el = document.getElementById("tally-body");
+  el.innerHTML = `<div class="empty-hint">Loading…</div>`;
+  let q;
+  try{ q = await api("GET", "/tally/queue"); }
+  catch(e){ el.innerHTML = `<div class="pm-warn">${escapeHtml(e.message)}</div>`; return; }
+  tallyState.queue = q.rows;
+  const c = q.counts;
+
+  el.innerHTML = `
+    <div class="pm-filter-grid">
+      ${[["SUCCESS","Sent"],["PENDING","Waiting"],["FAILED","Failed"],["CANCELLED","Cancelled"]]
+        .map(([k,l])=>`<div class="box" style="padding:8px 10px;">
+          <div class="muted" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;">${l}</div>
+          <div style="font-size:19px;font-weight:800;">${c[k]||0}</div></div>`).join("")}
+    </div>
+    <div class="acts" style="margin-top:12px;">
+      <button class="btn btn-gold" id="tly-sync-now">Sync now</button>
+      <button class="btn btn-outline" id="tly-sync-failed">Retry failed</button>
+    </div>
+    <div id="tly-sync-out" style="margin-top:8px;"></div>
+    <div style="margin-top:12px;">${q.rows.length ? q.rows.slice(0,120).map(r=>`
+      <div style="padding:8px 0;border-bottom:1px solid var(--border);">
+        <div style="display:flex;justify-content:space-between;gap:8px;">
+          <b style="font-size:13px;">${escapeHtml(r.doc_no || r.doc_id)}</b>
+          <span class="muted" style="font-size:11px;">${escapeHtml(r.status)}</span>
+        </div>
+        <div class="muted" style="font-size:11px;">
+          ${escapeHtml(r.doc_type)} · ${escapeHtml(r.doc_date)} · ${escapeHtml(r.fy)}
+          ${r.voucher_no ? " · voucher " + escapeHtml(r.voucher_no) : ""}
+          ${r.attempts ? " · " + r.attempts + " attempt(s)" : ""}</div>
+        ${r.last_error ? `<div class="pm-warn" style="margin-top:4px;font-size:11px;">${escapeHtml(r.last_error)}</div>` : ""}
+      </div>`).join("") : `<div class="empty-hint">Nothing has been queued yet.</div>`}</div>`;
+
+  const run = async (btn, body) => {
+    const out = document.getElementById("tly-sync-out");
+    out.innerHTML = `<div class="muted" style="font-size:12px;">Sending…</div>`;
+    btn.disabled = true;
+    try{
+      const r = await api("POST", "/tally/sync", body);
+      out.innerHTML = `<div class="${r.failed?"pm-warn":"pm-ok"}">` +
+        `${r.ok} sent, ${r.failed} failed, ${r.skipped} skipped` +
+        (r.stoppedEarly ? " — stopped early, Tally is not answering" : "") +
+        (r.errors && r.errors.length ? "<br>" + r.errors.map(e=>escapeHtml((e.docNo||"")+": "+e.error)).join("<br>") : "") +
+        `</div>`;
+      await renderTallyQueue();
+    }catch(e){ out.innerHTML = `<div class="pm-warn">${escapeHtml(e.message)}</div>`; }
+    btn.disabled = false;
+  };
+  document.getElementById("tly-sync-now").addEventListener("click", e=>run(e.currentTarget, {}));
+  document.getElementById("tly-sync-failed").addEventListener("click", e=>run(e.currentTarget,
+    { syncIds: tallyState.queue.filter(r=>r.status==="FAILED").map(r=>r.sync_id) }));
+}
+
+/* ---- names in Tally ---- */
+async function renderTallyMap(){
+  const el = document.getElementById("tally-body");
+  el.innerHTML = `<div class="empty-hint">Loading…</div>`;
+  let list;
+  try{ list = await api("GET", "/tally/map/" + tallyState.mapKind); }
+  catch(e){ el.innerHTML = `<div class="pm-warn">${escapeHtml(e.message)}</div>`; return; }
+  tallyState.maps = list;
+
+  el.innerHTML = `
+    <div class="chip-row">
+      ${[["ledger","Parties"],["stockitem","Products"]].map(([k,l])=>
+        `<button class="chip ${tallyState.mapKind===k?"selected":""}" data-tly-mapkind="${k}">${l}</button>`).join("")}
+    </div>
+    <p class="muted" style="font-size:11px;margin-top:8px;">
+      Leave a box empty and Shop Manager's own name is used, creating it in Tally if it is
+      not there. Type the exact Tally name to point at one that already exists —
+      that is what stops a second ledger being made for the same party.</p>
+    <div style="margin-top:10px;">${list.map(r=>`
+      <div style="padding:7px 0;border-bottom:1px solid var(--border);">
+        <div style="font-size:12.5px;font-weight:700;">${escapeHtml(r.name)}
+          ${r.side?`<span class="muted" style="font-weight:400;font-size:11px;"> — ${escapeHtml(r.side)}</span>`:""}</div>
+        <div class="row" style="gap:6px;margin-top:4px;">
+          <input type="text" data-tly-map="${escapeHtml(r.id)}" value="${escapeHtml(r.tallyName||"")}"
+            placeholder="${escapeHtml(r.name)}" style="flex:1;font-size:12px;">
+          <button class="btn btn-outline pm-mini" data-tly-ignore="${escapeHtml(r.id)}"
+            data-name="${escapeHtml(r.name)}">${r.action==="ignore"?"Ignored":"Ignore"}</button>
+        </div>
+      </div>`).join("")}</div>`;
+
+  el.querySelectorAll("[data-tly-mapkind]").forEach(b=>b.addEventListener("click", ()=>{
+    tallyState.mapKind = b.dataset.tlyMapkind; renderTallyMap();
+  }));
+  el.querySelectorAll("[data-tly-map]").forEach(i=>i.addEventListener("change", async ()=>{
+    try{
+      await api("PUT", "/tally/map/" + tallyState.mapKind + "/" + i.dataset.tlyMap, {
+        tallyName: i.value.trim(), action: i.value.trim() ? "map" : "create",
+        localName: i.placeholder
+      });
+      toast("Saved.", "ok");
+    }catch(e){ toast(e.message); }
+  }));
+  el.querySelectorAll("[data-tly-ignore]").forEach(b=>b.addEventListener("click", async ()=>{
+    try{
+      await api("PUT", "/tally/map/" + tallyState.mapKind + "/" + b.dataset.tlyIgnore, {
+        action: "ignore", localName: b.dataset.name });
+      renderTallyMap();
+    }catch(e){ toast(e.message); }
+  }));
+}
+
 async function openWaSend(o){
   const cust = o.customer || null;
   const sheet = document.getElementById("sheet-wa-send");

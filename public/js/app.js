@@ -8464,6 +8464,133 @@ function closeFullscreen(id){ document.getElementById(id).classList.remove("show
  * window.close(). If a browser ever refuses, the button falls back to going
  * back in history rather than doing nothing.
  */
+/* ============================================================
+   THE OTHER SIX DOCUMENTS, PRINTED FROM THEIR TEMPLATE
+
+   Quotation, Sales Order, Purchase Order, Selection Slip, Sales Return and
+   Purchase Return each built their own HTML and their own <style> block.
+   None read the template a shop had designed for it in Print Management,
+   and none carried an @page rule at all — so none of them had A4 or A5
+   either. A shop could lay out a Sales Order template for an afternoon and
+   print something that looked at none of it.
+
+   All six go through public/js/docPrint.js now: same template config as the
+   bill, same columns and widths and row heights, same With Rate / Without
+   Rate rule, and a real paper size.
+
+   THE OLD LAYOUTS ARE STILL HERE, as printQuotationLegacy() and friends.
+   Nothing was thrown away — point a print button back at one and it prints
+   exactly as it used to.
+   ============================================================ */
+
+/* One template per document type, fetched once. Separate from
+   state.billTemplates, which only ever holds the invoice and the challan. */
+const docTemplateCache = {};
+
+async function docTemplateConfig(docKey){
+  if(docTemplateCache[docKey] !== undefined) return docTemplateCache[docKey];
+  try{
+    const list = await api("GET", "/print-manager/templates/" + docKey);
+    const chosen = (list || []).find(t => t.is_default) || (list || [])[0];
+    docTemplateCache[docKey] = chosen
+      ? (typeof chosen.config === "string" ? JSON.parse(chosen.config) : chosen.config)
+      : null;
+  }catch(e){
+    /* Silent, like loadBillTemplates(): a print must never be blocked by a
+       settings lookup. docPrint falls back to a sensible column set. */
+    docTemplateCache[docKey] = null;
+  }
+  return docTemplateCache[docKey];
+}
+
+/** Where each document is loaded from, for a preview opened off a search
+ *  result that only carries an id. */
+const DOC_FETCH = {
+  purchase_invoice: id => api("GET", "/purchases/" + id),
+  sales_quotation: id => api("GET", "/quotations/" + id),
+  sales_order:     id => api("GET", "/sales-orders/" + id),
+  purchase_order:  id => api("GET", "/purchase-orders/" + id),
+  sales_return:    id => api("GET", "/sales-returns/" + id),
+  purchase_return: id => api("GET", "/purchase-returns/" + id),
+  selection_slip:  id => api("GET", "/selection-slips/" + id)
+};
+
+/** The party, from whichever master this document draws on. A selection
+ *  slip carries its own, because it is often written for somebody who is
+ *  not a customer yet — which is rather the point of one. */
+function docPartyFor(docKey, doc){
+  const spec = DocPrint.SPECS[docKey];
+  if(!spec || spec.partyKind === "inline") return null;
+  const id = spec.partyId(doc);
+  const list = spec.partyKind === "supplier" ? (state.suppliers || []) : (state.customers || []);
+  return list.find(p => p.id === id) || null;
+}
+
+/**
+ * What a line does not carry itself, looked up from the product.
+ *
+ * docPrint.js is deliberately free of app state, so it cannot reach
+ * state.products — it asks for this instead. The LINE's own value always
+ * wins: a document must keep printing what it was raised with even if the
+ * product is reclassified afterwards. Only a blank falls back.
+ */
+function docLineExtras(it){
+  const p = (state.products || []).find(x => x.id === it.product_id);
+  const size = p && (p.sizes || []).find(s => s.id === it.size_id);
+  return {
+    size: (size && size.label) || "",
+    hsn: (p && p.hsn_code) || "",
+    code: (p && p.code) || "",
+    brand: (p && p.brand) || "",
+    category: (p && p.category) || "",
+    unit: (p && p.unit) || ""
+  };
+}
+
+/**
+ * Open one of the six as a page, in its own window.
+ *
+ * @param opts.print   go straight to the printer. A print button does;
+ *                     Open Preview in Print Management does not, because
+ *                     the point of a preview is to look at it first — the
+ *                     window has its own Print button in the bar.
+ * @param opts.config  a template chosen by hand, overriding the default.
+ */
+async function openTemplatedDoc(docKey, doc, opts){
+  opts = opts || {};
+  const spec = DocPrint.SPECS[docKey];
+  if(!spec){ toast("This document has no print layout yet."); return; }
+  const cfg = opts.config || await docTemplateConfig(docKey) || {};
+  let html;
+  try{
+    html = DocPrint.page(docKey, doc, {
+      settings: state.settings || {},
+      party: docPartyFor(docKey, doc),
+      config: cfg,
+      enrich: docLineExtras
+    });
+  }catch(e){
+    toast("Could not build this document: " + e.message);
+    return;
+  }
+  const w = openPrintWindow(html, { title: spec.label });
+  if(w && opts.print){
+    /* After the window has laid the page out. Printing immediately prints
+       an empty sheet often enough to be worth the wait. */
+    setTimeout(() => { try{ w.print(); }catch(e){ /* the bar has a button */ } }, 500);
+  }
+  return w;
+}
+
+/* The six print buttons. Same names the detail sheets already call, so
+   nothing else had to change. */
+function printQuotation(q){       return openTemplatedDoc("sales_quotation", q, { print:true }); }
+function printSalesOrder(so){     return openTemplatedDoc("sales_order", so, { print:true }); }
+function printPurchaseOrder(po){  return openTemplatedDoc("purchase_order", po, { print:true }); }
+function printSalesReturn(sr){    return openTemplatedDoc("sales_return", sr, { print:true }); }
+function printPurchaseReturn(pr){ return openTemplatedDoc("purchase_return", pr, { print:true }); }
+function printSelectionSlip(s){   return openTemplatedDoc("selection_slip", s, { print:true }); }
+
 function openPrintWindow(html, opts){
   const label = (opts && opts.title) || "Document";
   const bar = `
@@ -14808,7 +14935,7 @@ function openPoReceive(po){
   showSheet("sheet-po-receive");
 }
 
-function printPurchaseOrder(po){
+function printPurchaseOrderLegacy(po){
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(po.po_no)}</title>
     <style>
       body{font-family:Arial,Helvetica,sans-serif;padding:20px;color:#000;}
@@ -16027,7 +16154,7 @@ const QUOTATION_PRINT_CSS = `
 // Salesperson, a QR code) are left out rather than shown blank/fake.
 // Standalone popup, fully self-contained styling (not reusing the Tax
 // Invoice's erp-* classes — this is a different visual system).
-function printQuotation(q){
+function printQuotationLegacy(q){
   const cfg = state.settings || {};
   const cust = state.customers.find(c=>c.id===q.customer_id);
 
@@ -16682,7 +16809,7 @@ function editExistingSo(so){
     toast(`Editing ${so.so_no} — make your changes, then save.`, "ok");
   });
 }
-function printSalesOrder(so){
+function printSalesOrderLegacy(so){
   const cust = state.customers.find(c=>c.id===so.customer_id);
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(so.so_no)}</title>
     <style>
@@ -17003,7 +17130,7 @@ async function openSalesReturnDetail(returnId){
   showSheet("sheet-sales-return-detail");
 }
 
-function printSalesReturn(sr){
+function printSalesReturnLegacy(sr){
   const cust = state.customers.find(c=>c.id===sr.customer_id);
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(sr.return_no)}</title>
     <style>
@@ -17197,7 +17324,7 @@ async function openPurchaseReturnDetail(returnId){
   showSheet("sheet-purchase-return-detail");
 }
 
-function printPurchaseReturn(pr){
+function printPurchaseReturnLegacy(pr){
   const supplier = state.suppliers.find(s=>s.id===pr.supplier_id);
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(pr.return_no)}</title>
     <style>
@@ -17619,10 +17746,17 @@ async function openPmPreview(row){
     </div>
     <p class="muted" style="font-size:11px;margin-top:10px;line-height:1.6;" id="pm-pv-note"></p>`;
 
-  const canPreview = row.docType === "sales_invoice" || row.docType === "delivery_challan";
+  /* Every document that has a print layout can be previewed now. It used to
+     be the invoice and the challan only, and the other six were left with a
+     greyed-out button and a note admitting their templates were "saved and
+     ready" — saved, ready, and reaching nothing. */
+  const isBill = row.docType === "sales_invoice" || row.docType === "delivery_challan";
+  const canPreview = isBill || !!(window.DocPrint && DocPrint.SPECS[row.docType] && DOC_FETCH[row.docType]);
   document.getElementById("pm-pv-note").innerHTML = canPreview
-    ? "Preview opens the full bill, where Print, PDF and WhatsApp all live."
-    : `A preview for <strong>${escapeHtml(row.docTypeLabel)}</strong> is not built into this screen. Close this and tap <strong>Open</strong> on the row instead — that goes to the document itself, where Print, Edit and Void all live. Its templates above are saved and ready.`;
+    ? (isBill
+        ? "Preview opens the full bill, where Print, PDF and WhatsApp all live."
+        : "Preview opens this document laid out by the template chosen above, on its own paper size. Print from the bar at the top of it.")
+    : `A preview for <strong>${escapeHtml(row.docTypeLabel)}</strong> is not built yet. Close this and tap <strong>Open</strong> on the row instead — that goes to the document itself, where Print, Edit and Void all live.`;
   document.getElementById("pm-pv-open").disabled = !canPreview;
 
   const pvDetail = document.getElementById("pm-pv-detail");
@@ -17649,17 +17783,37 @@ Stock, the party’s outstanding and GST are reversed. The document stays on fil
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
   document.getElementById("pm-pv-open").addEventListener("click", async ()=>{
     const sel = document.getElementById("pm-pv-template");
-    /* Whatever is selected in the dropdown actually drives the bill now.
+    /* Whatever is selected in the dropdown actually drives the document.
        Nothing selected, or no templates at all, leaves it null and the
-       document's default is used exactly as before. */
+       document's default is used. */
     const chosen = sel ? templates.find(t => t.id === sel.value) : null;
-    billTemplatePick = chosen
-      ? { docId: row.id, docType: row.docType,
-          config: typeof chosen.config === "string" ? JSON.parse(chosen.config) : chosen.config }
+    const cfg = chosen
+      ? (typeof chosen.config === "string" ? JSON.parse(chosen.config) : chosen.config)
       : null;
-    closeAllSheets();
-    await openExistingInvoice(row.id);
-    logPmPrint(row, sel ? sel.value : null, "preview");
+
+    if(row.docType === "sales_invoice" || row.docType === "delivery_challan"){
+      billTemplatePick = cfg ? { docId: row.id, docType: row.docType, config: cfg } : null;
+      closeAllSheets();
+      await openExistingInvoice(row.id);
+      logPmPrint(row, sel ? sel.value : null, "preview");
+      return;
+    }
+
+    /* One of the other six. The search result carries only an id, so the
+       document itself has to be fetched before it can be laid out. */
+    const fetchIt = DOC_FETCH[row.docType];
+    if(!fetchIt) return;
+    const btn = document.getElementById("pm-pv-open");
+    btn.disabled = true;
+    try{
+      const doc = await fetchIt(row.id);
+      closeAllSheets();
+      await openTemplatedDoc(row.docType, doc, { config: cfg });
+      logPmPrint(row, sel ? sel.value : null, "preview");
+    }catch(err){
+      toast(err.message || "Could not open this document.");
+    }
+    btn.disabled = false;
   });
   document.getElementById("pm-pv-mark").addEventListener("click", async ()=>{
     await logPmPrint(row, document.getElementById("pm-pv-template").value, "manual");
@@ -21385,7 +21539,7 @@ function selectionToQuotation(s){
  * paper leaves it blank. It is never printed as 0 — a customer handed a
  * slip saying they wanted 0 of a design would be right to be annoyed.
  */
-function printSelectionSlip(s){
+function printSelectionSlipLegacy(s){
   const cfg = state.settings || {};
 
   const rows = s.items.map(it=>`<tr>

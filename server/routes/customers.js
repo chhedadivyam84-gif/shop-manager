@@ -311,6 +311,13 @@ router.post("/", (req, res) => {
   if (!name || !String(name).trim() || !phone || !String(phone).trim()) {
     return res.status(400).json({ error: "Name and phone are required." });
   }
+  /* Kept apart from phone on purpose: for most shops they are the same
+     number, for some they are not — an office landline against the owner's
+     mobile. Blank is normal and means "same as phone", which the send
+     dialog resolves; it is not a missing value to be chased. */
+  const whatsapp = String(req.body.whatsapp || "").trim();
+  const waContactType = ["individual", "group", "both"].includes(req.body.waContactType)
+    ? req.body.waContactType : "individual";
   // Opening Outstanding is entered at the same moment the customer is
   // created (the natural, one-time entry point per the Opening Outstanding
   // spec) — owner-only, same as the standalone opening-balance route below.
@@ -322,9 +329,9 @@ router.post("/", (req, res) => {
   const id = uid("C");
   db.transaction(() => {
     db.prepare(`
-      INSERT INTO customers (id, name, type, phone, address, gst, state, credit_limit, due, created_at, gst_type, area_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
-    `).run(id, name.trim(), type || "Retail Customer", phone.trim(), (address || "").trim(), (gst || "").trim(), (state || "").trim(), Number(creditLimit) || 0, Date.now(), gstType === "IGST" ? "IGST" : "CGST_SGST", cleanAreaId(areaId, null));
+      INSERT INTO customers (id, name, type, phone, address, gst, state, credit_limit, due, created_at, gst_type, area_id, whatsapp, wa_contact_type)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
+    `).run(id, name.trim(), type || "Retail Customer", phone.trim(), (address || "").trim(), (gst || "").trim(), (state || "").trim(), Number(creditLimit) || 0, Date.now(), gstType === "IGST" ? "IGST" : "CGST_SGST", cleanAreaId(areaId, null), whatsapp, waContactType);
 
     if (openingAmount > 0) {
       const balanceType = req.body.openingBalanceType === "Advance" ? "Advance" : "Receivable";
@@ -348,12 +355,19 @@ router.put("/:id", (req, res) => {
   if (!c) return res.status(404).json({ error: "Customer not found." });
   const { name, type, phone, address, gst, state, creditLimit, gstType, areaId } = req.body;
   db.prepare(`
-    UPDATE customers SET name=?, type=?, phone=?, address=?, gst=?, state=?, credit_limit=?, gst_type=?, area_id=? WHERE id=?
+    UPDATE customers SET name=?, type=?, phone=?, address=?, gst=?, state=?, credit_limit=?, gst_type=?, area_id=?,
+                         whatsapp=?, wa_contact_type=? WHERE id=?
   `).run(
     (name || c.name).trim(), type ?? c.type, (phone ?? c.phone), (address ?? c.address), (gst ?? c.gst),
     (state ?? c.state), creditLimit !== undefined ? Number(creditLimit) : c.credit_limit,
     gstType === "IGST" ? "IGST" : gstType === "CGST_SGST" ? "CGST_SGST" : c.gst_type,
-    cleanAreaId(areaId, c.area_id), c.id
+    cleanAreaId(areaId, c.area_id),
+    /* ?? not ||, so an empty string deliberately CLEARS the WhatsApp number
+       instead of being read as "not supplied" and silently kept. */
+    req.body.whatsapp === undefined ? c.whatsapp : String(req.body.whatsapp).trim(),
+    ["individual", "group", "both"].includes(req.body.waContactType)
+      ? req.body.waContactType : c.wa_contact_type,
+    c.id
   );
   logAction(req, "customer.update", c.name);
   res.json(db.prepare("SELECT * FROM customers WHERE id = ?").get(c.id));

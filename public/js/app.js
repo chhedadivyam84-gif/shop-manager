@@ -1280,6 +1280,14 @@ async function initApp(){
     startEwbForInvoice(lastPreviewInvoice.id);
   });
   document.getElementById("inv-whatsapp-pdf").addEventListener("click", shareInvoicePdfWhatsApp);
+  document.getElementById("inv-whatsapp-text").addEventListener("click", ()=>{
+    const inv = lastPreviewInvoice;
+    if(!inv){ toast("Open a bill first."); return; }
+    const challan = inv.doc_type === "challan";
+    waSendDocument(challan ? "delivery_challan" : "sales_invoice", inv,
+      challan ? "Delivery Challan" : "Invoice", inv.challan_no,
+      (state.customers || []).find(c => c.id === inv.customer_id));
+  });
   document.getElementById("inv-server-print").addEventListener("click", printViaServer);
 
   await renderAll();
@@ -1998,6 +2006,7 @@ function openMenu(){
       ).join("")}`).join("")}
     <div class="menu-group">Shop</div>
     ${isOwner() ? `<button class="menu-item" id="menu-permissions"><span class="ic">&#128100;</span>Staff Access</button>` : ""}
+    <button class="menu-item" id="menu-wa-history"><span class="ic">&#128172;</span>WhatsApp History</button>
     <button class="menu-item" id="menu-settings"><span class="ic">&#9881;</span>Settings</button>
     <button class="menu-item" id="menu-logout" style="color:var(--danger);">
       <span class="ic">&#128682;</span>Log out${state.me.staffName ? " (" + escapeHtml(state.me.staffName) + ")" : ""}</button>`;
@@ -2008,6 +2017,9 @@ function openMenu(){
       closeAllSheets();
       await switchTab(b.dataset.menu);
     }));
+  const waHistBtn = document.getElementById("menu-wa-history");
+  if(waHistBtn) waHistBtn.addEventListener("click", () => { closeAllSheets(); openWaHistory(null); });
+
   const permBtn = document.getElementById("menu-permissions");
   if(permBtn) permBtn.addEventListener("click", async ()=>{ closeAllSheets(); await switchTab("permissions"); });
   document.getElementById("menu-logout").addEventListener("click", async () => {
@@ -7538,6 +7550,21 @@ function openAddCustomer(editing){
     <label class="field-label">Party type</label>
     <div class="chip-row" id="nc-type-chips">${types.map(t=>`<button class="chip ${(editing?editing.type===t:t===types[0])?'selected':''}" data-type="${t}">${t}</button>`).join("")}</div>
     <label class="field-label">Phone / WhatsApp</label><input type="tel" id="nc-phone" value="${editing?escapeHtml(editing.phone||""):""}">
+
+    <div class="section-title" style="margin-top:14px;">WhatsApp</div>
+    <label class="field-label">WhatsApp number <span class="muted" style="font-weight:400;">— leave blank if it is the same as the phone above</span></label>
+    <input type="tel" id="nc-whatsapp" value="${editing?escapeHtml(editing.whatsapp||""):""}" placeholder="Same as phone">
+    <label class="field-label" style="margin-top:10px;">Usually send to</label>
+    <div class="chip-row" id="nc-wa-type-chips">${
+      [["individual","Individual"],["group","Group"],["both","Both"]].map(([v,l])=>{
+        const cur = (editing && editing.wa_contact_type) || "individual";
+        return `<button class="chip ${cur===v?"selected":""}" data-nc-wa-type="${v}">${l}</button>`;
+      }).join("")}</div>
+    <p class="muted" style="font-size:11px;margin-top:5px;">
+      Only decides which option the send screen opens on. Either is always available.</p>
+    ${editing
+      ? `<button class="btn btn-outline" id="nc-wa-groups" style="margin-top:10px;">Manage WhatsApp Groups</button>`
+      : `<p class="muted" style="font-size:11px;margin-top:8px;">Groups can be added once the customer is saved.</p>`}
     <label class="field-label">Address</label><textarea id="nc-address" rows="2" placeholder="Shop / site address — shown on the invoice">${editing?escapeHtml(editing.address||""):""}</textarea>
     <label class="field-label">Location / Area <span class="muted" style="font-weight:400;">— optional</span></label>
     <div id="nc-area-picker"></div>
@@ -7582,6 +7609,13 @@ function openAddCustomer(editing){
   sheet.querySelectorAll("[data-nc-opening-type]").forEach(b=>b.addEventListener("click", ()=>{
     sheet.querySelectorAll("[data-nc-opening-type]").forEach(x=>x.classList.remove("selected")); b.classList.add("selected");
   }));
+  sheet.querySelectorAll("[data-nc-wa-type]").forEach(b=>b.addEventListener("click", ()=>{
+    sheet.querySelectorAll("[data-nc-wa-type]").forEach(x=>x.classList.remove("selected"));
+    b.classList.add("selected");
+  }));
+  const ncWaGroups = sheet.querySelector("#nc-wa-groups");
+  if(ncWaGroups) ncWaGroups.addEventListener("click", ()=>openWaGroups(editing));
+
   sheet.querySelector("#nc-save").addEventListener("click", async ()=>{
     const name = document.getElementById("nc-name").value.trim();
     const phone = document.getElementById("nc-phone").value.trim();
@@ -7594,7 +7628,13 @@ function openAddCustomer(editing){
       state: document.getElementById("nc-state").value || state.settings.state,
       gstType: sheet.querySelector("[data-gsttype].selected").dataset.gsttype,
       creditLimit: parseFloat(document.getElementById("nc-credit").value)||0,
-      areaId: ncAreaId
+      areaId: ncAreaId,
+      /* Sent even when blank, deliberately: blank MEANS "same as the phone",
+         and the server treats an empty string as a real value so a number
+         can be cleared again once it has been set. */
+      whatsapp: document.getElementById("nc-whatsapp").value.trim(),
+      waContactType: (sheet.querySelector("[data-nc-wa-type].selected") || {}).dataset
+        ? sheet.querySelector("[data-nc-wa-type].selected").dataset.ncWaType : "individual"
     };
     if(openingAmountEl && parseFloat(openingAmountEl.value)>0){
       payload.openingBalance = parseFloat(openingAmountEl.value);
@@ -11108,6 +11148,354 @@ async function printViaServer(){
  * is a popup blocker silently eating window.open, which is what the toast
  * below actually covers.
  */
+/* ============================================================
+   SENDING A DOCUMENT ON WHATSAPP
+
+   WHAT WHATSAPP ACTUALLY ALLOWS. This is the whole design, so it is worth
+   being blunt about it rather than discovering it later:
+
+     TO A PERSON   wa.me/<number>?text=... opens their chat with the
+                   message already typed. This works, and it is what the
+                   app has always done.
+
+     TO A GROUP    there is NO link and NO API that does this. A
+                   chat.whatsapp.com link is an INVITE — it makes somebody
+                   join a group, it cannot open one or post to it. The
+                   WhatsApp Business Cloud API does not support groups at
+                   all; it is strictly one business to one customer. So
+                   this is not a thing that money or a better integration
+                   would fix.
+
+   The one route that genuinely reaches a group is the operator's own
+   device: navigator.share() raises the OS share sheet, they tap WhatsApp
+   and choose the group. One extra tap, and the message really does land in
+   the group. That is what "Send to group" does here, and the screen says
+   so plainly rather than implying it went by itself.
+
+   Where there is no share sheet — most desktops — the message goes to the
+   clipboard and the screen says to paste it. That is worse, and it is
+   still the truth rather than a button that appears to work.
+
+   NOTHING EXISTING CHANGED. openWhatsApp(), shareSoWhatsApp(),
+   sharePoPdf() and every button already wired to them are untouched.
+   ============================================================ */
+
+/* ============================================================
+   WHATSAPP SEND HISTORY
+
+   What was handed to WhatsApp, when, by whom, and where it went.
+
+   The status column is the honest one. WhatsApp gives a web page no
+   delivery callback of any kind, so there is no "delivered" and no "read"
+   here — only what this app can actually observe: the chat was opened, the
+   share sheet completed, the message was copied, or the operator backed
+   out. Anything more would be invented.
+   ============================================================ */
+const WA_STATUS_LABEL = {
+  opened:    "Opened in WhatsApp",
+  shared:    "Shared",
+  copied:    "Copied",
+  cancelled: "Cancelled",
+  failed:    "Failed"
+};
+
+async function openWaHistory(customer){
+  const sheet = document.getElementById("sheet-wa-groups");   // reused shell
+  if(!sheet) return;
+  let data = { rows: [] };
+  try{
+    data = await api("GET", "/whatsapp/log" + (customer ? "?customerId=" + encodeURIComponent(customer.id) : ""));
+  }catch(e){ toast(e.message || "Could not load the history."); return; }
+
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">WhatsApp History</div>
+    <p class="muted" style="font-size:12px;margin-top:-6px;">
+      ${customer ? escapeHtml(customer.name) : "Everything sent from this shop"}</p>
+    <div style="margin-top:12px;">${
+      data.rows.length ? data.rows.map(r => `
+        <div style="padding:9px 0;border-bottom:1px solid var(--border);">
+          <div style="display:flex;justify-content:space-between;gap:8px;">
+            <b style="font-size:13px;">${escapeHtml(r.doc_no || r.doc_type || "—")}</b>
+            <span class="muted" style="font-size:11px;white-space:nowrap;">${escapeHtml(fyDay(isoDate(new Date(r.at))))}</span>
+          </div>
+          <div style="font-size:12px;">${escapeHtml(r.customer_name || "—")}</div>
+          <div class="muted" style="font-size:11px;">
+            ${r.dest_type === "group" ? "Group" : "Individual"}: ${escapeHtml(r.dest_ref || r.dest_name || "—")}
+            · ${escapeHtml(WA_STATUS_LABEL[r.status] || r.status)}
+            ${r.staff_name ? " · " + escapeHtml(r.staff_name) : ""}</div>
+        </div>`).join("")
+      : `<div class="empty-hint">Nothing has been sent on WhatsApp yet.</div>`
+    }</div>
+    <p class="muted" style="font-size:11px;margin-top:12px;line-height:1.55;">
+      WhatsApp tells no website whether a message was delivered or read, so this
+      records what the app itself did — not what happened afterwards in WhatsApp.</p>`;
+
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  showSheet("sheet-wa-groups");
+}
+
+/** Cached per customer, because the send dialog is opened repeatedly and
+ *  the list rarely changes within a session. */
+const waGroupCache = {};
+
+async function waGroupsFor(customerId, force){
+  if(!customerId) return [];
+  if(!force && waGroupCache[customerId]) return waGroupCache[customerId];
+  try{
+    waGroupCache[customerId] = await api("GET", "/whatsapp/groups/" + customerId);
+  }catch(e){ waGroupCache[customerId] = []; }
+  return waGroupCache[customerId];
+}
+
+/** The number to message: the WhatsApp number if one was recorded, else the
+ *  phone. Most shops keep one number and should not have to type it twice. */
+function waNumberOf(cust){
+  if(!cust) return "";
+  return String(cust.whatsapp || cust.phone || "").trim();
+}
+
+/** Never blocks the send. Same rule as the print log: a customer getting
+ *  their order matters more than the record of it. */
+function waLog(entry){
+  try{ api("POST", "/whatsapp/log", entry); }catch(e){ /* nothing to do */ }
+}
+
+/**
+ * The send dialog.
+ *
+ * @param o.docKey    a DocPrint.SPECS key, or "invoice"/"challan"
+ * @param o.doc       the saved document
+ * @param o.customer  the party, already looked up
+ * @param o.message   optional override; otherwise built from the document
+ */
+async function openWaSend(o){
+  const cust = o.customer || null;
+  const sheet = document.getElementById("sheet-wa-send");
+  if(!sheet) return;
+
+  let message = o.message;
+  if(!message){
+    try{
+      message = DocPrint.message(o.docKey, o.doc, {
+        settings: state.settings || {}, party: cust, enrich: docLineExtras
+      });
+    }catch(e){ message = ""; }
+  }
+  if(!message){ toast("Nothing to send for this document."); return; }
+
+  const groups = (await waGroupsFor(cust && cust.id)).filter(g => g.active);
+  const number = waNumberOf(cust);
+  /* What the customer was set up as. "both" and "group" open on Group, so
+     a shop that works through groups is not made to change it every time. */
+  const pref = (cust && cust.wa_contact_type) || "individual";
+  let mode = (pref === "group" || pref === "both") && groups.length ? "group" : "individual";
+  if(!number && groups.length) mode = "group";
+
+  const canShare = typeof navigator !== "undefined" && !!navigator.share;
+
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">Send on WhatsApp</div>
+    <p class="muted" style="font-size:12px;margin-top:-6px;">
+      ${escapeHtml(o.docLabel || "Document")}${o.docNo ? " · " + escapeHtml(o.docNo) : ""}
+      ${cust ? " · " + escapeHtml(cust.name) : ""}</p>
+
+    <div class="section-title">Send to</div>
+    <div class="chip-row" id="wa-mode-chips">
+      <button class="chip${mode === "individual" ? " selected" : ""}" data-wa-mode="individual"
+        ${number ? "" : "disabled"}>Individual</button>
+      <button class="chip${mode === "group" ? " selected" : ""}" data-wa-mode="group"
+        ${groups.length ? "" : "disabled"}>Customer Group</button>
+    </div>
+
+    <div id="wa-dest"></div>
+
+    <div class="section-title">Message</div>
+    <textarea id="wa-message" rows="10" style="font-size:12px;">${escapeHtml(message)}</textarea>
+    <p class="muted" style="font-size:11px;">Edit it here if you want — what is sent is what is in this box.</p>
+
+    <button class="btn btn-gold" id="wa-send-btn" style="margin-top:14px;">Send</button>
+    <button class="btn btn-outline" id="wa-copy-btn" style="margin-top:8px;">Copy message</button>
+    <div class="muted" id="wa-send-note" style="font-size:11px;margin-top:10px;line-height:1.55;"></div>`;
+
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+
+  const drawDest = () => {
+    const el = document.getElementById("wa-dest");
+    const note = document.getElementById("wa-send-note");
+    if(mode === "individual"){
+      el.innerHTML = number
+        ? `<label class="field-label">WhatsApp number</label>
+           <input type="tel" id="wa-number" value="${escapeHtml(number)}">
+           <p class="muted" style="font-size:11px;">From this customer's record. Change it here to send this one message elsewhere.</p>`
+        : `<p class="muted" style="font-size:12px;">This customer has no phone or WhatsApp number saved.</p>`;
+      note.innerHTML = "WhatsApp opens with the message already typed. Press send there.";
+    }else{
+      el.innerHTML = `<label class="field-label">Group</label>
+        <select id="wa-group">${groups.map(g =>
+          `<option value="${escapeHtml(g.id)}">${escapeHtml(g.name)}${g.purpose ? " — " + escapeHtml(g.purpose) : ""}</option>`
+        ).join("")}</select>
+        <p class="muted" style="font-size:11px;">Groups are set up on the customer.</p>`;
+      /* The honest bit. WhatsApp gives no way to post into a group from a
+         web page, so the operator picks it in WhatsApp's own share sheet. */
+      note.innerHTML = canShare
+        ? "<b>WhatsApp does not allow any app to post into a group by itself</b> — not through a link, and not through the WhatsApp Business API, which does not support groups at all. So this opens your phone's share sheet: tap WhatsApp, then pick <b>" +
+          escapeHtml((groups[0] && groups[0].name) || "the group") + "</b>. The message goes with it."
+        : "<b>WhatsApp does not allow any app to post into a group by itself</b>, and this device has no share sheet. The message will be copied instead — open the group in WhatsApp and paste it.";
+    }
+  };
+  drawDest();
+
+  sheet.querySelectorAll("[data-wa-mode]").forEach(b => b.addEventListener("click", () => {
+    if(b.disabled) return;
+    mode = b.dataset.waMode;
+    sheet.querySelectorAll("[data-wa-mode]").forEach(x => x.classList.toggle("selected", x === b));
+    drawDest();
+  }));
+
+  const logBase = () => ({
+    customerId: cust && cust.id, customerName: cust ? cust.name : "",
+    docType: o.docKey || "", docId: (o.doc && o.doc.id) || "", docNo: o.docNo || ""
+  });
+
+  document.getElementById("wa-copy-btn").addEventListener("click", async () => {
+    const ok = await copyToClipboard(document.getElementById("wa-message").value);
+    toast(ok ? "Message copied." : "Could not copy — select the text and copy it by hand.");
+  });
+
+  document.getElementById("wa-send-btn").addEventListener("click", async () => {
+    const text = document.getElementById("wa-message").value;
+    if(mode === "individual"){
+      const numEl = document.getElementById("wa-number");
+      const to = numEl ? numEl.value.trim() : "";
+      if(!to){ toast("No WhatsApp number to send to."); return; }
+      openWhatsApp(to, text);
+      waLog({ ...logBase(), destType: "individual", destName: cust ? cust.name : "", destRef: to, status: "opened" });
+      closeAllSheets();
+      return;
+    }
+
+    const sel = document.getElementById("wa-group");
+    const group = groups.find(g => g.id === (sel && sel.value));
+    if(!group){ toast("Pick a group first."); return; }
+    const base = { ...logBase(), destType: "group", destName: group.name, destRef: group.name };
+
+    if(canShare){
+      try{
+        await navigator.share({ text });
+        waLog({ ...base, status: "shared" });
+        toast("Handed to WhatsApp — pick " + group.name + " there.", "ok");
+        closeAllSheets();
+      }catch(e){
+        /* The share sheet was dismissed. That is a decision, not a failure,
+           and it is logged as one so the history does not read as an error. */
+        if(e && e.name === "AbortError"){ waLog({ ...base, status: "cancelled" }); return; }
+        const ok = await copyToClipboard(text);
+        waLog({ ...base, status: ok ? "copied" : "failed" });
+        toast(ok ? "Copied — paste it into " + group.name + "." : "Could not share or copy.");
+      }
+      return;
+    }
+
+    const ok = await copyToClipboard(text);
+    waLog({ ...base, status: ok ? "copied" : "failed" });
+    if(ok && group.invite_link){
+      toast("Copied. Opening the group — paste it there.", "ok");
+      window.open(group.invite_link, "_blank");
+    }else{
+      toast(ok ? "Copied — open " + group.name + " in WhatsApp and paste it."
+               : "Could not copy the message.");
+    }
+    closeAllSheets();
+  });
+
+  showSheet("sheet-wa-send");
+}
+
+/**
+ * The WhatsApp button every document screen uses, so they all behave the
+ * same way and there is one place to change it.
+ */
+function waSendDocument(docKey, doc, docLabel, docNo, customer){
+  return openWaSend({ docKey, doc, docLabel, docNo, customer });
+}
+
+/* ============================================================
+   A CUSTOMER'S WHATSAPP GROUPS
+   ============================================================ */
+async function openWaGroups(customer){
+  const sheet = document.getElementById("sheet-wa-groups");
+  if(!sheet || !customer) return;
+  const groups = await waGroupsFor(customer.id, true);
+
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">WhatsApp Groups</div>
+    <p class="muted" style="font-size:12px;margin-top:-6px;">${escapeHtml(customer.name)}</p>
+    <div id="wa-group-list" style="margin-top:12px;"></div>
+    <div class="section-title">Add a group</div>
+    <label class="field-label">Group name</label>
+    <input type="text" id="wag-name" placeholder="e.g. ${escapeHtml(customer.name)} Order Group">
+    <label class="field-label" style="margin-top:10px;">Purpose</label>
+    <input type="text" id="wag-purpose" placeholder="e.g. Order communication">
+    <label class="field-label" style="margin-top:10px;">Invite link <span class="muted" style="font-weight:400;">— optional</span></label>
+    <input type="text" id="wag-link" placeholder="https://chat.whatsapp.com/…">
+    <p class="muted" style="font-size:11px;margin-top:5px;">
+      Stored so you can reach the group quickly. It cannot post into the group —
+      an invite link only lets somebody join one.</p>
+    <button class="btn btn-gold" id="wag-add" style="margin-top:12px;">Add Group</button>`;
+
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+
+  const draw = () => {
+    const list = document.getElementById("wa-group-list");
+    const gs = waGroupCache[customer.id] || [];
+    list.innerHTML = gs.length ? gs.map(g => `
+      <div class="row" style="align-items:flex-start;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);">
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:700;${g.active ? "" : "opacity:.5;"}">${escapeHtml(g.name)}</div>
+          ${g.purpose ? `<div class="muted" style="font-size:11px;">${escapeHtml(g.purpose)}</div>` : ""}
+          ${g.active ? "" : `<div class="muted" style="font-size:11px;">Inactive</div>`}
+        </div>
+        <button class="btn btn-outline pm-mini" data-wag-toggle="${g.id}">${g.active ? "Switch off" : "Switch on"}</button>
+      </div>`).join("")
+      : `<div class="empty-hint">No groups yet for this customer.</div>`;
+
+    list.querySelectorAll("[data-wag-toggle]").forEach(b => b.addEventListener("click", async () => {
+      try{
+        await api("POST", "/whatsapp/groups/" + b.dataset.wagToggle + "/deactivate");
+        await waGroupsFor(customer.id, true);
+        draw();
+      }catch(e){ toast(e.message); }
+    }));
+  };
+  draw();
+
+  document.getElementById("wag-add").addEventListener("click", async () => {
+    const name = document.getElementById("wag-name").value.trim();
+    if(!name){ toast("Give the group a name."); return; }
+    try{
+      await api("POST", "/whatsapp/groups", {
+        customerId: customer.id, name,
+        purpose: document.getElementById("wag-purpose").value.trim(),
+        inviteLink: document.getElementById("wag-link").value.trim()
+      });
+      document.getElementById("wag-name").value = "";
+      document.getElementById("wag-purpose").value = "";
+      document.getElementById("wag-link").value = "";
+      await waGroupsFor(customer.id, true);
+      draw();
+      toast("Group added.", "ok");
+    }catch(e){ toast(e.message); }
+  });
+
+  showSheet("sheet-wa-groups");
+}
+
 function openWhatsApp(phone, text){
   const num = phone ? "91" + String(phone).replace(/\D/g,"") : "";
   const url = "https://wa.me/" + num + (text ? ("?text=" + encodeURIComponent(text)) : "");
@@ -16052,7 +16440,9 @@ async function openQuotationDetail(quotationId){
     }catch(err){ toast(err.message); }
   });
   sheet.querySelector("#print-quotation-btn").addEventListener("click", ()=>printQuotation(q));
-  sheet.querySelector("#share-quotation-btn").addEventListener("click", ()=>shareQuotationWhatsApp(q));
+  sheet.querySelector("#share-quotation-btn").addEventListener("click", ()=>
+    waSendDocument("sales_quotation", q, "Quotation", q.quotation_no,
+      (state.customers || []).find(c => c.id === q.customer_id)));
   const cancelLink = sheet.querySelector("#cancel-quotation-link");
   if(cancelLink) cancelLink.addEventListener("click", async (e)=>{
     e.preventDefault();
@@ -16786,7 +17176,9 @@ async function openSoDetail(soId){
     }catch(err){ toast(err.message); }
   });
   sheet.querySelector("#print-so-btn").addEventListener("click", ()=>printSalesOrder(so));
-  sheet.querySelector("#share-so-btn").addEventListener("click", ()=>shareSoWhatsApp(so));
+  sheet.querySelector("#share-so-btn").addEventListener("click", ()=>
+    waSendDocument("sales_order", so, "Sales Order", so.so_no,
+      (state.customers || []).find(c => c.id === so.customer_id)));
   const cancelLink = sheet.querySelector("#cancel-so-link");
   if(cancelLink) cancelLink.addEventListener("click", async (e)=>{
     e.preventDefault();
@@ -17154,11 +17546,15 @@ async function openSalesReturnDetail(returnId){
     <div style="display:flex;gap:8px;margin-top:14px;">
       ${!sr.voided && isOwner() ? `<button class="btn btn-gold" id="edit-sales-return-btn" style="flex:1;">Edit</button>` : ""}
       <button class="btn btn-outline" id="print-sales-return-btn" style="flex:1;">Print</button>
+      <button class="btn btn-outline" id="wa-sales-return-btn" style="flex:1;">WhatsApp</button>
     </div>
     ${!sr.voided && isOwner() ? `<div style="margin-top:14px;text-align:center;"><a href="#" id="void-sales-return-link" class="btn-danger-link">Void this return</a></div>` : ""}
   `;
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
   sheet.querySelector("#print-sales-return-btn").addEventListener("click", ()=>printSalesReturn(sr));
+  sheet.querySelector("#wa-sales-return-btn").addEventListener("click", ()=>
+    waSendDocument("sales_return", sr, "Sales Return", sr.return_no,
+      (state.customers || []).find(c => c.id === sr.customer_id)));
   const sEdit = sheet.querySelector("#edit-sales-return-btn");
   if(sEdit) sEdit.addEventListener("click", ()=>openReturnEdit("sales", sr));
   const voidLink = sheet.querySelector("#void-sales-return-link");

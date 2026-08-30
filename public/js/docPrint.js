@@ -144,6 +144,45 @@
       }
     },
 
+    /* The bill and the challan.
+
+       Their PRINTING is not done here — that is renderInvoicePageContent()
+       in app.js, which every shop uses daily and which nothing here
+       touches. These entries exist so the same document can be turned into
+       a WhatsApp message by the same code as the rest, rather than a
+       second message builder drifting away from this one. */
+    sales_invoice: {
+      label: "Invoice", defaultTitle: "INVOICE",
+      no: function (d) { return d.challan_no; },
+      date: function (d) { return d.date; },
+      partyKind: "customer", partyId: function (d) { return d.customer_id; },
+      tax: true,
+      items: goodsItems,
+      charges: function (d) { return namedCharges(d, [["Transport", d.transport], ["Loading", d.loading]]); },
+      extras: function () { return []; },
+      notes: function (d) { return [d.remarks].filter(Boolean); }
+    },
+
+    delivery_challan: {
+      label: "Delivery Challan", defaultTitle: "DELIVERY CHALLAN",
+      no: function (d) { return d.challan_no; },
+      date: function (d) { return d.date; },
+      partyKind: "customer", partyId: function (d) { return d.customer_id; },
+      /* A challan carries no GST — that is what makes it a challan and not
+         a bill — so the totals block leaves the tax lines out entirely
+         rather than printing them at zero. */
+      tax: false,
+      items: goodsItems,
+      charges: function () { return []; },
+      extras: function (d) {
+        return [
+          d.vehicle_number ? ["Vehicle", d.vehicle_number] : null,
+          d.delivery_man ? ["Delivered by", d.delivery_man] : null
+        ].filter(Boolean);
+      },
+      notes: function (d) { return [d.remarks].filter(Boolean); }
+    },
+
     /* The seventh. Not in the original six, but it was the only document
        left in Print Management with a greyed-out Preview button once the
        others were done — and it carries exactly the same line shape, so
@@ -548,6 +587,84 @@
   }
 
   /* ---------------------------------------------------------------- */
+  /* the same document, as a WhatsApp message                          */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * The document as text, for WhatsApp.
+   *
+   * Built from the SAME spec the printed page uses, so the message and the
+   * paper can never quote different figures for the same order — which is
+   * the one thing that would make a shop stop trusting either.
+   *
+   * WhatsApp understands *bold* and nothing else useful; there is no table,
+   * no monospace that survives, and no reliable alignment. So each line is
+   * its own indented block rather than a column layout that would arrive
+   * ragged on a narrow phone.
+   */
+  function docMessage(docKey, doc, opts) {
+    opts = opts || {};
+    var spec = SPECS[docKey];
+    if (!spec) throw new Error("No message spec for " + docKey);
+    var s = opts.settings || {};
+    var showRate = opts.showRate !== false;
+    var items = spec.items(doc, opts.enrich);
+    var party = spec.partyKind === "inline" ? spec.party(doc) : (opts.party || null);
+    var shop = s.business_name || "";
+
+    var L = [];
+    L.push("*" + (shop ? shop.toUpperCase() + " — " : "") + spec.defaultTitle + "*");
+    L.push("");
+    L.push(spec.label + " No: " + (spec.no(doc) || "—"));
+    L.push("Date: " + (spec.date(doc) || "—"));
+
+    (spec.extras ? spec.extras(doc) : []).forEach(function (e) { L.push(e[0] + ": " + e[1]); });
+
+    L.push("");
+    L.push("Customer:");
+    L.push(party && party.name ? party.name : "—");
+    L.push("");
+    L.push("*Items:*");
+    L.push("");
+
+    items.forEach(function (it, i) {
+      /* Name and size on one line: on a phone they read as one product,
+         and a size on its own line looks like a second item. */
+      L.push((i + 1) + ". " + [it.name, it.size].filter(Boolean).join(" — "));
+      var qty = "   Qty: " + it.qty + (it.unit ? " " + it.unit : "");
+      L.push(qty);
+      if (showRate && it.rate != null) L.push("   Rate: " + rupee(it.rate));
+      if (showRate && it.amount != null) L.push("   Amount: " + rupee(it.amount));
+    });
+
+    if (showRate) {
+      var rows = buildTotals(docKey, doc, spec, items, true).rows;
+      if (rows.length) {
+        L.push("");
+        L.push("--------------------------------");
+        rows.forEach(function (r) {
+          /* The grand total in bold, because it is the line the customer
+             is actually looking for. buildTotals already put the rupee
+             symbol on it, so it is not added twice. */
+          var v = /^₹/.test(r.value) ? r.value : "₹" + r.value;
+          L.push(r.grand ? ("*" + r.label + ": " + v + "*") : (r.label + ": " + v));
+        });
+      }
+    }
+
+    (spec.notes ? spec.notes(doc) : []).forEach(function (n) {
+      L.push(""); L.push(n);
+    });
+
+    L.push("");
+    L.push("Thank you,");
+    L.push(shop || "");
+    return L.filter(function (x) { return x !== undefined; }).join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  }
+
+  function rupee(v) { return "₹" + money(v); }
+
+  /* ---------------------------------------------------------------- */
   /* the stylesheet                                                    */
   /* ---------------------------------------------------------------- */
 
@@ -607,6 +724,7 @@
   global.DocPrint = {
     SPECS: SPECS,
     build: buildDocHtml,
+    message: docMessage,
     paperMm: paperMm,
     CSS: CSS,
     /** A complete standalone document, for the popup print window. */

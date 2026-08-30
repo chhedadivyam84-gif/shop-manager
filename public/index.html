@@ -1502,6 +1502,10 @@ setTimeout(function () {
 
   <!-- ============ FULLSCREEN: INVOICE PREVIEW ============ -->
   <div class="sheet" id="sheet-pm-preview"></div>
+  <!-- Send a document on WhatsApp: individual or one of the customer's groups. -->
+  <div class="sheet" id="sheet-wa-send"></div>
+  <!-- A customer's WhatsApp groups: add, edit, switch off. -->
+  <div class="sheet" id="sheet-wa-groups"></div>
   <div class="sheet" id="sheet-pm-templates"></div>
   <div class="sheet" id="sheet-pm-designer"></div>
 
@@ -1560,6 +1564,9 @@ setTimeout(function () {
       <button id="inv-server-print">&#128424; Print to Shop Printer</button>
       <button id="inv-download">&#11015; Download PDF</button>
       <button id="inv-whatsapp-pdf">&#128172; Share PDF on WhatsApp</button>
+      <!-- Alongside the PDF share, not instead of it: the PDF is the document,
+           this is the figures as text a customer can read in the chat. -->
+      <button id="inv-whatsapp-text">&#128172; Send Details on WhatsApp</button>
       <button id="inv-print">&#128424; Browser Print</button>
       <button id="inv-ewb">&#128667; Generate E-Way Bill</button>
       <!-- Screen-only. Deliberately outside .invoice-page so nothing here

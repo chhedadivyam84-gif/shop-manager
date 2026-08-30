@@ -58,7 +58,16 @@ const MODULES = [
   { key: "ledger",        label: "Ledger" },
   { key: "gst",           label: "GST" },
   { key: "reports",       label: "Reports" },
-  { key: "salesman_report", label: "Salesman Reports" }
+  { key: "salesman_report", label: "Salesman Reports" },
+  /* WhatsApp sending and the groups behind it.
+     Deliberately ONE module using the four actions this file already has,
+     rather than a new kind of permission:
+       view  — see the WhatsApp button and the send history
+       add   — actually send
+       edit  — add, rename or switch off a customer's groups
+     A shop that wants a counter hand to send but not to reorganise the
+     groups gives them view + add and withholds edit. */
+  { key: "whatsapp",      label: "WhatsApp" }
 ];
 
 const ACTIONS = ["view", "add", "edit", "print"];

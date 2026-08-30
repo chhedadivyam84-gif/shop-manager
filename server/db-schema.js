@@ -91,6 +91,59 @@ CREATE TABLE IF NOT EXISTS customers (
   created_at INTEGER NOT NULL
 );
 
+-- A customer's WhatsApp groups. One customer can have several — an Order
+-- group, an Accounts group, a site group — and the operator picks which one
+-- an order goes to.
+--
+-- invite_link is a chat.whatsapp.com invite, stored only so the shop can
+-- REACH the group; it is not, and cannot be, a way to post into it. See
+-- server/routes/whatsapp.js for why.
+--
+-- Deactivated, never deleted: a group that stops being used is still the
+-- destination named on every send already in the log, and a row that
+-- vanishes turns that history into a reference to nothing.
+CREATE TABLE IF NOT EXISTS customer_wa_groups (
+  id TEXT PRIMARY KEY,
+  customer_id TEXT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  purpose TEXT NOT NULL DEFAULT '',
+  invite_link TEXT NOT NULL DEFAULT '',
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_wa_groups_customer ON customer_wa_groups(customer_id);
+
+-- What was actually sent, and what actually happened.
+--
+-- STATUS IS HONEST, NOT ASPIRATIONAL. A web page hands a message to
+-- WhatsApp and never hears from it again — there is no delivery callback of
+-- any kind. So this records what THIS APP can see:
+--
+--   opened     the wa.me chat was opened with the message pre-filled
+--   shared     the OS share sheet completed (the operator picked a chat)
+--   copied     no share sheet, so the message went to the clipboard
+--   cancelled  the operator dismissed the share sheet
+--
+-- There is deliberately no "delivered" and no "read". Recording either
+-- would be inventing a fact nobody here can know.
+CREATE TABLE IF NOT EXISTS wa_send_log (
+  id TEXT PRIMARY KEY,
+  at INTEGER NOT NULL,
+  customer_id TEXT,
+  -- Copied, not joined. The log has to stay readable years later even if the
+  -- customer is renamed, and it is a record of what was sent at the time.
+  customer_name TEXT NOT NULL DEFAULT '',
+  doc_type TEXT NOT NULL DEFAULT '',
+  doc_id TEXT NOT NULL DEFAULT '',
+  doc_no TEXT NOT NULL DEFAULT '',
+  dest_type TEXT NOT NULL DEFAULT 'individual',
+  dest_name TEXT NOT NULL DEFAULT '',
+  dest_ref TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'opened',
+  staff_name TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_wa_log_at ON wa_send_log(at);
+
 CREATE TABLE IF NOT EXISTS invoices (
   id TEXT PRIMARY KEY,
   challan_no TEXT UNIQUE NOT NULL,
@@ -740,6 +793,16 @@ addColumn("invoice_items", "size_label", "TEXT NOT NULL DEFAULT ''");
 addColumn("invoice_items", "pieces", "REAL NOT NULL DEFAULT 0");
 addColumn("invoice_items", "per_piece", "REAL NOT NULL DEFAULT 0");
 addColumn("invoice_items", "unit_label", "TEXT NOT NULL DEFAULT 'Pc'");
+
+/* A customer's WhatsApp number, kept SEPARATE from phone.
+   They are the same number for most shops and not for some — an office
+   landline in phone, the owner's mobile on WhatsApp — and merging them
+   would mean a shop could not record both. Blank falls back to phone at
+   send time, so nothing has to be re-entered for the ones that match. */
+addColumn("customers", "whatsapp", "TEXT NOT NULL DEFAULT ''");
+/* individual | group | both — how this customer prefers to be sent to, so
+   the send dialog can default sensibly rather than asking every time. */
+addColumn("customers", "wa_contact_type", "TEXT NOT NULL DEFAULT 'individual'");
 
 if (addedItemMode) {
   // Every invoice raised before this feature existed was priced per piece, so

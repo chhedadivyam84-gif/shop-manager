@@ -798,7 +798,13 @@ table.erp-table td.c-amt,table.erp-table th.c-amt{font-weight:800;}
 table.erp-table{ table-layout:fixed; }
 /* The one thing fixed layout does worse is a long unbroken word, which
    would overflow rather than widen its column — so text wraps... */
-table.erp-table td, table.erp-table th{ overflow-wrap:anywhere; }
+table.erp-table td{ overflow-wrap:anywhere; }
+/* A HEADING NEVER BREAKS INSIDE A WORD. Sharing the cells’ anywhere-rule
+   let "HSN/SAC" split into "HSN/SA" and "C" the moment the column was a
+   pixel short. A heading may wrap BETWEEN words — "Product Description"
+   over two lines is fine and expected in a narrow column — but a word cut
+   in half reads as a broken form. */
+table.erp-table th{ overflow-wrap:normal; word-break:normal; }
 /* ...except where a break would be worse than a narrow column. A rate
    split across two lines is not a rate. */
 table.erp-table .c-num, table.erp-table .c-unit, table.erp-table .c-size{ overflow-wrap:normal; }
@@ -846,14 +852,31 @@ table.erp-table th.c-amt, table.erp-table td.c-amt  { width:calc(86px * var(--co
    they would otherwise squeeze the product name out of existence. See
    fitBillColumns() for why, and for the arithmetic that sets it. */
 table.erp-table{ --colk:1; }
-table.erp-table th.c-sn,     table.erp-table td.c-sn      { width:calc(44px * var(--colk)); }
+/* MEASURED AGAINST THE HEADING AS IT IS ACTUALLY DRAWN, PLUS SLACK.
+
+   These were measured with a probe using letter-spacing .02em, but the
+   printed table sets .06em on its headings — so every figure came out a
+   few pixels short, and the ones that had no margin to lose broke. HSN/SAC
+   needs exactly 58px and was given exactly 58px: no slack at all, so a
+   different machine’s font metrics tipped it over and the heading split
+   mid-word as "HSN/SA" above a lone "C".
+
+   Re-measured from a rendered <th>’s own computed style, and each is now
+   its requirement plus about 6px, so a font that rounds differently on
+   someone else’s PC still has somewhere to go.
+
+     Sr No.       needs 47, was 44
+     HSN/SAC      needs 58, was 58
+     Disc.%       needs 47, was 46
+     Taxable Amt  needs 84, was 80 */
+table.erp-table th.c-sn,     table.erp-table td.c-sn      { width:calc(52px * var(--colk)); }
 /* Sizes are the long ones here — "1220x2440" needs more than the heading. */
 table.erp-table th.c-size,   table.erp-table td.c-size    { width:calc(60px * var(--colk)); }
 table.erp-table th.c-unit,   table.erp-table td.c-unit    { width:calc(40px * var(--colk)); }
-table.erp-table th.c-hsn,    table.erp-table td.c-hsn     { width:calc(58px * var(--colk)); }
-table.erp-table th.c-disc,   table.erp-table td.c-disc    { width:calc(46px * var(--colk)); }
-table.erp-table th.c-gstpct, table.erp-table td.c-gstpct  { width:calc(42px * var(--colk)); }
-table.erp-table th.c-taxable,table.erp-table td.c-taxable { width:calc(80px * var(--colk)); }
+table.erp-table th.c-hsn,    table.erp-table td.c-hsn     { width:calc(66px * var(--colk)); }
+table.erp-table th.c-disc,   table.erp-table td.c-disc    { width:calc(54px * var(--colk)); }
+table.erp-table th.c-gstpct, table.erp-table td.c-gstpct  { width:calc(50px * var(--colk)); }
+table.erp-table th.c-taxable,table.erp-table td.c-taxable { width:calc(90px * var(--colk)); }
 /* CGST, SGST and IGST share a class and therefore a width, so the three of
    them line up with each other on a bill that shows more than one. */
 table.erp-table th.c-tax,    table.erp-table td.c-tax     { width:calc(62px * var(--colk)); }
@@ -869,13 +892,15 @@ table.erp-table th, table.erp-table td{ padding:4px calc(5px * var(--colf)); }
 
 /* A5 is a narrower sheet: the same columns, proportionally tighter, so the
    product name keeps a usable share there too. */
-.invoice-page.size-a5 table.erp-table th.c-sn,     .invoice-page.size-a5 table.erp-table td.c-sn      { width:calc(40px * var(--colk)); }
+/* A5 headings are set at 8px rather than 9px, so they need about a ninth
+   less — but the same slack, for the same reason. */
+.invoice-page.size-a5 table.erp-table th.c-sn,     .invoice-page.size-a5 table.erp-table td.c-sn      { width:calc(46px * var(--colk)); }
 .invoice-page.size-a5 table.erp-table th.c-size,   .invoice-page.size-a5 table.erp-table td.c-size    { width:calc(52px * var(--colk)); }
 .invoice-page.size-a5 table.erp-table th.c-unit,   .invoice-page.size-a5 table.erp-table td.c-unit    { width:calc(36px * var(--colk)); }
-.invoice-page.size-a5 table.erp-table th.c-hsn,    .invoice-page.size-a5 table.erp-table td.c-hsn     { width:calc(50px * var(--colk)); }
-.invoice-page.size-a5 table.erp-table th.c-disc,   .invoice-page.size-a5 table.erp-table td.c-disc    { width:calc(42px * var(--colk)); }
-.invoice-page.size-a5 table.erp-table th.c-gstpct, .invoice-page.size-a5 table.erp-table td.c-gstpct  { width:calc(38px * var(--colk)); }
-.invoice-page.size-a5 table.erp-table th.c-taxable,.invoice-page.size-a5 table.erp-table td.c-taxable { width:calc(68px * var(--colk)); }
+.invoice-page.size-a5 table.erp-table th.c-hsn,    .invoice-page.size-a5 table.erp-table td.c-hsn     { width:calc(58px * var(--colk)); }
+.invoice-page.size-a5 table.erp-table th.c-disc,   .invoice-page.size-a5 table.erp-table td.c-disc    { width:calc(48px * var(--colk)); }
+.invoice-page.size-a5 table.erp-table th.c-gstpct, .invoice-page.size-a5 table.erp-table td.c-gstpct  { width:calc(44px * var(--colk)); }
+.invoice-page.size-a5 table.erp-table th.c-taxable,.invoice-page.size-a5 table.erp-table td.c-taxable { width:calc(82px * var(--colk)); }
 .invoice-page.size-a5 table.erp-table th.c-tax,    .invoice-page.size-a5 table.erp-table td.c-tax     { width:calc(54px * var(--colk)); }
 
 

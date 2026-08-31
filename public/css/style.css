@@ -741,10 +741,20 @@ nav.bottom .tab.active{color:var(--navy);}
 .erp-kv span{color:#333;}
 .erp-kv b{font-weight:800;}
 
-/* Product table: the ONE section allowed to grow — fills remaining page
-   height (via .invoice-page's min-height, set in JS) so a short item list
-   never leaves a large blank gap before the footer, while every other
-   section keeps its natural size. */
+/* Product table: exactly as many rows as there are items, and no taller.
+
+   This used to be the one section allowed to GROW, stretched to fill the
+   sheet so the totals sat at the bottom of the page. On a short bill that
+   put a large blank panel between the last item and the totals — half an A4
+   sheet on a seven-line bill — with the ruling stopping in the middle of
+   the page and the figures marooned at the foot of it.
+
+   Filling that space with blank ruled rows is the other way to solve it,
+   and it is what a printed bill book does, but it reads as clutter: five
+   products should be five rows. So the table simply keeps its natural
+   height, the totals follow immediately under the last item, and whatever
+   is left over falls at the FOOT of the sheet where empty paper belongs
+   rather than in a hole in the middle of the form. */
 .erp-banner,.erp-header,.erp-parties,.erp-bottom,.erp-sign-row,.erp-terms{flex:0 0 auto;}
 /* flex-grow:1 stretches this WRAPPER (not the <table> itself — a percentage
    height or flex-grow on a <table> element specifically proved unreliable,
@@ -755,7 +765,7 @@ nav.bottom .tab.active{color:var(--navy);}
    lines in that gap). flex-shrink:0 guards against a flex item shrinking
    below its own content once min-height:0 is set — the bug that let rows
    spill out of this wrapper and overlap the totals box on a long list. */
-.erp-table-wrap{border:1px solid #178a6e;border-top:none;flex:1 0 auto;min-height:0;}
+.erp-table-wrap{border:1px solid #178a6e;border-top:none;flex:0 0 auto;min-height:0;}
 table.erp-table{width:100%;border-collapse:collapse;font-size:10px;}
 table.erp-table th{text-align:left;font-size:9px;text-transform:uppercase;letter-spacing:.02em;font-weight:800;padding:4px 5px;border:1px solid #178a6e;color:#000;}
 table.erp-table td{padding:4px 5px;border:1px solid #178a6e;vertical-align:top;color:#1e3a70;}

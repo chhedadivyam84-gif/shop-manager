@@ -10564,10 +10564,6 @@ function renderInvoicePageContent(){
       ? `<strong>PLYWOOD, BLACKBOARD, ARE MANUFACTURED FROM NATURAL WOOD WHICH IS BELOW BIO DEGRADEBLE, WE DONOT GUARANTEE AGAINST ANY NATURAL DECAY DEFICIENTY, DETORATION AND LIKE INCLUDING MANUFACTURING DEFACT AND/OR IMPERFACT QUALITY</strong>`
       : `<strong>NO GURANTEE AND WARRANTY FOR DECORATIVE PRODUCTS AND AIR BUBBLES IN LAMMINATES, ACRYLIC AND PVC LAMINATES OR ANY SHADE VARIATION AFTER INSTALLATION. NO EXCHANGE. NO RETURN IN ANY CONDITION. PLEASE CHECK THE MATERIAL ON DELIVERY.</strong>`}</div>
   `;
-  /* Rule the rest of the sheet, then fit it to the screen — in that order,
-     because the filler changes the page's height and the scale is worked
-     out from it. */
-  fitBillToPage(cols.length);
   fitInvoiceToScreen();
 }
 
@@ -10815,18 +10811,12 @@ function renderBillBookLayout(){
 function fitBillToPage(colCount){
   const page = document.getElementById("invoice-page-content");
   if(!page) return;
-  /* Either layout. There are two bill markups in this file — the bill-book
-     one (.bill-items) and the classic ruled one (table.erp-table) — and this
-     only ever looked for the first. The classic layout is what most bills
-     actually render, so it never got its filler: a seven-line bill left
-     roughly HALF an A4 sheet as blank white between the last item and the
-     totals, with the ruling stopping dead in the middle of the page.
-
-     A bill book rules its empty lines to the bottom. It is what the printed
-     books every shop already uses look like, and it is also why they do it:
-     an unruled gap under the last item is a space someone can write in
-     after the fact. */
-  const tbody = page.querySelector(".bill-items tbody, table.erp-table tbody");
+  /* The bill-book layout only. The classic bill deliberately does NOT get
+     filler rows: five products means five rows, and blank ruled lines under
+     them were read as clutter rather than as a bill book. The classic
+     layout closes its gap by not stretching instead — see .erp-table-wrap
+     in the stylesheet. */
+  const tbody = page.querySelector(".bill-items tbody");
   if(!tbody) return;
 
   tbody.querySelectorAll(".bill-filler").forEach(r => r.remove());

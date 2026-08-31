@@ -366,13 +366,23 @@ app.use("/api/purchase-orders", requireAuth, require("./routes/purchaseOrders"))
 app.use("/api/selection-slips", requireAuth, require("./routes/selectionSlips"));
 app.use("/api/whatsapp", requireAuth, require("./routes/whatsapp"));
 /* Tally sync. Owner-only inside the router, and one-way by construction —
-   nothing under it reads a value out of Tally into Shop Manager. */
-app.use("/api/tally", requireAuth, require("./routes/tally"));
-/* The auto-sync timer, started once the tables exist. Wrapped because a
-   sync timer must never be able to stop the shop from billing — if this
-   throws, the app still serves. */
-try { require("./tally/autosync").reschedule(); }
-catch (e) { console.log("[tally] auto-sync not started: " + e.message); }
+   nothing under it reads a value out of Tally into Shop Manager.
+
+   ON THIS SHOP'S OWN COPY ONLY. Tally was scoped to Swagat Ply, and hiding
+   the menu is not scoping — a hidden button leaves the routes answering to
+   anyone who types the address. So the routes are not MOUNTED on a copy
+   that was sold, and the timer is not started. A stamped public key is what
+   makes a build a customer's; ours leaves it empty so its licence can never
+   lock the shop out, which makes it the one honest test of whose copy this
+   is, and it holds whether that copy is hosted or run from a folder. */
+if (!require("./license").enabled()) {
+  app.use("/api/tally", requireAuth, require("./routes/tally"));
+  /* The auto-sync timer, started once the tables exist. Wrapped because a
+     sync timer must never be able to stop the shop from billing — if this
+     throws, the app still serves. */
+  try { require("./tally/autosync").reschedule(); }
+  catch (e) { console.log("[tally] auto-sync not started: " + e.message); }
+}
 app.use("/api/gst-filings", requireAuth, require("./routes/gstFilings"));
 app.use("/api/price-lists", requireAuth, require("./routes/priceLists"));
 app.use("/api/quotations", requireAuth, require("./routes/quotations"));

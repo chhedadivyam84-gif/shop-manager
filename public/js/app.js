@@ -405,6 +405,7 @@ async function boot(){
        should not appear on the other kind at all. An older server that
        does not send it reads as false — a single shop, as it always was. */
     state.multiTenant = !!sess.multiTenant;
+    state.sellBuild = !!sess.sellBuild;
     if(sess.loggedIn){
       state.me = { staffName: sess.staffName, role: sess.role };
       document.getElementById("login").style.display="none";
@@ -2013,7 +2014,7 @@ function openMenu(){
     <div class="menu-group">Shop</div>
     ${isOwner() ? `<button class="menu-item" id="menu-permissions"><span class="ic">&#128100;</span>Staff Access</button>` : ""}
     <button class="menu-item" id="menu-wa-history"><span class="ic">&#128172;</span>WhatsApp History</button>
-    ${isOwner() && !state.multiTenant
+    ${isOwner() && !state.multiTenant && !state.sellBuild
       ? `<button class="menu-item" id="menu-tally"><span class="ic">&#128202;</span>Tally Sync</button>` : ""}
     <button class="menu-item" id="menu-settings"><span class="ic">&#9881;</span>Settings</button>
     <button class="menu-item" id="menu-logout" style="color:var(--danger);">
@@ -11459,7 +11460,7 @@ async function openTallySync(){
   /* Belt to the menu's braces. The menu is hidden on a hosted copy, but a
      screen that cannot work should refuse plainly if it is reached any
      other way rather than showing a connection panel that never connects. */
-  if(state.multiTenant){
+  if(state.multiTenant || state.sellBuild){
     toast("Tally sync runs on the copy installed at your shop, beside Tally itself.");
     return;
   }

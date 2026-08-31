@@ -3,6 +3,7 @@ const db = require("../db");
 const { verifyPin, loginLockStatus, recordLoginFailure, clearLoginFailures } = require("../auth");
 const { logAction, todayStr } = require("../util");
 const tenants = require("../tenants");
+const license = require("../license");
 const checkin = require("../licenseCheckin");
 
 const router = express.Router();
@@ -426,7 +427,14 @@ router.get("/session", (req, res) => {
        being the first: Tally listens on the PC it runs on, and a hosted
        copy serving many shops can never reach one. Rather than offer a
        screen that could not possibly work, the app hides it. */
-    multiTenant: tenants.multiTenant()
+    multiTenant: tenants.multiTenant(),
+    /* Whether this copy was SOLD to someone.
+       A stamped public key is what makes a build a customer's — the shop's
+       own copy leaves it empty on purpose, so its licence can never lock it
+       out. That makes it the one honest test of "is this ours or theirs",
+       and it holds for a customer running the folder on their own PC, where
+       multiTenant is false and nothing else would tell them apart. */
+    sellBuild: license.enabled()
   });
 });
 

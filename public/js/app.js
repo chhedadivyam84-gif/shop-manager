@@ -7588,6 +7588,7 @@ function openAddCustomer(editing){
       <button class="chip ${gstType==="CGST_SGST"?'selected':''}" data-gsttype="CGST_SGST">CGST + SGST (9% + 9%)</button>
       <button class="chip ${gstType==="IGST"?'selected':''}" data-gsttype="IGST">IGST (18%)</button>
     </div>
+    <label class="field-label">PIN Code <span class="muted" style="font-weight:400;">— six digits; needed for e-way bill</span></label><input type="text" id="nc-pincode" inputmode="numeric" maxlength="6" value="${editing?escapeHtml(editing.pin_code||""):""}" placeholder="e.g. 400064">
     <label class="field-label">GSTIN (optional)</label><input type="text" id="nc-gst" value="${editing?escapeHtml(editing.gst||""):""}">
     <label class="field-label">Credit limit</label><input type="number" id="nc-credit" value="${editing?editing.credit_limit:0}">
     ${!editing && isOwner() ? `
@@ -7637,6 +7638,7 @@ function openAddCustomer(editing){
       name, type: sheet.querySelector("[data-type].selected").dataset.type, phone,
       address: document.getElementById("nc-address").value.trim(),
       gst: document.getElementById("nc-gst").value.trim(),
+      pinCode: document.getElementById("nc-pincode").value.trim(),
       state: document.getElementById("nc-state").value || state.settings.state,
       gstType: sheet.querySelector("[data-gsttype].selected").dataset.gsttype,
       creditLimit: parseFloat(document.getElementById("nc-credit").value)||0,
@@ -7683,6 +7685,7 @@ function openSettings(){
       <label class="field-label">Tagline</label><input type="text" id="st-tagline" value="${escapeHtml(cfg.tagline||"")}">
       <label class="field-label">Address</label><input type="text" id="st-address" value="${escapeHtml(cfg.address||"")}">
       <label class="field-label">Phone(s)</label><input type="text" id="st-phones" value="${escapeHtml(cfg.phones||"")}">
+      <label class="field-label">PIN Code <span class="muted" style="font-weight:400;">— six digits; needed for e-invoice and e-way bill</span></label><input type="text" id="st-pincode" inputmode="numeric" maxlength="6" value="${escapeHtml(cfg.pin_code||"")}" placeholder="e.g. 400064">
       <label class="field-label">GSTIN</label><input type="text" id="st-gstin" value="${escapeHtml(cfg.gstin||"")}">
       <label class="field-label">Email <span class="muted" style="font-weight:400;">— optional, printed on documents</span></label><input type="email" id="st-email" value="${escapeHtml(cfg.email||"")}" placeholder="e.g. shop@gmail.com">
       <label class="field-label">Website <span class="muted" style="font-weight:400;">— optional, printed on documents</span></label><input type="text" id="st-website" value="${escapeHtml(cfg.website||"")}" placeholder="e.g. www.myshop.com">
@@ -7857,6 +7860,7 @@ function openSettings(){
         address: document.getElementById("st-address").value.trim(),
         phones: document.getElementById("st-phones").value.trim(),
         gstin: document.getElementById("st-gstin").value.trim(),
+        pinCode: document.getElementById("st-pincode").value.trim(),
         state: document.getElementById("st-state").value,
         upiId: document.getElementById("st-upi").value.trim(),
         email: document.getElementById("st-email").value.trim(),

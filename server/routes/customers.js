@@ -306,8 +306,17 @@ function cleanAreaId(id, fallback) {
   return a ? a.id : null;
 }
 
+/* Six digits, or nothing. The e-invoice and e-way bill portals both take a
+   postal PIN code and both reject anything else, so a space or a dash typed
+   into the field is stripped here rather than being discovered as a
+   rejection from the portal. */
+function cleanPin(v, fallback) {
+  if (v === undefined) return fallback === undefined ? "" : fallback;
+  return String(v).replace(/\D/g, "").slice(0, 6);
+}
+
 router.post("/", (req, res) => {
-  const { name, type, phone, address, gst, state, creditLimit, gstType, areaId } = req.body;
+  const { name, type, phone, address, gst, state, creditLimit, gstType, areaId, pinCode } = req.body;
   if (!name || !String(name).trim() || !phone || !String(phone).trim()) {
     return res.status(400).json({ error: "Name and phone are required." });
   }
@@ -329,9 +338,9 @@ router.post("/", (req, res) => {
   const id = uid("C");
   db.transaction(() => {
     db.prepare(`
-      INSERT INTO customers (id, name, type, phone, address, gst, state, credit_limit, due, created_at, gst_type, area_id, whatsapp, wa_contact_type)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
-    `).run(id, name.trim(), type || "Retail Customer", phone.trim(), (address || "").trim(), (gst || "").trim(), (state || "").trim(), Number(creditLimit) || 0, Date.now(), gstType === "IGST" ? "IGST" : "CGST_SGST", cleanAreaId(areaId, null), whatsapp, waContactType);
+      INSERT INTO customers (id, name, type, phone, address, gst, state, credit_limit, due, created_at, gst_type, area_id, whatsapp, wa_contact_type, pin_code)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
+    `).run(id, name.trim(), type || "Retail Customer", phone.trim(), (address || "").trim(), (gst || "").trim(), (state || "").trim(), Number(creditLimit) || 0, Date.now(), gstType === "IGST" ? "IGST" : "CGST_SGST", cleanAreaId(areaId, null), whatsapp, waContactType, cleanPin(pinCode, ""));
 
     if (openingAmount > 0) {
       const balanceType = req.body.openingBalanceType === "Advance" ? "Advance" : "Receivable";
@@ -353,10 +362,10 @@ router.post("/", (req, res) => {
 router.put("/:id", (req, res) => {
   const c = db.prepare("SELECT * FROM customers WHERE id = ?").get(req.params.id);
   if (!c) return res.status(404).json({ error: "Customer not found." });
-  const { name, type, phone, address, gst, state, creditLimit, gstType, areaId } = req.body;
+  const { name, type, phone, address, gst, state, creditLimit, gstType, areaId, pinCode } = req.body;
   db.prepare(`
     UPDATE customers SET name=?, type=?, phone=?, address=?, gst=?, state=?, credit_limit=?, gst_type=?, area_id=?,
-                         whatsapp=?, wa_contact_type=? WHERE id=?
+                         whatsapp=?, wa_contact_type=?, pin_code=? WHERE id=?
   `).run(
     (name || c.name).trim(), type ?? c.type, (phone ?? c.phone), (address ?? c.address), (gst ?? c.gst),
     (state ?? c.state), creditLimit !== undefined ? Number(creditLimit) : c.credit_limit,
@@ -367,6 +376,9 @@ router.put("/:id", (req, res) => {
     req.body.whatsapp === undefined ? c.whatsapp : String(req.body.whatsapp).trim(),
     ["individual", "group", "both"].includes(req.body.waContactType)
       ? req.body.waContactType : c.wa_contact_type,
+    /* Kept when the field is not sent at all, so an older screen that does
+       not know about PIN codes cannot wipe one that is already there. */
+    pinCode === undefined ? (c.pin_code || "") : cleanPin(pinCode, c.pin_code || ""),
     c.id
   );
   logAction(req, "customer.update", c.name);

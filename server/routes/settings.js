@@ -38,14 +38,14 @@ router.put("/", requireRole("owner"), (req, res) => {
   const { businessName, tagline, address, phones, gstin, state, upiId, email, website,
           invoiceTheme, challanTheme, allowNegativeStock,
           bankName, bankAccountNo, bankIfsc, bankBranch,
-          invoiceTitle, challanTitle, footerMessage, showCopyLabel } = req.body;
+          invoiceTitle, challanTitle, footerMessage, showCopyLabel, pinCode } = req.body;
   const current = db.prepare("SELECT * FROM settings WHERE id = 1").get();
 
   db.prepare(`
     UPDATE settings SET business_name=?, tagline=?, address=?, phones=?, gstin=?, state=?, upi_id=?, email=?, website=?,
       invoice_theme=?, challan_theme=?, allow_negative_stock=?,
       bank_name=?, bank_account_no=?, bank_ifsc=?, bank_branch=?,
-      invoice_title=?, challan_title=?, footer_message=?, show_copy_label=? WHERE id=1
+      invoice_title=?, challan_title=?, footer_message=?, show_copy_label=?, pin_code=? WHERE id=1
   `).run(
     (businessName || current.business_name).trim(), (tagline ?? current.tagline),
     (address ?? current.address), (phones ?? current.phones), (gstin ?? current.gstin),
@@ -66,7 +66,14 @@ router.put("/", requireRole("owner"), (req, res) => {
     // The footer, by contrast, is allowed to be blank — some shops want no
     // closing line at all.
     (footerMessage ?? current.footer_message),
-    showCopyLabel === undefined ? current.show_copy_label : (showCopyLabel ? 1 : 0)
+    showCopyLabel === undefined ? current.show_copy_label : (showCopyLabel ? 1 : 0),
+    /* The shop's postal PIN code. The e-invoice and e-way bill portals both
+       require it, and both validators here refuse a bill without one — but
+       there was nowhere to enter it. The column existed, this route ignored
+       it, and no screen offered a field, so the app told shops to fix
+       something in "Settings → PIN code" that did not exist. Digits only,
+       six of them, so a typed space or a dash cannot reach the portal. */
+    ((pinCode ?? "").toString().replace(/\D/g, "").slice(0, 6) || current.pin_code || "")
   );
 
   logAction(req, "settings.update", "");

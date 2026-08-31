@@ -759,7 +759,13 @@ nav.bottom .tab.active{color:var(--navy);}
 table.erp-table{width:100%;border-collapse:collapse;font-size:10px;}
 table.erp-table th{text-align:left;font-size:9px;text-transform:uppercase;letter-spacing:.02em;font-weight:800;padding:4px 5px;border:1px solid #178a6e;color:#000;}
 table.erp-table td{padding:4px 5px;border:1px solid #178a6e;vertical-align:top;color:#1e3a70;}
-table.erp-table th.c-sn,table.erp-table td.c-sn{width:22px;text-align:center;}
+/* 22px fitted the NUMBERS and not the HEADING. "Sr No." needs about 30px
+   at this size, so it broke across three lines — S R / N / O. — and dragged
+   the whole header row to three times its height. The figures underneath
+   never needed more than 14px; it is the word above them that sets the
+   width. */
+table.erp-table th.c-sn,table.erp-table td.c-sn{width:34px;text-align:center;}
+table.erp-table th.c-sn{white-space:nowrap;}
 table.erp-table th.c-size,table.erp-table td.c-size,
 table.erp-table th.c-unit,table.erp-table td.c-unit{white-space:nowrap;}
 table.erp-table th.c-num,table.erp-table td.c-num{text-align:right;white-space:nowrap;}
@@ -1132,6 +1138,13 @@ table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #178a6e;color:#0
      no business applying to print, where it was leaving an unused gap on
      the right instead of the content using the full physical A5 width. */
   .invoice-page.size-a5{max-width:none !important;margin-left:0 !important;margin-right:0 !important;}
+  /* The preview is drawn at the sheet's real size and then SCALED DOWN to
+     fit the screen (see fitInvoiceToScreen in app.js). That shrink is a
+     screen convenience and has no business on paper — the printer already
+     has a real sheet the real size. Left on, the bill would print at 45%
+     in the top corner of the page. */
+  .invoice-page{ transform:none !important; margin-bottom:0 !important;
+                 width:auto !important; max-width:none !important; }
   /* Minimal deliberately has no boxes, so the outer page frame above would
      contradict it — the one theme that drops it. Kept in sync with the
      equivalent override on the html2canvas PDF path in app.js. */

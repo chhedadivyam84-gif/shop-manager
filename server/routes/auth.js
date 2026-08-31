@@ -420,7 +420,13 @@ router.get("/session", (req, res) => {
        change made in the panel takes effect on the next page load instead
        of waiting for them to sign out. A single-shop copy has no tenant
        and gets an empty list — it has everything, as it always has. */
-    featuresOff: currentFeaturesOff(req)
+    featuresOff: currentFeaturesOff(req),
+    /* Which KIND of copy this is.
+       Some things only make sense on a shop's own machine — Tally sync
+       being the first: Tally listens on the PC it runs on, and a hosted
+       copy serving many shops can never reach one. Rather than offer a
+       screen that could not possibly work, the app hides it. */
+    multiTenant: tenants.multiTenant()
   });
 });
 

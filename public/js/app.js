@@ -399,6 +399,12 @@ async function boot(){
   try{
     const sess = await fetch("/api/auth/session").then(r=>r.json()).catch(()=>({loggedIn:false}));
     FEATURES_OFF = Array.isArray(sess.featuresOff) ? sess.featuresOff : [];
+    /* Whether this is a hosted copy serving many shops, or the one
+       installed at a shop. Remembered at boot because the menu is built
+       long afterwards, and a screen that can only work on a local copy
+       should not appear on the other kind at all. An older server that
+       does not send it reads as false — a single shop, as it always was. */
+    state.multiTenant = !!sess.multiTenant;
     if(sess.loggedIn){
       state.me = { staffName: sess.staffName, role: sess.role };
       document.getElementById("login").style.display="none";
@@ -2007,7 +2013,8 @@ function openMenu(){
     <div class="menu-group">Shop</div>
     ${isOwner() ? `<button class="menu-item" id="menu-permissions"><span class="ic">&#128100;</span>Staff Access</button>` : ""}
     <button class="menu-item" id="menu-wa-history"><span class="ic">&#128172;</span>WhatsApp History</button>
-    ${isOwner() ? `<button class="menu-item" id="menu-tally"><span class="ic">&#128202;</span>Tally Sync</button>` : ""}
+    ${isOwner() && !state.multiTenant
+      ? `<button class="menu-item" id="menu-tally"><span class="ic">&#128202;</span>Tally Sync</button>` : ""}
     <button class="menu-item" id="menu-settings"><span class="ic">&#9881;</span>Settings</button>
     <button class="menu-item" id="menu-logout" style="color:var(--danger);">
       <span class="ic">&#128682;</span>Log out${state.me.staffName ? " (" + escapeHtml(state.me.staffName) + ")" : ""}</button>`;
@@ -8919,6 +8926,71 @@ function activePaperMm(){
     : { kind, orientation, w, h };
 }
 
+/**
+ * SHOW THE PREVIEW AS THE SHEET IT IS.
+ *
+ * The preview used to be REFLOWED to whatever width was going: A5 was
+ * capped at 360px and A4 took whatever the column gave it. That is not a
+ * smaller picture of the bill — it is a DIFFERENT bill. At 360px the
+ * Product column gets about 46px, so "Product Description" wraps down five
+ * lines, the header row triples in height, and the sheet on screen looks
+ * nothing like the one that comes out of the printer.
+ *
+ * It was doing that on a 1288px desktop, not just on a phone.
+ *
+ * So the page is now laid out at its REAL width — 210mm for A4, 148mm for
+ * A5 — and then scaled down with a transform to fit the space available.
+ * Same proportions as the paper, every column where it will actually be,
+ * on every device. One layout, which is the whole point.
+ *
+ * A transform does not change the space an element reserves, so the
+ * negative margin below takes back the gap the shrunk page would otherwise
+ * leave under it.
+ */
+function fitInvoiceToScreen(){
+  const page = document.getElementById("invoice-page-content");
+  const host = document.getElementById("fs-invoice");
+  if(!page || !host) return;
+
+  /* Cleared first, so every measurement below is of the page at its real
+     size rather than of the last scale that was applied to it. */
+  page.style.transform = "";
+  page.style.marginBottom = "";
+
+  const paper = activePaperMm();
+  const MM = 96 / 25.4;
+  const sheetPx = paper.w * MM;
+
+  page.style.width = paper.w + "mm";
+  page.style.maxWidth = "none";
+
+  /* What the page has to fit into, less the breathing room either side. */
+  const hostCs = getComputedStyle(host);
+  const avail = host.clientWidth
+    - parseFloat(hostCs.paddingLeft || 0) - parseFloat(hostCs.paddingRight || 0) - 24;
+  if(!(avail > 0)) return;
+
+  /* Never scaled UP. A bill blown up past its real size on a big monitor
+     looks like a mistake, and reading it larger is what the zoom is for. */
+  const scale = Math.min(1, avail / sheetPx);
+  if(scale >= 0.999){ page.style.transformOrigin = "top center"; return; }
+
+  const natural = page.getBoundingClientRect().height;
+  page.style.transformOrigin = "top center";
+  page.style.transform = "scale(" + scale.toFixed(4) + ")";
+  page.style.marginBottom = (-(1 - scale) * natural) + "px";
+}
+
+/* The space available changes when the window does, and when the print
+   panel slides in beside the bill. Debounced, because a drag of the window
+   edge fires this a hundred times and each one measures the layout. */
+let fitInvoiceTimer = null;
+function fitInvoiceSoon(){
+  clearTimeout(fitInvoiceTimer);
+  fitInvoiceTimer = setTimeout(fitInvoiceToScreen, 80);
+}
+window.addEventListener("resize", fitInvoiceSoon);
+
 function applyPageSizeStyle(){
   const style = document.getElementById("page-size-style");
   if(!style) return;
@@ -9111,6 +9183,7 @@ function setPaper(size){
   document.getElementById("paper-a4").classList.toggle("selected", size==="A4");
   applyPageSizeStyle();
   renderInvoicePageContent();
+  fitInvoiceToScreen();
 }
 let lastPreviewInvoice = null;
 function openInvoicePreview(existingInvoice){
@@ -10304,6 +10377,7 @@ function renderInvoicePageContent(){
       renderTallyInvoiceHtml(inv, cust, cols, rows, {
         showRate, displayTotal, gstEnabled, isIGST
       });
+    fitInvoiceToScreen();
     return;
   }
   document.getElementById("invoice-page-content").innerHTML = `
@@ -10362,6 +10436,7 @@ function renderInvoicePageContent(){
       ? `<strong>PLYWOOD, BLACKBOARD, ARE MANUFACTURED FROM NATURAL WOOD WHICH IS BELOW BIO DEGRADEBLE, WE DONOT GUARANTEE AGAINST ANY NATURAL DECAY DEFICIENTY, DETORATION AND LIKE INCLUDING MANUFACTURING DEFACT AND/OR IMPERFACT QUALITY</strong>`
       : `<strong>NO GURANTEE AND WARRANTY FOR DECORATIVE PRODUCTS AND AIR BUBBLES IN LAMMINATES, ACRYLIC AND PVC LAMINATES OR ANY SHADE VARIATION AFTER INSTALLATION. NO EXCHANGE. NO RETURN IN ANY CONDITION. PLEASE CHECK THE MATERIAL ON DELIVERY.</strong>`}</div>
   `;
+  fitInvoiceToScreen();
 }
 
 /* ============================================================
@@ -10987,6 +11062,9 @@ async function buildInvoicePdf(){
         width:${pageWidth}mm !important;
         min-height:${pageHeight}mm !important;
         margin-left:0 !important;margin-right:0 !important;
+        /* Same reason as the print rule: the on-screen shrink is undone in
+           the clone, so the PDF is drawn from the sheet at full size. */
+        transform:none !important;margin-bottom:0 !important;
       }`;
       clonedDoc.head.appendChild(style);
     }
@@ -11269,6 +11347,13 @@ const tallyState = { tab: "setup", data: null, queue: [], mapKind: "ledger", map
 
 async function openTallySync(){
   if(!isOwner()){ toast("Only the owner can set up Tally sync."); return; }
+  /* Belt to the menu's braces. The menu is hidden on a hosted copy, but a
+     screen that cannot work should refuse plainly if it is reached any
+     other way rather than showing a connection panel that never connects. */
+  if(state.multiTenant){
+    toast("Tally sync runs on the copy installed at your shop, beside Tally itself.");
+    return;
+  }
   const sheet = document.getElementById("sheet-tally");
   if(!sheet) return;
   sheet.innerHTML = `<div class="sheet-handle"></div>

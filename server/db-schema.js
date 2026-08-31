@@ -1629,6 +1629,37 @@ CREATE INDEX IF NOT EXISTS idx_txn_categories_kind ON txn_categories(kind, activ
   }
 })();
 
+/* The seeded title said ESTIMATE CHALLAN on the SALES INVOICE, so shops that
+   installed before that was fixed still carry it in their saved template —
+   and a saved template beats the title in Settings, so their GST bills print
+   as estimates however they set that field.
+
+   Only the string WE seeded is replaced, and only where the shop's own
+   Settings say something different — so a shop that deliberately typed
+   "ESTIMATE CHALLAN" over the top of a matching setting keeps it, and a
+   title anyone has edited to anything else is never touched. Nothing is
+   cleared: the wrong value is replaced by the shop's own configured one, so
+   the sheet ends up headed what the shop already asked for. */
+(function retitleInvoiceTemplatesThatSayEstimate() {
+  const rows = db.prepare(
+    "SELECT id, config FROM doc_templates WHERE doc_type = 'sales_invoice'"
+  ).all();
+  if (!rows.length) return;
+  const s = db.prepare("SELECT invoice_title FROM settings WHERE id = 1").get();
+  const want = ((s && s.invoice_title) || "").trim();
+  /* Nothing to correct TO, so nothing is changed. */
+  if (!want || want.toUpperCase() === "ESTIMATE CHALLAN") return;
+
+  const upd = db.prepare("UPDATE doc_templates SET config = ? WHERE id = ?");
+  for (const r of rows) {
+    let cfg;
+    try { cfg = JSON.parse(r.config); } catch (e) { continue; }
+    if (!cfg || String(cfg.title || "").trim().toUpperCase() !== "ESTIMATE CHALLAN") continue;
+    cfg.title = want;
+    upd.run(JSON.stringify(cfg), r.id);
+  }
+})();
+
 (function alignTemplateLabelsAndWidths() {
   const reg = require("./printRegistry");
   const rows = db.prepare("SELECT id, doc_type, config FROM doc_templates").all();

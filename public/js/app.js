@@ -10475,9 +10475,27 @@ function renderInvoicePageContent(){
     ${showRate ? `<div class="erp-words"><b>Amount in Words:</b> ${Pricing.amountInWords(displayTotal)}</div>` : ""}
   </div>`;
 
-  // The heading the template names, or the wording the bill has always used.
+  /* The heading, in the order the shop would expect to be obeyed: what this
+     print template names, then what the shop set in Settings, then the
+     wording the bill has always fallen back to.
+
+     The middle step was missing. A shop could type "TAX INVOICE" into
+     Settings, save it, and still get a sheet headed ESTIMATE CHALLAN,
+     because only a print template was ever consulted — and a shop that has
+     not built one has no way to reach it. On a bill carrying CGST, SGST and
+     a grand total, "Estimate" is not a cosmetic slip: an estimate is not a
+     tax invoice, and the customer cannot claim credit against one. */
   const tplCfg = billConfig(challan) || {};
-  const bannerText = (tplCfg.title || "").trim() || (challan ? "DELIVERY CHALLAN" : "ESTIMATE CHALLAN");
+  const bannerText = (tplCfg.title || "").trim()
+    || ((challan ? cfg.challan_title : cfg.invoice_title) || "").trim()
+    || (challan ? "DELIVERY CHALLAN" : "ESTIMATE CHALLAN");
+
+  /* And the number is labelled to match the heading, rather than always
+     saying "Estimate No." under a sheet headed TAX INVOICE. */
+  const noLabel = challan ? "Challan No."
+    : /INVOICE/i.test(bannerText) ? "Invoice No."
+    : /QUOTATION|QUOTE/i.test(bannerText) ? "Quotation No."
+    : "Estimate No.";
 
   /* Tally Format is a different LAYOUT, so it builds its own page from the
      same columns and rows computed above. Every other theme falls through
@@ -10522,7 +10540,7 @@ function renderInvoicePageContent(){
         ${cust&&cust.state ? `<div>State: ${escapeHtml(cust.state)}</div>` : ""}
       </div>
       <div class="erp-doc-box">
-        <div class="erp-kv"><span>${challan ? "Challan No." : "Estimate No."}</span><b>${inv.challan_no}</b></div>
+        <div class="erp-kv"><span>${noLabel}</span><b>${inv.challan_no}</b></div>
         <div class="erp-kv"><span>Date</span><b>${inv.date}</b></div>
         ${inv.delivery_man ? `<div class="erp-kv"><span>Salesperson</span><b>${escapeHtml(inv.delivery_man)}</b></div>` : ""}
         ${inv.vehicle_number ? `<div class="erp-kv"><span>Vehicle No.</span><b>${escapeHtml(inv.vehicle_number)}</b></div>` : ""}
@@ -10546,6 +10564,10 @@ function renderInvoicePageContent(){
       ? `<strong>PLYWOOD, BLACKBOARD, ARE MANUFACTURED FROM NATURAL WOOD WHICH IS BELOW BIO DEGRADEBLE, WE DONOT GUARANTEE AGAINST ANY NATURAL DECAY DEFICIENTY, DETORATION AND LIKE INCLUDING MANUFACTURING DEFACT AND/OR IMPERFACT QUALITY</strong>`
       : `<strong>NO GURANTEE AND WARRANTY FOR DECORATIVE PRODUCTS AND AIR BUBBLES IN LAMMINATES, ACRYLIC AND PVC LAMINATES OR ANY SHADE VARIATION AFTER INSTALLATION. NO EXCHANGE. NO RETURN IN ANY CONDITION. PLEASE CHECK THE MATERIAL ON DELIVERY.</strong>`}</div>
   `;
+  /* Rule the rest of the sheet, then fit it to the screen — in that order,
+     because the filler changes the page's height and the scale is worked
+     out from it. */
+  fitBillToPage(cols.length);
   fitInvoiceToScreen();
 }
 
@@ -10793,7 +10815,18 @@ function renderBillBookLayout(){
 function fitBillToPage(colCount){
   const page = document.getElementById("invoice-page-content");
   if(!page) return;
-  const tbody = page.querySelector(".bill-items tbody");
+  /* Either layout. There are two bill markups in this file — the bill-book
+     one (.bill-items) and the classic ruled one (table.erp-table) — and this
+     only ever looked for the first. The classic layout is what most bills
+     actually render, so it never got its filler: a seven-line bill left
+     roughly HALF an A4 sheet as blank white between the last item and the
+     totals, with the ruling stopping dead in the middle of the page.
+
+     A bill book rules its empty lines to the bottom. It is what the printed
+     books every shop already uses look like, and it is also why they do it:
+     an unruled gap under the last item is a space someone can write in
+     after the fact. */
+  const tbody = page.querySelector(".bill-items tbody, table.erp-table tbody");
   if(!tbody) return;
 
   tbody.querySelectorAll(".bill-filler").forEach(r => r.remove());

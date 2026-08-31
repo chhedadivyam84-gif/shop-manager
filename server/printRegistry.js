@@ -86,7 +86,14 @@ const DOCUMENTS = [
     voidedCol: "voided", locationCol: "location_id", areaCol: "area_id",
     salesmanCol: "delivery_man", totalCol: "total",
     itemsTable: "invoice_items", itemsKey: "invoice_id",
-    items: ALL_GOODS, supportsRate: true, defaultTitle: "ESTIMATE CHALLAN",
+    /* Every other document here is titled what it IS — QUOTATION, SALES
+       ORDER, PURCHASE INVOICE. This one said "ESTIMATE CHALLAN", so the
+       template seeded for every new shop headed its tax invoices as
+       estimates, over the top of the "TAX INVOICE" the app itself puts in
+       settings.invoice_title. On a sheet carrying CGST, SGST and a grand
+       total that is not a wording preference: an estimate is not a tax
+       invoice, and a buyer cannot claim input credit against one. */
+    items: ALL_GOODS, supportsRate: true, defaultTitle: "TAX INVOICE",
     // The wording the bill has always printed. Without these a default
     // template would relabel the shop's own headers ("Sr. No.", "Product",
     // "Quantity") the moment templates drive the page.

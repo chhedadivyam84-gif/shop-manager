@@ -167,9 +167,24 @@
       /* The sheet on screen. In print the page box already IS this size, so
          the wrapper drops its own dimensions rather than nesting a second
          sheet inside the first. */
+      /* A COLUMN, so the document can fill the sheet.
+      
+         The bill's ruled box is meant to grow to the height of the page,
+         with the items at the top of it and the totals down at the foot —
+         that is what makes it look like a printed bill rather than a
+         receipt floating on a mostly empty sheet. That growth needs
+         something to grow INSIDE, and on screen the app gave .invoice-page
+         a min-height in JS. No JS of ours runs in here, so the sheet
+         provides it instead. */
       ".pc-sheet{width:" + (sh.w - m * 2) + "mm;min-height:" + (sh.h - m * 2) + "mm;" +
-      "margin:" + m + "mm auto;box-sizing:border-box;}" +
-      "@media print{.pc-sheet{width:auto;min-height:0;margin:0;}}" +
+      "margin:" + m + "mm auto;box-sizing:border-box;display:flex;flex-direction:column;}" +
+      ".pc-sheet > .invoice-page{flex:1 1 auto;min-height:0;}" +
+      /* min-height STAYS in print. Dropping it to 0 was letting the sheet
+         collapse to its content on paper while filling the page on screen —
+         the preview and the print would have disagreed about the one thing
+         this canvas exists to keep identical. The page box is already the
+         sheet, so only the width and the centring margin come off. */
+      "@media print{.pc-sheet{width:auto;margin:0;}}" +
       (opt.css || "") +
       "</style></head><body><div class=\"pc-sheet\">" + body + "</div></body></html>";
   }

@@ -10644,7 +10644,21 @@ function renderInvoicePageContent(){
     <div class="erp-table-wrap">
       <table class="erp-table">
         <thead><tr>${head}</tr></thead>
-        <tbody>${rows}</tbody>
+        <tbody>${rows}${
+          /* ONE spacer row, holding the column rules open to the foot of
+             the box.
+
+             The empty part of a printed bill is not blank paper — the
+             vertical rules run the whole height of the form and only the
+             horizontal ones stop after the last item. Without this the
+             ruling ended under the last row and the rest was an empty
+             rectangle, which reads as a form that gave up half way.
+
+             It is ONE row, not filler rows: four products are still four
+             lines. This one draws no line across the page — no top border —
+             and simply stretches. */
+          `<tr class="erp-fill">${cols.map(c => `<td class="${BILL_CELL_CLASS[c.key] || ""}"></td>`).join("")}</tr>`
+        }</tbody>
         ${tfoot}
       </table>
     </div>

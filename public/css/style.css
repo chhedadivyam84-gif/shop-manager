@@ -741,20 +741,29 @@ nav.bottom .tab.active{color:var(--navy);}
 .erp-kv span{color:#333;}
 .erp-kv b{font-weight:800;}
 
-/* Product table: exactly as many rows as there are items, and no taller.
+/* Product table: EXACTLY as many rows as there are items — and the box
+   around them fills the sheet.
 
-   This used to be the one section allowed to GROW, stretched to fill the
-   sheet so the totals sat at the bottom of the page. On a short bill that
-   put a large blank panel between the last item and the totals — half an A4
-   sheet on a seven-line bill — with the ruling stopping in the middle of
-   the page and the figures marooned at the foot of it.
+   Three things were tried here and only the third is right.
 
-   Filling that space with blank ruled rows is the other way to solve it,
-   and it is what a printed bill book does, but it reads as clutter: five
-   products should be five rows. So the table simply keeps its natural
-   height, the totals follow immediately under the last item, and whatever
-   is left over falls at the FOOT of the sheet where empty paper belongs
-   rather than in a hole in the middle of the form. */
+   Ruled filler rows filled the page but read as clutter: four products
+   should be four lines, not four lines and twenty empty ones.
+
+   Letting the table keep its natural height removed the clutter but left
+   the bill floating at the top of a mostly empty sheet, with the totals
+   packed under the last item and a third of the paper trailing off below.
+   Tidy, and cheap-looking.
+
+   What a printed bill actually does is BOTH: the ruled box runs the height
+   of the page, the items occupy the top of it, the rest of the box is
+   plain white space with no lines drawn across it, and the totals sit down
+   at the foot of the sheet where they belong. The item rows are still
+   exactly the items. The box is what grows.
+
+   flex-grow on this WRAPPER, never on the <table> — a percentage height or
+   flex-grow on a table element sizes it below its own rows once
+   min-height:0 is in play, which is the bug that let a long item list
+   overlap the totals box. flex-shrink:0 guards the same thing. */
 .erp-banner,.erp-header,.erp-parties,.erp-bottom,.erp-sign-row,.erp-terms{flex:0 0 auto;}
 /* flex-grow:1 stretches this WRAPPER (not the <table> itself — a percentage
    height or flex-grow on a <table> element specifically proved unreliable,
@@ -765,8 +774,34 @@ nav.bottom .tab.active{color:var(--navy);}
    lines in that gap). flex-shrink:0 guards against a flex item shrinking
    below its own content once min-height:0 is set — the bug that let rows
    spill out of this wrapper and overlap the totals box on a long list. */
-.erp-table-wrap{border:1px solid #178a6e;border-top:none;flex:0 0 auto;min-height:0;}
+.erp-table-wrap{border:1px solid #178a6e;border-top:none;flex:1 0 auto;min-height:0;
+  /* A column, so the table can be told to fill it. */
+  display:flex;flex-direction:column;}
 table.erp-table{width:100%;border-collapse:collapse;font-size:10px;}
+/* The table fills the box its wrapper just grew — and the SPACER takes all
+   of that height, not the item rows.
+
+   flex:1 0 auto on the table did fill the box, but a table hands spare
+   height to every row alike: measured, four items on an A4 sheet came out
+   174px tall EACH, four enormous bands instead of four lines. Which is the
+   same family of fault the old comment warned about.
+
+   height:100% plus height:1px on the item rows is the way a table is asked
+   this. 1px is not a real height — a row never shrinks below its content —
+   it is how a row says "I want none of the extra", so all of it lands on
+   the one row that did not say so. */
+/* Both levers, and both are needed. flex:1 0 auto is what actually makes
+   the table fill the box — height:100% alone left it at its content height,
+   because a percentage wants a definite container and a flex-resolved one
+   is not reliably that. And height:1px on the item rows is what stops the
+   growth landing on THEM: on its own, flex-grow gave four items 174px each,
+   four bands instead of four lines. */
+.erp-table-wrap > table.erp-table{ flex:1 0 auto; }
+table.erp-table tbody tr:not(.erp-fill){ height:1px; }
+/* The spacer. No line across the top of it, so the rule under the last item
+   is the last horizontal one on the sheet; the left and right borders of
+   its cells are what carry the columns down to the totals. */
+table.erp-table tr.erp-fill > td{ border-top:none; padding:0; }
 table.erp-table th{text-align:left;font-size:9px;text-transform:uppercase;letter-spacing:.02em;font-weight:800;padding:4px 5px;border:1px solid #178a6e;color:#000;}
 table.erp-table td{padding:4px 5px;border:1px solid #178a6e;vertical-align:top;color:#1e3a70;}
 /* 22px fitted the NUMBERS and not the HEADING. "Sr No." needs about 30px

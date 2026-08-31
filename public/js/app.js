@@ -1279,6 +1279,18 @@ async function initApp(){
   document.getElementById("bill-panel-btn").addEventListener("click", toggleBillPanel);
   document.getElementById("inv-download").addEventListener("click", downloadInvoicePdf);
   document.getElementById("inv-print").addEventListener("click", printInvoiceOnePage);
+
+  /* The templated documents' preview. Print sends THE CANVAS — the sheet on
+     screen — rather than opening a second copy of the document somewhere
+     else and printing that. */
+  document.getElementById("doc-print").addEventListener("click", () => {
+    if(!docCanvas){ toast("Nothing to print yet."); return; }
+    const v = docCanvas.validate();
+    showDocWarnings(v);
+    if(v.pages > 1) toast("This document needs " + v.pages + " sheets.");
+    if(!docCanvas.print()) toast("The browser would not open the print dialog.");
+  });
+  document.getElementById("doc-close").addEventListener("click", () => closeFullscreen("fs-doc"));
   document.getElementById("inv-ewb").addEventListener("click", ()=>{
     // An unsaved preview has no invoice to attach an e-way bill to.
     if(!lastPreviewInvoice || !lastPreviewInvoice.id){
@@ -8617,9 +8629,20 @@ async function openTemplatedDoc(docKey, doc, opts){
   const spec = DocPrint.SPECS[docKey];
   if(!spec){ toast("This document has no print layout yet."); return; }
   const cfg = opts.config || await docTemplateConfig(docKey) || {};
-  let html;
+
+  /* build(), not page(). page() wraps the document in its own sheet with
+     its own margins, and those margins CHANGED between screen and paper:
+     210mm with 8mm of padding in the preview, 194mm of content, against
+     width:auto inside an @page margin of 6mm when printed, 198mm. Four
+     millimetres wider on paper than in the preview, so every column
+     reflowed between what you approved and what came out.
+
+     The canvas owns the sheet now, and takes its width and its margin from
+     one number each — so there is nothing left for the two to disagree
+     about. */
+  let built;
   try{
-    html = DocPrint.page(docKey, doc, {
+    built = DocPrint.build(docKey, doc, {
       settings: state.settings || {},
       party: docPartyFor(docKey, doc),
       config: cfg,
@@ -8629,13 +8652,53 @@ async function openTemplatedDoc(docKey, doc, opts){
     toast("Could not build this document: " + e.message);
     return;
   }
-  const w = openPrintWindow(html, { title: spec.label });
-  if(w && opts.print){
-    /* After the window has laid the page out. Printing immediately prints
-       an empty sheet often enough to be worth the wait. */
-    setTimeout(() => { try{ w.print(); }catch(e){ /* the bar has a button */ } }, 500);
+
+  const host = document.getElementById("doc-canvas");
+  document.getElementById("fs-doc-title").textContent = spec.label;
+
+  docCanvas = PrintCanvas.mount(host, built.html, {
+    sheet: {
+      w: built.paper.w, h: built.paper.h,
+      named: built.paper.named || null,
+      orientation: built.paper.orientation || "portrait"
+    },
+    /* The document's own stylesheet travels with it. document.css is in
+       there too and is simply not addressed to these class names. */
+    css: built.css,
+    title: spec.label,
+    onReady: (h) => {
+      h.fit();
+      showDocWarnings(h.validate());
+      /* Straight to the printer when a print button asked for it. Waiting
+         for the canvas to be laid out rather than a fixed delay — printing
+         an unlaid-out document prints an empty sheet. */
+      if(opts.print) h.print();
+    }
+  });
+
+  document.getElementById("fs-doc").classList.add("show");
+  return docCanvas;
+}
+
+/* The templated documents share one canvas, the way they now share one
+   preview. Held here so the Print button in the bar can reach it. */
+let docCanvas = null;
+
+/** Same warning row as the bill's, on the same measurements. */
+function showDocWarnings(v){
+  const row = document.getElementById("doc-status-row");
+  if(!row) return;
+  const real = (v.issues || []).filter(i => !i.info);
+  const notes = (v.issues || []).filter(i => i.info);
+  if(real.length){
+    row.style.display = ""; row.className = "print-status-row error";
+    row.textContent = real.map(i => i.text).join(" ");
+  } else if(notes.length){
+    row.style.display = ""; row.className = "print-status-row";
+    row.textContent = notes.map(i => i.text).join(" ");
+  } else {
+    row.style.display = "none"; row.textContent = "";
   }
-  return w;
 }
 
 /* The six print buttons. Same names the detail sheets already call, so
@@ -10566,6 +10629,26 @@ function renderInvoicePageContent(){
       ? "Received" + (inv.ack_receiver_name ? " — signed by " + escapeHtml(inv.ack_receiver_name) : "")
       : "Pending — signed copy not yet returned"}</div>` : ""}
     ${showRate ? `<div class="erp-words"><b>Amount in Words:</b> ${Pricing.amountInWords(displayTotal)}</div>` : ""}
+    ${/* THE SHOP'S BANK, so the customer knows where to pay.
+
+         It was typed into Settings and printed by nothing. Only the
+         bill-book layout ever rendered it, and that is not the layout that
+         prints — so four fields a shop had filled in went onto no document
+         at all, and every bill went out without telling anyone where to
+         send the money.
+
+         Not on a challan: a delivery note is not a request for payment, and
+         bank details on one invite payment against goods that have not been
+         invoiced yet. Not on a Without Rate print either, for the same
+         reason — that sheet deliberately carries no figures. */""}
+    ${(!challan && showRate && (cfg.bank_name || cfg.bank_account_no || cfg.bank_ifsc))
+      ? `<div class="erp-bank"><b>Bank Details:</b> ${[
+          cfg.bank_name ? escapeHtml(cfg.bank_name) : "",
+          cfg.bank_branch ? escapeHtml(cfg.bank_branch) : "",
+          cfg.bank_account_no ? "A/c " + escapeHtml(cfg.bank_account_no) : "",
+          cfg.bank_ifsc ? "IFSC " + escapeHtml(cfg.bank_ifsc) : ""
+        ].filter(Boolean).join("  ·  ")}</div>`
+      : ""}
   </div>`;
 
   /* The heading, in the order the shop would expect to be obeyed: what this

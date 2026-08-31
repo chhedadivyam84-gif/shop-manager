@@ -1522,6 +1522,27 @@ setTimeout(function () {
     <div class="zoom-scroll" id="fs-zoom-body"></div>
   </div>
 
+  <!-- Quotations, orders, challans and returns. One preview for all nine,
+       showing the same canvas the printer is given — they used to open a
+       separate browser window each, which a popup blocker could eat, and
+       which printed with different margins from the preview it came from. -->
+  <div class="fullscreen" id="fs-doc">
+    <div class="fs-stick">
+      <div class="fs-bar">
+        <div class="fs-title" id="fs-doc-title">Document</div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <button class="fs-close" data-close-fs="fs-doc">&#10005;</button>
+        </div>
+      </div>
+    </div>
+    <div id="doc-canvas" class="invoice-canvas"></div>
+    <div class="print-status-row" id="doc-status-row" style="display:none;"></div>
+    <div class="inv-actions">
+      <button id="doc-print">&#128424; Print</button>
+      <button id="doc-close">Close</button>
+    </div>
+  </div>
+
   <div class="fullscreen" id="fs-invoice">
     <!-- Stays put while the bill scrolls. On a phone the bill is taller than
          the screen, so a header that scrolls away takes the paper size, the

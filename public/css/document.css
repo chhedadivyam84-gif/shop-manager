@@ -509,6 +509,11 @@ table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #178a6e;color:#0
 .invoice-page.theme-minimal .erp-tb-grand{border-top:1px solid #999;}
 .invoice-page.theme-minimal .erp-sign-row{border:none;}
 
+/* Bank details sit under the amount in words, in the space the bottom-left
+   box already has, so nothing else moves to make room for them. */
+.erp-bank{font-size:9px;margin-top:3px;line-height:1.35;}
+.erp-bank b{font-weight:800;}
+
 .erp-terms{border:1px solid #000;border-top:none;padding:3px 8px;font-size:8.5px;line-height:1.3;text-align:center;}
 .erp-terms strong{font-weight:800;}
 

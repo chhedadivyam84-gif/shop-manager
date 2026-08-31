@@ -178,7 +178,11 @@
          provides it instead. */
       ".pc-sheet{width:" + (sh.w - m * 2) + "mm;min-height:" + (sh.h - m * 2) + "mm;" +
       "margin:" + m + "mm auto;box-sizing:border-box;display:flex;flex-direction:column;}" +
-      ".pc-sheet > .invoice-page{flex:1 1 auto;min-height:0;}" +
+      /* Whatever the document's own root is — the bill's .invoice-page or a
+         templated document's .dp-page — it fills the sheet. Both are flex
+         columns whose table wrapper grows, and both need something to grow
+         inside. */
+      ".pc-sheet > *{flex:1 1 auto;min-height:0;}" +
       /* min-height STAYS in print. Dropping it to 0 was letting the sheet
          collapse to its content on paper while filling the page on screen —
          the preview and the print would have disagreed about the one thing
@@ -292,6 +296,64 @@
         return { ok: !issues.some(function (i) { return !i.info; }), issues: issues, pages: pages };
       },
 
+      /**
+       * NO HEADING IS EVER CLIPPED.
+       *
+       * A template can be given column widths by hand, and a hand-set width
+       * knows nothing about the heading that has to sit in it. Measured on
+       * a real quotation: "Sr. No." had 26px and needed 53, so it ran under
+       * the next column and printed as "SR. NPRODUCT"; "Quantity" had 49px
+       * and needed 69, and spilled over "Rate". Both are single words or
+       * nearly so — there is no wrap that would have saved them, and the
+       * cells are nowrap by design because a rate split over two lines is
+       * not a rate.
+       *
+       * So the shortfall is measured here, where the document actually
+       * exists, and taken from the widest column — which is the description,
+       * the one column with room to give. Nothing is estimated: the browser
+       * is asked how wide the heading is and how wide its cell is.
+       *
+       * Runs once per mount, before the sheet is shown.
+       */
+      fixClippedHeadings: function () {
+        var d = frame.contentDocument;
+        if (!d) return [];
+        var fixed = [];
+        Array.prototype.forEach.call(d.querySelectorAll("table"), function (table) {
+          var head = table.querySelector("thead tr");
+          if (!head) return;
+          var cells = Array.prototype.slice.call(head.children);
+          var short = cells.map(function (c) {
+            return Math.max(0, c.scrollWidth - c.clientWidth);
+          });
+          var total = short.reduce(function (a, b) { return a + b; }, 0);
+          if (!total) return;
+
+          /* The widest column is the description. It is the only one that
+             can lose a few millimetres without losing meaning — a number
+             column cannot. */
+          var widest = 0;
+          cells.forEach(function (c, i) {
+            if (c.getBoundingClientRect().width > cells[widest].getBoundingClientRect().width) widest = i;
+          });
+          var give = cells[widest].getBoundingClientRect().width - total;
+          /* Never below something a description can still be read in. If
+             the headings genuinely cannot fit, they are left as they are
+             and validate() reports it, rather than crushing the one column
+             that carries the product name. */
+          if (give < 90) return;
+
+          cells.forEach(function (c, i) {
+            if (i === widest) { c.style.width = give + "px"; return; }
+            if (short[i] > 0) {
+              c.style.width = (c.getBoundingClientRect().width + short[i]) + "px";
+              fixed.push(c.textContent.trim());
+            }
+          });
+        });
+        return fixed;
+      },
+
       /** Send THIS document — the one on screen — to the printer. */
       print: function () {
         var w = frame.contentWindow;
@@ -306,6 +368,10 @@
     };
 
     frame.addEventListener("load", function () {
+      /* Before anything measures or shows the sheet: a clipped heading
+         changes nothing about the page's height, but it is the difference
+         between a document and a defect. */
+      handle.fixClippedHeadings();
       handle.fit();
       if (typeof opt.onReady === "function") opt.onReady(handle);
     });
@@ -322,15 +388,34 @@
     
        A ResizeObserver asks the one question that matters, which is how
        much room this element has right now. */
+    var stop = [];
     if (typeof ResizeObserver === "function") {
       handle.observer = new ResizeObserver(function () { handle.fit(); });
       handle.observer.observe(host);
-      var destroy = handle.destroy;
-      handle.destroy = function () {
-        try { handle.observer.disconnect(); } catch (e) {}
-        destroy();
-      };
+      stop.push(function () { try { handle.observer.disconnect(); } catch (e) {} });
     }
+    /* AND the window, because the observer cannot be relied on alone.
+    
+       Measured: a fresh ResizeObserver on this very host fired ZERO times
+       across two deliberate width changes, so the sheet stayed at scale(1)
+       inside a 360px column — laid out correctly at 794px and hanging off
+       the side of it. The observer is the better signal when it works, and
+       a window resize is the one that always arrives: a phone turning over,
+       a window dragged narrower. Both are cheap, and fit() only writes a
+       transform. */
+    var onResize = function () { handle.fit(); };
+    window.addEventListener("resize", onResize);
+    window.addEventListener("orientationchange", onResize);
+    stop.push(function () {
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("orientationchange", onResize);
+    });
+
+    var destroy = handle.destroy;
+    handle.destroy = function () {
+      stop.forEach(function (f) { f(); });
+      destroy();
+    };
 
     return handle;
   }

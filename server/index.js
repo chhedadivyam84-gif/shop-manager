@@ -368,9 +368,10 @@ app.use("/api/whatsapp", requireAuth, require("./routes/whatsapp"));
 /* Tally sync. Owner-only inside the router, and one-way by construction —
    nothing under it reads a value out of Tally into Shop Manager.
 
-   ON THIS SHOP'S OWN COPY ONLY. Tally was scoped to Swagat Ply, and hiding
-   the menu is not scoping — a hidden button leaves the routes answering to
-   anyone who types the address. So the routes are not MOUNTED on a copy
+   ON THIS SHOP'S OWN COPY ONLY. Tally sync was built for the vendor's own
+   shop and was never part of what is sold, and hiding the menu is not
+   scoping — a hidden button leaves the routes answering to anyone who types
+   the address. So the routes are not MOUNTED on a copy
    that was sold, and the timer is not started. A stamped public key is what
    makes a build a customer's; ours leaves it empty so its licence can never
    lock the shop out, which makes it the one honest test of whose copy this

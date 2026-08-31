@@ -355,6 +355,83 @@
     });
   }
 
+  /**
+   * HOW WIDE EACH COLUMN WANTS TO BE, IN PIXELS, AT THIS TABLE’S TYPE SIZE.
+   *
+   * dp-table is table-layout:fixed and, until now, handed no widths at
+   * all unless a template supplied them. Fixed layout with no widths
+   * splits the sheet into EQUAL columns — so a seven-column quotation gave
+   * the product description exactly the same 110px it gave "Qty". The
+   * description is the column people read; Qty is three characters.
+   *
+   * Each figure below is the wider of the column’s heading at 9px/800 and
+   * its widest realistic value, plus the 10px of padding and 2px of border
+   * the cell adds — measured, not guessed, and the same figures the bill
+   * uses so a quotation and the invoice it becomes rule the same.
+   *
+   * name and remarks are deliberately absent: they are the columns that
+   * take whatever is left, which is what makes the description wide.
+   */
+  var COL_PX = {
+    sn: 44, code: 66, size: 60, unit: 40, hsn: 58, qty: 46, rate: 74,
+    disc: 46, gstPct: 42, taxable: 80, cgst: 62, sgst: 62, igst: 62,
+    amount: 86, length: 46, width: 46, thickness: 52
+  };
+
+  /**
+   * Turn that intent into percentages that always fit the sheet.
+   *
+   * Percentages rather than pixels because this file’s output is opened in
+   * a separate print window where no script of ours runs — there is nothing
+   * there to measure the result and correct it, so the widths have to be
+   * right before they leave here. A percentage of a fixed-layout table can
+   * never overflow the paper and can never collapse a column to nothing,
+   * which pixels demonstrably can: the bill’s own twelve-column A5 case
+   * measured a zero-width description and a header row 205px tall.
+   *
+   * @param cols  the columns being printed, in order
+   * @param cfg   the template, for the paper size and any dragged widths
+   * @returns     a function from column to a CSS width, or null when there
+   *              is nothing sensible to say
+   */
+  function colWidthFn(cols, cfg) {
+    if (!cols || !cols.length) return function () { return ""; };
+    var paper = paperMm(cfg, "A4");
+    /* The sheet less the 8mm of padding it carries either side. */
+    var contentPx = (paper.w - 16) * (96 / 25.4);
+    if (!(contentPx > 0)) return function () { return ""; };
+
+    var want = function (c) {
+      return num(c.width) > 0 ? num(c.width) : (COL_PX[c.key] || 0);
+    };
+    var flex = cols.filter(function (c) { return !want(c); });
+    var fixedPx = cols.reduce(function (s, c) { return s + want(c); }, 0);
+
+    /* What a column of free text needs before it stops being one. */
+    var floorPx = 96;
+    var k = 1;
+    if (!flex.length) {
+      /* Every column asked for a width. If together they ask for more than
+         the paper, they all give up the same share — nobody is squeezed to
+         nothing so that another can keep its full size. */
+      k = Math.min(1, contentPx / fixedPx);
+    } else if (contentPx - fixedPx < floorPx * flex.length) {
+      /* Not enough left for the description columns. Take it from the
+         sized ones, but never past 0.6 — below that the figures stop being
+         legible, and an unreadable bill is not an improvement. */
+      k = Math.max(0.6, Math.min(1, (contentPx - floorPx * flex.length) / fixedPx));
+    }
+
+    var slackPx = Math.max(0, contentPx - fixedPx * k);
+    var perFlex = flex.length ? slackPx / flex.length : 0;
+
+    return function (c) {
+      var px = want(c) ? want(c) * k : perFlex;
+      if (!(px > 0)) return "";
+      return 'width:' + (px / contentPx * 100).toFixed(3) + '%';
+    };
+  }
+
   /* ---------------------------------------------------------------- */
   /* one cell                                                          */
   /* ---------------------------------------------------------------- */
@@ -450,9 +527,13 @@
 
     var totals = buildTotals(docKey, doc, spec, items, showRate);
 
+    /* Fixed layout takes its column widths from the first row, so the
+       headings carry them and the body cells need say nothing. */
+    var widthOf = colWidthFn(cols, cfg);
     var head = cols.map(function (c) {
+      var w = widthOf(c);
       return '<th class="' + (NUM_KEYS[c.key] ? "n" : "") + '"' +
-        (num(c.width) > 0 ? ' style="width:' + num(c.width) + 'px"' : "") +
+        (w ? ' style="' + w + '"' : "") +
         ">" + esc(c.label || c.key) + "</th>";
     }).join("");
 

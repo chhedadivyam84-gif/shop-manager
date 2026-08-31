@@ -792,13 +792,82 @@ table.erp-table td, table.erp-table th{ overflow-wrap:anywhere; }
 /* ...except where a break would be worse than a narrow column. A rate
    split across two lines is not a rate. */
 table.erp-table .c-num, table.erp-table .c-unit, table.erp-table .c-size{ overflow-wrap:normal; }
-table.erp-table th.c-qty, table.erp-table td.c-qty  { width:46px; }
-table.erp-table th.c-rate,table.erp-table td.c-rate { width:74px; }
-table.erp-table th.c-amt, table.erp-table td.c-amt  { width:86px; }
+/* On the same multiplier as the rest. Left off it, these three kept their
+   full width on a crowded bill while every other column shrank around
+   them — so the squeeze fell entirely on the columns that had already
+   given up the most. */
+table.erp-table th.c-qty, table.erp-table td.c-qty  { width:calc(46px * var(--colk)); }
+table.erp-table th.c-rate,table.erp-table td.c-rate { width:calc(74px * var(--colk)); }
+table.erp-table th.c-amt, table.erp-table td.c-amt  { width:calc(86px * var(--colk)); }
 /* A5 is a narrower page; the same columns, proportionally. */
-.invoice-page.size-a5 table.erp-table th.c-qty, .invoice-page.size-a5 table.erp-table td.c-qty  { width:40px; }
-.invoice-page.size-a5 table.erp-table th.c-rate,.invoice-page.size-a5 table.erp-table td.c-rate { width:64px; }
-.invoice-page.size-a5 table.erp-table th.c-amt, .invoice-page.size-a5 table.erp-table td.c-amt  { width:74px; }
+.invoice-page.size-a5 table.erp-table th.c-qty, .invoice-page.size-a5 table.erp-table td.c-qty  { width:calc(40px * var(--colk)); }
+.invoice-page.size-a5 table.erp-table th.c-rate,.invoice-page.size-a5 table.erp-table td.c-rate { width:calc(64px * var(--colk)); }
+.invoice-page.size-a5 table.erp-table th.c-amt, .invoice-page.size-a5 table.erp-table td.c-amt  { width:calc(74px * var(--colk)); }
+
+/* ------------------------------------------------------------------
+   EVERY COLUMN BUT THE PRODUCT NAME IS SIZED. THE NAME TAKES THE REST.
+
+   The comment above says "the product column then takes whatever is
+   left". It did not. table-layout:fixed splits the leftover EQUALLY
+   between every column that has no width of its own — and Size, Unit,
+   HSN, Disc, Taxable and the tax columns had none. So on a plain A4 tax
+   invoice the browser handed 177px each to Product Description, Size and
+   Unit: identical thirds, with the product name — the one column anyone
+   actually reads — no wider than the cell holding "Pc".
+
+   That is 46% of the table spent on a dash and a two-letter unit, and it
+   is why a real product name wrapped onto three lines while half the
+   sheet sat empty.
+
+   The widths below are MEASURED, not guessed: each is the wider of its
+   heading at 9px/800 and its widest realistic value, plus the 10px of
+   padding and 2px of border the cell adds. Sized to their contents, they
+   stop competing with the name, and the name is then the only column
+   left without a width — so it absorbs the whole remainder, which is what
+   the original comment intended all along.
+
+   On the same A4 invoice this takes Product Description from 177px to
+   about 420px.
+   ------------------------------------------------------------------ */
+/* "SR NO." needs 44px to sit on one line; at 34px it was overflowing its
+   cell silently, held in place only by the nowrap above it. */
+/* Each width is multiplied by --colk, which is 1 on an ordinary bill and
+   is turned down by the script when a bill carries so many columns that
+   they would otherwise squeeze the product name out of existence. See
+   fitBillColumns() for why, and for the arithmetic that sets it. */
+table.erp-table{ --colk:1; }
+table.erp-table th.c-sn,     table.erp-table td.c-sn      { width:calc(44px * var(--colk)); }
+/* Sizes are the long ones here — "1220x2440" needs more than the heading. */
+table.erp-table th.c-size,   table.erp-table td.c-size    { width:calc(60px * var(--colk)); }
+table.erp-table th.c-unit,   table.erp-table td.c-unit    { width:calc(40px * var(--colk)); }
+table.erp-table th.c-hsn,    table.erp-table td.c-hsn     { width:calc(58px * var(--colk)); }
+table.erp-table th.c-disc,   table.erp-table td.c-disc    { width:calc(46px * var(--colk)); }
+table.erp-table th.c-gstpct, table.erp-table td.c-gstpct  { width:calc(42px * var(--colk)); }
+table.erp-table th.c-taxable,table.erp-table td.c-taxable { width:calc(80px * var(--colk)); }
+/* CGST, SGST and IGST share a class and therefore a width, so the three of
+   them line up with each other on a bill that shows more than one. */
+table.erp-table th.c-tax,    table.erp-table td.c-tax     { width:calc(62px * var(--colk)); }
+
+/* When --colk goes down the cells get narrower, so the type has to come
+   down with them or the headings simply wrap instead. --colf tracks it,
+   but not as steeply: 7px is about the floor for a bill someone has to
+   read across a counter. */
+table.erp-table{ --colf:1; }
+table.erp-table th{ font-size:calc(9px * var(--colf)); }
+table.erp-table td{ font-size:calc(10px * var(--colf)); }
+table.erp-table th, table.erp-table td{ padding:4px calc(5px * var(--colf)); }
+
+/* A5 is a narrower sheet: the same columns, proportionally tighter, so the
+   product name keeps a usable share there too. */
+.invoice-page.size-a5 table.erp-table th.c-sn,     .invoice-page.size-a5 table.erp-table td.c-sn      { width:calc(40px * var(--colk)); }
+.invoice-page.size-a5 table.erp-table th.c-size,   .invoice-page.size-a5 table.erp-table td.c-size    { width:calc(52px * var(--colk)); }
+.invoice-page.size-a5 table.erp-table th.c-unit,   .invoice-page.size-a5 table.erp-table td.c-unit    { width:calc(36px * var(--colk)); }
+.invoice-page.size-a5 table.erp-table th.c-hsn,    .invoice-page.size-a5 table.erp-table td.c-hsn     { width:calc(50px * var(--colk)); }
+.invoice-page.size-a5 table.erp-table th.c-disc,   .invoice-page.size-a5 table.erp-table td.c-disc    { width:calc(42px * var(--colk)); }
+.invoice-page.size-a5 table.erp-table th.c-gstpct, .invoice-page.size-a5 table.erp-table td.c-gstpct  { width:calc(38px * var(--colk)); }
+.invoice-page.size-a5 table.erp-table th.c-taxable,.invoice-page.size-a5 table.erp-table td.c-taxable { width:calc(68px * var(--colk)); }
+.invoice-page.size-a5 table.erp-table th.c-tax,    .invoice-page.size-a5 table.erp-table td.c-tax     { width:calc(54px * var(--colk)); }
+
 
 /* The totals grid already sits in a fixed 42% column and right-aligns its
    figures. Tabular numerals keep the digits themselves in line, so 250.00
@@ -808,8 +877,12 @@ table.erp-table th.c-amt, table.erp-table td.c-amt  { width:86px; }
 table.erp-table td.c-num{ font-variant-numeric: tabular-nums; }
 .c-pieces{font-size:0.8em;font-weight:400;color:#555;white-space:nowrap;}
 table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #178a6e;color:#000;}
-.invoice-page.size-a5 table.erp-table{font-size:8.5px;}
-.invoice-page.size-a5 table.erp-table th{font-size:8px;}
+/* A5 already starts a shade smaller than A4 — and it too has to ride
+   --colf, or a crowded A5 bill keeps full-size headings inside cells the
+   script has just narrowed, which is the wrapping this was meant to end. */
+.invoice-page.size-a5 table.erp-table{font-size:calc(8.5px * var(--colf));}
+.invoice-page.size-a5 table.erp-table th{font-size:calc(8px * var(--colf));}
+.invoice-page.size-a5 table.erp-table td{font-size:calc(8.5px * var(--colf));}
 
 /* Bottom: delivery info / remarks / amount-in-words on the left, the
    bordered totals grid on the right — matching the shop's paper form. */

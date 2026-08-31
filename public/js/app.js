@@ -8947,10 +8947,116 @@ function activePaperMm(){
  * negative margin below takes back the gap the shrunk page would otherwise
  * leave under it.
  */
+/* Read back, rather than remembered — the browser is the only thing that
+   knows what a fixed-layout table actually did with the widths it was
+   given, and these two are called repeatedly as that answer changes. */
+function tableWOf(table){ return table.getBoundingClientRect().width; }
+function fixedWOf(cells, name){
+  return cells.reduce((sum, c) =>
+    sum + (c === name ? 0 : c.getBoundingClientRect().width), 0);
+}
+
+/**
+ * KEEP THE PRODUCT NAME A COLUMN, NOT A SLIVER.
+ *
+ * Every column except the product name has a width of its own. The name
+ * is deliberately the only one left without: table-layout:fixed hands the
+ * whole remainder to it, which is what makes an ordinary bill give the
+ * name 422px of a 772px A4 table instead of an equal 177px third.
+ *
+ * That works until a bill carries so many columns that the fixed widths
+ * eat the table on their own. Twelve columns — Sr, name, size, unit, HSN,
+ * qty, rate, disc, taxable, CGST, SGST, amount — need 658px of a 772px A4
+ * table, which is tight but fine; on the 520px A5 table they need more
+ * than the table has, and the remainder handed to the name is then not
+ * small but ZERO. Measured: the name column collapses to 0px and every
+ * heading stacks one letter per line, 205px tall. That is precisely the
+ * wrecked bill this whole exercise is about.
+ *
+ * Neither CSS lever fixes it. min-width is ignored under fixed layout
+ * (measured: still 0px). An explicit width on the name stops the collapse
+ * but pushes the table 112px off the side of the paper, and a percentage
+ * width makes the ordinary bill WORSE — 231px down to 215px — while still
+ * leaving the crowded one at zero.
+ *
+ * So the widths scale instead. --colk multiplies every fixed width and
+ * --colf every font size; both are 1 on an ordinary bill, and are turned
+ * down here only as far as it takes to leave the name a readable column.
+ * One measurement, one calculation, no loop — the numbers below are
+ * arithmetic on measured widths, not a search.
+ *
+ * @param page  the .invoice-page element that was just drawn
+ */
+function fitBillColumns(page){
+  if(!page) return;
+  page.querySelectorAll("table.erp-table").forEach(table => {
+    /* Cleared first, so the measurement below is of the table at full
+       size rather than of whatever the last bill was scaled to. */
+    table.style.removeProperty("--colk");
+    table.style.removeProperty("--colf");
+
+    const head = table.querySelector("thead tr");
+    if(!head) return;
+    const cells = Array.from(head.children);
+    /* The name column is the one with no width of its own — the same rule
+       the stylesheet uses, read back rather than restated, so the two can
+       never disagree about which column is meant to absorb the slack. */
+    const name  = cells.find(c => !/\bc-(sn|size|unit|hsn|qty|rate|disc|gstpct|taxable|tax|amt)\b/.test(c.className));
+    if(!name) return;
+
+    const tableW = table.getBoundingClientRect().width;
+    if(!(tableW > 0)) return;
+    const fixedW = cells.reduce((sum, c) =>
+      sum + (c === name ? 0 : c.getBoundingClientRect().width), 0);
+
+    /* What the name needs to hold "Product Description" on two lines at
+       full size. Below this a bill stops being readable, which is the
+       point at which it is worth shrinking everything else. */
+    const floor = page.classList.contains("size-a5") ? 96 : 120;
+    if(tableW - fixedW >= floor) return;   /* the ordinary bill: untouched */
+
+    /* One pass would under-correct, and it is worth being clear why.
+
+       When the fixed widths ask for more than the table has, the browser
+       does not report what they ASKED for — it reports what it gave them
+       after squeezing. On the crowded A5 bill the columns want 574px of a
+       520px table, so they measure as 520 and the name as 0, and a factor
+       worked out from 520 shrinks by too little to free the space that was
+       actually missing.
+
+       So the factor is refined against a fresh measurement, which is the
+       real width at the factor just applied. It converges in two or three
+       passes; the cap is there because a bounded loop that reads layout is
+       the kind of thing that must not be able to run away. */
+    let k = 1;
+    for(let pass = 0; pass < 4; pass++){
+      const gap = tableWOf(table) - fixedWOf(cells, name);
+      if(gap >= floor) break;
+      const fixed = fixedWOf(cells, name);
+      if(!(fixed > 0)) break;
+      /* Never below 0.62 — past that the figures stop being legible, and a
+         bill nobody can read is not an improvement on a cramped one. */
+      const next = Math.max(0.62, k * Math.max(0.5,
+        Math.min(1, (tableWOf(table) - floor) / fixed)));
+      if(Math.abs(next - k) < 0.005) { k = next; break; }
+      k = next;
+      table.style.setProperty("--colk", k.toFixed(4));
+      /* The type comes down with the cells, but only half as far: the cells
+         lose width, the text only has to stop overflowing them. */
+      table.style.setProperty("--colf", Math.max(0.78, 1 - (1 - k) * 0.5).toFixed(4));
+    }
+  });
+}
+
 function fitInvoiceToScreen(){
   const page = document.getElementById("invoice-page-content");
   const host = document.getElementById("fs-invoice");
   if(!page || !host) return;
+
+  /* Columns first. The scale below is worked out from the page's height,
+     and the height depends on how tall the header row ends up — so the
+     columns have to be settled before anything is measured. */
+  fitBillColumns(page);
 
   /* Cleared first, so every measurement below is of the page at its real
      size rather than of the last scale that was applied to it. */
@@ -9674,7 +9780,10 @@ function billRowHeightAt(challan, i, fallback){
    in two different places. Added alongside, never instead of: c-num still
    carries the right-align and the nowrap. */
 const BILL_CELL_CLASS = {
-  sn:"c-sn", size:"c-size", unit:"c-unit",
+  /* HSN carried no class at all, so it fell through to the widthless pile
+     and took an equal share of the table alongside the product name. It is
+     an eight-digit code: it needs a column, not a third of the sheet. */
+  sn:"c-sn", size:"c-size", unit:"c-unit", hsn:"c-hsn",
   qty:"c-num c-qty", rate:"c-num c-rate",
   amount:"c-num c-amt", disc:"c-num c-disc", taxable:"c-num c-taxable",
   gstPct:"c-num c-gstpct",

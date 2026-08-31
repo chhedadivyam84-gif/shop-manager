@@ -1588,6 +1588,11 @@ setTimeout(function () {
 <script src="/js/docPrint.js"></script>
 <script src="/js/pricing.js"></script>
 <script src="/js/printEngine.js"></script>
+<!-- The print canvas: one fixed-millimetre sheet that every document is
+     rendered into, so the preview and the paper are the same rendering
+     rather than two that have to be kept in agreement. Loads before app.js,
+     which mounts documents into it. -->
+<script src="/js/printCanvas.js"></script>
 <script src="/js/app.js"></script>
 </body>
 </html>

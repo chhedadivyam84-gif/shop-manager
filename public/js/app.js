@@ -21168,6 +21168,24 @@ window.__printPrefsSave = (json) => {
   try{ localStorage.setItem(PE_PREFS_KEY, json); }catch(e){ /* private mode — prints still work */ }
 };
 
+/* The print canvas keeps its paper, orientation, margin, scaling and print
+   mode in the same place and for the same reason: the counter PC and the
+   phone in the warehouse print on different machines, and one shop-wide
+   value would have them overwriting each other all day.
+
+   Chosen once, applied to every document — which is the point of the
+   engine. A shop that sets A5 at the counter gets A5 for its bills, its
+   challans, its quotations and its ledgers without setting it four times. */
+const PC_PREFS_KEY = "shopManager.printCanvas";
+window.__printCanvasLoad = () => {
+  try{ return JSON.parse(localStorage.getItem(PC_PREFS_KEY) || "{}") || {}; }
+  catch(e){ return {}; }
+};
+window.__printCanvasSave = (obj) => {
+  try{ localStorage.setItem(PC_PREFS_KEY, JSON.stringify(obj)); }
+  catch(e){ /* private mode — printing still works, it just forgets */ }
+};
+
 let peDoc = null, peOpts = null;
 
 function openPrintPreview(doc){

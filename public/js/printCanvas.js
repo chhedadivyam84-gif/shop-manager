@@ -202,7 +202,12 @@
 
     var stage = document.createElement("div");
     stage.className = "pc-stage";
-    stage.style.cssText = "position:relative;overflow:hidden;";
+    /* flex:none matters. The host is a centring flex container, and a flex
+        item shrinks below its own width by default — so the stage was set to
+        383px and then squeezed to 359px, clipping 24px off the right of the
+        sheet. Measured on a phone: the Amount column and the grand total
+        were cut off the edge of the preview. */
+    stage.style.cssText = "position:relative;overflow:hidden;flex:none;";
 
     var frame = document.createElement("iframe");
     frame.className = "pc-frame";
@@ -221,7 +226,12 @@
 
       /** Scale the drawn size to the room available. Layout is untouched. */
       fit: function () {
-        var avail = host.clientWidth - 8;
+        /* clientWidth INCLUDES padding, and this host carries 16px each
+           side. Using it raw claimed 32px of room that was not there, and
+           the sheet was drawn wider than the box holding it. */
+        var cs = getComputedStyle(host);
+        var avail = host.clientWidth
+          - parseFloat(cs.paddingLeft || 0) - parseFloat(cs.paddingRight || 0);
         if (!(avail > 0)) return;
         var scale = Math.min(1, avail / mmToPx(sh.w));
         frame.style.transform = "scale(" + scale.toFixed(4) + ")";
@@ -284,6 +294,28 @@
       handle.fit();
       if (typeof opt.onReady === "function") opt.onReady(handle);
     });
+
+    /* Watch the HOST, not the window.
+    
+       The room beside the sheet changes for reasons a resize event never
+       reports: the print panel sliding in, an overlay opening, a phone
+       turning on its side, a font arriving late. Measured on a 390px
+       viewport the sheet was still drawn at scale(1) — laid out correctly
+       at 794px, but hanging off the side of the screen — because the fit
+       had been worked out while the host was still desktop-width and
+       nothing had told it otherwise.
+    
+       A ResizeObserver asks the one question that matters, which is how
+       much room this element has right now. */
+    if (typeof ResizeObserver === "function") {
+      handle.observer = new ResizeObserver(function () { handle.fit(); });
+      handle.observer.observe(host);
+      var destroy = handle.destroy;
+      handle.destroy = function () {
+        try { handle.observer.disconnect(); } catch (e) {}
+        destroy();
+      };
+    }
 
     return handle;
   }

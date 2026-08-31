@@ -8988,6 +8988,73 @@ function fixedWOf(cells, name){
  *
  * @param page  the .invoice-page element that was just drawn
  */
+/**
+ * PUT THE BILL ON THE CANVAS.
+ *
+ * renderInvoicePageContent() has just built the document into
+ * #invoice-page-content. That div is now the SOURCE — hidden, still read by
+ * the PDF rasteriser and the column autofit — and this hands its markup to
+ * the canvas, which lays it out at true paper size inside an iframe
+ * carrying document.css and nothing else.
+ *
+ * The preview then shows that iframe, and printInvoiceOnePage() prints that
+ * same iframe. Preview and paper stop being two renderings that have to be
+ * kept in agreement and become one rendering seen twice.
+ */
+let billCanvas = null;
+function mountBillOnCanvas(){
+  const host = document.getElementById("invoice-canvas");
+  const src  = document.getElementById("invoice-page-content");
+  if(!host || !src || typeof PrintCanvas === "undefined") return;
+
+  /* The sheet the shop chose for THIS bill, not a remembered default —
+     the A4/A5 chips in the bar change it per document, and the canvas has
+     to follow them or the preview would show a sheet nobody asked for. */
+  const paper = activePaperMm();
+  const sh = { w: paper.w, h: paper.h,
+               named: paper.kind === "custom" ? null : paper.kind,
+               orientation: paper.orientation || "portrait" };
+
+  /* The source div carries the size class the document design keys off
+     (.size-a5 changes type and column widths), so it travels with it. */
+  const body = '<div class="' + src.className + '">' + src.innerHTML + '</div>';
+
+  billCanvas = PrintCanvas.mount(host, body, {
+    sheet: sh,
+    title: (document.querySelector("#fs-invoice .fs-title") || {}).textContent || "Bill",
+    onReady: (h) => {
+      h.fit();
+      /* Say so BEFORE the printer does. A bill wider than the printable
+         area used to be discovered at the tray. */
+      const v = h.validate();
+      showPrintWarnings(v);
+    }
+  });
+}
+
+/** Warn about a bad print instead of producing one quietly. */
+function showPrintWarnings(v){
+  const row = document.getElementById("print-status-row");
+  if(!row) return;
+  const real = (v.issues || []).filter(i => !i.info);
+  const notes = (v.issues || []).filter(i => i.info);
+  if(real.length){
+    row.style.display = "";
+    row.className = "print-status-row error";
+    row.textContent = real.map(i => i.text).join(" ");
+  } else if(notes.length){
+    row.style.display = "";
+    row.className = "print-status-row";
+    row.textContent = notes.map(i => i.text).join(" ");
+  } else {
+    row.style.display = "none";
+    row.textContent = "";
+  }
+}
+
+/* The room beside the bill changes when the window does. */
+window.addEventListener("resize", () => { if(billCanvas) billCanvas.fit(); });
+
 function fitBillColumns(page){
   if(!page) return;
   page.querySelectorAll("table.erp-table").forEach(table => {
@@ -9163,6 +9230,27 @@ function applyPageSizeStyle(){
  * is told rather than left to discover it at the printer.
  */
 function printInvoiceOnePage(){
+  /* THE CANVAS PRINTS ITSELF.
+
+     The bill you are looking at is an iframe holding the document at true
+     paper size, with its own @page. Printing THAT is the whole point: the
+     printer is handed the identical rendering the preview is showing, so
+     there is nothing left for the two to disagree about.
+
+     Everything below this branch is the old path, kept for the moment as a
+     fallback for a browser that refuses to print a frame. It measures the
+     app's own DOM and shrinks it with zoom — which is exactly the behaviour
+     that made the paper differ from the preview, so it runs only when the
+     canvas could not. */
+  if(billCanvas){
+    const v = billCanvas.validate();
+    showPrintWarnings(v);
+    if(v.pages > 1){
+      toast("This bill needs " + v.pages + " sheets.");
+    }
+    if(billCanvas.print()) return;
+  }
+
   const page = document.getElementById("invoice-page-content");
   if(!page){ window.print(); return; }
 
@@ -9291,6 +9379,7 @@ function setPaper(size){
   applyPageSizeStyle();
   renderInvoicePageContent();
   fitInvoiceToScreen();
+  mountBillOnCanvas();
 }
 let lastPreviewInvoice = null;
 function openInvoicePreview(existingInvoice){
@@ -10506,6 +10595,7 @@ function renderInvoicePageContent(){
         showRate, displayTotal, gstEnabled, isIGST
       });
     fitInvoiceToScreen();
+    mountBillOnCanvas();
     return;
   }
   document.getElementById("invoice-page-content").innerHTML = `
@@ -10565,6 +10655,7 @@ function renderInvoicePageContent(){
       : `<strong>NO GURANTEE AND WARRANTY FOR DECORATIVE PRODUCTS AND AIR BUBBLES IN LAMMINATES, ACRYLIC AND PVC LAMINATES OR ANY SHADE VARIATION AFTER INSTALLATION. NO EXCHANGE. NO RETURN IN ANY CONDITION. PLEASE CHECK THE MATERIAL ON DELIVERY.</strong>`}</div>
   `;
   fitInvoiceToScreen();
+  mountBillOnCanvas();
 }
 
 /* ============================================================

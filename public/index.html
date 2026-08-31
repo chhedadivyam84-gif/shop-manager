@@ -1560,7 +1560,21 @@ setTimeout(function () {
     <!-- Previous / Next bill stepper. Filled by renderInvoicePageContent() only
          when the bill was opened from a list; empty otherwise. -->
     <div id="invoice-bill-nav" style="margin:0 16px;"></div>
-    <div class="invoice-page" id="invoice-page-content"></div>
+    <!-- THE SOURCE, not the preview.
+
+         renderInvoicePageContent() still builds the bill's markup in here,
+         because a dozen other things read it — the PDF rasteriser, the
+         column autofit, the drag handles. What it is NOT any more is the
+         thing you look at: it is hidden, and its markup is handed to the
+         print canvas below, which renders it at true paper size.
+
+         Printing this div was the original sin. It made the paper depend on
+         the screen, because it IS the screen. -->
+    <div class="invoice-page" id="invoice-page-content" aria-hidden="true"></div>
+    <!-- The print canvas: the bill at its real size, in an iframe carrying
+         only document.css. This is what the preview shows and what the
+         printer is given — the same rendering, not two of them. -->
+    <div id="invoice-canvas" class="invoice-canvas"></div>
     <div class="print-status-row" id="print-status-row" style="display:none;"></div>
     <div class="inv-actions">
       <button id="inv-server-print">&#128424; Print to Shop Printer</button>

@@ -38,14 +38,16 @@ router.put("/", requireRole("owner"), (req, res) => {
   const { businessName, tagline, address, phones, gstin, state, upiId, email, website,
           invoiceTheme, challanTheme, allowNegativeStock,
           bankName, bankAccountNo, bankIfsc, bankBranch,
-          invoiceTitle, challanTitle, footerMessage, showCopyLabel, pinCode } = req.body;
+          invoiceTitle, challanTitle, footerMessage, showCopyLabel, pinCode,
+          headerScales } = req.body;
   const current = db.prepare("SELECT * FROM settings WHERE id = 1").get();
 
   db.prepare(`
     UPDATE settings SET business_name=?, tagline=?, address=?, phones=?, gstin=?, state=?, upi_id=?, email=?, website=?,
       invoice_theme=?, challan_theme=?, allow_negative_stock=?,
       bank_name=?, bank_account_no=?, bank_ifsc=?, bank_branch=?,
-      invoice_title=?, challan_title=?, footer_message=?, show_copy_label=?, pin_code=? WHERE id=1
+      invoice_title=?, challan_title=?, footer_message=?, show_copy_label=?, pin_code=?,
+      header_scales=? WHERE id=1
   `).run(
     (businessName || current.business_name).trim(), (tagline ?? current.tagline),
     (address ?? current.address), (phones ?? current.phones), (gstin ?? current.gstin),
@@ -73,7 +75,24 @@ router.put("/", requireRole("owner"), (req, res) => {
        it, and no screen offered a field, so the app told shops to fix
        something in "Settings → PIN code" that did not exist. Digits only,
        six of them, so a typed space or a dash cannot reach the portal. */
-    ((pinCode ?? "").toString().replace(/\D/g, "").slice(0, 6) || current.pin_code || "")
+    ((pinCode ?? "").toString().replace(/\D/g, "").slice(0, 6) || current.pin_code || ""),
+    /* Clamped 0.5-2.0 on the way in, so a value posted by hand cannot
+       produce a letterhead three feet tall or one too small to read.
+       Anything unparseable leaves what is already stored alone. */
+    (() => {
+      if (headerScales === undefined) return current.header_scales || "";
+      let obj = headerScales;
+      if (typeof obj === "string") {
+        try { obj = JSON.parse(obj); } catch (e) { return current.header_scales || ""; }
+      }
+      if (!obj || typeof obj !== "object") return "";
+      const out = {};
+      ["name", "tag", "addr", "gst", "phone", "email", "web"].forEach(k => {
+        const n = Number(obj[k]);
+        if (Number.isFinite(n)) out[k] = Math.max(0.5, Math.min(2, n));
+      });
+      return JSON.stringify(out);
+    })()
   );
 
   logAction(req, "settings.update", "");

@@ -722,12 +722,34 @@ nav.bottom .tab.active{color:var(--navy);}
    app's oklch() theme variables: html2canvas 1.4.1 (used to rasterise the
    page into a PDF) throws on oklch(). Keep it that way for any future edits. */
 
+/* PRINT HEADER SIZE CONTROL.
+   Each heading line is multiplied by its own factor, and every factor
+   defaults to 1 — so with nothing set the arithmetic is 15px * 1 = 15px
+   and the sheet is byte-identical to what it printed before. A shop that
+   never opens the size controls can never be affected by them.
+
+   Only the SHOP'S OWN heading lines are on these factors. The banner, the
+   party boxes, the item table, the totals, the terms and every margin are
+   deliberately left alone: this is a size control for the letterhead, not
+   a way to redesign the bill. */
+.invoice-page{
+  --hs-name:1; --hs-tag:1; --hs-addr:1;
+  --hs-gst:1; --hs-phone:1; --hs-email:1; --hs-web:1;
+}
 .erp-banner{text-align:center;font-weight:800;font-size:15px;letter-spacing:.12em;border-bottom:1px solid #000;padding-bottom:3px;margin-bottom:3px;}
 .erp-header{text-align:center;margin-bottom:4px;padding-bottom:4px;border-bottom:1px solid #000;}
-.erp-biz-name{font-size:17px;font-weight:800;letter-spacing:.01em;}
-.erp-tag{font-size:10px;font-style:italic;color:#333;}
-.erp-addr{font-size:10px;color:#333;margin-top:1px;}
+.erp-biz-name{font-size:calc(17px * var(--hs-name,1));font-weight:800;letter-spacing:.01em;}
+.erp-tag{font-size:calc(10px * var(--hs-tag,1));font-style:italic;color:#333;}
+.erp-addr{font-size:calc(10px * var(--hs-addr,1));color:#333;margin-top:1px;}
 .erp-contact-line{font-size:9.5px;font-weight:700;margin-top:2px;}
+/* The contact line is one line holding four different things, so each is
+   wrapped and sized on its own — a shop that wants a big phone number and
+   a small website can have both. em, not px: each stays relative to the
+   9.5px the line has always been. */
+.erp-contact-line .hs-gst{font-size:calc(1em * var(--hs-gst,1));}
+.erp-contact-line .hs-phone{font-size:calc(1em * var(--hs-phone,1));}
+.erp-contact-line .hs-email{font-size:calc(1em * var(--hs-email,1));}
+.erp-contact-line .hs-web{font-size:calc(1em * var(--hs-web,1));}
 
 /* Buyer / document-info: two bordered boxes, equal height via flex's default
    align-items:stretch — sitting flush above the item table so the whole
@@ -1170,6 +1192,19 @@ table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #178a6e;color:#0
      to a print job and stays out of it entirely. */
   .invoice-canvas, #invoice-page-content{ display:none !important; }
 }
+
+/* PRINT HEADER SETTINGS — the sliders, and a preview that is the real
+   letterhead rather than a picture of one. The preview sits on white with
+   a hairline round it so it reads as paper, not as another app panel. */
+.hs-preview{background:#fff;border:1px solid var(--border);border-radius:8px;
+  padding:10px 12px;margin-top:12px;overflow-x:auto;}
+.hs-preview .invoice-page{margin:0;padding:0;box-shadow:none;border:none;
+  border-radius:0;max-width:none;width:auto;background:#fff;}
+.hs-ctl{margin-top:12px;}
+.hs-ctl-head{display:flex;justify-content:space-between;align-items:baseline;
+  font-size:12px;font-weight:700;margin-bottom:2px;}
+.hs-ctl-head b{font-variant-numeric:tabular-nums;color:var(--muted);font-weight:700;}
+.hs-ctl input[type=range]{width:100%;}
 
 /* E-WAY BILL — the values to type into the government portal.
    A label on the left, the value and its Copy button on the right, so the

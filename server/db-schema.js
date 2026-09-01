@@ -3158,6 +3158,12 @@ CREATE INDEX IF NOT EXISTS idx_pl_log_product ON price_list_log(product_id, at);
    deliberately: one spelling of a name across the app beats a second list
    of names drifting from the first. */
 addColumn("customers", "salesman", "TEXT DEFAULT ''");
+/* How much bigger or smaller each line of the printed letterhead is, as a
+   JSON object of factors — {"name":1.2,"addr":0.9}. Empty means every one
+   is 1, which is what the bill has always printed at. Stored shop-wide
+   rather than per device: the letterhead is the shop's identity and must
+   not differ between the counter PC and a phone. */
+addColumn("settings", "header_scales", "TEXT NOT NULL DEFAULT ''");
 
 /* MOVED HERE DELIBERATELY, AND THIS IS WHY.
 

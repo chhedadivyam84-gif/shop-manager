@@ -7743,6 +7743,13 @@ function openSettings(){
       <p class="muted" style="font-size:11px;margin-bottom:10px;">Capital, fixed assets, loans and deposits — the figures the app can't work out from your sales and purchases. Enter them once; they feed the Balance Sheet from then on.</p>
       <button class="btn btn-outline" id="st-accounting">Set Opening Balances</button>
 
+      <div class="section-title">Print Header Settings</div>
+      <button class="btn btn-outline" id="st-header-size">Letterhead Size</button>
+      <p class="muted" style="font-size:11.5px;margin-top:4px;line-height:1.6;">
+        Makes the shop name, tagline, address and contact line bigger or smaller
+        on every printed document. The item table, totals, margins and page size
+        are not affected.</p>
+
       <div class="section-title">Appearance</div>
       <button class="btn btn-outline" id="st-app-theme">App Colour</button>
       <div class="muted" style="font-size:11px;margin-top:4px;">
@@ -7920,6 +7927,9 @@ function openSettings(){
   // leaves every other setting untouched.
   const appThemeBtn = sheet.querySelector("#st-app-theme");
   if(appThemeBtn) appThemeBtn.addEventListener("click", () => { closeAllSheets(); openAppThemePicker(); });
+
+  const hdrSizeBtn = sheet.querySelector("#st-header-size");
+  if(hdrSizeBtn) hdrSizeBtn.addEventListener("click", () => { closeAllSheets(); openHeaderSizeSheet(); });
 
   const invThemeSel = sheet.querySelector("#st-invoice-theme");
   const chThemeSel = sheet.querySelector("#st-challan-theme");
@@ -9156,6 +9166,162 @@ function fixedWOf(cells, name){
  * kept in agreement and become one rendering seen twice.
  */
 let billCanvas = null;
+/**
+ * PRINT HEADER SETTINGS — the sliders, and a preview that is the real thing.
+ *
+ * The preview is not a drawing of the letterhead; it is the letterhead,
+ * built from the same markup and the same stylesheet the printed sheet
+ * uses. Moving a slider writes the factor straight onto it, so what the
+ * shop sees while dragging is what the printer will do.
+ *
+ * Saved as it is changed, debounced — a slider fires on every pixel of a
+ * drag, and thirty saves a second is a poor way to treat a database.
+ */
+let headerScaleTimer = null;
+function openHeaderSizeSheet(){
+  if(!isOwner()){ toast("Only the owner can change the printed letterhead."); return; }
+  const cfg = state.settings || {};
+  const s = headerScales();
+
+  const line = [
+    cfg.gstin ? '<span class="hs-gst">GSTIN: ' + escapeHtml(cfg.gstin) + '</span>' : "",
+    cfg.phones ? '<span class="hs-phone">Ph: ' + escapeHtml(cfg.phones) + '</span>' : "",
+    cfg.email ? '<span class="hs-email">Email: ' + escapeHtml(cfg.email) + '</span>' : "",
+    cfg.website ? '<span class="hs-web">Website: ' + escapeHtml(cfg.website) + '</span>' : ""
+  ].filter(Boolean).join("  |  ");
+
+  const sheet = document.getElementById("sheet-header-size");
+  sheet.innerHTML =
+    '<div class="sheet-handle"></div>' +
+    '<button class="sheet-close" data-sheetclose>&#10005;</button>' +
+    '<div class="sheet-title">Print Header Settings</div>' +
+    '<p class="muted" style="font-size:12px;margin-top:-6px;line-height:1.6;">' +
+      'Only the letterhead changes size. The item table, totals, margins and ' +
+      'page size stay exactly as they are.</p>' +
+
+    '<div class="hs-preview"><div class="invoice-page" id="hs-preview-page">' +
+      '<div class="erp-header">' +
+        '<div class="erp-biz-name">' + escapeHtml(cfg.business_name || "Your Shop") + '</div>' +
+        (cfg.tagline ? '<div class="erp-tag">' + escapeHtml(cfg.tagline) + '</div>' : "") +
+        (cfg.address ? '<div class="erp-addr">' + escapeHtml(cfg.address) + '</div>' : "") +
+        (line ? '<div class="erp-contact-line">' + line + '</div>' : "") +
+      '</div></div></div>' +
+
+    HEADER_PARTS.map(p =>
+      '<div class="hs-ctl">' +
+        '<div class="hs-ctl-head"><span>' + escapeHtml(p.label) + '</span>' +
+          '<b id="hs-val-' + p.key + '">' + Math.round(s[p.key] * 100) + '%</b></div>' +
+        '<input type="range" min="50" max="200" step="5" value="' + Math.round(s[p.key] * 100) + '" ' +
+          'data-hs="' + p.key + '">' +
+      '</div>').join("") +
+
+    '<div style="display:flex;flex-direction:column;gap:8px;margin-top:16px;">' +
+      '<button class="btn btn-outline" id="hs-reset">Reset to original size</button>' +
+    '</div>';
+
+  const page = sheet.querySelector("#hs-preview-page");
+  const current = () => {
+    const out = {};
+    HEADER_PARTS.forEach(p => {
+      const el = sheet.querySelector('[data-hs="' + p.key + '"]');
+      out[p.key] = Number(el.value) / 100;
+    });
+    return out;
+  };
+
+  const save = (scales) => {
+    clearTimeout(headerScaleTimer);
+    headerScaleTimer = setTimeout(async () => {
+      try{
+        state.settings = await api("PUT", "/settings", { headerScales: scales });
+        /* The open bill, if there is one, re-drawn at the new size — the
+           setting is worth nothing if it only takes effect next time. */
+        if(lastPreviewInvoice && document.getElementById("fs-invoice").classList.contains("show")){
+          renderInvoicePageContent();
+        }
+      }catch(e){ toast(e.message); }
+    }, 400);
+  };
+
+  applyHeaderScales(page, s);
+  sheet.querySelectorAll("[data-hs]").forEach(inp => {
+    inp.addEventListener("input", () => {
+      const scales = current();
+      applyHeaderScales(page, scales);
+      sheet.querySelector("#hs-val-" + inp.dataset.hs).textContent =
+        Math.round(scales[inp.dataset.hs] * 100) + "%";
+      save(scales);
+    });
+  });
+
+  document.getElementById("hs-reset").addEventListener("click", () => {
+    const one = {};
+    HEADER_PARTS.forEach(p => {
+      one[p.key] = 1;
+      const el = sheet.querySelector('[data-hs="' + p.key + '"]');
+      el.value = 100;
+      sheet.querySelector("#hs-val-" + p.key).textContent = "100%";
+    });
+    applyHeaderScales(page, one);
+    save(one);
+    toast("Back to the original size.", "ok");
+  });
+
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  sheet.classList.add("show");
+}
+
+/* ============================================================
+   PRINT HEADER SIZE
+
+   The shop’s own letterhead lines — name, tagline, address, GSTIN,
+   phone, email, website — each carry a factor between 0.5 and 2.0. The
+   stylesheet multiplies the size it has always used by that factor, so a
+   factor of 1 is arithmetically the old value and a shop that never opens
+   these controls prints exactly what it printed before.
+
+   NOTHING ELSE IS ON THESE FACTORS. Not the banner, the party boxes, the
+   item table, the totals, the terms, the margins or the page size. This
+   makes the letterhead bigger or smaller; it is not a way to redesign the
+   bill, and it cannot become one.
+   ============================================================ */
+const HEADER_PARTS = [
+  { key:"name",  label:"Company Name",   css:"--hs-name"  },
+  { key:"tag",   label:"Tagline",        css:"--hs-tag"   },
+  { key:"addr",  label:"Address",        css:"--hs-addr"  },
+  { key:"gst",   label:"GST Number",     css:"--hs-gst"   },
+  { key:"phone", label:"Mobile Number",  css:"--hs-phone" },
+  { key:"email", label:"Email",          css:"--hs-email" },
+  { key:"web",   label:"Website",        css:"--hs-web"   }
+];
+
+/** What the shop has chosen, with anything unset reading as 1. */
+function headerScales(){
+  let raw = {};
+  try{ raw = JSON.parse((state.settings || {}).header_scales || "{}") || {}; }
+  catch(e){ raw = {}; }
+  const out = {};
+  HEADER_PARTS.forEach(p => {
+    const n = Number(raw[p.key]);
+    out[p.key] = Number.isFinite(n) ? Math.max(0.5, Math.min(2, n)) : 1;
+  });
+  return out;
+}
+
+/**
+ * Write the factors onto a sheet as CSS variables.
+ *
+ * Applied to the element rather than baked into the stylesheet, because
+ * the same stylesheet serves the live preview in Settings and the sheet
+ * being printed — and while the sliders are moving those two must be able
+ * to hold different values at the same moment.
+ */
+function applyHeaderScales(el, scales){
+  if(!el) return;
+  const s = scales || headerScales();
+  HEADER_PARTS.forEach(p => el.style.setProperty(p.css, String(s[p.key])));
+}
+
 function mountBillOnCanvas(){
   const host = document.getElementById("invoice-canvas");
   const src  = document.getElementById("invoice-page-content");
@@ -9173,7 +9339,14 @@ function mountBillOnCanvas(){
      (.size-a5 changes type and column widths), so it travels with it. */
   const body = '<div class="' + src.className + '">' + src.innerHTML + '</div>';
 
+  /* Written into the document that goes on the canvas, so the printed
+     sheet and the preview of it are sized from the one set of values. */
+  const hs = headerScales();
+  const hsCss = ":root{" + HEADER_PARTS.map(p => p.css + ":" + hs[p.key] + ";").join("") + "}"
+    + ".invoice-page{" + HEADER_PARTS.map(p => p.css + ":" + hs[p.key] + ";").join("") + "}";
+
   billCanvas = PrintCanvas.mount(host, body, {
+    css: hsCss,
     sheet: sh,
     title: (document.querySelector("#fs-invoice .fs-title") || {}).textContent || "Bill",
     onReady: (h) => {
@@ -9211,6 +9384,9 @@ window.addEventListener("resize", () => { if(billCanvas) billCanvas.fit(); });
 
 function fitBillColumns(page){
   if(!page) return;
+  /* The letterhead sizes travel with the sheet, so the columns below are
+     measured against a header that is already its final size. */
+  applyHeaderScales(page);
   page.querySelectorAll("table.erp-table").forEach(table => {
     /* Cleared first, so the measurement below is of the table at full
        size rather than of whatever the last bill was scaled to. */
@@ -10786,11 +10962,15 @@ function renderInvoicePageContent(){
            filled in its GSTIN or phone leaves an unexplained gap under the
            shop name — the sort of thing that reads as a fault in the
            paperwork rather than a blank field. */
+        /* Each part in its own span so it can carry its own size factor.
+           Inline spans with no styling of their own — the line reads and
+           breaks exactly as it did before, and with every factor at 1 the
+           rendered result is unchanged. */
         const line = [
-          cfg.gstin ? `GSTIN: ${escapeHtml(cfg.gstin)}` : "",
-          cfg.phones ? `Ph: ${escapeHtml(cfg.phones)}` : "",
-          cfg.email ? `Email: ${escapeHtml(cfg.email)}` : "",
-          cfg.website ? `Website: ${escapeHtml(cfg.website)}` : ""
+          cfg.gstin ? `<span class="hs-gst">GSTIN: ${escapeHtml(cfg.gstin)}</span>` : "",
+          cfg.phones ? `<span class="hs-phone">Ph: ${escapeHtml(cfg.phones)}</span>` : "",
+          cfg.email ? `<span class="hs-email">Email: ${escapeHtml(cfg.email)}</span>` : "",
+          cfg.website ? `<span class="hs-web">Website: ${escapeHtml(cfg.website)}</span>` : ""
         ].filter(Boolean).join("  |  ");
         return line ? `<div class="erp-contact-line">${line}</div>` : "";
       })()}

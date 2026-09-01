@@ -8,6 +8,38 @@ const { buildXlsx } = require("../xlsx");
 
 const router = express.Router();
 
+/**
+ * Offer a finished document to Tally.
+ *
+ * WRAPPED IN EVERYTHING, deliberately. This runs at the tail of saving, and
+ * a sync problem must never be able to fail the entry  not a missing
+ * module, not a broken require, not a database error. The record is already
+ * saved; the worst this may do is nothing.
+ *
+ * It only QUEUES. Sending happens separately, so Tally being off, slow or
+ * sitting on a dialog cannot make anyone wait at the counter.
+ *
+ * Identical to the helper in invoices.js on purpose: four modules queueing
+ * on four slightly different sets of rules is how one of them quietly stops
+ * queueing at all.
+ */
+function offerToTally(req, docType, doc, opts) {
+  try {
+    const svc = require("../tally/service");
+    const r = svc.enqueue(docType, doc, {
+      ...(opts || {}),
+      staff: (req.session && req.session.staffName) || ""
+    });
+    if (r && r.queued) {
+      try { require("../tally/autosync").nudge(); } catch (e) { /* never fatal */ }
+    }
+    return r;
+  } catch (e) {
+    return { queued: false, reason: e.message };
+  }
+}
+
+
 router.get("/", (req, res) => {
   const customers = db.prepare("SELECT * FROM customers ORDER BY name ASC").all();
   res.json(customers);
@@ -219,6 +251,22 @@ router.post("/:id/payments", (req, res) => {
       });
     })();
   } catch (err) { return res.status(400).json({ error: err.message }); }
+
+  /* Money IN from a customer is a Receipt in Tally. */
+  {
+    const rec = db.prepare("SELECT * FROM payments WHERE id = ?").get(id);
+    /* This table dates its rows in payment_date, not date. enqueue() reads
+       doc.date to work out the financial year, and the FY is part of the
+       sync id Tally dedupes on — left blank, a receipt would be filed under
+       the wrong year and could be sent twice. So the date is normalised
+       here, the same way the loader normalises it at send time. */
+    if (rec) rec.date = rec.payment_date || new Date(rec.created_at).toISOString().slice(0, 10);
+    offerToTally(req, "receipt", rec, {
+      /* Money has no bill number of its own; the cheque or UTR is what the
+         shop would look for, and failing that the tail of the id. */
+      docNo: (rec && (rec.reference_no || String(rec.id).slice(-8))) || ""
+    });
+  }
 
   logAction(req, "payment.record", `${c.name}: ${amount} (${method})`);
   res.status(201).json(db.prepare("SELECT * FROM customers WHERE id = ?").get(c.id));

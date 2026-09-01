@@ -6,6 +6,34 @@ const inventory = require("../inventory");
 
 const router = express.Router();
 
+/**
+ * Offer a finished document to Tally.
+ *
+ * WRAPPED IN EVERYTHING, deliberately. This runs at the tail of saving, and
+ * a sync problem must never be able to fail the entry  not a missing
+ * module, not a broken require, not a database error. The record is already
+ * saved; the worst this may do is nothing.
+ *
+ * It only QUEUES. Sending happens separately, so Tally being off, slow or
+ * sitting on a dialog cannot make anyone wait at the counter.
+ */
+function offerToTally(req, docType, doc, opts) {
+  try {
+    const svc = require("../tally/service");
+    const r = svc.enqueue(docType, doc, {
+      ...(opts || {}),
+      staff: (req.session && req.session.staffName) || ""
+    });
+    if (r && r.queued) {
+      try { require("../tally/autosync").nudge(); } catch (e) { /* never fatal */ }
+    }
+    return r;
+  } catch (e) {
+    return { queued: false, reason: e.message };
+  }
+}
+
+
 function shopLocationId() {
   return inventory.getLocationByCode("shop").id;
 }
@@ -172,6 +200,18 @@ router.post("/", (req, res) => {
       db.prepare("UPDATE sales_returns SET ledger_applied = ? WHERE id = ?").run(moved, id);
     }
   })();
+
+  /* A sales return is a Credit Note in Tally. The number and the date both live on the row, so
+     nothing has to be normalised here the way it does for a payment. */
+  {
+    const saved = db.prepare("SELECT * FROM sales_returns WHERE id = ?").get(id);
+    offerToTally(req, "sales_return", saved, {
+      docNo: saved.return_no,
+      /* A return against a bill that carried no GST is kachha, exactly as
+         the bill it reverses was. */
+      pakka: saved.gst_enabled !== 0
+    });
+  }
 
   logAction(req, "return.create", `${returnNo}: against ${invoice.challan_no} — ${total} (${method})`);
   res.status(201).json(serialize(db.prepare("SELECT * FROM sales_returns WHERE id = ?").get(id)));

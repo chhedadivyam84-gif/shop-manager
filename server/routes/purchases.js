@@ -7,6 +7,38 @@ const Pricing = require("../../public/js/pricing.js");
 
 const router = express.Router();
 
+/**
+ * Offer a finished document to Tally.
+ *
+ * WRAPPED IN EVERYTHING, deliberately. This runs at the tail of saving, and
+ * a sync problem must never be able to fail the entry  not a missing
+ * module, not a broken require, not a database error. The record is already
+ * saved; the worst this may do is nothing.
+ *
+ * It only QUEUES. Sending happens separately, so Tally being off, slow or
+ * sitting on a dialog cannot make anyone wait at the counter.
+ *
+ * Identical to the helper in invoices.js on purpose: four modules queueing
+ * on four slightly different sets of rules is how one of them quietly stops
+ * queueing at all.
+ */
+function offerToTally(req, docType, doc, opts) {
+  try {
+    const svc = require("../tally/service");
+    const r = svc.enqueue(docType, doc, {
+      ...(opts || {}),
+      staff: (req.session && req.session.staffName) || ""
+    });
+    if (r && r.queued) {
+      try { require("../tally/autosync").nudge(); } catch (e) { /* never fatal */ }
+    }
+    return r;
+  } catch (e) {
+    return { queued: false, reason: e.message };
+  }
+}
+
+
 /* The geographic area a purchase belongs to — Kandivali, Borivali, Mira Road.
    Distinct from location_id below, which is the godown the goods land in.
    Defaults to the supplier's own area so it isn't retyped on every bill, and
@@ -328,6 +360,20 @@ router.post("/", (req, res) => {
     // A challan never carries a due regardless of payment method.
     if (!isChallan && (paymentMethod || "Credit") === "Credit") bumpDue.run(totals.total, supplierId);
   })();
+
+  /* A purchase CHALLAN is goods received, not a bill  there is nothing
+     for Tally to book until the purchase invoice is raised, so only the
+     invoice is offered. */
+  if (!isChallan) {
+    const saved = db.prepare("SELECT * FROM purchases WHERE id = ?").get(id);
+    offerToTally(req, "purchase_invoice", saved, {
+      docNo: saved.purchase_no,
+      /* A purchase with no GST on it is a kachha bill, and booking one as
+         a tax purchase claims input credit the shop never had. Same test
+         the sales side uses. */
+      pakka: saved.gst_enabled !== 0
+    });
+  }
 
   logAction(req, isChallan ? "purchase_challan.create" : "purchase.create", `${purchaseNo}: ${supplier.name} — ${totals.total}`);
   const saved = db.prepare("SELECT * FROM purchases WHERE id = ?").get(id);

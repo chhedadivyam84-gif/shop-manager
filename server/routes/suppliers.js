@@ -8,6 +8,38 @@ const { buildXlsx } = require("../xlsx");
 
 const router = express.Router();
 
+/**
+ * Offer a finished document to Tally.
+ *
+ * WRAPPED IN EVERYTHING, deliberately. This runs at the tail of saving, and
+ * a sync problem must never be able to fail the entry  not a missing
+ * module, not a broken require, not a database error. The record is already
+ * saved; the worst this may do is nothing.
+ *
+ * It only QUEUES. Sending happens separately, so Tally being off, slow or
+ * sitting on a dialog cannot make anyone wait at the counter.
+ *
+ * Identical to the helper in invoices.js on purpose: four modules queueing
+ * on four slightly different sets of rules is how one of them quietly stops
+ * queueing at all.
+ */
+function offerToTally(req, docType, doc, opts) {
+  try {
+    const svc = require("../tally/service");
+    const r = svc.enqueue(docType, doc, {
+      ...(opts || {}),
+      staff: (req.session && req.session.staffName) || ""
+    });
+    if (r && r.queued) {
+      try { require("../tally/autosync").nudge(); } catch (e) { /* never fatal */ }
+    }
+    return r;
+  } catch (e) {
+    return { queued: false, reason: e.message };
+  }
+}
+
+
 router.get("/", (req, res) => {
   const suppliers = db.prepare("SELECT * FROM suppliers ORDER BY name ASC").all();
   res.json(suppliers);
@@ -224,6 +256,18 @@ router.post("/:id/payments", (req, res) => {
       });
     })();
   } catch (err) { return res.status(400).json({ error: err.message }); }
+
+  /* Money OUT to a supplier is a Payment in Tally. */
+  {
+    const pay = db.prepare("SELECT * FROM purchase_payments WHERE id = ?").get(id);
+    /* payment_date, not date — see the note on the receipt side. The
+       financial year is part of the sync id, so a blank date here files the
+       voucher under the wrong year. */
+    if (pay) pay.date = pay.payment_date || new Date(pay.created_at).toISOString().slice(0, 10);
+    offerToTally(req, "payment", pay, {
+      docNo: (pay && (pay.reference_no || String(pay.id).slice(-8))) || ""
+    });
+  }
 
   logAction(req, "purchase_payment.record", `${s.name}: ${amount} (${method})`);
   res.status(201).json(db.prepare("SELECT * FROM suppliers WHERE id = ?").get(s.id));

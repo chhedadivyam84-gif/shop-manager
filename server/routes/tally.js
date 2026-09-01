@@ -24,6 +24,7 @@ const svc = require("../tally/service");
 const proc = require("../tally/processor");
 const connector = require("../tally/connector");
 const autosync = require("../tally/autosync");
+const backfill = require("../tally/backfill");
 
 const router = express.Router();
 
@@ -147,6 +148,44 @@ router.get("/dashboard", async (req, res) => {
 /* ------------------------------------------------------------------ */
 /* the queue                                                           */
 /* ------------------------------------------------------------------ */
+
+/**
+ * WHAT IS SITTING THERE, UNQUEUED.
+ *
+ * Asked before any backfill runs, so the owner sees the size of the thing
+ * — "412 sales invoices" — and decides, rather than starting something
+ * open-ended against live books.
+ */
+router.get("/backfill", requireRole("owner"), (req, res) => {
+  try {
+    res.json({ counts: backfill.survey({ from: req.query.from, to: req.query.to }) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * Put documents that already exist into the queue.
+ *
+ * Owner only, and it only ENQUEUES — nothing is sent, so this cannot post
+ * anything by surprise and cannot hang on Tally being closed. Sending
+ * stays a separate, deliberate press of Sync.
+ *
+ * Safe to run twice: enqueue() recognises a document it has already seen
+ * rather than duplicating it.
+ */
+router.post("/backfill", requireRole("owner"), (req, res) => {
+  const types = Array.isArray(req.body && req.body.docTypes) ? req.body.docTypes : null;
+  try {
+    const r = backfill.run(types, { from: req.body && req.body.from, to: req.body && req.body.to });
+    if (r.error) return res.status(400).json(r);
+    logAction(req, "tally.backfill",
+      Object.entries(r).map(([k, v]) => k + ": " + v.queued + "/" + v.found).join(", "));
+    res.json({ result: r });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 router.get("/queue", (req, res) => {
   const q = req.query || {};

@@ -41,13 +41,31 @@ function qty(v, unit) {
  *               same fact stated twice, and disagreeing between them is
  *               how a voucher ends up posted the wrong way round.
  */
-function ledgerLine(name, value, debit) {
+/* WHICH TAG, AND WHY IT IS NOT A DETAIL.
+
+   An invoice-view voucher — one carrying stock — must state its ledger
+   lines as LEDGERENTRIES.LIST. Given ALLLEDGERENTRIES.LIST, TallyPrime
+   does not complain about the tag: it silently DROPS every one of those
+   lines, then rejects the voucher for not balancing. Measured against
+   build 27913, a sale of 118 came back "Dr: (blank) Cr: 100.00 Diff:
+   100.00" — the party and both tax lines simply gone, leaving only the
+   stock line Tally had read from ALLINVENTORYENTRIES.LIST.
+
+   An accounting-view voucher — a receipt or a payment, no stock — takes
+   ALLLEDGERENTRIES.LIST and is happy with it, which is why that stays
+   the default here rather than being changed everywhere.
+
+   Ordering makes no difference either way; only the tag does. */
+const INVOICE_ENTRY = "LEDGERENTRIES.LIST";
+
+function ledgerLine(name, value, debit, tag) {
+  const T = tag || "ALLLEDGERENTRIES.LIST";
   const v = Number(value) || 0;
-  return "<ALLLEDGERENTRIES.LIST>" +
+  return "<" + T + ">" +
     "<LEDGERNAME>" + esc(name) + "</LEDGERNAME>" +
     "<ISDEEMEDPOSITIVE>" + (debit ? "Yes" : "No") + "</ISDEEMEDPOSITIVE>" +
     "<AMOUNT>" + amt(debit ? -Math.abs(v) : Math.abs(v)) + "</AMOUNT>" +
-    "</ALLLEDGERENTRIES.LIST>";
+    "</" + T + ">";
 }
 
 /** One stock line, with the sales/purchase ledger it posts against. */
@@ -76,14 +94,14 @@ function inventoryLine(it, postingLedger, isSale) {
  * has since changed its defaults, because the paper in the customer's file
  * says 12%.
  */
-function taxLines(doc, names) {
+function taxLines(doc, names, tag) {
   const out = [];
   const isIGST = String(doc.tax_type || "").toUpperCase() === "IGST";
   if (isIGST) {
-    if (Number(doc.igst)) out.push(ledgerLine(names.igst, doc.igst, false));
+    if (Number(doc.igst)) out.push(ledgerLine(names.igst, doc.igst, false, tag));
   } else {
-    if (Number(doc.cgst)) out.push(ledgerLine(names.cgst, doc.cgst, false));
-    if (Number(doc.sgst)) out.push(ledgerLine(names.sgst, doc.sgst, false));
+    if (Number(doc.cgst)) out.push(ledgerLine(names.cgst, doc.cgst, false, tag));
+    if (Number(doc.sgst)) out.push(ledgerLine(names.sgst, doc.sgst, false, tag));
   }
   return out;
 }
@@ -126,11 +144,13 @@ const voucherClose = "</VOUCHER></TALLYMESSAGE>";
  */
 function salesVoucher(d) {
   const lines = [
-    ledgerLine(d.party, d.total, true)                       // party debited
+    ledgerLine(d.party, d.total, true, INVOICE_ENTRY)        // party debited
   ].concat(
     d.items.map(it => inventoryLine(it, d.ledgers.sales, true)),
-    taxLines(d, d.ledgers),
-    Number(d.roundOff) ? [ledgerLine(d.ledgers.roundOff, d.roundOff, Number(d.roundOff) < 0)] : []
+    taxLines(d, d.ledgers, INVOICE_ENTRY),
+    Number(d.roundOff)
+      ? [ledgerLine(d.ledgers.roundOff, d.roundOff, Number(d.roundOff) < 0, INVOICE_ENTRY)]
+      : []
   );
   return voucherOpen({ ...d, type: d.voucherType || "Sales",
                        view: "Invoice Voucher View" }) + lines.join("") + voucherClose;
@@ -139,12 +159,12 @@ function salesVoucher(d) {
 /** PURCHASE.  Purchase Dr, tax Dr, Party Cr. The mirror of a sale. */
 function purchaseVoucher(d) {
   const lines = [
-    ledgerLine(d.party, d.total, false)                      // party credited
+    ledgerLine(d.party, d.total, false, INVOICE_ENTRY)       // party credited
   ].concat(
     d.items.map(it => inventoryLine(it, d.ledgers.purchase, false)),
     /* Tax on a purchase is INPUT tax and is debited — the shop is owed it
        back, not liable for it. Same rates, opposite side. */
-    taxLines(d, d.ledgers).map(l => l.replace("<ISDEEMEDPOSITIVE>No", "<ISDEEMEDPOSITIVE>Yes")
+    taxLines(d, d.ledgers, INVOICE_ENTRY).map(l => l.replace("<ISDEEMEDPOSITIVE>No", "<ISDEEMEDPOSITIVE>Yes")
                                      .replace(/<AMOUNT>([\d.]+)<\/AMOUNT>/, "<AMOUNT>-$1</AMOUNT>"))
   );
   return voucherOpen({ ...d, type: d.voucherType || "Purchase",
@@ -201,7 +221,18 @@ function stockItemMaster(name, group, unit) {
   return '<TALLYMESSAGE xmlns:UDF="TallyUDF">' +
     '<STOCKITEM NAME="' + esc(name) + '" ACTION="Create">' +
     "<NAME>" + esc(name) + "</NAME>" +
-    "<PARENT>" + esc(group || "Primary") + "</PARENT>" +
+    /* AN EMPTY PARENT, NOT "Primary".
+
+       "Primary" is the root every Tally tutorial names, and TallyPrime
+       rejects it outright for stock: "Stock Group 'Primary' does not
+       exist!" — measured against build 27913, where it failed all six
+       document types at the master stage before a voucher was even
+       attempted. Left empty, Tally files the item at the root itself,
+       which is what naming Primary was trying to say.
+
+       A real group name still passes straight through, so a shop that
+       maps its categories keeps them. */
+    "<PARENT>" + esc(group || "") + "</PARENT>" +
     "<BASEUNITS>" + esc(unit || "Nos") + "</BASEUNITS>" +
     "</STOCKITEM></TALLYMESSAGE>";
 }
@@ -220,7 +251,9 @@ function stockGroupMaster(name, parent) {
   return '<TALLYMESSAGE xmlns:UDF="TallyUDF">' +
     '<STOCKGROUP NAME="' + esc(name) + '" ACTION="Create">' +
     "<NAME>" + esc(name) + "</NAME>" +
-    "<PARENT>" + esc(parent || "Primary") + "</PARENT>" +
+    /* Empty rather than "Primary", for the same reason as the stock
+       item above — Tally has no stock group by that name. */
+    "<PARENT>" + esc(parent || "") + "</PARENT>" +
     "</STOCKGROUP></TALLYMESSAGE>";
 }
 

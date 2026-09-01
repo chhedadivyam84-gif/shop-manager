@@ -153,15 +153,38 @@ function readImportReply(body) {
 
 /** Is Tally there, and which companies does it have open? */
 async function companies(settings) {
+  /* A BARE COLLECTION DOES NOT WORK HERE.
+
+     The obvious request — TYPE Collection, ID "List of Companies", a
+     COLLECTION of TYPE Company — is answered by TallyPrime with a CMPINFO
+     summary and no names at all, so every company looked closed and the
+     setup screen could never offer one to choose. Measured against
+     TallyPrime build 27913: it replies STATUS 1, COMPANY 1, LEDGER 0, and
+     not a single NAME, while the company sat plainly open on screen.
+
+     Tally wants the whole report spelled out — report, form, part, line,
+     field, collection — before it will export the names. Verbose for one
+     string, and it is what actually answers.
+
+     TYPE Company without ISINITIALIZE lists the companies that are OPEN,
+     which is the question being asked: a company on disk but not loaded
+     cannot be written to. */
   const xml =
     '<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST>' +
-    '<TYPE>Collection</TYPE><ID>List of Companies</ID></HEADER>' +
+    '<TYPE>Data</TYPE><ID>ListOfCompanies</ID></HEADER>' +
     '<BODY><DESC><STATICVARIABLES>' +
-    '<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>' +
+    '<SVEXPORTFORMAT>$SysName:XML</SVEXPORTFORMAT>' +
     '</STATICVARIABLES><TDL><TDLMESSAGE>' +
-    '<COLLECTION NAME="List of Companies" ISMODIFY="No">' +
-    '<TYPE>Company</TYPE><NATIVEMETHOD>Name</NATIVEMETHOD>' +
-    '</COLLECTION></TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>';
+    '<REPORT NAME="ListOfCompanies"><FORMS>ListOfCompanies</FORMS></REPORT>' +
+    '<FORM NAME="ListOfCompanies"><PARTS>ListOfCompanies</PARTS></FORM>' +
+    '<PART NAME="ListOfCompanies"><LINES>ListOfCompanies</LINES>' +
+    '<REPEAT>ListOfCompanies : CollOfCompanies</REPEAT>' +
+    '<SCROLLED>Vertical</SCROLLED></PART>' +
+    '<LINE NAME="ListOfCompanies"><FIELDS>FldCmpName</FIELDS></LINE>' +
+    '<FIELD NAME="FldCmpName"><SET>$Name</SET><XMLTAG>"NAME"</XMLTAG></FIELD>' +
+    '<COLLECTION NAME="CollOfCompanies"><TYPE>Company</TYPE>' +
+    '<FETCH>Name</FETCH></COLLECTION>' +
+    '</TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>';
 
   const r = await post(settings, xml);
   if (!r.ok) return { ok: false, error: r.error, code: r.code };

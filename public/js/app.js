@@ -12354,6 +12354,15 @@ async function renderTallyQueue(){
   tallyState.queue = q.rows;
   const c = q.counts;
 
+  /* The queue stores a document type as the key the server works in
+     ("purchase_return"). A shopkeeper reads "Purchase Return", and the
+     names are already on hand from the settings call, so the raw key
+     never has to be shown. Falls back to the key if settings have not
+     loaded, which is better than a blank line. */
+  const typeNames = {};
+  ((tallyState.data && tallyState.data.settings && tallyState.data.settings.docTypes) || [])
+    .forEach(t => { typeNames[t.key] = t.label; });
+
   el.innerHTML = `
     <div class="pm-filter-grid">
       ${[["SUCCESS","Sent"],["PENDING","Waiting"],["FAILED","Failed"],["CANCELLED","Cancelled"]]
@@ -12373,7 +12382,7 @@ async function renderTallyQueue(){
           <span class="muted" style="font-size:11px;">${escapeHtml(r.status)}</span>
         </div>
         <div class="muted" style="font-size:11px;">
-          ${escapeHtml(r.doc_type)} · ${escapeHtml(r.doc_date)} · ${escapeHtml(r.fy)}
+          ${escapeHtml(typeNames[r.doc_type] || r.doc_type)} · ${escapeHtml(r.doc_date)} · ${escapeHtml(r.fy)}
           ${r.voucher_no ? " · voucher " + escapeHtml(r.voucher_no) : ""}
           ${r.attempts ? " · " + r.attempts + " attempt(s)" : ""}</div>
         ${r.last_error ? `<div class="pm-warn" style="margin-top:4px;font-size:11px;">${escapeHtml(r.last_error)}</div>` : ""}

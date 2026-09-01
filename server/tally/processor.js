@@ -201,8 +201,18 @@ function mastersFor(doc, isSale) {
     const unit = (it.unit_label || (prod && prod.unit) || "Nos").trim() || "Nos";
     units.add(unit);
     if (m.create) {
-      const group = (prod && (prod.category || prod.brand)) || "Primary";
-      if (group !== "Primary") msgs.push(V.stockGroupMaster(group, "Primary"));
+      /* NO GROUP IS AN EMPTY STRING, NOT "Primary".
+
+         Naming "Primary" is what every Tally example does and TallyPrime
+         refuses it for stock — "Stock Group 'Primary' does not exist!" —
+         which failed every document at the master stage, before a voucher
+         was ever attempted. Empty lets Tally file the item at the root,
+         which is what "Primary" was reaching for.
+
+         A product that HAS a category or brand still gets a real group,
+         created at the root, exactly as before. */
+      const group = (prod && (prod.category || prod.brand)) || "";
+      if (group) msgs.push(V.stockGroupMaster(group, ""));
       msgs.push(V.stockItemMaster(m.name, group, unit));
     }
     const qty = Number(it.qty) || 0;
@@ -422,6 +432,34 @@ async function processOne(rowOrSyncId, opts) {
        The VOUCHERTYPENAME still says Credit Note or Debit Note, which is
        what Tally files it under. */
     const salesShape = row.doc_type === "sales_invoice" || row.doc_type === "purchase_return";
+
+    /* THE SHAPE IS NOT THE BOOK.
+
+       The shape above decides the signs and which way the party ledger
+       moves. It does NOT decide which nominal ledger the money lands in,
+       and treating it as if it did posts a return into the wrong book:
+       a customer's return took the purchase shape and so was written to
+       Purchase, inflating purchases instead of reducing sales, and a
+       supplier return was written to Sales. Both were wrong in the P&L
+       and in GSTR-1.
+
+       Which book a document belongs to follows the screen it came from,
+       exactly as customerSide already decides Sundry Debtors against
+       Sundry Creditors — and mastersFor() has been creating the ledger
+       on that same basis all along, so before this the voucher named a
+       ledger the masters had not set up.
+
+         sales invoice, sales return       -> Sales
+         purchase invoice, purchase return -> Purchase
+
+       Only the key the chosen shape reads is overridden; the signs, the
+       party side and both invoice paths are untouched. A shop that wants
+       returns in their own "Sales Return"/"Purchase Return" ledgers can
+       say so in Names in Tally — this is the sensible default, not a
+       decision taken away from them. */
+    const nominal = customerSide ? prep.ledgers.sales : prep.ledgers.purchase;
+    build.ledgers = { ...prep.ledgers, sales: nominal, purchase: nominal };
+
     const xml = connector.voucherEnvelope(s.company,
       [salesShape ? V.salesVoucher(build) : V.purchaseVoucher(build)]);
 

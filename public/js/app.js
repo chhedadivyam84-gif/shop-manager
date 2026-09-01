@@ -6247,24 +6247,59 @@ async function loadStockInHistory(productId){
  * only exists to make the moment feel as serious as it is.
  */
 const RESET_CONFIRM_PHRASE = "DELETE ALL DATA";
-function openFactoryResetSheet(){
+const BILLS_CONFIRM_PHRASE = "DELETE ALL BILLS";
+
+/**
+ * Two jobs, one sheet.
+ *
+ *   "bills"  every bill, challan, return, order and delivery goes; the shop
+ *            itself stays — products, stock, customers, suppliers, staff,
+ *            settings, and the bill numbering. This is "clear the old
+ *            entries and start from today", which is a different request
+ *            from setting a shop up from scratch.
+ *   "all"    the above PLUS products, customers and suppliers.
+ *
+ * Defaults to "all" so the existing Wipe All Shop Data button is unchanged.
+ * Each has its own typed phrase, so knowing one does not let muscle memory
+ * run the other.
+ */
+function openFactoryResetSheet(scope){
+  const billsOnly = scope === "bills";
+  const phrase = billsOnly ? BILLS_CONFIRM_PHRASE : RESET_CONFIRM_PHRASE;
+  const action = billsOnly ? "Clear All Bills" : "Wipe All Shop Data";
   const sheet = document.getElementById("sheet-factory-reset");
   sheet.innerHTML = `
     <div class="sheet-handle"></div>
     <button class="sheet-close" data-sheetclose>✕</button>
-    <div class="sheet-title" style="color:var(--danger);">⚠ Factory Reset</div>
+    <div class="sheet-title" style="color:var(--danger);">⚠ ${billsOnly ? "Clear All Bills" : "Factory Reset"}</div>
+    ${billsOnly ? `
     <p class="muted" style="font-size:12.5px;line-height:1.5;margin-top:4px;">
-      This permanently deletes every <strong>product, customer, invoice, delivery challan, purchase record, and payment</strong>.
-      Your business profile (name, GSTIN, address) and staff logins are kept.
+      This permanently deletes every <strong>sale bill, delivery challan, purchase bill,
+      purchase challan, sales &amp; purchase return, quotation, order, delivery and
+      payment/receipt</strong>.
     </p>
+    <p class="muted" style="font-size:12.5px;line-height:1.5;">
+      <strong>Kept:</strong> your products and their stock, customers, suppliers,
+      staff logins, settings, bank accounts, and the bill numbering — the next bill
+      carries on from the number it would have had. Customer and supplier balances
+      are set to zero, because the bills that created them are gone.
+    </p>
+    <p class="muted" style="font-size:12.5px;line-height:1.5;">
+      Anything already sent to Tally <strong>stays in Tally</strong>. This never
+      reaches into your accounts.
+    </p>` : `
+    <p class="muted" style="font-size:12.5px;line-height:1.5;margin-top:4px;">
+      This permanently deletes every <strong>product, customer, supplier, invoice, delivery challan, purchase record, and payment</strong>.
+      Your business profile (name, GSTIN, address) and staff logins are kept.
+    </p>`}
     <p class="muted" style="font-size:12.5px;line-height:1.5;">
       A full backup is taken automatically right before this runs, so the data isn't gone forever — but restoring it means replacing this file by hand later. This is not something to click through casually.
     </p>
     <label class="field-label">Enter your PIN</label>
     <input type="password" inputmode="numeric" id="fr-pin" placeholder="••••" maxlength="6">
-    <label class="field-label">Type <strong>${RESET_CONFIRM_PHRASE}</strong> to confirm</label>
-    <input type="text" id="fr-phrase" placeholder="${RESET_CONFIRM_PHRASE}" autocomplete="off" autocapitalize="characters">
-    <button class="btn" id="fr-submit" style="background:var(--danger);color:#fff;width:100%;margin-top:16px;" disabled>Wipe All Shop Data</button>
+    <label class="field-label">Type <strong>${phrase}</strong> to confirm</label>
+    <input type="text" id="fr-phrase" placeholder="${phrase}" autocomplete="off" autocapitalize="characters">
+    <button class="btn" id="fr-submit" style="background:var(--danger);color:#fff;width:100%;margin-top:16px;" disabled>${action}</button>
   `;
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
 
@@ -6272,7 +6307,7 @@ function openFactoryResetSheet(){
   const phraseEl = sheet.querySelector("#fr-phrase");
   const submitBtn = sheet.querySelector("#fr-submit");
   const updateEnabled = () => {
-    submitBtn.disabled = !(pinEl.value.length>=4 && phraseEl.value.trim()===RESET_CONFIRM_PHRASE);
+    submitBtn.disabled = !(pinEl.value.length>=4 && phraseEl.value.trim()===phrase);
   };
   pinEl.addEventListener("input", updateEnabled);
   phraseEl.addEventListener("input", updateEnabled);
@@ -6280,18 +6315,23 @@ function openFactoryResetSheet(){
   submitBtn.addEventListener("click", async ()=>{
     // Last checkpoint before the irreversible network call — a second, more
     // explicit confirm() on top of the two typed gates above.
-    if(!confirm("This is the final step. Everything except your business profile and staff logins will be permanently deleted. Continue?")) return;
+    if(!confirm(billsOnly
+      ? "This is the final step. Every bill, challan, return, order and delivery will be permanently deleted. Your products, stock, customers and suppliers stay. Continue?"
+      : "This is the final step. Everything except your business profile and staff logins will be permanently deleted. Continue?")) return;
     submitBtn.disabled = true;
-    submitBtn.textContent = "Wiping…";
+    submitBtn.textContent = billsOnly ? "Clearing…" : "Wiping…";
     try{
-      const r = await api("POST", "/reset", { pin: pinEl.value, confirmText: phraseEl.value.trim() });
+      const r = await api("POST", "/reset", {
+        pin: pinEl.value, confirmText: phraseEl.value.trim(),
+        scope: billsOnly ? "bills" : "all"
+      });
       closeAllSheets();
-      toast(`Shop data wiped. Backup saved: ${r.backupFile}`, "ok");
+      toast(`${billsOnly ? "All bills cleared" : "Shop data wiped"}. Backup saved: ${r.backupFile}`, "ok");
       await Promise.all([loadProducts(), loadCustomers()]);
       await renderAll();
     }catch(err){
       toast(err.message);
-      submitBtn.textContent = "Wipe All Shop Data";
+      submitBtn.textContent = action;
       updateEnabled();
     }
   });
@@ -8108,8 +8148,15 @@ function openSettings(){
 
       <div class="section-title" style="color:var(--danger);">Danger Zone</div>
       <div class="card" style="border-color:var(--danger);">
-        <div class="row-title" style="font-size:12.5px;">Factory Reset</div>
-        <p class="muted" style="font-size:11px;margin:4px 0 10px;">Permanently erases every product, customer, invoice, challan, purchase and payment. A backup is taken automatically right before — your business profile and staff logins are kept, everything else is not.</p>
+        <!-- Starting the year fresh is a normal thing to want, and it is not
+             the same as setting the shop up from scratch. Offered first, and
+             separately, so nobody reaches for the full wipe to get it. -->
+        <div class="row-title" style="font-size:12.5px;">Clear All Bills</div>
+        <p class="muted" style="font-size:11px;margin:4px 0 10px;">Deletes every sale bill, delivery challan, purchase bill, return, quotation, order, delivery and payment — and zeroes customer and supplier balances. <strong>Keeps</strong> your products and their stock, customers, suppliers, staff and settings. Use this to start fresh from today. A backup is taken first.</p>
+        <button class="btn" id="st-clear-bills" style="background:var(--danger);color:#fff;width:100%;">⚠ Clear All Bills</button>
+
+        <div class="row-title" style="font-size:12.5px;margin-top:16px;">Factory Reset</div>
+        <p class="muted" style="font-size:11px;margin:4px 0 10px;">Everything above, <strong>plus</strong> every product, customer and supplier. A backup is taken automatically right before — your business profile and staff logins are kept, everything else is not.</p>
         <button class="btn" id="st-factory-reset" style="background:var(--danger);color:#fff;width:100%;">⚠ Wipe All Shop Data</button>
       </div>
     ` : `<div class="card"><div class="empty-hint">Business details and staff accounts can only be changed by the owner.</div></div>`}
@@ -8416,7 +8463,8 @@ function openSettings(){
       }catch(err){ toast(err.message); }
       finally{ btn.disabled = false; }
     });
-    sheet.querySelector("#st-factory-reset").addEventListener("click", openFactoryResetSheet);
+    sheet.querySelector("#st-factory-reset").addEventListener("click", () => openFactoryResetSheet("all"));
+    sheet.querySelector("#st-clear-bills").addEventListener("click", () => openFactoryResetSheet("bills"));
   }
   sheet.querySelector("#st-logout").addEventListener("click", logOutOfThisDevice);
   const licBlock = sheet.querySelector("#st-license-block");

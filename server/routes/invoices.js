@@ -284,6 +284,85 @@ router.get("/next-number", (req, res) => {
   res.json({ challanNo: `SP${String(next).padStart(7, "0")}` });
 });
 
+/**
+ * FINDING A BILL THAT HAS ALREADY BEEN WRITTEN.
+ *
+ * Declared BEFORE "/:id" on purpose: Express matches in order, so with
+ * the routes the other way round "/search" arrives as an invoice id and
+ * this never runs.
+ *
+ * Every field the counter would search by, and each one optional — the
+ * common case is a bill number typed on its own, and nothing else should
+ * have to be filled in for that to work.
+ *
+ * Salesman, order number and delivery number do not live on the invoice.
+ * They are the staff member who wrote it, the sales order it was raised
+ * from, and the delivery note that went out against it, so they are
+ * joined here rather than copied onto the bill — a copy would be another
+ * thing to keep in step.
+ *
+ * VOIDED BILLS ARE INCLUDED, marked. Searching a number and being told it
+ * does not exist, when it does and was cancelled, sends somebody hunting
+ * through paper. They are shown and flagged; whether one can be edited is
+ * the billing form's decision, not this list's.
+ */
+router.get("/search", (req, res) => {
+  const q = req.query || {};
+  const like = (v) => "%" + String(v).trim() + "%";
+  const where = ["1=1"];
+  const args = [];
+
+  if (String(q.no || "").trim())       { where.push("i.challan_no LIKE ?");   args.push(like(q.no)); }
+  if (String(q.customer || "").trim()) { where.push("c.name LIKE ?");          args.push(like(q.customer)); }
+  if (String(q.from || "").trim())     { where.push("i.date >= ?");            args.push(String(q.from).trim()); }
+  if (String(q.to || "").trim())       { where.push("i.date <= ?");            args.push(String(q.to).trim()); }
+  if (q.docType === "invoice" || q.docType === "challan") {
+    where.push("i.doc_type = ?"); args.push(q.docType);
+  }
+  if (String(q.salesman || "").trim()) {
+    where.push("(s.salesman_name LIKE ? OR i.created_by LIKE ?)");
+    args.push(like(q.salesman), like(q.salesman));
+  }
+  if (String(q.orderNo || "").trim()) {
+    where.push("EXISTS (SELECT 1 FROM sales_orders so WHERE so.converted_invoice_id = i.id AND so.so_no LIKE ?)");
+    args.push(like(q.orderNo));
+  }
+  if (String(q.deliveryNo || "").trim()) {
+    where.push("EXISTS (SELECT 1 FROM deliveries d WHERE d.invoice_id = i.id AND d.delivery_no LIKE ?)");
+    args.push(like(q.deliveryNo));
+  }
+  /* An amount is remembered as "about nine thousand", not to the paisa,
+     so this matches within a rupee either way rather than exactly. */
+  if (String(q.amount || "").trim() !== "" && isFinite(Number(q.amount))) {
+    where.push("i.total BETWEEN ? AND ?");
+    args.push(Number(q.amount) - 1, Number(q.amount) + 1);
+  }
+
+  const limit = Math.min(Math.max(parseInt(q.limit, 10) || 200, 1), 500);
+
+  try {
+    const rows = db.prepare(`
+      SELECT i.id, i.challan_no, i.date, i.total, i.doc_type, i.voided,
+             i.payment_method, i.balance_due,
+             c.name AS customer_name,
+             COALESCE(NULLIF(TRIM(s.salesman_name), ''), i.created_by) AS salesman,
+             (SELECT so.so_no FROM sales_orders so
+               WHERE so.converted_invoice_id = i.id LIMIT 1) AS order_no,
+             (SELECT d.delivery_no FROM deliveries d
+               WHERE d.invoice_id = i.id ORDER BY d.created_at DESC LIMIT 1) AS delivery_no
+        FROM invoices i
+        LEFT JOIN customers c ON c.id = i.customer_id
+        LEFT JOIN staff s     ON s.name = i.created_by
+       WHERE ${where.join(" AND ")}
+       ORDER BY i.date DESC, i.created_at DESC
+       LIMIT ?
+    `).all(...args, limit);
+    res.json({ rows, truncated: rows.length >= limit });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.get("/:id", (req, res) => {
   const inv = db.prepare("SELECT * FROM invoices WHERE id = ?").get(req.params.id);
   if (!inv) return res.status(404).json({ error: "Invoice not found." });

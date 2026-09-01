@@ -1310,6 +1310,27 @@ async function initApp(){
   document.getElementById("paper-a4").addEventListener("click", ()=>setPaper("A4"));
   document.getElementById("bill-panel-btn").addEventListener("click", toggleBillPanel);
   document.getElementById("inv-download").addEventListener("click", downloadInvoicePdf);
+  /* Find / modify a bill, on this screen. Enter searches from any box,
+     because typing a bill number and pressing Enter is the whole
+     interaction most of the time. */
+  const bfToggle = document.getElementById("bill-find-toggle");
+  if(bfToggle) bfToggle.addEventListener("click", () => toggleBillFind());
+  const bfSearch = document.getElementById("bf-search");
+  if(bfSearch) bfSearch.addEventListener("click", runBillFind);
+  const bfClear = document.getElementById("bf-clear");
+  if(bfClear) bfClear.addEventListener("click", () => {
+    ["bf-no","bf-customer","bf-from","bf-to","bf-salesman","bf-order","bf-delivery","bf-amount"]
+      .forEach(id => { const el = document.getElementById(id); if(el) el.value = ""; });
+    const out = document.getElementById("bf-results"); if(out) out.innerHTML = "";
+    const first = document.getElementById("bf-no"); if(first) first.focus();
+  });
+  const bfPanel = document.getElementById("bill-find-panel");
+  if(bfPanel) bfPanel.addEventListener("keydown", e => {
+    if(e.key === "Enter" && e.target && e.target.tagName === "INPUT"){
+      e.preventDefault(); runBillFind();
+    }
+  });
+
   const numReuseBtn = document.getElementById("billing-number-reuse");
   if(numReuseBtn) numReuseBtn.addEventListener("click", () => {
     const wrap = document.getElementById("billing-number-manual");
@@ -4053,6 +4074,109 @@ async function loadBillingNavRows(){
       .filter(r => r.type === "Sales")
       .map(r=>({ id: r.id, no: r.challan_no, date: r.date, party: r.party_name, total: r.total }));
   }catch(e){ state.billingChallanNavRows = []; }
+}
+
+/* ------------------------------------------------------------------ */
+/* FIND / MODIFY A BILL, on the billing screen itself                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Open the find panel, or shut it.
+ *
+ * Shut by default. Writing a new bill is what this screen is for, and a
+ * search box left open pushes the whole bill down the screen.
+ */
+function toggleBillFind(force){
+  const panel = document.getElementById("bill-find-panel");
+  const btn = document.getElementById("bill-find-toggle");
+  if(!panel || !btn) return;
+  const open = force === undefined ? panel.style.display === "none" : !!force;
+  panel.style.display = open ? "" : "none";
+  btn.textContent = open ? "✕ Close search" : "🔍 Find / modify a bill";
+  if(open){ const f = document.getElementById("bf-no"); if(f) f.focus(); }
+}
+
+/**
+ * Run the search and draw the results.
+ *
+ * Every field is optional and they combine, so a bill number alone is a
+ * one-box search — which is how it will nearly always be used.
+ */
+/** 2026-09-01 as 1 Sep 2026 — how a shopkeeper reads a date. */
+function billFindDate(d){
+  if(!d) return "—";
+  const t = new Date(d + "T00:00:00");
+  return isNaN(t) ? String(d)
+    : t.toLocaleDateString("en-IN", {day:"numeric", month:"short", year:"numeric"});
+}
+
+async function runBillFind(){
+  const out = document.getElementById("bf-results");
+  if(!out) return;
+  const val = id => (document.getElementById(id) || {}).value || "";
+  const q = {
+    no: val("bf-no").trim(), customer: val("bf-customer").trim(),
+    from: val("bf-from"), to: val("bf-to"),
+    salesman: val("bf-salesman").trim(), orderNo: val("bf-order").trim(),
+    deliveryNo: val("bf-delivery").trim(), amount: val("bf-amount").trim()
+  };
+  const qs = Object.entries(q).filter(([,v]) => String(v).trim() !== "")
+    .map(([k,v]) => encodeURIComponent(k) + "=" + encodeURIComponent(v)).join("&");
+  if(!qs){ out.innerHTML = `<div class="empty-hint">Fill in at least one box, then press Search.</div>`; return; }
+
+  out.innerHTML = `<div class="empty-hint">Searching…</div>`;
+  let r;
+  try{ r = await api("GET", "/invoices/search?" + qs); }
+  catch(e){ out.innerHTML = `<div class="pm-warn">${escapeHtml(e.message)}</div>`; return; }
+
+  const rows = (r && r.rows) || [];
+  if(!rows.length){ out.innerHTML = `<div class="empty-hint">No bill matches that.</div>`; return; }
+
+  out.innerHTML = `
+    <div class="muted" style="font-size:11.5px;margin-bottom:6px;">
+      ${rows.length} bill${rows.length===1?"":"s"} found${r.truncated?" (showing the newest)":""}
+      · tap one to open it here</div>
+    <div class="bf-wrap"><table class="bf-table">
+      <thead><tr>
+        <th>Bill No.</th><th>Date</th><th>Customer</th><th>Salesman</th>
+        <th>Order No.</th><th>Delivery No.</th><th class="num">Amount</th>
+      </tr></thead>
+      <tbody>${rows.map(b=>`
+        <tr data-bf-open="${escapeHtml(b.id)}">
+          <td><b>${escapeHtml(b.challan_no||"")}</b>
+            ${b.doc_type==="challan"?`<span class="muted" style="font-size:10px;"> challan</span>`:""}
+            ${b.voided?`<span class="bf-void">VOID</span>`:""}</td>
+          <td>${escapeHtml(billFindDate(b.date))}</td>
+          <td>${escapeHtml(b.customer_name||"—")}</td>
+          <td>${escapeHtml(b.salesman||"—")}</td>
+          <td>${escapeHtml(b.order_no||"—")}</td>
+          <td>${escapeHtml(b.delivery_no||"—")}</td>
+          <td class="num">${fmtPaise(b.total)}</td>
+        </tr>`).join("")}</tbody>
+    </table></div>`;
+
+  out.querySelectorAll("[data-bf-open]").forEach(tr =>
+    tr.addEventListener("click", () => openBillFromFind(tr.dataset.bfOpen)));
+}
+
+/**
+ * Open a found bill in THIS form.
+ *
+ * Goes through editExistingInvoice, the same path the Edit button on a
+ * saved bill already uses — so the loading, the edit banner, the
+ * Previous/Next stepper and Save all behave exactly as they always have.
+ * Nothing about editing is reimplemented here.
+ */
+async function openBillFromFind(id){
+  try{
+    const inv = await api("GET", "/invoices/" + id);
+    if(inv.voided && !confirm("This bill is cancelled (VOID). Open it anyway to look at it?")) return;
+    /* Losing a half-typed bill to a search result would be unforgivable. */
+    if(!state.editingInvoiceId && (state.cart||[]).length &&
+       !confirm("The bill on screen has not been saved. Open the searched bill and lose it?")) return;
+    await editExistingInvoice(inv);
+    toggleBillFind(false);
+  }catch(e){ toast(e.message); }
 }
 
 function renderBillingBillNav(){

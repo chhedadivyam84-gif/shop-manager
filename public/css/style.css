@@ -1171,6 +1171,31 @@ table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #178a6e;color:#0
   .invoice-canvas, #invoice-page-content{ display:none !important; }
 }
 
+/* E-WAY BILL — the values to type into the government portal.
+   A label on the left, the value and its Copy button on the right, so the
+   eye runs down one column while the hand works the other. The value is in
+   a monospace box because most of these are codes, and a transposed digit
+   in a GSTIN or an HSN is the whole reason this screen exists. */
+.ep-row{display:flex;gap:10px;align-items:flex-start;justify-content:space-between;
+  padding:7px 0;border-bottom:1px solid var(--border);}
+.ep-row:last-child{border-bottom:none;}
+.ep-label{font-size:12px;font-weight:700;flex:1 1 40%;min-width:0;}
+.ep-val{display:flex;gap:8px;align-items:center;flex:1 1 55%;min-width:0;justify-content:flex-end;}
+/* The value takes the room; the button takes only what it needs.
+   .btn is width:100% app-wide — it was written for stacked mobile buttons —
+   so without overriding it here the Copy button claimed the whole row and
+   squeezed the value to a couple of characters. "Outward" came out as one
+   letter per line down the page. */
+.ep-val code{font-family:ui-monospace,Consolas,monospace;font-size:12px;
+  background:var(--bg-outer);border:1px solid var(--border);border-radius:6px;
+  padding:4px 8px;word-break:break-word;text-align:right;
+  flex:1 1 auto;min-width:0;}
+.ep-val .ep-copy{padding:4px 10px;font-size:11px;
+  flex:0 0 auto;width:auto;min-width:0;white-space:nowrap;}
+.ep-item{border:1px solid var(--border);border-radius:10px;padding:8px 12px;margin-top:10px;}
+.ep-item-head{font-size:11px;font-weight:800;text-transform:uppercase;
+  letter-spacing:.06em;color:var(--muted);margin-bottom:4px;}
+
 .inv-actions{display:flex;gap:8px;padding:12px 16px 20px;flex-wrap:wrap;}
 .inv-actions button{flex:1;min-width:120px;background:rgba(255,255,255,.15);color:#fff;border:none;border-radius:10px;padding:11px;font-size:12px;font-weight:700;}
 .inv-actions button:disabled{opacity:.5;}

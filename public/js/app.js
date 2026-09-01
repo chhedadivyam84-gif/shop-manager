@@ -1296,6 +1296,11 @@ async function initApp(){
     if(!lastPreviewInvoice || !lastPreviewInvoice.id){
       toast("Save the invoice first, then raise its e-way bill."); return;
     }
+    /* The preview closes first. It is a fullscreen overlay and the e-way
+       bill sheet is not — so left open it floats over the lower half of the
+       sheet, which matters most on the portal-details list, where the whole
+       point is scrolling down it copying values. */
+    closeFullscreen("fs-invoice");
     startEwbForInvoice(lastPreviewInvoice.id);
   });
   document.getElementById("inv-whatsapp-pdf").addEventListener("click", shareInvoicePdfWhatsApp);
@@ -20840,6 +20845,120 @@ async function renderInvoiceGstPanel(){
   if(ewbBtn) ewbBtn.addEventListener("click", ()=>startEwbForInvoice(inv.id));
 }
 
+/**
+ * WHAT TO TYPE INTO THE GOVERNMENT PORTAL.
+ *
+ * An e-way bill cannot be raised through the API without a GSP account —
+ * NIC grants direct access only to businesses filing more than 25,000
+ * invoices a month, and everyone else goes through a paid intermediary.
+ * For a single shop that is usually not worth it, so the bill gets typed
+ * into ewaybillgst.gov.in by hand.
+ *
+ * Everything that form asks for is already in the invoice — HSN codes, the
+ * GST split, both PIN codes, the taxable value per line. Working them out
+ * again by eye is where the mistakes come from, and a rejected e-way bill
+ * is a lorry waiting at the gate.
+ *
+ * So this lays them out in the order the portal asks, each with a Copy
+ * button. It sends nothing anywhere: it is a reading of the bill that is
+ * already saved.
+ */
+function openEwbPortalSheet(p, invoiceId){
+  const row = (label, value, note) => {
+    const v = (value === null || value === undefined) ? "" : String(value);
+    return `<div class="ep-row"><div class="ep-label">${escapeHtml(label)}${note ? `<span class="muted"> — ${escapeHtml(note)}</span>` : ""}</div><div class="ep-val"><code>${v ? escapeHtml(v) : "&mdash;"}</code>${v ? `<button class="btn btn-outline ep-copy" data-copy="${escapeHtml(v)}">Copy</button>` : ""}</div></div>`;
+  };
+
+  /* Rates per line, split the way the portal asks: CGST+SGST within the
+     state, IGST across it. The bill already knows which, so nobody has to
+     decide it again at the keyboard. */
+  const items = (p.items || []).map((it, i) =>
+    `<div class="ep-item"><div class="ep-item-head">Item ${i+1}</div>` +
+      row("Product name", it.name) +
+      row("HSN code", it.hsn) +
+      row("Quantity", it.qty) +
+      row("Unit", it.uqc) +
+      row("Taxable value", it.taxable_value) +
+      row("CGST rate %", it.igst > 0 ? 0 : (it.gst_rate || 0) / 2) +
+      row("SGST rate %", it.igst > 0 ? 0 : (it.gst_rate || 0) / 2) +
+      row("IGST rate %", it.igst > 0 ? (it.gst_rate || 0) : 0) +
+    "</div>").join("");
+
+  const sheet = document.getElementById("sheet-ewb");
+  sheet.innerHTML =
+    `<div class="sheet-handle"></div>` +
+    `<button class="sheet-close" data-sheetclose>&#10005;</button>` +
+    `<div class="sheet-title">Fill on the government portal</div>` +
+    `<p class="muted" style="font-size:12px;margin-top:-6px;line-height:1.6;">` +
+      `Open <b>ewaybillgst.gov.in</b> &rarr; log in &rarr; <b>e-Waybill &rarr; Generate New</b>, ` +
+      `then copy each value across. Nothing is sent from here.</p>` +
+
+    `<div class="section-title" style="margin-top:12px;">1. Transaction details</div>` +
+    row("Transaction Type", "Outward") +
+    row("Sub Type", "Supply") +
+    row("Document Type", "Tax Invoice") +
+    row("Document No.", p.doc_no) +
+    row("Document Date", p.doc_date) +
+
+    `<div class="section-title" style="margin-top:14px;">2. From — your shop</div>` +
+    row("GSTIN", p.from_gstin) +
+    row("State code", p.from_state_code) +
+    row("PIN code", p.from_pin, "Settings, if blank") +
+
+    `<div class="section-title" style="margin-top:14px;">3. To — the customer</div>` +
+    row("GSTIN", p.to_gstin, "URP if unregistered") +
+    row("Name", p.to_name) +
+    row("Address", p.to_addr) +
+    row("Place", p.to_place) +
+    row("PIN code", p.to_pin, "the customer record, if blank") +
+    row("State code", p.to_state_code) +
+
+    `<div class="section-title" style="margin-top:14px;">4. Item details</div>` +
+    items +
+    `<div class="ep-item"><div class="ep-item-head">Totals</div>` +
+      row("Total taxable value", p.taxable_value) +
+      row("CGST amount", p.cgst) +
+      row("SGST amount", p.sgst) +
+      row("IGST amount", p.igst) +
+      row("Total invoice value", p.total_value) +
+    `</div>` +
+
+    `<div class="section-title" style="margin-top:14px;">5. Transportation</div>` +
+    row("Mode", p.trans_mode || "Road") +
+    row("Approx. distance (km)", p.distance_km, "the portal will not accept a blank") +
+    row("Vehicle number", p.vehicle_no) +
+    row("Transporter name", p.transporter_name) +
+    row("Transport document no.", p.trans_doc_no) +
+
+    `<div style="display:flex;flex-direction:column;gap:8px;margin-top:16px;">` +
+      `<a class="btn btn-gold" href="https://ewaybillgst.gov.in" target="_blank" rel="noopener" ` +
+         `style="text-align:center;text-decoration:none;">Open the e-way bill portal</a>` +
+      `<button class="btn btn-outline" id="ep-back">Back to transport details</button>` +
+    `</div>`;
+
+  sheet.querySelectorAll(".ep-copy").forEach(b => b.addEventListener("click", async () => {
+    try{
+      await navigator.clipboard.writeText(b.dataset.copy);
+      const was = b.textContent;
+      b.textContent = "Copied";
+      setTimeout(() => { b.textContent = was; }, 1200);
+    }catch(e){
+      /* A browser refuses the clipboard on a plain http page, which is what
+         a shop PC on the LAN is. Selecting the text still works everywhere,
+         so it is selected and the operator told to press Ctrl+C — rather
+         than a message that says copying failed and leaves them stuck. */
+      const r = document.createRange();
+      r.selectNode(b.previousElementSibling);
+      const s = window.getSelection();
+      s.removeAllRanges(); s.addRange(r);
+      toast("Selected — press Ctrl+C. The browser blocked automatic copying.");
+    }
+  }));
+  document.getElementById("ep-back").addEventListener("click", () => startEwbForInvoice(invoiceId));
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  sheet.classList.add("show");
+}
+
 async function startEwbForInvoice(invoiceId){
   let prep;
   try{ prep = await api("POST", `/ewb/prepare/${invoiceId}`, {}); }
@@ -20886,6 +21005,10 @@ async function startEwbForInvoice(invoiceId){
       <button class="btn btn-gold" id="ewb-save-generate"${blockers.length ? " disabled" : ""}>
         ${blockers.length ? "Fix the problems above first" : "Save & Generate"}</button>
       <button class="btn btn-outline" id="ewb-save-draft">Save as Draft</button>
+      ${/* The route that works WITHOUT a GSP account, which is most
+           shops. Last in the list because it is not the automated path —
+           but it is the one that can be used today. */""}
+      <button class="btn btn-outline" id="ewb-portal">Fill on the government portal</button>
     </div>`;
 
   const transport = () => ({
@@ -20902,6 +21025,15 @@ async function startEwbForInvoice(invoiceId){
     return r.id;
   };
 
+  document.getElementById("ewb-portal").addEventListener("click", async ()=>{
+    /* Rebuilt with whatever transport details are on screen, so the mode,
+       vehicle and distance just typed appear in the list rather than as
+       blanks the operator has to remember. */
+    try{
+      const again = await api("POST", `/ewb/prepare/${invoiceId}`, transport());
+      openEwbPortalSheet(again.payload, invoiceId);
+    }catch(e){ toast(e.message); }
+  });
   document.getElementById("ewb-save-draft").addEventListener("click", async ()=>{
     try{ const id = await makeDraft(); closeAllSheets(); toast("Saved as draft.", "ok"); openEwbSheet(id); }
     catch(e){ toast(e.message); }

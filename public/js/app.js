@@ -7936,6 +7936,11 @@ function openSettings(){
         <label class="dim"><span>Next Estimate No.</span><input type="number" min="1" id="st-next-estimate" placeholder="e.g. 250"></label>
         <label class="dim"><span>Next Challan No.</span><input type="number" min="1" id="st-next-challan" placeholder="e.g. 80"></label>
       </div>
+      <button class="btn btn-outline" id="st-numbering-full" style="margin-top:8px;">Customize Bill Numbers</button>
+      <p class="muted" style="font-size:11px;margin-top:6px;line-height:1.6;">
+        Prefix, digits and next number for every document — invoice, challan,
+        purchase, quotation. This is the counter a saved bill actually takes
+        its number from.</p>
       <button class="btn btn-outline" id="st-save-numbering" style="margin-top:8px;">Set Starting Number</button>
       <p class="muted" style="font-size:11px;margin-top:8px;">Only fill in what you want to change — leave the other blank. Use this once, e.g. to continue from where your paper records left off. Setting it wrong can create duplicate or out-of-order numbers, so double-check before saving.</p>
 
@@ -8227,7 +8232,10 @@ function openSettings(){
     renderPrintServerStatus();
     sheet.querySelector("#st-recheck-print").addEventListener("click", renderPrintServerStatus);
     renderNumberingStatus();
-    sheet.querySelector("#st-save-numbering").addEventListener("click", async (e)=>{
+    const numFullBtn = sheet.querySelector("#st-numbering-full");
+  if(numFullBtn) numFullBtn.addEventListener("click", ()=>{ closeAllSheets(); openNumberingSheet(); });
+
+  sheet.querySelector("#st-save-numbering").addEventListener("click", async (e)=>{
       const nextEstimateNumber = document.getElementById("st-next-estimate").value.trim();
       const nextChallanNumber = document.getElementById("st-next-challan").value.trim();
       if(!nextEstimateNumber && !nextChallanNumber){ toast("Enter at least one number to change."); return; }
@@ -9317,6 +9325,120 @@ function openHeaderSizeSheet(){
 
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
   sheet.classList.add("show");
+}
+
+/* ============================================================
+   DOCUMENT NUMBERING
+
+   THE SCREEN THAT WAS MISSING, AND WHY IT MATTERED.
+
+   There were two counters. Settings offered "Next Estimate No." and wrote
+   it to the old `counters` table; the number a saved bill actually gets
+   comes from `doc_numbering`, through docNumber.allocate(). Nothing in the
+   app had ever called the route that writes THAT one.
+
+   So a shop could type 653, press Save, be told it was saved — and the
+   next bill would still come out SALE-000057, because the number it was
+   given was read from a table nobody had written to. The entry screen
+   showed 653 from the dead counter while the save took 57 from the live
+   one, which is why the two disagreed on screen as well.
+
+   This is the live counter, for every document, with the prefix and the
+   digit width the engine has always supported and nothing had exposed.
+   ============================================================ */
+let numberingRows = [];
+
+async function openNumberingSheet(){
+  if(!isOwner()){ toast("Only the owner can change document numbering."); return; }
+  const sheet = document.getElementById("sheet-numbering");
+  sheet.innerHTML = '<div class="sheet-handle"></div>' +
+    '<button class="sheet-close" data-sheetclose>&#10005;</button>' +
+    '<div class="sheet-title">Document Numbering</div>' +
+    '<div class="empty-hint">Loading…</div>';
+  sheet.classList.add("show");
+
+  try{ numberingRows = await api("GET", "/numbering"); }
+  catch(e){ toast(e.message); return; }
+
+  const card = (r) =>
+    '<div class="num-row" data-doc="' + escapeHtml(r.docType) + '">' +
+      '<div class="num-head"><b>' + escapeHtml(r.label) + '</b>' +
+        '<span class="num-sample" id="num-sample-' + escapeHtml(r.docType) + '">' +
+          escapeHtml(r.nextNumber || "—") + '</span></div>' +
+      '<div class="num-grid">' +
+        '<label class="dim"><span>Prefix</span>' +
+          '<input type="text" maxlength="10" data-num="prefix" value="' + escapeHtml(r.prefix || "") + '"></label>' +
+        '<label class="dim"><span>Digits</span>' +
+          '<input type="number" min="1" max="12" data-num="width" value="' + r.width + '"></label>' +
+        '<label class="dim"><span>Next number</span>' +
+          '<input type="number" min="1" data-num="next" value="' + r.nextValue + '"></label>' +
+      '</div>' +
+      (r.highestInUse !== null && r.highestInUse !== undefined
+        ? '<p class="muted" style="font-size:11px;margin-top:4px;">Highest already used: ' +
+          escapeHtml(String(r.highestInUse)) + '</p>' : "") +
+      '<button class="btn btn-outline num-save" style="margin-top:8px;">Save ' +
+        escapeHtml(r.label) + '</button>' +
+    '</div>';
+
+  sheet.innerHTML = '<div class="sheet-handle"></div>' +
+    '<button class="sheet-close" data-sheetclose>&#10005;</button>' +
+    '<div class="sheet-title">Document Numbering</div>' +
+    '<p class="muted" style="font-size:12px;margin-top:-6px;line-height:1.6;">' +
+      'The sample beside each name is exactly what the next document will be ' +
+      'numbered. A number already used on a document is refused rather than ' +
+      'duplicated.</p>' +
+    numberingRows.map(card).join("") +
+    '<button class="btn btn-outline" data-sheetclose style="margin-top:16px;">Close</button>';
+
+  /* The sample is worked out here the same way the server formats it —
+     prefix, then the number padded to the width — so what is shown while
+     typing is what will be issued. */
+  const sample = (row) => {
+    const p = row.querySelector('[data-num="prefix"]').value.trim().toUpperCase();
+    const w = Math.max(1, Math.min(12, parseInt(row.querySelector('[data-num="width"]').value, 10) || 1));
+    const n = Math.max(1, parseInt(row.querySelector('[data-num="next"]').value, 10) || 1);
+    return p + String(n).padStart(w, "0");
+  };
+
+  sheet.querySelectorAll(".num-row").forEach(row => {
+    const paint = () => {
+      const el = sheet.querySelector("#num-sample-" + row.dataset.doc);
+      if(el) el.textContent = sample(row);
+    };
+    row.querySelectorAll("[data-num]").forEach(i => i.addEventListener("input", paint));
+
+    row.querySelector(".num-save").addEventListener("click", async (ev) => {
+      const btn = ev.currentTarget;
+      btn.disabled = true;
+      try{
+        /* The route replies with the stored ROW — prefix, width, next_number —
+           not a formatted number, so the confirmation is built here from what
+           it actually saved rather than from what was typed. A toast that
+           echoes the input would say "saved" even if the server had clamped
+           or refused part of it. */
+        const saved = await api("PUT", "/numbering/" + row.dataset.doc, {
+          prefix: row.querySelector('[data-num="prefix"]').value.trim(),
+          width: row.querySelector('[data-num="width"]').value,
+          nextNumber: row.querySelector('[data-num="next"]').value
+        });
+        const shown = String(saved.prefix || "") +
+          String(saved.next_number).padStart(Math.max(1, saved.width || 1), "0");
+        const el = sheet.querySelector("#num-sample-" + row.dataset.doc);
+        if(el) el.textContent = shown;
+        row.querySelector('[data-num="prefix"]').value = saved.prefix || "";
+        row.querySelector('[data-num="width"]').value = saved.width;
+        row.querySelector('[data-num="next"]').value = saved.next_number;
+        toast("Next document will be " + shown, "ok");
+        /* The billing screen is showing a number from before this change,
+           so it is asked again rather than left stale. */
+        if(typeof updateBillingNumber === "function") updateBillingNumber();
+      }catch(e){ toast(e.message); }
+      btn.disabled = false;
+    });
+  });
+
+  sheet.querySelectorAll("[data-sheetclose]").forEach(b =>
+    b.addEventListener("click", closeAllSheets));
 }
 
 /* ============================================================

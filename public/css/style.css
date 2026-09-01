@@ -1193,6 +1193,15 @@ table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #178a6e;color:#0
   .invoice-canvas, #invoice-page-content{ display:none !important; }
 }
 
+/* DOCUMENT NUMBERING — one card per document, with the sample of the next
+   number sitting beside its name where the eye lands first. */
+.num-row{border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-top:10px;}
+.num-head{display:flex;justify-content:space-between;align-items:baseline;gap:10px;}
+.num-sample{font-family:ui-monospace,Consolas,monospace;font-size:12px;font-weight:700;
+  background:var(--bg-outer);border:1px solid var(--border);border-radius:6px;padding:2px 8px;}
+.num-grid{display:grid;grid-template-columns:1fr 80px 1fr;gap:8px;margin-top:8px;}
+@media (max-width:520px){ .num-grid{grid-template-columns:1fr;} }
+
 /* PRINT HEADER SETTINGS — the sliders, and a preview that is the real
    letterhead rather than a picture of one. The preview sits on white with
    a hairline round it so it reads as paper, not as another app panel. */

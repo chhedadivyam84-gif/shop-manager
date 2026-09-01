@@ -2,6 +2,11 @@ node_modules/
 data/*.db
 data/*.db-*
 data/session-secret.txt
+# The key that GST/e-way bill credentials are encrypted under. It lives
+# beside the database and NOT inside it, which is the entire point: the
+# cloud backup uploads shop-*.db only, so a stolen backup decrypts to
+# nothing. A key in the repository would undo that in one commit.
+data/credential-key.txt
 data/.env
 
 # Any environment file, anywhere. A credentials file that can be committed

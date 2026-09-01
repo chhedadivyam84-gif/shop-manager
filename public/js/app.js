@@ -21034,9 +21034,21 @@ async function renderGstProviderPanel(){
             /* Only the actual passwords are masked. A GSTIN or an API
                address behind dots is an invitation to a typo nobody can
                proofread — and neither is a secret. */
-            : `<input type="${c.secret ? "password" : "text"}" data-gst-cred="${escapeHtml(c.name)}"
-                 autocomplete="${c.secret ? "new-password" : "off"}" spellcheck="false"
-                 placeholder="${escapeHtml(ph)}"${off}>`;
+            : c.secret
+              ? `<div class="gst-secret">
+                   <input type="password" data-gst-cred="${escapeHtml(c.name)}"
+                     autocomplete="new-password" spellcheck="false"
+                     placeholder="${escapeHtml(ph)}"${off}>
+                   ${/* Typing a long secret blind is how a wrong one gets
+                        saved and blamed on the portal. It reveals only what
+                        is being typed NOW — a saved credential is never sent
+                        back to this screen, so there is nothing here to
+                        reveal until somebody types it. */""}
+                   <button type="button" class="btn btn-outline gst-eye"${off}>Show</button>
+                 </div>`
+              : `<input type="text" data-gst-cred="${escapeHtml(c.name)}"
+                   autocomplete="off" spellcheck="false"
+                   placeholder="${escapeHtml(ph)}"${off}>`;
           return `
           <label class="field-label" style="margin-top:10px;">${escapeHtml(c.label || c.name)}
             <span class="muted" style="font-weight:400;"> — ${saved}</span>
@@ -21069,6 +21081,10 @@ async function renderGstProviderPanel(){
   const saveBtn = document.getElementById("gst-save-btn");
   if(saveBtn) saveBtn.addEventListener("click", async (ev)=>{
     const out = document.getElementById("gst-save-result");
+    /* Asked BEFORE anything is disabled or sent. These credentials are what
+       stands between the shop and the GST portal; a mis-tap on a phone
+       should not be able to replace a working key. */
+    if(!confirm("Are you sure you want to update GST / E-Way Bill settings?")) return;
     ev.currentTarget.disabled = true;
     /* Only boxes somebody actually typed into are sent. An empty box means
        "leave it", never "clear it" — otherwise changing the environment
@@ -21092,6 +21108,16 @@ async function renderGstProviderPanel(){
       out.innerHTML = `<div class="pm-warn">${escapeHtml(e.message)}</div>`;
     }
     ev.currentTarget.disabled = false;
+  });
+
+  /* Each eye toggles only its own box. */
+  host.querySelectorAll(".gst-eye").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const input = btn.parentElement.querySelector("input");
+      const showing = input.type === "text";
+      input.type = showing ? "password" : "text";
+      btn.textContent = showing ? "Show" : "Hide";
+    });
   });
 
   document.getElementById("gst-test-btn").addEventListener("click", async (ev)=>{

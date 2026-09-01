@@ -1193,6 +1193,13 @@ table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #178a6e;color:#0
   .invoice-canvas, #invoice-page-content{ display:none !important; }
 }
 
+/* A masked credential and its Show button on one line. .btn is width:100%
+   app-wide, so the button is pinned to its content here or it takes the
+   whole row and leaves the box a few characters wide. */
+.gst-secret{display:flex;gap:8px;align-items:center;}
+.gst-secret input{flex:1 1 auto;min-width:0;}
+.gst-secret .gst-eye{flex:0 0 auto;width:auto;padding:6px 12px;font-size:11px;}
+
 /* DOCUMENT NUMBERING — one card per document, with the sample of the next
    number sitting beside its name where the eye lands first. */
 .num-row{border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-top:10px;}

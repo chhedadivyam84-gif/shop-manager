@@ -19,6 +19,7 @@
    returns a secret to a caller outside the server.
    ============================================================ */
 const db = require("../db");
+const secretBox = require("../secretBox");
 
 /** The settings row, or an empty object if the table is not ready yet. */
 function row() {
@@ -62,8 +63,13 @@ function credentials() {
   const mine = all[provider()] || {};
   const out = {};
   /* The environment wins per KEY, not per provider, so one secret can be
-     moved to the host without moving all of them. */
-  for (const [k, v] of Object.entries(mine)) out[k] = v;
+     moved to the host without moving all of them.
+
+     Each value is unsealed on the way out. Anything stored before
+     encryption existed is not sealed and comes back unchanged, so a shop
+     upgrading is not locked out of e-invoicing until it retypes seven
+     credentials — see server/secretBox.js. */
+  for (const [k, v] of Object.entries(mine)) out[k] = secretBox.open(v);
   return out;
 }
 
@@ -100,9 +106,16 @@ function saveCredentials(providerId, values, remove) {
 
   for (const [k, v] of Object.entries(values || {})) {
     const val = String(v == null ? "" : v).trim();
-    if (val) mine[k] = val;                 // blank leaves the old value alone
+    if (val) mine[k] = secretBox.seal(val);  // blank leaves the old value alone
   }
   for (const k of (remove || [])) delete mine[k];
+
+  /* Anything already stored in the clear is sealed as it is passed, so a
+     shop that edits one field quietly gets the other six encrypted too
+     rather than waiting until each is retyped. */
+  for (const k of Object.keys(mine)) {
+    if (mine[k] && !secretBox.isSealed(mine[k])) mine[k] = secretBox.seal(mine[k]);
+  }
 
   all[key] = mine;
   db.prepare("UPDATE settings SET gst_credentials = ? WHERE id = 1").run(JSON.stringify(all));

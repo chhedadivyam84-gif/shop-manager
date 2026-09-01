@@ -75,6 +75,20 @@ function nextPurchaseChallanNo() {
  * discountAmount, so this just sums rather than re-deriving a share of one
  * total discount the way the sales side does.
  */
+/**
+ * Is GST on for this request?
+ *
+ * 0, "0" and "false" all mean OFF, not only the boolean. This was written
+ * as `req.body.gstEnabled !== false`, so a caller sending 0  which is
+ * exactly what the column stores, and the most natural thing for an
+ * integration to send  had GST charged anyway. The screen sends a real
+ * boolean, so the app itself was never wrong; but "Without GST" has to mean
+ * without GST however it is asked for.
+ */
+function gstIsOn(v) {
+  return !(v === false || v === 0 || v === "0" || v === "false");
+}
+
 function computeTotals({ items, taxType, transport, loading, otherCharges, roundOff, gstEnabled }) {
   const subtotal = round2(items.reduce((s, it) => s + it.amount, 0));
   const discountAmount = round2(items.reduce((s, it) => s + it.discountAmount, 0));
@@ -176,7 +190,7 @@ router.post("/", (req, res) => {
     transport, loading, otherCharges, roundOff, locationId, areaId,
     items: rawItems
   } = req.body;
-  const gstEnabled = req.body.gstEnabled !== false;
+  const gstEnabled = gstIsOn(req.body.gstEnabled);
   const isChallan = req.body.docType === "challan";
 
   if (!Array.isArray(rawItems) || !rawItems.length) {
@@ -239,22 +253,24 @@ router.post("/", (req, res) => {
     });
   }
 
-  // A Purchase Challan is a goods-received note, never a priced bill: no
-  // GST, no discount, no supplier due — regardless of anything the client
-  // sent for those fields. Transport/Loading/Other Charges ARE kept though,
-  // same real-charges-survive-the-challan rule invoices.js uses for a
-  // Delivery Challan.
-  const challanTransport = round2(Math.max(0, Number(transport) || 0));
-  const challanLoading = round2(Math.max(0, Number(loading) || 0));
-  const challanOther = round2(Math.max(0, Number(otherCharges) || 0));
-  const challanTotals = {
-    subtotal: 0, discountAmount: 0, cgst: 0, sgst: 0, igst: 0,
-    transport: challanTransport, loading: challanLoading, otherCharges: challanOther,
-    roundOffAmount: 0, total: round2(challanTransport + challanLoading + challanOther)
-  };
-  const totals = isChallan
-    ? challanTotals
-    : computeTotals({ items, taxType, transport, loading, otherCharges, roundOff, gstEnabled });
+  /* A Purchase Challan is a goods-received note, and it now carries GST
+     when the shop says it does — CGST+SGST, IGST, or none — because a
+     supplier's delivery note usually shows the tax on the goods even though
+     nothing has been billed yet.
+
+     WHAT HAS NOT CHANGED, and this is the important half: a challan still
+     creates NO SUPPLIER DUE. See the bumpDue line below, which stays gated
+     on !isChallan. Goods received are not money owed until the purchase
+     invoice is raised, and showing the tax must not quietly start a debt.
+
+     Discount stays out too — a challan prices the goods as delivered. */
+  const totals = computeTotals({
+    items, taxType, transport, loading, otherCharges,
+    /* Never rounded on a challan: the figure is a statement of what arrived,
+       and a rounded one would not tally against the invoice that follows. */
+    roundOff: isChallan ? false : roundOff,
+    gstEnabled
+  });
   const id = uid("PUR");
   const purchaseNo = isChallan ? nextPurchaseChallanNo() : nextPurchaseNo();
   const purchaseDate = (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) ? date : todayStr();
@@ -341,7 +357,7 @@ router.put("/:id", (req, res) => {
     transport, loading, otherCharges, roundOff, locationId, areaId,
     items: rawItems
   } = req.body;
-  const gstEnabled = req.body.gstEnabled !== false;
+  const gstEnabled = gstIsOn(req.body.gstEnabled);
 
   if (!Array.isArray(rawItems) || !rawItems.length) {
     return res.status(400).json({ error: "Add at least one product to the purchase." });

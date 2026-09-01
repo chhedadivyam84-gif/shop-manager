@@ -15016,8 +15016,12 @@ function setPurDocType(type){
   const challan = isPurChallanMode();
   document.querySelectorAll('[data-pur-doctype]').forEach(b=>
     b.classList.toggle("selected", b.dataset.purDoctype === state.pur.docType));
+  /* The GST controls stay on a challan now — a delivery note from a supplier
+     normally shows the tax on the goods. Payment Type does NOT: a challan
+     still creates no supplier due, so asking how it will be paid would be
+     asking about money that is not owed yet. */
   const pricing = document.getElementById("pur-pricing");
-  if(pricing) pricing.style.display = challan ? "none" : "";
+  if(pricing) pricing.style.display = "";
   const payment = document.getElementById("pur-payment");
   if(payment) payment.style.display = challan ? "none" : "";
   const roundoffRow = document.getElementById("pur-roundoff-row");
@@ -15054,13 +15058,13 @@ function computePurchaseTotals(){
   const transport = round2(Math.max(0, state.pur.transport||0));
   const loading = round2(Math.max(0, state.pur.loading||0));
   const otherCharges = round2(Math.max(0, state.pur.otherCharges||0));
-  // A Purchase Challan is a goods-received note: no GST, no discount, no
-  // supplier due — only Transport/Loading/Other Charges are real, exactly
-  // like a Delivery Challan on the sales side (see server/routes/purchases.js).
-  if(isPurChallanMode()){
-    const total = round2(transport + loading + otherCharges);
-    return {subtotal:0, discountAmount:0, cgst:0, sgst:0, igst:0, transport, loading, otherCharges, roundOffAmount:0, total};
-  }
+  /* A Purchase Challan is priced like a purchase now — the shop chooses
+     CGST+SGST, IGST or no GST, and the goods are totalled either way,
+     because a supplier's delivery note normally shows the tax.
+
+     It still creates NO SUPPLIER DUE. That half is unchanged and lives on
+     the server, gated on !isChallan — goods received are not money owed
+     until the purchase invoice is raised. */
   const lines = state.pur.cart.map(purchaseLineCalc);
   const subtotal = round2(lines.reduce((s,r)=>s+r.amount,0));
   const discountAmount = round2(lines.reduce((s,r)=>s+r.discountAmount,0));
@@ -15075,7 +15079,8 @@ function computePurchaseTotals(){
   }
 
   const preRound = subtotal - discountAmount + cgst + sgst + igst + transport + loading + otherCharges;
-  const total = round2(state.pur.roundOff ? Math.round(preRound) : preRound);
+  /* Never rounded on a challan — see the same rule on the server. */
+  const total = round2((state.pur.roundOff && !isPurChallanMode()) ? Math.round(preRound) : preRound);
   const roundOffAmount = round2(total - preRound);
 
   return {subtotal, discountAmount, cgst, sgst, igst, transport, loading, otherCharges, roundOffAmount, total};

@@ -7613,6 +7613,11 @@ function openAddCustomer(editing){
       ? `<button class="btn btn-outline" id="nc-wa-groups" style="margin-top:10px;">Manage WhatsApp Groups</button>`
       : `<p class="muted" style="font-size:11px;margin-top:8px;">Groups can be added once the customer is saved.</p>`}
     <label class="field-label">Address</label><textarea id="nc-address" rows="2" placeholder="Shop / site address — shown on the invoice">${editing?escapeHtml(editing.address||""):""}</textarea>
+    ${/* Under the address, because that is what it is part of and where
+         anyone filling this form looks for it. It sat below GST Type
+         before — past the address, the area, the state and the tax type —
+         far enough down that it read as missing entirely. */""}
+    <label class="field-label">PIN Code <span class="muted" style="font-weight:400;">— six digits; needed for e-way bill</span></label><input type="text" id="nc-pincode" inputmode="numeric" maxlength="6" value="${editing?escapeHtml(editing.pin_code||""):""}" placeholder="e.g. 400064">
     <label class="field-label">Location / Area <span class="muted" style="font-weight:400;">— optional</span></label>
     <div id="nc-area-picker"></div>
     <p class="muted" style="font-size:11px;margin-top:5px;">Used on every bill for this customer unless a different area is chosen on the bill itself.</p>
@@ -7623,7 +7628,6 @@ function openAddCustomer(editing){
       <button class="chip ${gstType==="CGST_SGST"?'selected':''}" data-gsttype="CGST_SGST">CGST + SGST (9% + 9%)</button>
       <button class="chip ${gstType==="IGST"?'selected':''}" data-gsttype="IGST">IGST (18%)</button>
     </div>
-    <label class="field-label">PIN Code <span class="muted" style="font-weight:400;">— six digits; needed for e-way bill</span></label><input type="text" id="nc-pincode" inputmode="numeric" maxlength="6" value="${editing?escapeHtml(editing.pin_code||""):""}" placeholder="e.g. 400064">
     <label class="field-label">GSTIN (optional)</label><input type="text" id="nc-gst" value="${editing?escapeHtml(editing.gst||""):""}">
     <label class="field-label">Credit limit</label><input type="number" id="nc-credit" value="${editing?editing.credit_limit:0}">
     ${!editing && isOwner() ? `
@@ -8706,6 +8710,61 @@ async function openTemplatedDoc(docKey, doc, opts){
 /* The templated documents share one canvas, the way they now share one
    preview. Held here so the Print button in the bar can reach it. */
 let docCanvas = null;
+
+/**
+ * A PLAIN RULED DOCUMENT ON THE CANVAS.
+ *
+ * The ledger, the cash book, the bank book and the product query are the
+ * same document with different columns: a heading, a line of context, and
+ * one ruled table. Each had its own copy of the same forty lines of CSS,
+ * each opened its own browser tab, and each called window.print() on load —
+ * so all four printed BLIND, with no preview, and a popup blocker could
+ * swallow any of them without saying so.
+ *
+ * One function now, and one stylesheet. They gain a preview, the shop’s
+ * chosen paper, and the same validation every other document gets.
+ *
+ * @param o.title    what the preview bar is called
+ * @param o.heading  the line at the top of the sheet
+ * @param o.sub      the line under it — a date range, a party, a filter
+ * @param o.table    the <table> markup
+ * @param o.after    anything below the table, such as a totals line
+ * @param o.widths   column widths in px, in order; 0 leaves one flexible
+ * @param o.landscape  wide tables turn the sheet rather than shrink
+ */
+function openRuledDoc(o){
+  const widths = (o.widths || []).map((w, i) =>
+    w > 0 ? '.lg-doc th:nth-child(' + (i+1) + '),.lg-doc td:nth-child(' + (i+1) + '){width:' + w + 'px;}' : "").join("");
+
+  const css = `
+      .lg-doc{font-family:Arial,Helvetica,sans-serif;color:#000;}
+      .lg-doc h1{font-size:16px;margin:0 0 2px;}
+      .lg-doc .sub{font-size:11px;color:#555;margin-bottom:14px;}
+      .lg-doc table{width:100%;border-collapse:collapse;font-size:11px;table-layout:fixed;}
+      .lg-doc th,.lg-doc td{border:1px solid #000;padding:4px 6px;text-align:left;
+        overflow-wrap:anywhere;}
+      /* A heading never breaks inside a word, and a figure never wraps —
+         the two rules the bill learned the hard way, applied here too. */
+      .lg-doc th{background:#eee;overflow-wrap:normal;word-break:normal;}
+      .lg-doc .num{text-align:right;white-space:nowrap;overflow-wrap:normal;
+        font-variant-numeric:tabular-nums;}
+      .lg-doc .totals{margin-top:10px;font-size:12px;}
+      ` + widths;
+
+  const html = '<div class="lg-doc"><h1>' + o.heading + '</h1>' +
+    (o.sub ? '<div class="sub">' + o.sub + "</div>" : "") +
+    (o.table || "") + (o.after || "") + "</div>";
+
+  const p = PrintCanvas.prefs();
+  const sh = PrintCanvas.sheet(o.landscape ? { ...p, orientation: "landscape" } : p);
+  document.getElementById("fs-doc-title").textContent = o.title || "Document";
+  docCanvas = PrintCanvas.mount(document.getElementById("doc-canvas"), html, {
+    sheet: sh, css: css, title: o.title || "Document",
+    onReady: (h) => { h.fit(); showDocWarnings(h.validate()); }
+  });
+  document.getElementById("fs-doc").classList.add("show");
+  return docCanvas;
+}
 
 /** Same warning row as the bill's, on the same measurements. */
 function showDocWarnings(v){
@@ -13469,22 +13528,21 @@ function openCashEntry(type, editEntry){
 }
 function printCashBook(){
   const rows = [...state.cbEntries].reverse();
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Cash Book</title>
-    <style>
-      body{font-family:Arial,Helvetica,sans-serif;padding:20px;color:#000;}
-      h1{font-size:16px;margin:0 0 2px;} .sub{font-size:11px;color:#555;margin-bottom:14px;}
-      table{width:100%;border-collapse:collapse;font-size:11px;}
-      th,td{border:1px solid #000;padding:4px 6px;text-align:left;}
-      th{background:#eee;} .num{text-align:right;}
-    </style></head><body>
-    <h1>Cash Book</h1>
-    <div class="sub">${state.cbFrom || state.cbTo ? (state.cbFrom||"…")+" to "+(state.cbTo||"…") : "All entries"}</div>
-    <table><thead><tr><th>Date</th><th>Party</th><th>Category</th><th>Remarks</th><th class="num">Cash In</th><th class="num">Cash Out</th><th class="num">Balance</th></tr></thead>
+  /* On the canvas, with a preview, like every other document. */
+  const table = `<table><thead><tr><th>Date</th><th>Party</th><th>Category</th><th>Remarks</th><th class="num">Cash In</th><th class="num">Cash Out</th><th class="num">Balance</th></tr></thead>
     <tbody>${rows.map(e=>`<tr><td>${e.date}</td><td>${escapeHtml(e.party||"")}</td><td>${escapeHtml(e.category||"")}</td><td>${escapeHtml(e.remarks||"")}</td>
-      <td class="num">${e.type==="in"?fmt(e.amount):""}</td><td class="num">${e.type==="out"?fmt(e.amount):""}</td><td class="num">${fmt(e.runningBalance)}</td></tr>`).join("")}</tbody></table>
-    <script>window.onload=()=>window.print();</script>
-    </body></html>`;
-  openPrintWindow(html, { title: "Cash Book" });
+      <td class="num">${e.type==="in"?fmt(e.amount):""}</td><td class="num">${e.type==="out"?fmt(e.amount):""}</td><td class="num">${fmt(e.runningBalance)}</td></tr>`).join("")}</tbody></table>`;
+  openRuledDoc({
+    title: "Cash Book",
+    heading: "Cash Book",
+    sub: state.cbFrom || state.cbTo
+      ? (state.cbFrom||"…") + " to " + (state.cbTo||"…") : "All entries",
+    table,
+    /* Date and the three money columns hold their width so the running
+       balance reads straight down the page; Party, Category and Remarks
+       share what is left. A date never wraps. */
+    widths: [78, 0, 0, 0, 76, 76, 82]
+  });
 }
 
 /* ============================================================
@@ -14024,22 +14082,21 @@ function openManageBankAccounts(){
 }
 function printBankBook(){
   const rows = [...state.bbEntries].reverse();
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Bank Book</title>
-    <style>
-      body{font-family:Arial,Helvetica,sans-serif;padding:20px;color:#000;}
-      h1{font-size:16px;margin:0 0 2px;} .sub{font-size:11px;color:#555;margin-bottom:14px;}
-      table{width:100%;border-collapse:collapse;font-size:11px;}
-      th,td{border:1px solid #000;padding:4px 6px;text-align:left;}
-      th{background:#eee;} .num{text-align:right;}
-    </style></head><body>
-    <h1>Bank Book</h1>
-    <div class="sub">${state.bbFrom || state.bbTo ? (state.bbFrom||"…")+" to "+(state.bbTo||"…") : "All entries"}</div>
-    <table><thead><tr><th>Date</th><th>Party</th><th>Category</th><th>Remarks</th><th class="num">Bank In</th><th class="num">Bank Out</th><th class="num">Balance</th></tr></thead>
+  /* On the canvas, with a preview, like every other document. */
+  const table = `<table><thead><tr><th>Date</th><th>Party</th><th>Category</th><th>Remarks</th><th class="num">Bank In</th><th class="num">Bank Out</th><th class="num">Balance</th></tr></thead>
     <tbody>${rows.map(e=>`<tr><td>${e.date}</td><td>${escapeHtml(e.party||"")}</td><td>${escapeHtml(e.category||"")}</td><td>${escapeHtml(e.remarks||"")}</td>
-      <td class="num">${e.type==="in"?fmt(e.amount):""}</td><td class="num">${e.type==="out"?fmt(e.amount):""}</td><td class="num">${fmt(e.runningBalance)}</td></tr>`).join("")}</tbody></table>
-    <script>window.onload=()=>window.print();</script>
-    </body></html>`;
-  openPrintWindow(html, { title: "Bank Book" });
+      <td class="num">${e.type==="in"?fmt(e.amount):""}</td><td class="num">${e.type==="out"?fmt(e.amount):""}</td><td class="num">${fmt(e.runningBalance)}</td></tr>`).join("")}</tbody></table>`;
+  openRuledDoc({
+    title: "Bank Book",
+    heading: "Bank Book",
+    sub: state.bbFrom || state.bbTo
+      ? (state.bbFrom||"…") + " to " + (state.bbTo||"…") : "All entries",
+    table,
+    /* Date and the three money columns hold their width so the running
+       balance reads straight down the page; Party, Category and Remarks
+       share what is left. A date never wraps. */
+    widths: [78, 0, 0, 0, 76, 76, 82]
+  });
 }
 
 /* ============================================================
@@ -22024,9 +22081,26 @@ function printProductQuery(){
     </table>
     </div>`;
 
-  document.getElementById("fs-pq-report").classList.add("show");
-  fitPqReportToOnePage();
-  window.print();
+  /* ON THE CANVAS, LANDSCAPE. Seventeen columns do not fit a portrait
+     sheet, which is why this one had a named landscape @page declared in
+     style.css — a rule that had to live there because an @page written into
+     innerHTML is ignored, and which flipped nothing else only because it
+     was named. The canvas takes the orientation as a parameter instead, so
+     there is no named page to keep in step with anything.
+
+     The sheet's CSS is scoped to #pq-report-content, so that wrapper goes
+     into the canvas with it and every selector still matches. */
+  const pqHtml = document.getElementById("pq-report-content").innerHTML;
+  const p = PrintCanvas.prefs();
+  const sh = PrintCanvas.sheet({ ...p, orientation: "landscape" });
+  document.getElementById("fs-doc-title").textContent = "Product Query";
+  docCanvas = PrintCanvas.mount(document.getElementById("doc-canvas"),
+    '<div id="pq-report-content">' + pqHtml + '</div>',
+    {
+      sheet: sh, title: "Product Query",
+      onReady: (h) => { h.fit(); showDocWarnings(h.validate()); }
+    });
+  document.getElementById("fs-doc").classList.add("show");
 }
 
 /* A4 landscape at 96dpi, less the 8mm margins declared on @page pqLandscape. */

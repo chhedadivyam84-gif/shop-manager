@@ -6709,21 +6709,37 @@ function wirePartyLedgerActions(sheet, detail, partyType){
 function printPartyLedger(detail, partyLabel){
   const rows = [...detail.ledger].reverse();
   const isReceivable = partyLabel==="Customer";
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(detail.name)} — Ledger</title>
-    <style>
-      body{font-family:Arial,Helvetica,sans-serif;padding:20px;color:#000;}
-      h1{font-size:16px;margin:0 0 2px;} .sub{font-size:11px;color:#555;margin-bottom:14px;}
-      table{width:100%;border-collapse:collapse;font-size:11px;}
-      th,td{border:1px solid #000;padding:4px 6px;text-align:left;}
-      th{background:#eee;} .num{text-align:right;}
-      .totals{margin-top:10px;font-size:12px;}
-      /* This opens as its own blank browser tab (window.open), so it needs
-         its own way back — there's no app header/nav here to fall back on.
-         Hidden on the printed page itself; only shown on screen. */
-      .back-link{display:inline-block;margin-bottom:12px;font-size:12px;color:#1e2a4a;text-decoration:none;}
-      @media print{ .back-link{display:none;} }
-    </style></head><body>
-    <a href="#" class="back-link" onclick="window.close();return false;">&larr; Back to Home</a>
+  /* The ledger's own stylesheet, handed to the canvas with the document.
+     It used to be a whole standalone page opened in a second browser tab,
+     printed blind — there was no preview at all, and a popup blocker could
+     swallow the whole thing. The canvas gives it the same sheet, the same
+     margins and the same preview every other document now gets. */
+  const css = `
+      .lg-doc{font-family:Arial,Helvetica,sans-serif;color:#000;}
+      .lg-doc h1{font-size:16px;margin:0 0 2px;}
+      .lg-doc .sub{font-size:11px;color:#555;margin-bottom:14px;}
+      .lg-doc table{width:100%;border-collapse:collapse;font-size:11px;table-layout:fixed;}
+      .lg-doc th,.lg-doc td{border:1px solid #000;padding:4px 6px;text-align:left;
+        overflow-wrap:anywhere;}
+      /* A heading never breaks inside a word, and a figure never wraps —
+         the same two rules the bill learned the hard way. */
+      .lg-doc th{background:#eee;overflow-wrap:normal;word-break:normal;}
+      .lg-doc .num{text-align:right;white-space:nowrap;overflow-wrap:normal;
+        font-variant-numeric:tabular-nums;}
+      /* Dates and the three money columns hold their width so the figures
+         line up down the page; Remarks takes whatever is left. */
+      /* A date is one thing and wraps to two lines the moment it is a few
+         pixels short — "2026-08-31" broke after the month at 62px, and a
+         column of half-dates is unreadable. It never wraps now. */
+      .lg-doc th:nth-child(1),.lg-doc td:nth-child(1){width:78px;white-space:nowrap;}
+      .lg-doc th:nth-child(2),.lg-doc td:nth-child(2){width:58px;}
+      .lg-doc th:nth-child(3),.lg-doc td:nth-child(3){width:96px;}
+      .lg-doc th:nth-child(4),.lg-doc td:nth-child(4),
+      .lg-doc th:nth-child(5),.lg-doc td:nth-child(5),
+      .lg-doc th:nth-child(6),.lg-doc td:nth-child(6){width:76px;}
+      .lg-doc .totals{margin-top:10px;font-size:12px;}`;
+
+  const html = `<div class="lg-doc">
     <h1>${escapeHtml(detail.name)} — Party Ledger</h1>
     <div class="sub">${partyLabel} · ${detail.phone?escapeHtml(detail.phone):""}${detail.gst?" · GST "+escapeHtml(detail.gst):""}</div>
     <table><thead><tr><th>Date</th><th>Type</th><th>Invoice No</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th><th>Remarks</th></tr></thead>
@@ -6738,9 +6754,16 @@ function printPartyLedger(detail, partyLabel){
       ${isReceivable ? `Total Sales: ${fmt(detail.totalSales)} &nbsp; Total Received: ${fmt(detail.totalPaymentReceived)} &nbsp; <strong>Outstanding Receivable: ${fmt(detail.outstandingReceivable)}</strong>`
         : `Total Purchases: ${fmt(detail.totalPurchases)} &nbsp; Total Paid: ${fmt(detail.totalPaymentPaid)} &nbsp; <strong>Outstanding Payable: ${fmt(detail.outstandingPayable)}</strong>`}
     </div>
-    <script>window.onload=()=>window.print();</script>
-    </body></html>`;
-  openPrintWindow(html, { title: "Ledger" });
+    </div>`;
+
+  const p = PrintCanvas.prefs();
+  const sh = PrintCanvas.sheet(p);
+  document.getElementById("fs-doc-title").textContent = "Ledger";
+  docCanvas = PrintCanvas.mount(document.getElementById("doc-canvas"), html, {
+    sheet: sh, css: css, title: detail.name + " — Ledger",
+    onReady: (h) => { h.fit(); showDocWarnings(h.validate()); }
+  });
+  document.getElementById("fs-doc").classList.add("show");
 }
 
 /** Reads a <input type=file> into {filename, mimeType, dataBase64} for the payment attachment field, or null if empty. */
@@ -21439,16 +21462,62 @@ function readPeOpts(){
   peOpts.logo      = document.getElementById("pe-logo").checked;
 }
 
+let reportCanvas = null;
+
 function renderPrintPreview(){
   readPeOpts();
   const cfg = state.settings || {};
   const out = PrintEngine.renderSheet(peDoc, peOpts, cfg);
   const content = document.getElementById("pe-content");
 
-  // Show the sheet at true page size so the preview is the printout.
-  content.style.width = out.dims.innerW + "px";
-  content.style.padding = out.dims.marginMm + "mm";
-  content.innerHTML = out.html;
+  /* ON THE CANVAS, like every other document.
+
+     The report used to be shown by sizing this div to the page and then
+     printing the APPLICATION, with a stylesheet hiding the app around it —
+     the same arrangement the bill had, with the same consequence: the paper
+     depended on the screen it was previewed on.
+
+     The sheet's own CSS is scoped to #pe-content, so that wrapper travels
+     into the canvas with it and every one of those selectors still matches.
+     The width and padding do not: the canvas is already the page, and a
+     second set of margins inside it is what put the report at 194mm in the
+     preview and 198mm on paper elsewhere in this app. */
+  content.style.width = "";
+  content.style.padding = "";
+  content.innerHTML = "";
+
+  reportCanvas = PrintCanvas.mount(content,
+    '<div id="pe-content">' + out.html + '</div>',
+    {
+      sheet: {
+        w: out.dims.pageW, h: out.dims.pageH,
+        named: (out.dims.pageW === 210 && out.dims.pageH === 297) ? "A4"
+             : (out.dims.pageW === 148 && out.dims.pageH === 210) ? "A5" : null,
+        orientation: out.dims.pageW > out.dims.pageH ? "landscape" : "portrait"
+      },
+      margin: out.dims.marginMm,
+      title: (peDoc && peDoc.title) || "Report",
+      onReady: (h) => {
+        h.fit();
+        /* The note under the sheet, now measured against the real page box
+           rather than estimated. It says how many sheets this will take and
+           whether anything runs off the side — the two things worth knowing
+           before the paper comes out, not after. */
+        const note = document.getElementById("pe-pagenote");
+        if(note){
+          const v = h.validate();
+          const wide = (v.issues || []).find(i => i.kind === "wide");
+          note.textContent = wide ? wide.text
+            : v.pages > 1 ? "This will print on " + v.pages + " sheets."
+            : "";
+        }
+      }
+    });
+  /* Everything below this point is the old fit-and-shrink pass, which
+     measured the on-screen box and scaled it. The canvas lays the sheet out
+     at true size and reports what it finds, so none of it is needed — kept
+     rather than cut while the other modules are still being moved over. */
+  return;
 
   const box = document.getElementById("pe-scale");
   const note = document.getElementById("pe-pagenote");
@@ -21565,7 +21634,15 @@ function wirePrintEngine(){
   document.getElementById("pe-options-btn").addEventListener("click", ()=>{
     document.querySelector(".pe-bar").classList.toggle("pe-options-open");
   });
-  document.getElementById("pe-print").addEventListener("click", ()=>{ renderPrintPreview(); window.print(); });
+  document.getElementById("pe-print").addEventListener("click", ()=>{
+    renderPrintPreview();
+    /* The canvas has to finish laying the sheet out before it can be
+       printed — printing an unlaid-out document prints an empty page. */
+    setTimeout(()=>{
+      if(reportCanvas && reportCanvas.print()) return;
+      window.print();
+    }, 250);
+  });
   document.getElementById("pe-pdf").addEventListener("click", pePdf);
   document.getElementById("pe-xlsx").addEventListener("click", peXlsx);
   document.getElementById("pe-csv").addEventListener("click", peExportCsv);

@@ -368,12 +368,25 @@
     };
 
     frame.addEventListener("load", function () {
-      /* Before anything measures or shows the sheet: a clipped heading
-         changes nothing about the page's height, but it is the difference
-         between a document and a defect. */
-      handle.fixClippedHeadings();
-      handle.fit();
-      if (typeof opt.onReady === "function") opt.onReady(handle);
+      /* LET THE LAYOUT SETTLE FIRST.
+
+         load fires when the document and its subresources are there, which
+         is not the same as the browser having laid them out. Measured: a
+         four-row report reported "This will print on 2 sheets" at this
+         moment and exactly one sheet a moment later — nothing had changed
+         but the timing, and the warning was simply wrong.
+
+         Two frames, because the first is where style and layout are
+         flushed and the second is where the result can be read back. */
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          /* A clipped heading changes nothing about the page's height, but
+             it is the difference between a document and a defect. */
+          handle.fixClippedHeadings();
+          handle.fit();
+          if (typeof opt.onReady === "function") opt.onReady(handle);
+        });
+      });
     });
 
     /* Watch the HOST, not the window.

@@ -20995,6 +20995,11 @@ async function renderGstProviderPanel(){
       ).join("") : `<div class="erp-kv"><span>Credentials</span><b>none needed</b></div>`}
     </div>
 
+    ${/* The card above only REPORTS — it says set or not set and never what
+         a credential is. The boxes that change them are further down the
+         screen, which is easy to miss on a phone, so this goes to them and
+         puts the cursor in the first one. */""}
+    <button class="btn btn-outline" id="gst-edit-btn" style="margin-top:10px;">Edit GST / E-Way Bill Settings</button>
     <button class="btn btn-outline" id="gst-test-btn" style="margin-top:10px;">Test connection</button>
     <div id="gst-test-result" style="margin-top:8px;"></div>
 
@@ -21068,7 +21073,10 @@ async function renderGstProviderPanel(){
           and <b>Test connection</b> logs in and tells you whether they worked.
         </p>`}
 
-      <button class="btn btn-gold" id="gst-save-btn" style="margin-top:12px;">Save provider settings</button>
+      <button class="btn btn-gold" id="gst-save-btn" style="margin-top:12px;">Save Changes</button>
+      ${/* Clears what has been TYPED, never what is stored. A credential
+           already saved is not on this screen to be cancelled. */""}
+      <button class="btn btn-outline" id="gst-cancel-btn" style="margin-top:8px;">Cancel</button>
       <div id="gst-save-result" style="margin-top:8px;"></div>
     </div>
 
@@ -21108,6 +21116,31 @@ async function renderGstProviderPanel(){
       out.innerHTML = `<div class="pm-warn">${escapeHtml(e.message)}</div>`;
     }
     ev.currentTarget.disabled = false;
+  });
+
+  const editBtn = host.querySelector("#gst-edit-btn");
+  if(editBtn) editBtn.addEventListener("click", () => {
+    const first = host.querySelector("[data-gst-cred]:not([disabled])");
+    const card = host.querySelector("#gst-save-btn");
+    (first || card).scrollIntoView({ behavior:"smooth", block:"center" });
+    if(first) setTimeout(() => first.focus(), 350);
+    else toast("This provider needs no credentials — choose nic to connect for real.");
+  });
+
+  const cancelBtn = host.querySelector("#gst-cancel-btn");
+  if(cancelBtn) cancelBtn.addEventListener("click", () => {
+    let typed = 0;
+    host.querySelectorAll("[data-gst-cred]").forEach(i => { if(i.value) typed++; i.value = ""; });
+    /* The password boxes go back to being masked, so a Show left on does
+       not survive the cancel. */
+    host.querySelectorAll(".gst-eye").forEach(b => {
+      const input = b.parentElement.querySelector("input");
+      if(input) input.type = "password";
+      b.textContent = "Show";
+    });
+    const out = document.getElementById("gst-save-result");
+    if(out) out.innerHTML = "";
+    toast(typed ? "Changes discarded — nothing was saved." : "Nothing to cancel.", "ok");
   });
 
   /* Each eye toggles only its own box. */

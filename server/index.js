@@ -151,10 +151,30 @@ app.set("trust proxy", 1);
 // Raised from Express's 100kb default so a payment's base64-encoded receipt
 // attachment (up to 8MB decoded, see attachments.js) fits in one JSON request.
 app.use(express.json({ limit: "12mb" }));
+/* Sessions in a file, not in memory.
+
+   The thirty days below was never the reason staff got thrown back to the
+   PIN screen mid-bill. express-session with no `store` uses an IN-MEMORY
+   one, and memory does not survive the process — so every restart, every
+   deploy, and every spin-down of a hosted instance logged the whole shop
+   out at once. Raising the timeout would have changed nothing.
+
+   Its own file, deliberately: a session is not shop data and does not
+   belong in the backup that goes to the cloud every fifteen minutes, and on
+   a multi-company copy the shop database changes underneath you when the
+   company is switched. */
+const { SqliteSessionStore } = require("./sessionStore");
 app.use(session({
+  store: new SqliteSessionStore({
+    dir: process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR)
+                              : path.join(__dirname, "..", "data")
+  }),
   secret: sessionSecret,
   resave: false,
   saveUninitialized: false,
+  /* Every request pushes the expiry back, so somebody billing all day is
+     never logged out for having been logged in too long. */
+  rolling: true,
   cookie: {
     maxAge: 1000 * 60 * 60 * 24 * 30, // 30 days — shop staff shouldn't have to re-enter the PIN daily
     httpOnly: true,

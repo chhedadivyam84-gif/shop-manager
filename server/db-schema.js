@@ -1629,37 +1629,6 @@ CREATE INDEX IF NOT EXISTS idx_txn_categories_kind ON txn_categories(kind, activ
   }
 })();
 
-/* The seeded title said ESTIMATE CHALLAN on the SALES INVOICE, so shops that
-   installed before that was fixed still carry it in their saved template —
-   and a saved template beats the title in Settings, so their GST bills print
-   as estimates however they set that field.
-
-   Only the string WE seeded is replaced, and only where the shop's own
-   Settings say something different — so a shop that deliberately typed
-   "ESTIMATE CHALLAN" over the top of a matching setting keeps it, and a
-   title anyone has edited to anything else is never touched. Nothing is
-   cleared: the wrong value is replaced by the shop's own configured one, so
-   the sheet ends up headed what the shop already asked for. */
-(function retitleInvoiceTemplatesThatSayEstimate() {
-  const rows = db.prepare(
-    "SELECT id, config FROM doc_templates WHERE doc_type = 'sales_invoice'"
-  ).all();
-  if (!rows.length) return;
-  const s = db.prepare("SELECT invoice_title FROM settings WHERE id = 1").get();
-  const want = ((s && s.invoice_title) || "").trim();
-  /* Nothing to correct TO, so nothing is changed. */
-  if (!want || want.toUpperCase() === "ESTIMATE CHALLAN") return;
-
-  const upd = db.prepare("UPDATE doc_templates SET config = ? WHERE id = ?");
-  for (const r of rows) {
-    let cfg;
-    try { cfg = JSON.parse(r.config); } catch (e) { continue; }
-    if (!cfg || String(cfg.title || "").trim().toUpperCase() !== "ESTIMATE CHALLAN") continue;
-    cfg.title = want;
-    upd.run(JSON.stringify(cfg), r.id);
-  }
-})();
-
 (function alignTemplateLabelsAndWidths() {
   const reg = require("./printRegistry");
   const rows = db.prepare("SELECT id, doc_type, config FROM doc_templates").all();
@@ -3189,6 +3158,47 @@ CREATE INDEX IF NOT EXISTS idx_pl_log_product ON price_list_log(product_id, at);
    deliberately: one spelling of a name across the app beats a second list
    of names drifting from the first. */
 addColumn("customers", "salesman", "TEXT DEFAULT ''");
+
+/* MOVED HERE DELIBERATELY, AND THIS IS WHY.
+
+   This reads settings.invoice_title  a column added by addColumn() above.
+   It used to sit 769 lines EARLIER, before that column existed. On a
+   database that already had the column it worked; on a FRESH one it threw
+   "no such column: invoice_title" during startup, and a server that cannot
+   start is a deploy that fails. Nine of them, until this was found by
+   booting the build against an empty data directory.
+
+   Data migrations belong after the columns they read. */
+/* The seeded title said ESTIMATE CHALLAN on the SALES INVOICE, so shops that
+   installed before that was fixed still carry it in their saved template —
+   and a saved template beats the title in Settings, so their GST bills print
+   as estimates however they set that field.
+
+   Only the string WE seeded is replaced, and only where the shop's own
+   Settings say something different — so a shop that deliberately typed
+   "ESTIMATE CHALLAN" over the top of a matching setting keeps it, and a
+   title anyone has edited to anything else is never touched. Nothing is
+   cleared: the wrong value is replaced by the shop's own configured one, so
+   the sheet ends up headed what the shop already asked for. */
+(function retitleInvoiceTemplatesThatSayEstimate() {
+  const rows = db.prepare(
+    "SELECT id, config FROM doc_templates WHERE doc_type = 'sales_invoice'"
+  ).all();
+  if (!rows.length) return;
+  const s = db.prepare("SELECT invoice_title FROM settings WHERE id = 1").get();
+  const want = ((s && s.invoice_title) || "").trim();
+  /* Nothing to correct TO, so nothing is changed. */
+  if (!want || want.toUpperCase() === "ESTIMATE CHALLAN") return;
+
+  const upd = db.prepare("UPDATE doc_templates SET config = ? WHERE id = ?");
+  for (const r of rows) {
+    let cfg;
+    try { cfg = JSON.parse(r.config); } catch (e) { continue; }
+    if (!cfg || String(cfg.title || "").trim().toUpperCase() !== "ESTIMATE CHALLAN") continue;
+    cfg.title = want;
+    upd.run(JSON.stringify(cfg), r.id);
+  }
+})();
 
 /* Every size that predates the printed barcode gets one now, so a shop that
    has been trading for a year can print labels for its whole rack on the

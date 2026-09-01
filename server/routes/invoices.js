@@ -433,6 +433,41 @@ router.post("/", (req, res) => {
      comment says does not exist. */
   const series = isChallan ? "challan" : "invoice";
   const autoOff = docNumber.config(series).auto_enabled !== 1;
+
+  /* REUSING A DELETED NUMBER IS THE ONLY WAY TO SET ONE BY HAND.
+
+     There is deliberately no general "edit the invoice number" here. A
+     number is issued automatically and in order, and the single
+     exception is a number a deletion actually freed  which the owner
+     may put back into use, with a reason, and once.
+
+     Three gates, all on the server, because a check that only exists in
+     the browser is not a check:
+       - the owner, and nobody else;
+       - the number must still be genuinely deleted AT THIS MOMENT, asked
+         again rather than trusted from whatever list the screen drew;
+       - a reason, which goes into the audit trail with it. */
+  const wantsManual = req.body.useManualNumber === true && req.body.manualNumber;
+  if (wantsManual) {
+    if (!req.session || req.session.role !== "owner") {
+      return res.status(403).json({
+        error: "Only the shop owner can reuse a deleted document number."
+      });
+    }
+    const wanted = String(req.body.manualNumber).trim();
+    if (!docNumber.isDeletedNumber(series, wanted)) {
+      return res.status(400).json({
+        error: docNumber.isTaken(series, wanted)
+          ? `${wanted} is already on another document.`
+          : `${wanted} was never issued and then deleted, so it cannot be reused. ` +
+            "Only a number a deletion actually freed can be put back into use."
+      });
+    }
+    if (!String(req.body.reuseReason || "").trim()) {
+      return res.status(400).json({ error: "Give a reason for reusing this number." });
+    }
+  }
+
   let challanNo;
   try {
     challanNo = docNumber.resolve(series, {
@@ -450,8 +485,9 @@ router.post("/", (req, res) => {
   }
   if (req.body.useManualNumber === true || (autoOff && req.body.manualNumber)) {
     docNumber.logNumber(req, {
-      docType: series, action: "manual", docId: id, docNumber: challanNo,
-      detail: "Number entered by hand instead of the automatic one"
+      docType: series, action: "reused", docId: id, docNumber: challanNo,
+      detail: "Deleted number put back into use by the owner  reason: " +
+        String(req.body.reuseReason || "").trim().slice(0, 300)
     });
   }
   // Same optional-backdate pattern as purchases.js/quotations.js — falls

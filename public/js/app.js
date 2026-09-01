@@ -1310,20 +1310,16 @@ async function initApp(){
   document.getElementById("paper-a4").addEventListener("click", ()=>setPaper("A4"));
   document.getElementById("bill-panel-btn").addEventListener("click", toggleBillPanel);
   document.getElementById("inv-download").addEventListener("click", downloadInvoicePdf);
-  /* Reveals the box, seeded with the number that WOULD have been used, so
-     the shop edits a real number rather than typing one from nothing. */
-  const numEditBtn = document.getElementById("billing-number-edit");
-  if(numEditBtn) numEditBtn.addEventListener("click", () => {
+  const numReuseBtn = document.getElementById("billing-number-reuse");
+  if(numReuseBtn) numReuseBtn.addEventListener("click", () => {
     const wrap = document.getElementById("billing-number-manual");
-    const box = document.getElementById("billing-number-input");
     const on = wrap.style.display === "none";
     wrap.style.display = on ? "" : "none";
-    numEditBtn.textContent = on ? "Use automatic" : "\u270E Edit";
-    if(on){
-      const shown = (document.getElementById("billing-number-display").textContent || "").trim();
-      if(shown && shown !== "\u2014") box.value = shown;
-      box.focus(); box.select();
-    } else box.value = "";
+    numReuseBtn.textContent = on ? "Use the automatic number" : "\u21BB Reuse a deleted number";
+    if(!on){
+      document.getElementById("billing-number-input").value = "";
+      document.getElementById("billing-number-reason").value = "";
+    }
   });
 
   document.getElementById("inv-print").addEventListener("click", printInvoiceOnePage);
@@ -3998,6 +3994,7 @@ async function renderBillingNumber(){
      default. The entry screen said "Estimate No." above a document the
      paper calls a TAX INVOICE, which is the sort of disagreement that gets
      noticed at exactly the wrong moment. */
+  refreshDeletedNumbers();
   if(label){
     const cfg = state.settings || {};
     const title = ((challan ? cfg.challan_title : cfg.invoice_title) || "").trim();
@@ -4799,14 +4796,24 @@ async function completeSale(){
       // document with no date.
       date: (document.getElementById("billing-date") || {}).value || undefined
     };
-    /* Only when the box is OPEN and has something in it. Closed, or open
-       and empty, the bill numbers itself exactly as it always has — this
-       cannot change what a normal save does. */
+    /* Only when the picker is OPEN and a number is chosen. Closed, or open
+        with nothing picked, the bill numbers itself exactly as it always
+        has — this cannot change what a normal save does.
+
+        The server checks all of this again: owner, genuinely deleted, and a
+        reason. These are here so the answer comes back before the bill is
+        built, not to be relied on. */
     const manualWrap = document.getElementById("billing-number-manual");
     const manualBox = document.getElementById("billing-number-input");
+    const reasonBox = document.getElementById("billing-number-reason");
     if(manualWrap && manualBox && manualWrap.style.display !== "none" && manualBox.value.trim()){
+      const reason = (reasonBox && reasonBox.value.trim()) || "";
+      if(!reason){ toast("Give a reason for reusing this number."); return; }
+      if(!confirm("Reuse " + manualBox.value.trim() + " for this bill?\n\n" +
+                  "It will be recorded against your name with the reason you gave.")) return;
       payload.useManualNumber = true;
       payload.manualNumber = manualBox.value.trim();
+      payload.reuseReason = reason;
     }
 
     const invoice = editingId
@@ -21353,6 +21360,34 @@ function portalUrl(){
 /** Just the host, for reading in a sentence. */
 function portalHost(){
   try { return new URL(portalUrl()).host; } catch (e) { return "the government portal"; }
+}
+
+/**
+ * Fill the reuse picker with numbers a deletion actually freed.
+ *
+ * Owner only, and the button stays hidden when the list is empty: a
+ * control that can never do anything is one more thing to read past on a
+ * counter screen. Silent on failure — a bill must not be held up because
+ * an optional list could not be fetched.
+ */
+async function refreshDeletedNumbers(){
+  const btn = document.getElementById("billing-number-reuse");
+  const sel = document.getElementById("billing-number-input");
+  if(!btn || !sel) return;
+  if(!isOwner()){ btn.style.display = "none"; return; }
+  const series = isChallanMode() ? "challan" : "invoice";
+  try{
+    const r = await api("GET", "/numbering/" + series + "/deleted");
+    const rows = (r && r.rows) || [];
+    sel.innerHTML = rows.map(x =>
+      `<option value="${escapeHtml(x.value)}">${escapeHtml(x.value)}` +
+      `${x.deletedBy ? " — deleted by " + escapeHtml(x.deletedBy) : ""}</option>`).join("");
+    btn.style.display = rows.length ? "" : "none";
+    if(!rows.length){
+      const wrap = document.getElementById("billing-number-manual");
+      if(wrap) wrap.style.display = "none";
+    }
+  }catch(e){ btn.style.display = "none"; }
 }
 
 function openEwbPortalSheet(p, invoiceId){

@@ -85,6 +85,69 @@ function isTaken(docType, number, excludeId) {
 }
 
 /**
+ * NUMBERS THAT WERE ACTUALLY DELETED.
+ *
+ * Taken from the deletion log, not from gaps in the sequence. The first
+ * version of this counted every missing number below the counter, which
+ * sounds equivalent and is not: a counter moved forward by hand leaves
+ * hundreds of numbers that were never issued to anybody, and it offered
+ * all of them as "deleted". Measured on a real shop it listed SP0000002
+ * through SP0000652  651 numbers, none of which had ever been on a bill.
+ *
+ * releaseOnDelete() already writes a row on every delete:
+ *
+ *   "released"  it was the LATEST number, so it is handed back at once and
+ *               the next bill takes it automatically. Not offered here 
+ *               there is nothing for an owner to authorise.
+ *   "kept"      it was deleted and was NOT the latest, so the number stays
+ *               spent to keep the sequence intact. THIS is the list.
+ *
+ * Each candidate is then checked against the documents as they stand now,
+ * so a number that has since been reused, or restored from a backup, drops
+ * off the list rather than being offered twice.
+ */
+function deletedNumbers(docType, limit) {
+  const reg = REGISTRY[docType];
+  if (!reg) throw new Error(`Unknown document type "${docType}".`);
+
+  const rows = db.prepare(`
+    SELECT doc_number, at, staff_name FROM doc_number_log
+     WHERE doc_type = ? AND action = 'kept' AND doc_number IS NOT NULL
+     ORDER BY at DESC
+  `).all(docType);
+
+  const seen = new Set();
+  const out = [];
+  for (const r of rows) {
+    const v = String(r.doc_number || "").trim();
+    if (!v || seen.has(v)) continue;
+    seen.add(v);
+    /* Held by something now  reused already, or restored from a backup. */
+    if (isTaken(docType, v)) continue;
+    out.push({ value: v, deletedAt: r.at, deletedBy: r.staff_name || "" });
+    if (out.length >= (limit || 200)) break;
+  }
+  return out;
+}
+
+/**
+ * May this exact number be reused?
+ *
+ * Only if the log says it was deleted and nothing holds it now. Asked again
+ * at the moment of use rather than trusted from the list the screen was
+ * showing, which may be minutes old and a bill out of date.
+ */
+function isDeletedNumber(docType, value) {
+  const v = String(value || "").trim();
+  if (!v) return false;
+  if (isTaken(docType, v)) return false;
+  return !!db.prepare(`
+    SELECT 1 FROM doc_number_log
+     WHERE doc_type = ? AND action = 'kept' AND doc_number = ? LIMIT 1
+  `).get(docType, v);
+}
+
+/**
  * The next automatic number for a type.
  *
  * Advances the high-water counter and skips anything already taken — a number
@@ -314,5 +377,6 @@ function releaseOnDelete(req, docType, number, docId) {
 
 module.exports = {
   REGISTRY, allocate, peek, resolve, validateManual, isTaken, format, config,
+  deletedNumbers, isDeletedNumber,
   releaseIfLatest, releaseOnDelete, highestLiveNumber, parseSeriesNumber, logNumber
 };

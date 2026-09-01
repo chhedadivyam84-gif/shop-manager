@@ -49,6 +49,20 @@ router.get("/", (req, res) => {
 
 /** What the New-Bill screen shows before saving. Peeks without consuming,
  *  so an abandoned form never burns a number. */
+/**
+ * Numbers that were genuinely deleted and are free to be used again.
+ *
+ * Owner only. Which numbers a shop has thrown away is not counter
+ * information, and reusing one is an owner decision by design.
+ */
+router.get("/:docType/deleted", requireRole("owner"), (req, res) => {
+  try {
+    res.json({ rows: docNumber.deletedNumbers(req.params.docType, 200) });
+  } catch (e) {
+    res.status(404).json({ error: "Unknown document type." });
+  }
+});
+
 router.get("/:docType/next", (req, res) => {
   try {
     const cfg = docNumber.config(req.params.docType);

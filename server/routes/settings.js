@@ -39,7 +39,7 @@ router.put("/", requireRole("owner"), (req, res) => {
           invoiceTheme, challanTheme, allowNegativeStock,
           bankName, bankAccountNo, bankIfsc, bankBranch,
           invoiceTitle, challanTitle, footerMessage, showCopyLabel, pinCode,
-          headerScales } = req.body;
+          headerScales, portalUrl } = req.body;
   const current = db.prepare("SELECT * FROM settings WHERE id = 1").get();
 
   db.prepare(`
@@ -47,7 +47,7 @@ router.put("/", requireRole("owner"), (req, res) => {
       invoice_theme=?, challan_theme=?, allow_negative_stock=?,
       bank_name=?, bank_account_no=?, bank_ifsc=?, bank_branch=?,
       invoice_title=?, challan_title=?, footer_message=?, show_copy_label=?, pin_code=?,
-      header_scales=? WHERE id=1
+      header_scales=?, portal_url=? WHERE id=1
   `).run(
     (businessName || current.business_name).trim(), (tagline ?? current.tagline),
     (address ?? current.address), (phones ?? current.phones), (gstin ?? current.gstin),
@@ -92,6 +92,17 @@ router.put("/", requireRole("owner"), (req, res) => {
         if (Number.isFinite(n)) out[k] = Math.max(0.5, Math.min(2, n));
       });
       return JSON.stringify(out);
+    })(),
+    /* http and https ONLY. This value ends up in an href, and a
+       "javascript:" or "data:" address there would be a link that runs code
+       when a shopkeeper clicks it. Anything else is refused by falling back
+       to what is already stored. */
+    (() => {
+      if (portalUrl === undefined) return current.portal_url || "";
+      const v = String(portalUrl).trim();
+      if (!v) return "";
+      if (!/^https?:\/\//i.test(v)) return current.portal_url || "";
+      return v.slice(0, 300);
     })()
   );
 

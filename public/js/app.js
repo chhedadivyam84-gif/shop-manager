@@ -7804,6 +7804,11 @@ function openSettings(){
       <label class="field-label">Address</label><input type="text" id="st-address" value="${escapeHtml(cfg.address||"")}">
       <label class="field-label">Phone(s)</label><input type="text" id="st-phones" value="${escapeHtml(cfg.phones||"")}">
       <label class="field-label">PIN Code <span class="muted" style="font-weight:400;">— six digits; needed for e-invoice and e-way bill</span></label><input type="text" id="st-pincode" inputmode="numeric" maxlength="6" value="${escapeHtml(cfg.pin_code||"")}" placeholder="e.g. 400064">
+      ${/* Which government site the e-way bill screen's button opens. Most
+           shops use the e-way bill portal; some file through the e-invoice
+           portal or their GSP's own site, and typing the address beats
+           hunting for a bookmark on a shop PC. */""}
+      <label class="field-label">Government portal <span class="muted" style="font-weight:400;">— the site the E-Way Bill screen opens</span></label><input type="url" id="st-portal-url" value="${escapeHtml(cfg.portal_url||"")}" placeholder="https://ewaybillgst.gov.in" spellcheck="false">
       <label class="field-label">GSTIN</label><input type="text" id="st-gstin" value="${escapeHtml(cfg.gstin||"")}">
       <label class="field-label">Email <span class="muted" style="font-weight:400;">— optional, printed on documents</span></label><input type="email" id="st-email" value="${escapeHtml(cfg.email||"")}" placeholder="e.g. shop@gmail.com">
       <label class="field-label">Website <span class="muted" style="font-weight:400;">— optional, printed on documents</span></label><input type="text" id="st-website" value="${escapeHtml(cfg.website||"")}" placeholder="e.g. www.myshop.com">
@@ -7991,6 +7996,7 @@ function openSettings(){
         phones: document.getElementById("st-phones").value.trim(),
         gstin: document.getElementById("st-gstin").value.trim(),
         pinCode: document.getElementById("st-pincode").value.trim(),
+        portalUrl: document.getElementById("st-portal-url").value.trim(),
         state: document.getElementById("st-state").value,
         upiId: document.getElementById("st-upi").value.trim(),
         email: document.getElementById("st-email").value.trim(),
@@ -21339,6 +21345,16 @@ async function renderInvoiceGstPanel(){
  * button. It sends nothing anywhere: it is a reading of the bill that is
  * already saved.
  */
+/** The portal this shop files through — its own if it has set one. */
+function portalUrl(){
+  const v = String((state.settings || {}).portal_url || "").trim();
+  return /^https?:\/\//i.test(v) ? v : "https://ewaybillgst.gov.in";
+}
+/** Just the host, for reading in a sentence. */
+function portalHost(){
+  try { return new URL(portalUrl()).host; } catch (e) { return "the government portal"; }
+}
+
 function openEwbPortalSheet(p, invoiceId){
   const row = (label, value, note) => {
     const v = (value === null || value === undefined) ? "" : String(value);
@@ -21366,8 +21382,9 @@ function openEwbPortalSheet(p, invoiceId){
     `<button class="sheet-close" data-sheetclose>&#10005;</button>` +
     `<div class="sheet-title">Fill on the government portal</div>` +
     `<p class="muted" style="font-size:12px;margin-top:-6px;line-height:1.6;">` +
-      `Open <b>ewaybillgst.gov.in</b> &rarr; log in &rarr; <b>e-Waybill &rarr; Generate New</b>, ` +
-      `then copy each value across. Nothing is sent from here.</p>` +
+      `Open <b>${escapeHtml(portalHost())}</b> &rarr; log in &rarr; <b>Generate New</b>, ` +
+      `then copy each value across. Nothing is sent from here. ` +
+      `<span class="muted">The address is set in Settings &rsaquo; GST / E-Way Bill.</span></p>` +
 
     `<div class="section-title" style="margin-top:12px;">1. Transaction details</div>` +
     row("Transaction Type", "Outward") +
@@ -21407,8 +21424,12 @@ function openEwbPortalSheet(p, invoiceId){
     row("Transport document no.", p.trans_doc_no) +
 
     `<div style="display:flex;flex-direction:column;gap:8px;margin-top:16px;">` +
-      `<a class="btn btn-gold" href="https://ewaybillgst.gov.in" target="_blank" rel="noopener" ` +
-         `style="text-align:center;text-decoration:none;">Open the e-way bill portal</a>` +
+      /* The shop's own portal if it has set one — some file through the
+         e-invoice portal, some through their GSP's site. Settings holds
+         only http(s) addresses, so this cannot become a link that runs
+         code when it is clicked. */
+      `<a class="btn btn-gold" href="${escapeHtml(portalUrl())}" target="_blank" rel="noopener" ` +
+         `style="text-align:center;text-decoration:none;">Open the portal</a>` +
       `<button class="btn btn-outline" id="ep-back">Back to transport details</button>` +
     `</div>`;
 

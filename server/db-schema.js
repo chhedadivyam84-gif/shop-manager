@@ -3164,6 +3164,10 @@ addColumn("customers", "salesman", "TEXT DEFAULT ''");
    rather than per device: the letterhead is the shop's identity and must
    not differ between the counter PC and a phone. */
 addColumn("settings", "header_scales", "TEXT NOT NULL DEFAULT ''");
+/* The government portal the e-way bill screen links to. Blank means the
+   e-way bill portal, which is where most shops go. A shop filing through
+   the e-invoice portal, or through its GSP's own site, sets its own. */
+addColumn("settings", "portal_url", "TEXT NOT NULL DEFAULT ''");
 
 /* MOVED HERE DELIBERATELY, AND THIS IS WHY.
 

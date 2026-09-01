@@ -1193,6 +1193,25 @@ table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #178a6e;color:#0
   .invoice-canvas, #invoice-page-content{ display:none !important; }
 }
 
+/* PRINT MANAGEMENT RESULTS — a table, scanned down a column rather than
+   scrolled through as cards. Wide content scrolls inside its own box so the
+   page itself never moves sideways. */
+.pm-table-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:10px;margin-top:8px;}
+.pm-table{width:100%;border-collapse:collapse;font-size:12.5px;}
+.pm-table th{text-align:left;font-size:11px;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--muted);font-weight:800;padding:8px 10px;border-bottom:1px solid var(--border);
+  background:var(--bg-outer);white-space:nowrap;}
+.pm-table td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:middle;}
+.pm-table tr:last-child td{border-bottom:none;}
+.pm-table .n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;}
+.pm-table .nowrap{white-space:nowrap;}
+.pm-table .pill{margin-left:6px;}
+/* A cancelled document stays legible — it is still a record — but reads as
+   struck through rather than merely faint. */
+.pm-table .pm-cancelled td{opacity:.6;}
+.pm-table .pm-cancelled td:first-child b{text-decoration:line-through;}
+.pm-table .pm-mini{width:auto;padding:4px 10px;font-size:11px;}
+
 /* The two Tally setup paths, set apart from the note above them so the
    one that applies can be found at a glance rather than read through. */
 .tly-help{margin-top:8px;padding:8px 10px;border:1px solid var(--border);

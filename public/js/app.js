@@ -19288,22 +19288,42 @@ function renderPmResults(){
       pmWarningsHtml();
     return;
   }
+  /* A TABLE, not cards.
+
+     The shop reads this list the way it read the one in its old software:
+     scanning a column of bill numbers, or of party names, for the row it
+     wants. Stacked cards make that a scroll instead of a glance, and put
+     three lines on screen where a table puts fifteen.
+
+     The columns are the ones that were asked for and the ones already in
+     the row — number, date, party, total — with the document type kept
+     because this list mixes invoices, challans and quotations, which the
+     old software did not have to do.
+
+     It scrolls sideways inside its own box on a narrow screen rather than
+     dragging the page with it. */
   body.innerHTML = pmWarningsHtml() +
     `<div class="pm-result-count">${rows.length} document${rows.length===1?"":"s"}</div>` +
+    `<div class="pm-table-wrap"><table class="pm-table">` +
+    `<thead><tr>` +
+      `<th>Bill No.</th><th>Date</th><th>Party</th><th>Type</th>` +
+      `<th class="n">Total</th><th></th>` +
+    `</tr></thead><tbody>` +
     rows.map((r,i)=>`
-      <div class="list-row pm-row"${r.cancelled ? ' style="opacity:.6;"' : ""}>
-        <div style="min-width:0;">
-          <div class="row-title">${escapeHtml(r.docNo || "—")}
-            ${r.cancelled ? `<span class="pill danger" style="margin-left:6px;">Cancelled</span>` : ""}
-            ${r.printed ? `<span class="pill" style="margin-left:6px;">Printed</span>` : ""}</div>
-          <div class="row-sub">${escapeHtml(fyDay(r.date))} · ${escapeHtml(r.docTypeLabel)}</div>
-          <div class="row-sub">${escapeHtml(r.partyName)}${r.partyPhone ? " · "+escapeHtml(r.partyPhone) : ""}</div>
-        </div>
-        <div class="row-right" style="display:flex;gap:6px;align-items:center;">
+      <tr${r.cancelled ? ' class="pm-cancelled"' : ""}>
+        <td><b>${escapeHtml(r.docNo || "—")}</b>
+          ${r.cancelled ? `<span class="pill danger">Cancelled</span>` : ""}
+          ${r.printed ? `<span class="pill">Printed</span>` : ""}</td>
+        <td class="nowrap">${escapeHtml(fyDay(r.date))}</td>
+        <td>${escapeHtml(r.partyName)}${r.partyPhone ? `<span class="muted"> · ${escapeHtml(r.partyPhone)}</span>` : ""}</td>
+        <td class="nowrap muted">${escapeHtml(r.docTypeLabel)}</td>
+        <td class="n">${r.total ? fmt(r.total) : ""}</td>
+        <td class="nowrap">
           ${PM_DETAIL_OPENERS[r.docType] ? `<button class="btn btn-outline pm-mini" data-pm-detail="${i}">Open</button>` : ""}
           <button class="btn btn-outline pm-mini" data-pm-open="${i}">Preview</button>
-        </div>
-      </div>`).join("");
+        </td>
+      </tr>`).join("") +
+    `</tbody></table></div>`;
 
   body.querySelectorAll("[data-pm-detail]").forEach(b=>{
     b.addEventListener("click", ()=>{

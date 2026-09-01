@@ -7,6 +7,38 @@ const INDIAN_STATES = ["Andhra Pradesh","Arunachal Pradesh","Assam","Bihar","Chh
 "Uttar Pradesh","Uttarakhand","West Bengal","Andaman and Nicobar Islands","Chandigarh",
 "Dadra and Nagar Haveli and Daman and Diu","Delhi","Jammu and Kashmir","Ladakh","Lakshadweep","Puducherry"];
 
+/* GST STATE CODES — the number in front of every GSTIN.
+
+   A GSTIN begins with its state code (27AAAPC7198R1Z1 is Maharashtra), and
+   the e-way bill and e-invoice portals ask for the NUMBER, not the name. It
+   was only known to the server, so anyone filling a portal form had to go
+   and look it up.
+
+   The same table server/einvoice/gstCodes.js validates against. Kept in the
+   same order and checked against it — if they ever disagree, a bill would
+   pass here and be rejected there. */
+const GST_STATE_CODES = {
+  "Jammu and Kashmir":"01", "Himachal Pradesh":"02", "Punjab":"03",
+  "Chandigarh":"04", "Uttarakhand":"05", "Haryana":"06", "Delhi":"07",
+  "Rajasthan":"08", "Uttar Pradesh":"09", "Bihar":"10", "Sikkim":"11",
+  "Arunachal Pradesh":"12", "Nagaland":"13", "Manipur":"14",
+  "Mizoram":"15", "Tripura":"16", "Meghalaya":"17", "Assam":"18",
+  "West Bengal":"19", "Jharkhand":"20", "Odisha":"21",
+  "Chhattisgarh":"22", "Madhya Pradesh":"23", "Gujarat":"24",
+  "Dadra and Nagar Haveli and Daman and Diu":"26",
+  "Maharashtra":"27", "Karnataka":"29", "Goa":"30", "Lakshadweep":"31",
+  "Kerala":"32", "Tamil Nadu":"33", "Puducherry":"34",
+  "Andaman and Nicobar Islands":"35", "Telangana":"36",
+  "Andhra Pradesh":"37", "Ladakh":"38"
+};
+
+/** "27 — Maharashtra", or just the name for anything without a code. */
+function stateWithCode(s){
+  const c = GST_STATE_CODES[s];
+  return c ? c + " — " + s : s;
+}
+
+
 /* ============================================================
    API HELPER
    ============================================================ */
@@ -7324,7 +7356,11 @@ function openAddSupplier(editing){
     <div id="ns-area-picker"></div>
     <p class="muted" style="font-size:11px;margin-top:5px;">Used on every purchase from this supplier unless a different area is chosen on the purchase itself.</p>
     <label class="field-label">State (for GST)</label>
-    <select id="ns-state"><option value="">${state.settings.state ? "Same as shop ("+escapeHtml(state.settings.state)+")" : "Select state"}</option>${INDIAN_STATES.map(s=>`<option value="${s}" ${editing&&editing.state===s?'selected':''}>${s}</option>`).join("")}</select>
+    ${/* The GST state code in front of the name, because that is the number
+         the portals ask for and the first two digits of the party’s GSTIN —
+         so a mismatched GSTIN is visible while choosing rather than at the
+         portal. */""}
+    <select id="ns-state"><option value="">${state.settings.state ? "Same as shop ("+escapeHtml(stateWithCode(state.settings.state))+")" : "Select state"}</option>${INDIAN_STATES.map(s=>`<option value="${s}" ${editing&&editing.state===s?'selected':''}>${escapeHtml(stateWithCode(s))}</option>`).join("")}</select>
     <label class="field-label">GST Type</label>
     <div class="chip-row" id="ns-gsttype-chips">
       <button class="chip ${gstType==="CGST_SGST"?'selected':''}" data-gsttype="CGST_SGST">CGST + SGST (9% + 9%)</button>
@@ -7627,7 +7663,7 @@ function openAddCustomer(editing){
     <div id="nc-area-picker"></div>
     <p class="muted" style="font-size:11px;margin-top:5px;">Used on every bill for this customer unless a different area is chosen on the bill itself.</p>
     <label class="field-label">State (for GST)</label>
-    <select id="nc-state"><option value="">${state.settings.state ? "Same as shop ("+escapeHtml(state.settings.state)+")" : "Select state"}</option>${INDIAN_STATES.map(s=>`<option value="${s}" ${editing&&editing.state===s?'selected':''}>${s}</option>`).join("")}</select>
+    <select id="nc-state"><option value="">${state.settings.state ? "Same as shop ("+escapeHtml(stateWithCode(state.settings.state))+")" : "Select state"}</option>${INDIAN_STATES.map(s=>`<option value="${s}" ${editing&&editing.state===s?'selected':''}>${escapeHtml(stateWithCode(s))}</option>`).join("")}</select>
     <label class="field-label">GST Type</label>
     <div class="chip-row" id="nc-gsttype-chips">
       <button class="chip ${gstType==="CGST_SGST"?'selected':''}" data-gsttype="CGST_SGST">CGST + SGST (9% + 9%)</button>

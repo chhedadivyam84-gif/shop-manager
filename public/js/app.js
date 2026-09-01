@@ -3977,7 +3977,19 @@ async function renderBillingNumber(){
   const label = document.getElementById("billing-number-label");
   if(!el) return;
   const challan = isChallanMode();
-  if(label) label.textContent = challan ? "Challan No." : "Estimate No.";
+  /* The same wording the printed sheet uses, worked out the same way — the
+     shop's own title in Settings, then the template's, then the old
+     default. The entry screen said "Estimate No." above a document the
+     paper calls a TAX INVOICE, which is the sort of disagreement that gets
+     noticed at exactly the wrong moment. */
+  if(label){
+    const cfg = state.settings || {};
+    const title = ((challan ? cfg.challan_title : cfg.invoice_title) || "").trim();
+    label.textContent = challan ? "Challan No."
+      : /INVOICE/i.test(title) ? "Invoice No."
+      : /QUOTATION|QUOTE/i.test(title) ? "Quotation No."
+      : "Estimate No.";
+  }
   if(state.editingInvoiceId && state.docNo){
     el.textContent = state.docNo;
     return;

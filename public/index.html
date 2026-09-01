@@ -246,6 +246,22 @@ setTimeout(function () {
         <div class="inv-flex" style="margin:8px 2px 0;">
           <span class="muted" id="billing-number-label">Estimate No.</span>
           <span id="billing-number-display" style="font-weight:800;">—</span>
+          <!-- The number is allocated automatically, which is right nearly
+               always. But a deleted bill leaves a gap, and a shop that wants
+               to reuse that number — or to match a paper book — has to be
+               able to say so. Hidden behind Edit rather than an open box, so
+               nobody retypes a number by accident. -->
+          <button type="button" class="chip" id="billing-number-edit"
+                  style="margin-left:auto;">&#9998; Edit</button>
+        </div>
+        <div id="billing-number-manual" style="display:none;margin:6px 2px 0;">
+          <input type="text" id="billing-number-input" maxlength="40"
+                 placeholder="e.g. SP0000653" autocomplete="off" spellcheck="false">
+          <p class="muted" style="font-size:11px;margin-top:4px;line-height:1.6;">
+            Filling a gap left by a deleted bill costs nothing — the automatic
+            numbering stays where it is. A number <b>ahead</b> of the counter pulls
+            it up, so the next automatic bill continues after yours instead of
+            colliding with it. A number already on another document is refused.</p>
         </div>
 
         <!-- Document date. Defaults to today, so a normal bill needs no thought;

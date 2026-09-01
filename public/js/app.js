@@ -1310,6 +1310,22 @@ async function initApp(){
   document.getElementById("paper-a4").addEventListener("click", ()=>setPaper("A4"));
   document.getElementById("bill-panel-btn").addEventListener("click", toggleBillPanel);
   document.getElementById("inv-download").addEventListener("click", downloadInvoicePdf);
+  /* Reveals the box, seeded with the number that WOULD have been used, so
+     the shop edits a real number rather than typing one from nothing. */
+  const numEditBtn = document.getElementById("billing-number-edit");
+  if(numEditBtn) numEditBtn.addEventListener("click", () => {
+    const wrap = document.getElementById("billing-number-manual");
+    const box = document.getElementById("billing-number-input");
+    const on = wrap.style.display === "none";
+    wrap.style.display = on ? "" : "none";
+    numEditBtn.textContent = on ? "Use automatic" : "\u270E Edit";
+    if(on){
+      const shown = (document.getElementById("billing-number-display").textContent || "").trim();
+      if(shown && shown !== "\u2014") box.value = shown;
+      box.focus(); box.select();
+    } else box.value = "";
+  });
+
   document.getElementById("inv-print").addEventListener("click", printInvoiceOnePage);
 
   /* The templated documents' preview. Print sends THE CANVAS — the sheet on
@@ -4783,6 +4799,16 @@ async function completeSale(){
       // document with no date.
       date: (document.getElementById("billing-date") || {}).value || undefined
     };
+    /* Only when the box is OPEN and has something in it. Closed, or open
+       and empty, the bill numbers itself exactly as it always has — this
+       cannot change what a normal save does. */
+    const manualWrap = document.getElementById("billing-number-manual");
+    const manualBox = document.getElementById("billing-number-input");
+    if(manualWrap && manualBox && manualWrap.style.display !== "none" && manualBox.value.trim()){
+      payload.useManualNumber = true;
+      payload.manualNumber = manualBox.value.trim();
+    }
+
     const invoice = editingId
       ? await api("PUT", `/invoices/${editingId}`, payload)
       : await api("POST", "/invoices", payload);

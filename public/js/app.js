@@ -9660,7 +9660,7 @@ function openInvoicePreview(existingInvoice){
 // doc type and whether it's already voided.
 ["inv-edit", "inv-void", "inv-delete", "inv-return", "inv-convert", "inv-ack"].forEach(id => { const el = document.getElementById(id); if(el) el.remove(); });
   if(existingInvoice && existingInvoice.id && !existingInvoice.voided){
-    const actionsBar = document.querySelector(".inv-actions");
+    const actionsBar = document.querySelector("#fs-invoice .inv-actions");
     const editBtn = document.createElement("button");
     editBtn.id = "inv-edit"; editBtn.textContent = "✎ Edit";
     editBtn.onclick = ()=>{ closeFullscreen("fs-invoice"); editExistingInvoice(existingInvoice); };
@@ -9712,7 +9712,9 @@ function openInvoicePreview(existingInvoice){
     }
   }
   if(existingInvoice && existingInvoice.id && isOwner()){
-    const actionsBar = document.querySelector(".inv-actions");
+    /* Scoped to #fs-invoice. An unscoped ".inv-actions" takes whichever bar
+       comes first in the document, and that is no longer this one. */
+    const actionsBar = document.querySelector("#fs-invoice .inv-actions");
     const afterDelete = async (msg) => {
       toast(msg, "ok");
       closeFullscreen("fs-invoice");

@@ -1537,7 +1537,12 @@ setTimeout(function () {
     </div>
     <div id="doc-canvas" class="invoice-canvas"></div>
     <div class="print-status-row" id="doc-status-row" style="display:none;"></div>
-    <div class="inv-actions">
+    <!-- doc-actions, NOT inv-actions. The invoice's Void / Delete / Convert /
+         Return buttons are attached at runtime with querySelector(".inv-actions"),
+         which returns the FIRST match in the document — and this overlay sits
+         above #fs-invoice in the markup. Sharing the class sent those buttons
+         to this screen instead, which is why they vanished from the bill. -->
+    <div class="inv-actions doc-actions">
       <button id="doc-print">&#128424; Print</button>
       <button id="doc-close">Close</button>
     </div>

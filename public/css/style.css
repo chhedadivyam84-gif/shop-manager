@@ -1193,6 +1193,11 @@ table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #178a6e;color:#0
   .invoice-canvas, #invoice-page-content{ display:none !important; }
 }
 
+/* The two Tally setup paths, set apart from the note above them so the
+   one that applies can be found at a glance rather than read through. */
+.tly-help{margin-top:8px;padding:8px 10px;border:1px solid var(--border);
+  border-radius:8px;font-size:11.5px;line-height:1.6;background:var(--bg-outer);}
+
 /* A masked credential and its Show button on one line. .btn is width:100%
    app-wide, so the button is pinned to its content here or it takes the
    whole row and leaves the box a few characters wide. */

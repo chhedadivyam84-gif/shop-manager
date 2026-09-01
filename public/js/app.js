@@ -12187,10 +12187,24 @@ function renderTallySetup(){
       <label class="pm-field"><span>Port</span>
         <input type="number" id="tly-port" value="${Number(s.port)||9000}"></label>
     </div>
-    <p class="muted" style="font-size:11px;margin-top:5px;">
+    <p class="muted" style="font-size:11px;margin-top:5px;line-height:1.7;">
       <b>localhost</b> if Tally runs on this computer. Otherwise the IP address of the PC it
-      is on. In Tally press <b>F12 &rsaquo; Advanced Configuration</b> and set
-      <b>Enable ODBC/HTTP</b> to Yes.</p>
+      is on.</p>
+    ${/* The menu path differs between the two Tally versions, and the old
+         one sends TallyPrime users hunting through a screen that no longer
+         holds the setting. Newest first — a shop on ERP 9 knows it is on
+         ERP 9, but somebody on Prime following ERP 9 directions just thinks
+         the app is broken. */""}
+    <div class="tly-help">
+      <div><b>TallyPrime</b> — press <b>F1</b> (Help) &rsaquo; <b>Settings</b> &rsaquo;
+        <b>Connectivity</b> &rsaquo; <b>Client/Server configuration</b>.
+        Set <b>TallyPrime acts as</b> to <b>Server</b> (or <b>Both</b>),
+        and <b>Port</b> to the number above.</div>
+      <div style="margin-top:5px;"><b>Tally ERP 9</b> — press <b>F12</b> &rsaquo;
+        <b>Advanced Configuration</b> and set <b>Enable ODBC/HTTP</b> to <b>Yes</b>.</div>
+      <div style="margin-top:5px;">Tally must be <b>open</b>, with the company loaded,
+        whenever Shop Manager sends to it.</div>
+    </div>
 
     <button class="btn btn-outline" id="tly-test" style="margin-top:10px;">Test connection</button>
     <div id="tly-test-out" style="margin-top:8px;"></div>

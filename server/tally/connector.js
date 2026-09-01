@@ -79,8 +79,17 @@ function post(settings, xml) {
       const where = (settings.host || "localhost") + ":" + (settings.port || 9000);
       let msg;
       if (e.code === "ECONNREFUSED") {
-        msg = "Nothing is listening at " + where + ". Open Tally, then press F12 > " +
-              "Advanced Configuration and set 'Enable ODBC/HTTP' to Yes.";
+        /* TALLY PRIME MOVED THIS SETTING, and the old directions send people
+           hunting through a menu that no longer holds it. F12 > Advanced
+           Configuration is where it lived in Tally ERP 9; in Tally Prime it
+           is under F1 (Help) > Settings > Connectivity. Both are given,
+           newest first, because a shop reading this is already stuck. */
+        msg = "Nothing is listening at " + where + ". Open Tally and switch its " +
+              "connectivity on: in TallyPrime press F1 (Help) > Settings > " +
+              "Connectivity > Client/Server configuration, set 'TallyPrime acts as' " +
+              "to Server (or Both) and the port to " + (settings.port || 9000) + ". " +
+              "In the older Tally ERP 9 it is F12 > Advanced Configuration, " +
+              "'Enable ODBC/HTTP' set to Yes.";
       } else if (e.code === "EHOSTUNREACH" || e.code === "ENETUNREACH" || e.code === "ETIMEDOUT") {
         msg = "Could not reach " + where + " on the network. Check the PC running " +
               "Tally is switched on and on the same network as this one.";

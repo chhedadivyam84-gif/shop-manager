@@ -2503,6 +2503,35 @@ CREATE TABLE IF NOT EXISTS dismissed_reminders (
 );
 `);
 
+/* THE SHOP'S OWN REMINDERS — "call Laxmi Thursday", "renew the licence".
+   A SEPARATE THING from the reminders worked out of the books, and kept
+   separate on purpose. Those are questions asked of live data and cannot be
+   edited, because editing one would only make it disagree with the ledger.
+   These are the shop's own words, so they can be written, changed and
+   thrown away freely.
+
+   The link to a customer or product is deliberately soft: just an id and
+   the name as it read when the reminder was written. A reminder saying
+   "chase Laxmi" should survive Laxmi being renamed or removed — it is a
+   note to a person, not a foreign key into the books. */
+db.exec(`
+CREATE TABLE IF NOT EXISTS reminders (
+  id TEXT PRIMARY KEY,
+  text TEXT NOT NULL,
+  due_date TEXT DEFAULT '',
+  due_time TEXT DEFAULT '',
+  link_kind TEXT DEFAULT '',
+  link_id TEXT DEFAULT '',
+  link_name TEXT DEFAULT '',
+  done INTEGER NOT NULL DEFAULT 0,
+  done_at INTEGER,
+  created_at INTEGER NOT NULL,
+  created_by TEXT DEFAULT '',
+  updated_at INTEGER
+);
+`);
+db.exec("CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(done, due_date)");
+
 addColumn("areas", "zone", "TEXT DEFAULT ''");
 addColumn("areas", "sub_area", "TEXT DEFAULT ''");
 addColumn("areas", "route", "TEXT DEFAULT ''");

@@ -2591,25 +2591,189 @@ async function renderBackups(){
    goes; deliver the goods and the line goes. Nothing to tick off, so nothing
    to fall out of step with the ledger.
    ============================================================ */
+/* ------------------------------------------------------------------ */
+/* THE SHOP'S OWN REMINDERS                                            */
+/*                                                                      */
+/* Kept visibly apart from the reminders worked out of the books. Those */
+/* are questions asked of live data and can only be cleared by doing    */
+/* the thing; these are the shop's own words, so they can be written,   */
+/* changed and thrown away. Mixing them would make it look as though a  */
+/* customer's overdue payment could be edited away.                     */
+/* ------------------------------------------------------------------ */
+
+/** 2026-09-05 as "5 Sep", and today/tomorrow said in words. */
+function reminderWhen(m){
+  if(!m.due_date) return "no date";
+  const t = new Date(m.due_date + "T00:00:00");
+  const day = isNaN(t) ? m.due_date
+    : t.toLocaleDateString("en-IN", { day:"numeric", month:"short" });
+  const when = m.dueToday ? "today" : m.overdue ? day + " · overdue" : day;
+  return m.due_time ? when + " " + m.due_time : when;
+}
+
+function renderMyReminders(list){
+  const rows = (list || []);
+  const open = rows.filter(m => !m.done);
+  const done = rows.filter(m => m.done);
+  const card = (m) => `
+    <div class="card my-reminder" data-rem="${escapeHtml(m.id)}"
+         style="margin-top:0;margin-bottom:6px;${m.done ? "opacity:.6;" : ""}">
+      <div class="row-title" style="${m.done ? "text-decoration:line-through;" : ""}">
+        ${escapeHtml(m.text)}</div>
+      <div class="row-sub" style="${m.overdue && !m.done ? "color:var(--danger);font-weight:700;" : ""}">
+        ${escapeHtml(reminderWhen(m))}${m.link_name ? " · " + escapeHtml(m.link_name) : ""}</div>
+      <div style="display:flex;gap:8px;margin-top:9px;">
+        <button class="btn btn-outline rem-done" style="flex:1;padding:7px;">${m.done ? "Undo" : "Done"}</button>
+        <button class="btn btn-outline rem-edit" style="flex:1;padding:7px;">Edit</button>
+        ${isOwner() ? `<button class="btn btn-outline rem-del" style="flex:1;padding:7px;color:var(--danger);">Delete</button>` : ""}
+      </div>
+    </div>`;
+
+  return `
+    <div class="section-title" style="display:flex;align-items:center;gap:8px;">
+      <span style="width:8px;height:8px;border-radius:50%;background:var(--navy);display:inline-block;"></span>
+      My reminders <span class="muted" style="font-weight:400;">· ${open.length}</span>
+      <button class="chip" id="rem-add" style="margin-left:auto;">+ Add</button>
+    </div>
+    ${open.length || done.length ? open.map(card).join("") + done.map(card).join("")
+      : `<div class="card" style="margin-top:0;margin-bottom:6px;">
+           <div class="row-sub">Nothing of your own yet. Use <b>+ Add</b> for things the
+           books cannot know — "call Laxmi Thursday", "renew the licence".</div>
+         </div>`}`;
+}
+
+function wireMyReminders(body){
+  const addBtn = body.querySelector("#rem-add");
+  if(addBtn) addBtn.addEventListener("click", () => openReminderSheet(null));
+
+  body.querySelectorAll(".my-reminder").forEach(el => {
+    const id = el.dataset.rem;
+    const guard = async (fn, btn) => {
+      btn.disabled = true;
+      try{ await fn(); await renderAlerts(); }
+      /* Said out loud. A delete that silently does nothing is worse than
+         one that fails, because the shop believes it worked. */
+      catch(e){ toast(e.message || "That did not work."); btn.disabled = false; }
+    };
+
+    el.querySelector(".rem-done").addEventListener("click", (ev) => guard(async () => {
+      const cur = (state.myReminders || []).find(m => m.id === id) || {};
+      await api("PUT", "/reminders/" + id, {
+        text: cur.text, dueDate: cur.due_date, dueTime: cur.due_time,
+        linkKind: cur.link_kind, linkId: cur.link_id, linkName: cur.link_name,
+        done: !cur.done
+      });
+    }, ev.currentTarget));
+
+    el.querySelector(".rem-edit").addEventListener("click", () => {
+      openReminderSheet((state.myReminders || []).find(m => m.id === id) || null);
+    });
+
+    const del = el.querySelector(".rem-del");
+    if(del) del.addEventListener("click", (ev) => {
+      if(!confirm("Delete this reminder?")) return;
+      guard(() => api("DELETE", "/reminders/" + id), ev.currentTarget);
+    });
+  });
+}
+
+/**
+ * One sheet for writing and for changing, because two would drift apart and
+ * one of them would quietly stop saving a field.
+ */
+function openReminderSheet(existing){
+  const sheet = document.getElementById("sheet-reminder");
+  const m = existing || {};
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>&#10005;</button>
+    <div class="sheet-title">${existing ? "Change this reminder" : "New reminder"}</div>
+    <label class="field-label">What is it about</label>
+    <input type="text" id="rem-text" maxlength="300" autocomplete="off"
+           placeholder="e.g. Call Laxmi about the pending order"
+           value="${escapeHtml(m.text || "")}">
+    <div class="pm-filter-grid" style="margin-top:10px;">
+      <label class="pm-field"><span>Date</span>
+        <input type="date" id="rem-date" value="${escapeHtml(m.due_date || "")}"></label>
+      <label class="pm-field"><span>Time (optional)</span>
+        <input type="time" id="rem-time" value="${escapeHtml(m.due_time || "")}"></label>
+    </div>
+    <p class="muted" style="font-size:11px;margin-top:6px;">
+      Leave the date blank for a someday note — it stays at the bottom and never
+      turns the bell on.</p>
+    <div id="rem-error" style="margin-top:10px;"></div>
+    <div style="display:flex;gap:8px;margin-top:14px;">
+      <button class="btn btn-outline" id="rem-cancel" style="flex:1;">Cancel</button>
+      <button class="btn btn-gold" id="rem-save" style="flex:1;">Save</button>
+    </div>`;
+
+  const close = () => closeAllSheets();
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", close);
+  sheet.querySelector("#rem-cancel").addEventListener("click", close);
+
+  sheet.querySelector("#rem-save").addEventListener("click", async (ev) => {
+    const btn = ev.currentTarget;
+    const err = sheet.querySelector("#rem-error");
+    err.innerHTML = "";
+    const payload = {
+      text: sheet.querySelector("#rem-text").value.trim(),
+      dueDate: sheet.querySelector("#rem-date").value,
+      dueTime: sheet.querySelector("#rem-time").value,
+      /* Carried through unchanged on an edit: the sheet does not offer a
+         link picker yet, and dropping it here would quietly lose it. */
+      linkKind: m.link_kind || "", linkId: m.link_id || "", linkName: m.link_name || ""
+    };
+    btn.disabled = true;
+    try{
+      if(existing) await api("PUT", "/reminders/" + m.id, payload);
+      else await api("POST", "/reminders", payload);
+      close();
+      await renderAlerts();
+      toast(existing ? "Reminder changed." : "Reminder added.", "ok");
+    }catch(e){
+      err.innerHTML = `<div class="pm-warn">${escapeHtml(e.message)}</div>`;
+      btn.disabled = false;
+    }
+  });
+
+  showSheet("sheet-reminder");
+  const first = sheet.querySelector("#rem-text");
+  if(first) first.focus();
+}
+
 async function renderAlerts(){
   const body = document.getElementById("alerts-body");
   body.innerHTML = `<p class="muted" style="font-size:13px;">Checking…</p>`;
-  let r;
+  let r, mine;
   try{ r = await api("GET", "/alerts"); }
   catch(e){ body.innerHTML = `<p class="muted" style="font-size:13px;">${escapeHtml(e.message)}</p>`; return; }
+  /* The shop's own reminders are a separate list and a separate failure:
+     an older server without the route must still show the automatic ones
+     rather than an error page. */
+  try{ mine = await api("GET", "/reminders"); }catch(e){ mine = []; }
+  /* Kept so the row handlers can read a reminder's current values without
+     asking the server again for something already on screen. */
+  state.myReminders = mine;
 
-  paintAlertCount(r.total);
+  /* Only the ones actually due count towards the bell. A "someday" note
+     would otherwise leave it red forever, and a bell that is always on is
+     a bell nobody looks at. */
+  const dueNow = mine.filter(m => !m.done && (m.overdue || m.dueToday)).length;
+  paintAlertCount(r.total + dueNow);
+
+  const mineHtml = renderMyReminders(mine);
 
   if(!r.total){
-    body.innerHTML = `<div class="card" style="margin-top:0;">
+    body.innerHTML = mineHtml + `<div class="card" style="margin-top:0;">
       <div class="row-title">Nothing waiting</div>
       <div class="row-sub">No unbilled challans, nothing overdue, nothing left on a van.</div>
     </div>`;
+    wireMyReminders(body);
     return;
   }
 
   const tone = t => t === "bad" ? "var(--bad)" : t === "warn" ? "var(--gold)" : "var(--navy)";
-  body.innerHTML = r.groups.map(g => `
+  body.innerHTML = mineHtml + r.groups.map(g => `
     <div class="section-title" style="display:flex;align-items:center;gap:8px;">
       <span style="width:8px;height:8px;border-radius:50%;background:${tone(g.tone)};display:inline-block;"></span>
       ${escapeHtml(g.title)} <span class="muted" style="font-weight:400;">· ${g.count}</span>
@@ -2623,6 +2787,8 @@ async function renderAlerts(){
           <button class="btn btn-outline alert-dismiss" style="flex:1;padding:7px;">Dismiss</button>
         </div>
       </div>`).join("")}`).join("");
+
+  wireMyReminders(body);
 
   body.querySelectorAll(".alert-row").forEach(el => {
     el.querySelector(".alert-edit").addEventListener("click", async () => {

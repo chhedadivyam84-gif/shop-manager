@@ -1,8 +1,11 @@
 /* ============================================================
    TALLY SYNC — the API
 
-   Owner only, all of it. Configuring where a shop's books get written,
-   and which documents go there, is not a counter job.
+   Owner, or a staff member the owner has granted the Tally module. It was
+   owner-only until the shop asked for it: in a shop with an accounts
+   person, pushing the day's bills into Tally is that person's job. What
+   each action costs is separated below — reading the queue is harmless,
+   changing the company or turning kachha on is not.
 
    ONE DIRECTION, ENFORCED HERE TOO. There is no route in this file that
    reads a value out of Tally and writes it into Shop Manager. The only
@@ -20,6 +23,7 @@ const express = require("express");
 const db = require("../db");
 const { uid, logAction } = require("../util");
 const { requireRole } = require("../auth");
+const perms = require("../permissions");
 const svc = require("../tally/service");
 const proc = require("../tally/processor");
 const connector = require("../tally/connector");
@@ -28,10 +32,25 @@ const backfill = require("../tally/backfill");
 
 const router = express.Router();
 
-/* Everything below is the owner's. Applied once, here, rather than
-   remembered on each route — the one that gets forgotten is the one that
-   matters. */
-router.use(requireRole("owner"));
+/* TALLY IS NO LONGER THE OWNER'S ALONE.
+   ------------------------------------------------------------------
+   It used to be one blanket requireRole("owner") here. In a shop with an
+   accounts person, pushing the day's bills into Tally is that person's
+   job, so it is now a grantable module like any other.
+
+   A floor first, applied once rather than remembered on each route — the
+   one that gets forgotten is the one that matters. Nobody without at
+   least `view` gets past this line, so a staff member who was granted
+   nothing sees exactly what they saw before: nothing.
+
+   Then each route names what it actually is:
+     view  — reading: settings, dashboard, queue, log, name mappings
+     add   — sending: test, sync, backfill
+     edit  — changing what syncs at all: settings, ledger and name maps
+
+   The split matters. Reading the queue is harmless; changing the company
+   or turning kachha on decides what enters the shop's books. */
+router.use(perms.require("tally", "view"));
 
 /* ------------------------------------------------------------------ */
 /* settings                                                            */
@@ -59,7 +78,7 @@ function publicSettings() {
 
 router.get("/settings", (req, res) => res.json(publicSettings()));
 
-router.put("/settings", (req, res) => {
+router.put("/settings", perms.require("tally","edit"), (req, res) => {
   const b = req.body || {};
   const cur = svc.settings();
 
@@ -114,7 +133,7 @@ router.put("/settings", (req, res) => {
 /* ------------------------------------------------------------------ */
 
 /** Reaching the port proves nothing; this asks Tally for its companies. */
-router.post("/test", async (req, res) => {
+router.post("/test", perms.require("tally","add"), async (req, res) => {
   const b = req.body || {};
   const cur = svc.settings();
   const probe = {
@@ -156,7 +175,7 @@ router.get("/dashboard", async (req, res) => {
  * — "412 sales invoices" — and decides, rather than starting something
  * open-ended against live books.
  */
-router.get("/backfill", requireRole("owner"), (req, res) => {
+router.get("/backfill", perms.require("tally","add"), (req, res) => {
   try {
     res.json({ counts: backfill.survey({ from: req.query.from, to: req.query.to }) });
   } catch (e) {
@@ -174,7 +193,7 @@ router.get("/backfill", requireRole("owner"), (req, res) => {
  * Safe to run twice: enqueue() recognises a document it has already seen
  * rather than duplicating it.
  */
-router.post("/backfill", requireRole("owner"), (req, res) => {
+router.post("/backfill", perms.require("tally","add"), (req, res) => {
   const types = Array.isArray(req.body && req.body.docTypes) ? req.body.docTypes : null;
   try {
     const r = backfill.run(types, { from: req.body && req.body.from, to: req.body && req.body.to });
@@ -211,7 +230,7 @@ router.get("/queue", (req, res) => {
  * invent — the ids are matched against rows that already exist, so a
  * request can only ask for work that was already queued by the server.
  */
-router.post("/sync", async (req, res) => {
+router.post("/sync", perms.require("tally","add"), async (req, res) => {
   const b = req.body || {};
   const s = svc.settings();
   if (!s.enabled) return res.status(400).json({ error: "Tally sync is switched off." });
@@ -264,7 +283,7 @@ router.get("/map/:kind", (req, res) => {
   }));
 });
 
-router.put("/map/:kind/:localId", (req, res) => {
+router.put("/map/:kind/:localId", perms.require("tally","edit"), (req, res) => {
   const kind = req.params.kind;
   if (!["ledger", "stockitem", "group", "unit"].includes(kind)) {
     return res.status(400).json({ error: "Unknown mapping type." });

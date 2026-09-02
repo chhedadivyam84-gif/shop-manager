@@ -32,8 +32,25 @@ const DOC_TYPES = {
   sales_return:    { label: "Sales Return",     voucher: "Credit Note", module: "sales_return" },
   purchase_invoice:{ label: "Purchase Invoice", voucher: "Purchase", module: "purchase_invoice" },
   purchase_return: { label: "Purchase Return",  voucher: "Debit Note",  module: "purchase_return" },
-  receipt:         { label: "Receipt",          voucher: "Receipt",  module: "receipt" },
-  payment:         { label: "Payment",          voucher: "Payment",  module: "payment" }
+  receipt:         { label: "Receipt",          voucher: "Receipt",  module: "receipt",
+                     partyGroup: "Sundry Debtors" },
+  payment:         { label: "Payment",          voucher: "Payment",  module: "payment",
+                     partyGroup: "Sundry Creditors" },
+
+  /* CASH BOOK ENTRIES TYPED STRAIGHT IN — rent, tea, freight, scrap sold.
+     Not a customer receipt or a supplier payment: those already come across
+     as `receipt` and `payment` from the payments tables, and a cash row
+     auto-posted from one of them must NOT be sent again from here or the
+     shop is charged twice in its own books.
+
+     The "party" on one of these is its CATEGORY, not a person, so it posts
+     to Indirect Incomes / Indirect Expenses rather than Sundry Debtors or
+     Creditors. Booking the electricity bill against Sundry Creditors would
+     make the electricity board a supplier the shop owes money to. */
+  cash_in:         { label: "Cash Book — Money In",  voucher: "Receipt", module: "cash_in",
+                     partyGroup: "Indirect Incomes" },
+  cash_out:        { label: "Cash Book — Money Out", voucher: "Payment", module: "cash_out",
+                     partyGroup: "Indirect Expenses" }
 };
 
 /* ------------------------------------------------------------------ */

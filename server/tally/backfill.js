@@ -64,6 +64,22 @@ const SOURCES = {
     where: "1=1",
     date: (r) => r.payment_date || new Date(r.created_at).toISOString().slice(0, 10),
     opts: (r) => ({ docNo: r.reference_no || String(r.id).slice(-8) })
+  },
+
+  /* CASH BOOK, TYPED ENTRIES ONLY. A row carrying a source_type was posted
+     into the cash book automatically from a customer receipt or a supplier
+     payment, and already travels as `receipt`/`payment`. Sweeping those up
+     here would book the same money twice in the shop's own accounts, so
+     the WHERE excludes them — the same test the loader makes again. */
+  cash_in: {
+    table: "cash_entries",
+    where: "type = 'in' AND (source_type IS NULL OR TRIM(source_type) = '')",
+    opts: (r) => ({ docNo: String(r.category || "").trim() || "Cash Book" })
+  },
+  cash_out: {
+    table: "cash_entries",
+    where: "type = 'out' AND (source_type IS NULL OR TRIM(source_type) = '')",
+    opts: (r) => ({ docNo: String(r.category || "").trim() || "Cash Book" })
   }
 };
 

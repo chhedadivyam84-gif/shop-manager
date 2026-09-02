@@ -2127,7 +2127,7 @@ function openMenu(){
     <div class="menu-group">Shop</div>
     ${isOwner() ? `<button class="menu-item" id="menu-permissions"><span class="ic">&#128100;</span>Staff Access</button>` : ""}
     <button class="menu-item" id="menu-wa-history"><span class="ic">&#128172;</span>WhatsApp History</button>
-    ${isOwner() && !state.multiTenant && !state.sellBuild
+    ${mayI("tally", "view") && !state.multiTenant && !state.sellBuild
       ? `<button class="menu-item" id="menu-tally"><span class="ic">&#128202;</span>Tally Sync</button>` : ""}
     <button class="menu-item" id="menu-settings"><span class="ic">&#9881;</span>Settings</button>
     <button class="menu-item" id="menu-logout" style="color:var(--danger);">

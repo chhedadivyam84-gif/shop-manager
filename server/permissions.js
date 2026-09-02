@@ -67,7 +67,23 @@ const MODULES = [
        edit  — add, rename or switch off a customer's groups
      A shop that wants a counter hand to send but not to reorganise the
      groups gives them view + add and withholds edit. */
-  { key: "whatsapp",      label: "WhatsApp" }
+  { key: "whatsapp",      label: "WhatsApp" },
+
+  /* TALLY SYNC. Was the owner's alone — one gate on the whole router — and
+     is now grantable, because in a shop with an accounts person it is that
+     person's daily job, not the owner's.
+
+     One module using the actions this file already has:
+       view  — see the Tally screen, the queue and the log
+       add   — send: Sync now, Retry failed, and Send old bills
+       edit  — change the setup: company, which documents, pakka/kachha,
+               ledger names
+
+     edit is the serious one. It decides what enters the shop's books, so a
+     shop that wants someone to push the queue without redefining the sync
+     grants view + add and withholds edit. Granting nothing leaves Tally
+     invisible, exactly as before. */
+  { key: "tally",         label: "Tally Sync" }
 ];
 
 const ACTIONS = ["view", "add", "edit", "print"];

@@ -7,6 +7,30 @@ const { buildXlsx } = require("../xlsx");
 const router = express.Router();
 
 /**
+ * Offer a finished document to Tally.
+ *
+ * Wrapped in everything: the row is already saved, and a sync problem must
+ * never be able to fail the entry. It only QUEUES, so Tally being closed
+ * cannot make anyone wait at the counter.
+ */
+function offerToTally(req, docType, doc, opts) {
+  try {
+    const svc = require("../tally/service");
+    const r = svc.enqueue(docType, doc, {
+      ...(opts || {}),
+      staff: (req.session && req.session.staffName) || ""
+    });
+    if (r && r.queued) {
+      try { require("../tally/autosync").nudge(); } catch (e) { /* never fatal */ }
+    }
+    return r;
+  } catch (e) {
+    return { queued: false, reason: e.message };
+  }
+}
+
+
+/**
  * Every non-voided entry ever made, oldest-first, each annotated with the
  * running cash balance immediately after it — the balance is a running total
  * over ALL history, never just whatever date range is being viewed, so a
@@ -142,6 +166,16 @@ router.post("/", (req, res) => {
     INSERT INTO cash_entries (id, date, type, amount, party, category, remarks, voided, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
   `).run(id, entryDate, type, amount, (party || "").trim(), (category || "").trim(), (remarks || "").trim(), Date.now());
+
+  /* Straight into Tally as a Receipt or a Payment against the category.
+     This route only ever writes rows the shop TYPED, so there is no
+     source_type to guard against here — a cash row auto-posted from a
+     customer receipt or a supplier payment is written by bankLink, never
+     by this handler, and travels as `receipt`/`payment` instead. The
+     loader checks source_type again anyway. */
+  offerToTally(req, type === "in" ? "cash_in" : "cash_out",
+    db.prepare("SELECT * FROM cash_entries WHERE id = ?").get(id),
+    { docNo: (category || "").trim() || "Cash Book" });
 
   logAction(req, "cashbook.create", `${type === "in" ? "+" : "-"}${amount} on ${entryDate}${party ? " (" + party + ")" : ""}`);
   res.status(201).json(db.prepare("SELECT * FROM cash_entries WHERE id = ?").get(id));

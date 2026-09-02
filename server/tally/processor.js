@@ -150,12 +150,41 @@ const LOADERS = {
   sales_return: loadSalesReturn,
   purchase_return: loadPurchaseReturn,
   receipt: loadReceipt,
-  payment: loadPayment
+  payment: loadPayment,
+  cash_in: loadCashEntry,
+  cash_out: loadCashEntry
 };
 
+/**
+ * A CASH BOOK ENTRY TYPED STRAIGHT IN.
+ *
+ * Its party is its CATEGORY — "Rent", "Tea", "Freight" — because that is
+ * what the money was actually for. A cash row that was auto-posted from a
+ * customer receipt or a supplier payment is NOT loaded here: those already
+ * travel as `receipt` and `payment`, and sending them again would charge
+ * the shop twice in its own books. source_type is how they are told apart,
+ * and the guard is repeated at the point of enqueue as well as here.
+ */
+function loadCashEntry(id) {
+  const c = db.prepare("SELECT * FROM cash_entries WHERE id = ?").get(id);
+  if (!c) return null;
+  if (String(c.source_type || "").trim()) return null;   // already sent another way
+  const name = String(c.category || "").trim() || "Cash Book";
+  return {
+    ...c,
+    /* The shape the money branch expects: a party with a name, an amount,
+       and a date. The party here is a heading in the books, not a person. */
+    party: { id: "CAT:" + name, name },
+    amount: Math.abs(Number(c.amount) || 0),
+    note: [c.party, c.remarks].filter(Boolean).join(" · "),
+    bank: null                       /* always Cash — that is what a cash book is */
+  };
+}
+
 /* A receipt and a payment have no stock lines — they are two ledger lines
-   and nothing else. They take their own path through processOne below. */
-const MONEY_TYPES = { receipt: 1, payment: 1 };
+   and nothing else. They take their own path through processOne below.
+   Cash book entries are the same shape, so they take the same path. */
+const MONEY_TYPES = { receipt: 1, payment: 1, cash_in: 1, cash_out: 1 };
 
 /* ------------------------------------------------------------------ */
 /* masters a voucher depends on                                         */
@@ -321,13 +350,18 @@ async function processOne(rowOrSyncId, opts) {
         return { ok: false, error: "This entry has no party to post against." };
       }
       const money = moneyLedger(doc, L);
-      const isReceipt = row.doc_type === "receipt";
+      const isReceipt = spec.voucher === "Receipt";
 
       const msgs = [];
       if (party.create) {
+        /* Which BOOK the other side belongs in comes from the document
+           type, not from the direction the money moved. A cash expense and
+           a supplier payment are both Payments, and they do not belong in
+           the same group. */
         msgs.push(V.ledgerMaster(party.name,
-          isReceipt ? "Sundry Debtors" : "Sundry Creditors",
-          { gstin: doc.party && doc.party.gst }));
+          spec.partyGroup || (isReceipt ? "Sundry Debtors" : "Sundry Creditors"),
+          { gstin: doc.party && doc.party.gst,
+            billwise: !!spec.partyGroup && /Sundry/.test(spec.partyGroup) }));
       }
       if (money.create) {
         msgs.push(V.ledgerMaster(money.name,

@@ -594,6 +594,14 @@ setTimeout(function () {
 
       <!-- Reminders: nothing stored, all worked out from the books. Bill it or
            deliver it and the line goes on its own. -->
+      <!-- Stock History: every movement, with the count before and after.
+           Read-only by design  a corrected entry becomes a new movement,
+           never an edit, so the history and the count can always explain
+           each other. -->
+      <div class="screen" id="screen-stockhistory">
+        <div id="sh-filters"></div>
+        <div id="sh-body"></div>
+      </div>
       <div class="screen" id="screen-alerts">
         <div id="alerts-body"></div>
       </div>
@@ -1468,6 +1476,7 @@ setTimeout(function () {
   <!-- Writing or changing one of the shop's own reminders. The same sheet
        for both, so the two can never drift apart. -->
   <div class="sheet" id="sheet-reminder"></div>
+  <div class="sheet" id="sheet-stockentry"></div>
 
   <!-- ============ FULLSCREEN: STOCK REPORT PRINT ============
        In-page print (not window.open) — a PWA installed to the home screen

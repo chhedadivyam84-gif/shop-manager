@@ -3,6 +3,7 @@ const db = require("../db");
 const { uid, todayStr, round2, logAction, bindId } = require("../util");
 const { requireRole } = require("../auth");
 const inventory = require("../inventory");
+const ledger = require("../stockLedger");
 const Pricing = require("../../public/js/pricing.js");
 
 const router = express.Router();
@@ -352,6 +353,8 @@ router.post("/", (req, res) => {
       );
       touchedProducts.add(it.productId);
     });
+    ledger.setContext({ movement: isChallan ? "stock_in" : "purchase",
+      refType: isChallan ? "Purchase Challan" : "Purchase", refNo: purchaseNo, refId: id });
     Object.entries(piecesBySize).forEach(([sizeId, pieces]) => inventory.addStock(Number(sizeId), targetLocationId, pieces));
     touchedProducts.forEach(pid => syncProductStockStmt.run(pid));
 

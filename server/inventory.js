@@ -68,13 +68,44 @@ function syncSizeStockTotal(sizeId) {
 }
 
 /** delta may be negative. Sufficiency is the caller's job — see file header. */
+/**
+ * THE ONLY PLACE A STOCK QUANTITY CHANGES.
+ *
+ * Which is why the ledger is written here and nowhere else: purchase,
+ * sale, return, transfer, adjustment and manual entry all arrive through
+ * this one function, so every one of them is recorded without thirty-two
+ * call sites having to remember — and without a future one being able to
+ * forget.
+ *
+ * The quantity is read BEFORE and AFTER, in the same breath as the change,
+ * so the row can say 100 → 150 rather than leaving the shop to add up
+ * every line above it.
+ */
 function addStock(sizeId, locationId, delta) {
   ensureRow(sizeId, locationId);
+
+  const before = db.prepare(
+    "SELECT quantity FROM size_location_stock WHERE size_id = ? AND location_id = ?"
+  ).get(sizeId, locationId);
+  const prev = before ? Number(before.quantity) || 0 : 0;
+
   db.prepare(`
     UPDATE size_location_stock SET quantity = quantity + ?, last_updated = ?
     WHERE size_id = ? AND location_id = ?
   `).run(delta, Date.now(), sizeId, locationId);
   syncSizeStockTotal(sizeId);
+
+  /* A movement of nothing is not a movement. Some callers pass 0 for a line
+     that turned out to have no quantity, and a ledger full of 100 → 100 is
+     a ledger nobody reads. */
+  if (Number(delta)) {
+    const size = db.prepare("SELECT product_id FROM product_sizes WHERE id = ?").get(sizeId);
+    require("./stockLedger").record({
+      sizeId, locationId,
+      productId: size ? size.product_id : "",
+      delta: Number(delta), prev, next: prev + Number(delta)
+    });
+  }
 }
 
 function setMinStock(sizeId, locationId, minStock) {

@@ -2,6 +2,7 @@ const express = require("express");
 const db = require("../db");
 const { uid, logAction, round2, bindId } = require("../util");
 const inventory = require("../inventory");
+const ledger = require("../stockLedger");
 
 const router = express.Router();
 
@@ -60,6 +61,10 @@ router.post("/", (req, res) => {
 
   const id = uid("XFR");
   db.transaction(() => {
+    /* A transfer is two movements — out of one place, into the other — and
+       both carry the same reference, so the history reads as one act. */
+    ledger.setContext({ movement: "transfer", refType: "Stock Transfer",
+                        refNo: id, refId: id, remarks: (reason || "").trim() });
     inventory.addStock(size.id, from.id, -qty);
     inventory.addStock(size.id, to.id, qty);
     syncProductStockStmt.run(product.id);

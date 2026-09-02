@@ -353,6 +353,24 @@ app.use("/api", (req, res, next) => {
    forty routes each remembering to check. Reads are never refused. */
 app.use("/api", require("./featureGate").gate());
 
+/* WHO IS MOVING THE STOCK.
+   ------------------------------------------------------------------
+   inventory.addStock writes a ledger row for every change, but it only
+   knows the size, the place and the amount — not the person. Rather than
+   pass a staff name down through thirty-two call sites, the name is put
+   into a per-request context here, once, and read at the bottom.
+
+   AsyncLocalStorage rather than a module-level variable: two requests
+   overlapping at an await would otherwise write each other's names into
+   each other's history, and that is exactly the kind of wrong a stock
+   audit must never be. Routes add what they know — the document type and
+   its number — on top of this. */
+app.use("/api", (req, res, next) => {
+  require("./stockLedger").withContext({
+    staff: (req.session && req.session.staffName) || ""
+  }, next);
+});
+
 app.use("/api/license", requireAuth, require("./routes/license"));
 
 
@@ -418,6 +436,7 @@ app.use("/api/purchase-returns", requireAuth, require("./routes/purchaseReturns"
 app.use("/api/stock-ins", requireAuth, require("./routes/stockIns"));
 app.use("/api/locations", requireAuth, require("./routes/locations"));
 app.use("/api/transfers", requireAuth, require("./routes/transfers"));
+app.use("/api/stock-history", requireAuth, require("./routes/stockHistory"));
 /* requireAuth only, not requireRole: /permissions/me is how a staff member's
    own screen learns what to show them, and it is the one thing here a
    non-owner can read. Everything else inside is behind requireRole. */

@@ -2120,6 +2120,31 @@ CREATE TABLE IF NOT EXISTS locations (
 -- every existing report/query/screen that reads it unchanged keeps working
 -- exactly as before — only code that specifically needs to know Shop vs
 -- Warehouse reads this table directly.
+CREATE TABLE IF NOT EXISTS stock_ledger (
+  id TEXT PRIMARY KEY,
+  at INTEGER NOT NULL,
+  date TEXT NOT NULL,
+  time TEXT NOT NULL,
+  size_id INTEGER,
+  product_id TEXT DEFAULT '',
+  location_id TEXT DEFAULT '',
+  movement TEXT NOT NULL DEFAULT 'stock_in',
+  qty REAL NOT NULL DEFAULT 0,
+  prev_qty REAL NOT NULL DEFAULT 0,
+  new_qty REAL NOT NULL DEFAULT 0,
+  ref_type TEXT DEFAULT '',
+  ref_no TEXT DEFAULT '',
+  ref_id TEXT DEFAULT '',
+  staff TEXT DEFAULT '',
+  remarks TEXT DEFAULT '',
+  updated_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_stock_ledger_at ON stock_ledger(at DESC);
+CREATE INDEX IF NOT EXISTS idx_stock_ledger_size ON stock_ledger(size_id, at DESC);
+CREATE INDEX IF NOT EXISTS idx_stock_ledger_prod ON stock_ledger(product_id, at DESC);
+CREATE INDEX IF NOT EXISTS idx_stock_ledger_date ON stock_ledger(date);
+
 CREATE TABLE IF NOT EXISTS size_location_stock (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   size_id INTEGER NOT NULL REFERENCES product_sizes(id) ON DELETE CASCADE,

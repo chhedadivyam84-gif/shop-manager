@@ -3,6 +3,7 @@ const db = require("../db");
 const { uid, todayStr, round2, logAction, bindId } = require("../util");
 const { requireRole } = require("../auth");
 const inventory = require("../inventory");
+const ledger = require("../stockLedger");
 const docNumber = require("../docNumber");
 // Same module the browser loads — see public/js/pricing.js for why it is shared.
 const Pricing = require("../../public/js/pricing.js");
@@ -637,6 +638,8 @@ router.post("/", (req, res) => {
     // total is resynced.
     const touchedProducts = new Set();
     Object.entries(piecesBySize).forEach(([sizeId, pieces]) => {
+      ledger.setContext({ movement: isChallan ? "stock_out" : "sale",
+        refType: isChallan ? "Delivery Challan" : "Sales Invoice", refNo: challanNo, refId: id });
       inventory.addStock(Number(sizeId), location, -pieces);
       const size = db.prepare("SELECT product_id FROM product_sizes WHERE id = ?").get(sizeId);
       if (size) touchedProducts.add(size.product_id);

@@ -1433,7 +1433,7 @@ async function switchTab(tab){
   // brought into view — otherwise switching from a tile leaves it off-screen.
   const activeBtn = document.querySelector(`nav.bottom .tab[data-tab="${tab}"]`);
   if(activeBtn && activeBtn.scrollIntoView) activeBtn.scrollIntoView({ block:"nearest", inline:"nearest" });
-  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",selection:"Selection Slip",quotation:"Quotation",so:"Sales Order",pquery:"Product Query",accounts:"Accounts",otherledger:(state.olKind==="income"?"Other Income":"Other Expenses"),fyear:"Financial Year",fyclose:"Financial Year",printmgr:"Print Management",outstanding:"Outstanding",ewb:"E-Way Bill",delivery:"Delivery & Dispatch",alerts:"Reminders",notes:"Notepad",backups:"Cloud Backups"};
+  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",selection:"Selection Slip",quotation:"Quotation",so:"Sales Order",pquery:"Product Query",stockhistory:"Stock History / Stock Ledger",accounts:"Accounts",otherledger:(state.olKind==="income"?"Other Income":"Other Expenses"),fyear:"Financial Year",fyclose:"Financial Year",printmgr:"Print Management",outstanding:"Outstanding",ewb:"E-Way Bill",delivery:"Delivery & Dispatch",alerts:"Reminders",notes:"Notepad",backups:"Cloud Backups"};
   document.getElementById("hdr-sub").textContent = subMap[tab];
   document.getElementById("hdr-main").textContent = tab==="home" ? greeting() : subMap[tab];
   if(tab==="billing") await renderBilling();
@@ -1458,6 +1458,7 @@ async function switchTab(tab){
   if(tab==="cheque") await renderCheque();
   if(tab==="delivery") await renderDelivery();
   if(tab==="alerts") await renderAlerts();
+  if(tab==="stockhistory") await renderStockHistory();
   if(tab==="notes") await renderNotes();
   if(tab==="permissions") await renderPermissions();
   if(tab==="backups") await renderBackups();
@@ -2078,7 +2079,8 @@ const MENU = [
   ]],
   ["Stock", [
     ["inventory",   "&#128230;", "Inventory"],
-    ["pquery",      "&#128269;", "Product Query"]
+    ["pquery",      "&#128269;", "Product Query"],
+    ["stockhistory","&#128220;", "Stock History"]
   ]],
   ["Money", [
     ["cashbook",    "&#128181;", "Cash Book"],
@@ -2591,6 +2593,192 @@ async function renderBackups(){
    goes; deliver the goods and the line goes. Nothing to tick off, so nothing
    to fall out of step with the ledger.
    ============================================================ */
+/* ------------------------------------------------------------------ */
+/* STOCK HISTORY — every movement, and what it did to the count         */
+/*                                                                      */
+/* Read-only on purpose. A wrong entry is corrected by making the       */
+/* opposite movement, which leaves both rows and explains itself; an    */
+/* editable history answers "how much is there" with whatever somebody  */
+/* last typed.                                                          */
+/* ------------------------------------------------------------------ */
+
+const SH = { meta: null, rows: [], filters: {} };
+
+function shMovementLabel(k){
+  const m = (SH.meta && SH.meta.movements || []).find(x => x.key === k);
+  return m ? m.label : k;
+}
+
+/** 2026-09-03 as "3 Sep 26" — a stock ledger is scanned, not read. */
+function shDate(d){
+  if(!d) return "";
+  const t = new Date(d + "T00:00:00");
+  return isNaN(t) ? d
+    : t.toLocaleDateString("en-IN", { day:"numeric", month:"short", year:"2-digit" });
+}
+
+async function renderStockHistory(){
+  const fbox = document.getElementById("sh-filters");
+  const body = document.getElementById("sh-body");
+  if(!fbox || !body) return;
+
+  if(!SH.meta){
+    try{ SH.meta = await api("GET", "/stock-history/meta"); }
+    catch(e){ body.innerHTML = `<div class="pm-warn">${escapeHtml(e.message)}</div>`; return; }
+  }
+  const m = SH.meta;
+  const f = SH.filters;
+
+  fbox.innerHTML = `
+    <div class="sh-grid">
+      <label class="pm-field"><span>From</span><input type="date" id="sh-from" value="${escapeHtml(f.from||"")}"></label>
+      <label class="pm-field"><span>To</span><input type="date" id="sh-to" value="${escapeHtml(f.to||"")}"></label>
+      <label class="pm-field"><span>Product</span><input type="text" id="sh-product" value="${escapeHtml(f.product||"")}" placeholder="name"></label>
+      <label class="pm-field"><span>Brand</span>
+        <select id="sh-brand"><option value="">All</option>
+          ${m.brands.map(b=>`<option${b===f.brand?" selected":""}>${escapeHtml(b)}</option>`).join("")}</select></label>
+      <label class="pm-field"><span>Category</span>
+        <select id="sh-category"><option value="">All</option>
+          ${m.categories.map(c=>`<option${c===f.category?" selected":""}>${escapeHtml(c)}</option>`).join("")}</select></label>
+      <label class="pm-field"><span>Stock type</span>
+        <select id="sh-movement"><option value="">All</option>
+          ${m.movements.map(x=>`<option value="${escapeHtml(x.key)}"${x.key===f.movement?" selected":""}>${escapeHtml(x.label)}</option>`).join("")}</select></label>
+      <label class="pm-field"><span>Shop / Warehouse</span>
+        <select id="sh-location"><option value="">All</option>
+          ${m.locations.map(l=>`<option value="${escapeHtml(l.id)}"${l.id===f.locationId?" selected":""}>${escapeHtml(l.name)}</option>`).join("")}</select></label>
+      <label class="pm-field"><span>User</span>
+        <select id="sh-staff"><option value="">All</option>
+          ${m.staff.map(s=>`<option${s===f.staff?" selected":""}>${escapeHtml(s)}</option>`).join("")}</select></label>
+      <label class="pm-field"><span>Reference no.</span><input type="text" id="sh-refno" value="${escapeHtml(f.refNo||"")}" placeholder="e.g. PU0000016"></label>
+    </div>
+    <div class="acts" style="margin-top:10px;">
+      <button class="btn btn-gold" id="sh-search">Search</button>
+      <button class="btn btn-outline" id="sh-reset">Reset</button>
+      <button class="btn btn-outline" id="sh-export">Export Excel</button>
+      <button class="btn btn-outline" id="sh-print">Print</button>
+    </div>`;
+
+  const read = () => ({
+    from: (document.getElementById("sh-from")||{}).value || "",
+    to: (document.getElementById("sh-to")||{}).value || "",
+    product: (document.getElementById("sh-product")||{}).value || "",
+    brand: (document.getElementById("sh-brand")||{}).value || "",
+    category: (document.getElementById("sh-category")||{}).value || "",
+    movement: (document.getElementById("sh-movement")||{}).value || "",
+    locationId: (document.getElementById("sh-location")||{}).value || "",
+    staff: (document.getElementById("sh-staff")||{}).value || "",
+    refNo: (document.getElementById("sh-refno")||{}).value || ""
+  });
+  const qs = (o) => Object.entries(o).filter(([,v]) => String(v).trim() !== "")
+    .map(([k,v]) => encodeURIComponent(k)+"="+encodeURIComponent(v)).join("&");
+
+  fbox.querySelector("#sh-search").addEventListener("click", async () => {
+    SH.filters = read(); await loadStockHistory();
+  });
+  fbox.querySelector("#sh-reset").addEventListener("click", async () => {
+    SH.filters = {}; await renderStockHistory();
+  });
+  fbox.querySelector("#sh-export").addEventListener("click", () => {
+    const q = qs(read());
+    window.location.href = "/api/stock-history/export/xlsx" + (q ? "?"+q : "");
+  });
+  fbox.querySelector("#sh-print").addEventListener("click", () => window.print());
+  fbox.addEventListener("keydown", e => {
+    if(e.key === "Enter" && e.target && e.target.tagName === "INPUT"){
+      e.preventDefault(); SH.filters = read(); loadStockHistory();
+    }
+  });
+
+  await loadStockHistory();
+}
+
+async function loadStockHistory(){
+  const body = document.getElementById("sh-body");
+  body.innerHTML = `<div class="empty-hint">Loading…</div>`;
+  const qs = Object.entries(SH.filters).filter(([,v]) => String(v).trim() !== "")
+    .map(([k,v]) => encodeURIComponent(k)+"="+encodeURIComponent(v)).join("&");
+  let r;
+  try{ r = await api("GET", "/stock-history" + (qs ? "?"+qs : "")); }
+  catch(e){ body.innerHTML = `<div class="pm-warn">${escapeHtml(e.message)}</div>`; return; }
+
+  SH.rows = r.rows || [];
+  if(!SH.rows.length){
+    body.innerHTML = `<div class="empty-hint">No stock movement matches that.</div>`;
+    return;
+  }
+
+  body.innerHTML = `
+    <div class="muted" style="font-size:11.5px;margin:10px 0 6px;">
+      ${SH.rows.length} movement${SH.rows.length===1?"":"s"}${r.truncated?" (newest shown)":""}
+      · tap a row for the full entry</div>
+    <div class="sh-wrap"><table class="sh-table">
+      <thead><tr>
+        <th>Date</th><th>Time</th><th>Product</th><th>Brand</th><th>Category</th>
+        <th>Size</th><th>Type</th><th class="num">Qty</th>
+        <th class="num">Previous</th><th class="num">New</th>
+        <th>Where</th><th>Reference</th><th>By</th>
+      </tr></thead>
+      <tbody>${SH.rows.map(x=>`
+        <tr data-sh="${escapeHtml(x.id)}">
+          <td>${escapeHtml(shDate(x.date))}</td>
+          <td>${escapeHtml(x.time||"")}</td>
+          <td><b>${escapeHtml(x.product_name||"—")}</b></td>
+          <td>${escapeHtml(x.brand||"—")}</td>
+          <td>${escapeHtml(x.category||"—")}</td>
+          <td>${escapeHtml(x.size_label||"—")}</td>
+          <td>${escapeHtml(shMovementLabel(x.movement))}</td>
+          <td class="num" style="color:${x.qty<0?"var(--danger)":"var(--ok,#178a6e)"};font-weight:800;">
+            ${x.qty>0?"+":""}${x.qty}</td>
+          <td class="num">${x.prev_qty}</td>
+          <td class="num"><b>${x.new_qty}</b></td>
+          <td>${escapeHtml(x.location_name||"—")}</td>
+          <td>${escapeHtml(x.ref_no||"—")}</td>
+          <td>${escapeHtml(x.staff||"—")}</td>
+        </tr>`).join("")}</tbody>
+    </table></div>`;
+
+  body.querySelectorAll("[data-sh]").forEach(tr =>
+    tr.addEventListener("click", () => openStockEntrySheet(tr.dataset.sh)));
+}
+
+/** One movement in full, for when the table's columns are not enough. */
+function openStockEntrySheet(id){
+  const x = SH.rows.find(r => r.id === id);
+  if(!x) return;
+  const sheet = document.getElementById("sheet-stockentry");
+  const row = (k, v) => `<div class="sh-detail-row"><span>${escapeHtml(k)}</span><b>${escapeHtml(String(v))}</b></div>`;
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>&#10005;</button>
+    <div class="sheet-title">Stock entry</div>
+    ${row("Entry date", shDate(x.date))}
+    ${row("Entry time", x.time || "—")}
+    ${row("Product", x.product_name || "—")}
+    ${row("Brand", x.brand || "—")}
+    ${row("Category", x.category || "—")}
+    ${row("Size / variant", x.size_label || "—")}
+    ${row("Stock type", shMovementLabel(x.movement))}
+    ${row("Previous stock", x.prev_qty)}
+    ${row("Quantity changed", (x.qty > 0 ? "+" : "") + x.qty)}
+    ${row("New stock", x.new_qty)}
+    ${row("Shop / warehouse", x.location_name || "—")}
+    ${row("Reference number", x.ref_no || "—")}
+    ${row("Reference type", x.ref_type || "—")}
+    ${row("Entered by", x.staff || "—")}
+    ${row("Remarks", x.remarks || "—")}
+    <p class="muted" style="font-size:11px;margin-top:10px;line-height:1.6;">
+      Stock history is never edited or deleted. A wrong entry is put right by
+      making the opposite movement, so both stay on the record.</p>`;
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  showSheet("sheet-stockentry");
+}
+
+/** From a product: its own movements, nothing else. */
+async function openProductStockHistory(productId){
+  SH.filters = { productId };
+  await switchTab("stockhistory");
+}
+
 /* ------------------------------------------------------------------ */
 /* THE SHOP'S OWN REMINDERS                                            */
 /*                                                                      */
@@ -6155,6 +6343,11 @@ function renderProductDetailSheet(context){
     <div class="sheet-title">${escapeHtml(p.name)}${p.active===0?' <span class="pill">Inactive</span>':''}</div>
     <div class="muted" style="font-size:12px;margin-bottom:8px;">${escapeHtml(p.brand||"")} · ${escapeHtml(p.category||"")}</div>
     <span class="pill ${stockLevel(p.stock)}">${p.stock} ${escapeHtml(p.unit||"")} total, all sizes</span>
+    <!-- Where this product's stock came from and went, in one tap: the
+         question "when was this put in, and by whom" is asked of a product,
+         not of a ledger. -->
+    <button class="btn btn-outline" id="pd-stock-history" style="margin-top:10px;">
+      &#128220; View Stock History</button>
 
     <div class="chip-row" style="margin:12px 0;">
       ${p.sizes.map((s,i)=>{
@@ -6295,6 +6488,11 @@ function renderProductDetailSheet(context){
     b.addEventListener("click", ()=>{ state.ctx.selectedSizeIdx = parseInt(b.dataset.size); renderProductDetailSheet(context); });
   });
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  const shBtn = sheet.querySelector("#pd-stock-history");
+  if(shBtn) shBtn.addEventListener("click", () => {
+    closeAllSheets();
+    openProductStockHistory(p.id);
+  });
   const addBtn = sheet.querySelector("#add-to-invoice-btn");
   if(addBtn){
     addBtn.addEventListener("click", ()=>{

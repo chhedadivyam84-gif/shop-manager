@@ -3,6 +3,7 @@ const db = require("../db");
 const { uid, todayStr, round2, logAction, bindId } = require("../util");
 const { requireRole } = require("../auth");
 const inventory = require("../inventory");
+const ledger = require("../stockLedger");
 
 const router = express.Router();
 
@@ -189,6 +190,7 @@ router.post("/", (req, res) => {
       insertItem.run(id, invItem.id, invItem.product_id, invItem.size_id, invItem.name, invItem.size_label,
         pieces, invItem.unit_label, qty, invItem.rate, invItem.gst_rate);
       if (invItem.size_id) {
+        ledger.setContext({ movement: "sales_return", refType: "Sales Return", refNo: returnNo, refId: id });
         inventory.addStock(invItem.size_id, returnLocation, pieces);
         if (invItem.product_id) touchedProducts.add(invItem.product_id);
       }

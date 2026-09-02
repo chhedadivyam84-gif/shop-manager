@@ -2491,6 +2491,18 @@ CREATE TABLE IF NOT EXISTS notes (
 CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(pinned DESC, updated_at DESC);
 `);
 
+/* A dismissed reminder is only hidden from the bell; the business record it
+   came from is never changed.  Keep the text fingerprint too, so a reminder
+   naturally returns when that record changes and needs attention again. */
+db.exec(`
+CREATE TABLE IF NOT EXISTS dismissed_reminders (
+  reminder_key TEXT PRIMARY KEY,
+  fingerprint TEXT NOT NULL DEFAULT '',
+  dismissed_at INTEGER NOT NULL,
+  dismissed_by TEXT DEFAULT ''
+);
+`);
+
 addColumn("areas", "zone", "TEXT DEFAULT ''");
 addColumn("areas", "sub_area", "TEXT DEFAULT ''");
 addColumn("areas", "route", "TEXT DEFAULT ''");

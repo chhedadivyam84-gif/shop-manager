@@ -15,6 +15,9 @@ const backup = require("../backup");
 
 const router = express.Router();
 
+const reminderKey = (group, item) => `${group.key}:${item.id}`;
+const fingerprint = item => `${item.line || ""}\n${item.sub || ""}`;
+
 const todayISO = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -158,11 +161,39 @@ router.get("/", (req, res) => {
     }
   }
 
+  /* Hide only the exact version the user dismissed. If its amount, status or
+     wording changes, the fingerprint changes and it appears again. */
+  let hidden = new Map();
+  try {
+    hidden = new Map(db.prepare("SELECT reminder_key, fingerprint FROM dismissed_reminders").all()
+      .map(r => [r.reminder_key, r.fingerprint]));
+  } catch { /* schema is created on the next normal database open */ }
+  for (const g of groups) {
+    g.items = g.items.filter(item => hidden.get(reminderKey(g, item)) !== fingerprint(item));
+    g.count = g.items.length;
+  }
+  const visibleGroups = groups.filter(g => g.count);
+
   res.json({
     generatedAt: Date.now(),
-    total: groups.reduce((t, g) => t + g.count, 0),
-    groups
+    total: visibleGroups.reduce((t, g) => t + g.count, 0),
+    groups: visibleGroups
   });
+});
+
+router.post("/dismiss", (req, res) => {
+  const key = String(req.body && req.body.key || "").trim();
+  const mark = String(req.body && req.body.fingerprint || "");
+  if (!key || !mark || key.length > 180 || mark.length > 1000)
+    return res.status(400).json({ error: "Invalid reminder." });
+  db.prepare(`INSERT INTO dismissed_reminders
+      (reminder_key, fingerprint, dismissed_at, dismissed_by)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(reminder_key) DO UPDATE SET
+      fingerprint=excluded.fingerprint, dismissed_at=excluded.dismissed_at,
+      dismissed_by=excluded.dismissed_by`)
+    .run(key, mark, Date.now(), req.session.staffName || req.session.role || "");
+  res.json({ ok: true });
 });
 
 module.exports = router;

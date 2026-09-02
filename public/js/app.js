@@ -2504,7 +2504,9 @@ async function renderBackups(){
   if(!BK.runs.length){
     body.innerHTML = `<div class="card" style="margin-top:0;">
       <div class="row-title">Nothing in the bucket yet</div>
-      <div class="row-sub">The next backup will appear here.</div></div>`;
+      <div class="row-sub">The next backup will appear here.</div>
+      <a class="btn btn-primary" href="/api/backup/download" style="margin-top:10px;">Download current backup</a>
+    </div>`;
     return;
   }
 
@@ -2515,6 +2517,7 @@ async function renderBackups(){
       ${r.limit ? `<div class="row-sub" id="bk-usage" style="color:${r.totalBytes/r.limit>=0.9?"var(--bad)":r.totalBytes/r.limit>=0.7?"var(--gold)":""};">${escapeHtml(r.label||"The store")} is ${(r.totalBytes/r.limit*100).toFixed(1)}% full — ${bkSize(r.totalBytes)} of ${bkSize(r.limit)}</div>` : ""}
       <div class="row-sub">In "${escapeHtml(r.bucket)}". Each one is a complete copy of the shop —
         deleting an old backup never deletes an old bill.</div>
+      <a class="btn btn-primary" href="/api/backup/download" style="margin-top:10px;">Download current backup</a>
       <div class="chip-row" style="margin-top:8px;">
         <button class="chip" data-bk-pick="week">Older than a week</button>
         <button class="chip" data-bk-pick="month">Older than a month</button>
@@ -2612,16 +2615,36 @@ async function renderAlerts(){
       ${escapeHtml(g.title)} <span class="muted" style="font-weight:400;">· ${g.count}</span>
     </div>
     ${g.items.map(it => `
-      <div class="card alert-row" data-goto-tab="${escapeHtml(it.goto || "")}" style="margin-top:0;margin-bottom:6px;cursor:pointer;">
+      <div class="card alert-row" data-group="${escapeHtml(g.key)}" data-id="${escapeHtml(it.id)}" data-line="${escapeHtml(it.line || "")}" data-sub="${escapeHtml(it.sub || "")}" data-goto-tab="${escapeHtml(it.goto || "")}" style="margin-top:0;margin-bottom:6px;">
         <div class="row-title">${escapeHtml(it.line)}</div>
         <div class="row-sub">${escapeHtml(it.sub || "")}</div>
+        <div style="display:flex;gap:8px;margin-top:9px;">
+          <button class="btn btn-outline alert-edit" style="flex:1;padding:7px;">Edit</button>
+          <button class="btn btn-outline alert-dismiss" style="flex:1;padding:7px;">Dismiss</button>
+        </div>
       </div>`).join("")}`).join("");
 
-  body.querySelectorAll(".alert-row").forEach(el =>
-    el.addEventListener("click", () => {
+  body.querySelectorAll(".alert-row").forEach(el => {
+    el.querySelector(".alert-edit").addEventListener("click", async () => {
       const t = el.dataset.gotoTab;
-      if(t) switchTab(t);
-    }));
+      const id = el.dataset.id;
+      try {
+        if(el.dataset.group === "sales-unbilled") return openExistingInvoice(id);
+        if(el.dataset.group === "purchase-unbilled") return openPurchaseDetail(id);
+        if(t) await switchTab(t);
+      } catch(e) { toast(e.message); }
+    });
+    el.querySelector(".alert-dismiss").addEventListener("click", async () => {
+      try {
+        await api("POST", "/alerts/dismiss", {
+          key: `${el.dataset.group}:${el.dataset.id}`,
+          fingerprint: `${el.dataset.line || ""}\n${el.dataset.sub || ""}`
+        });
+        await renderAlerts();
+        toast("Reminder dismissed.", "ok");
+      } catch(e) { toast(e.message); }
+    });
+  });
 }
 
 /** The count, on the header bell and the Home tile both. */

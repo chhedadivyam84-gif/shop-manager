@@ -188,7 +188,16 @@
          the preview and the print would have disagreed about the one thing
          this canvas exists to keep identical. The page box is already the
          sheet, so only the width and the centring margin come off. */
-      "@media print{.pc-sheet{width:auto;margin:0;}}" +
+      /* TWO PIXELS SHORT OF THE PAGE, AND THAT IS THE POINT.
+         min-height was exactly the printable height, so the sheet filled
+         100.000% of the page box. Measured on A4: 285mm of printable area
+         is 1077.16px and the sheet came out 1077px — no overflow on screen,
+         and a second, nearly empty sheet on paper, because laying out for a
+         printer rounds millimetres to device dots and anything at exactly
+         100% can round over. Two pixels is invisible on paper and is the
+         whole difference between one sheet and two. */
+      "@media print{.pc-sheet{width:auto;margin:0;" +
+      "min-height:calc(" + (sh.h - m * 2) + "mm - 2px);}}" +
       (opt.css || "") +
       "</style></head><body><div class=\"pc-sheet\">" + body + "</div></body></html>";
   }

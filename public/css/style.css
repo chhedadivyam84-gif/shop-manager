@@ -177,8 +177,12 @@
     --fs-chip:       13px;
     --fs-input:      14px;
     --fs-hint:       13px;
-    --fs-nav:        11px;
-    --nav-icon:      20px;
+    /* The menu bar was inheriting the TABLET sizes here, so on a laptop it
+       sat as tall as it does under a thumb while the pointer is a mouse.
+       A mouse hits a 38px target as easily as a 52px one, and the bar is on
+       every screen — the height it gives back is height the work gets. */
+    --fs-nav:      10.5px;
+    --nav-icon:      18px;
     --btn-pad-y:     11px;
     --btn-pad-x:     16px;
     --input-min-h:   38px;
@@ -2736,3 +2740,70 @@ body:has(.tpl-grip-row.dragging){ cursor:row-resize; }
 .bf-table .num{text-align:right;font-variant-numeric:tabular-nums;}
 .bf-void{font-size:10px;font-weight:800;color:#b42318;border:1px solid #b42318;
   border-radius:4px;padding:1px 5px;margin-left:6px;}
+
+/* THE SHOP MARK, where a logo has been uploaded.
+   Sits inside the same gold badge the initials used, so nothing around it
+   moves. contain, not cover: a logo is a specific shape and cropping one to
+   fill a circle is how a shop ends up with half its name showing. The white
+   ground keeps a dark logo readable on the gold. */
+.brand-mark-img{
+  width:100%;height:100%;object-fit:contain;display:block;
+  border-radius:inherit;background:#fff;padding:2px;box-sizing:border-box;
+}
+/* The badge holds an image now, so its letter-spacing and font sizing must
+   not add stray space around it. */
+#login .logo:has(.brand-mark-img),
+.avatar:has(.brand-mark-img){ padding:0; overflow:hidden; }
+
+/* THE MENU BAR ON A LAPTOP  laptop menu bar.
+   1024 and up AND a real pointer. Both conditions matter: a 1024px touch
+   screen is still a finger, and shrinking its targets would be a step
+   backwards. Guarded on pointer:fine so only mouse-driven screens tighten.
+   The bar keeps its shape and its labels; it simply stops reserving
+   thumb-sized height on a machine that has no thumbs. */
+@media (min-width:1024px) and (pointer: fine){
+  nav.bottom{ padding:4px 4px 5px; }
+  nav.bottom .tab{ min-height:38px; gap:2px; padding:3px 6px; }
+}
+
+/* THE MENU DRAWER ON A LAPTOP  laptop menu drawer.
+   Twenty-nine items at 45px a row is a 1534px list: on an 800px laptop the
+   shop scrolls past most of its own menu to reach anything below STOCK.
+   At 32px the same list is 1103px and five whole sections are on screen
+   at once, which is the difference between reading a menu and hunting
+   through one.
+
+   1024 and up AND a real pointer, both conditions deliberate: a 1024px
+   touch screen is still a finger, and shrinking its rows would be a step
+   backwards. Phone and tablet keep every pixel they had. */
+@media (min-width:1024px) and (pointer: fine){
+  .menu-item{ padding:6px 2px; font-size:12.5px; gap:8px; }
+  .menu-item .ic{ font-size:14px; }
+  .menu-group{ margin:9px 0 3px; }
+}
+
+/* THE MENU IS TOO LONG, NOT TOO TALL  menu drawer, two columns.
+
+   Shortening the rows helped and did not solve it: 29 items in ONE column
+   is a 1103px list, so the shop still scrolled past most of its own menu to
+   reach anything below STOCK. Meanwhile the drawer is the full width of a
+   1280px screen with one item per row and half the sheet empty.
+
+   Two columns uses that width instead of leaving it blank: the same list
+   becomes 563px and every section  SELL through SHOP  is on screen at
+   once, with no scrolling at all.
+
+   The handle and the title span both columns so the sheet still reads as
+   one panel. Items and group headings never split across a column break,
+   and a heading never lands at the foot of a column away from its items.
+
+   Laptop and a real pointer only. A phone gets one column, exactly as
+   before  two columns of 12.5px text on a 375px screen would be unusable. */
+@media (min-width:1024px) and (pointer: fine){
+  #sheet-menu{ column-count:2; column-gap:30px; }
+  #sheet-menu .sheet-handle,
+  #sheet-menu .sheet-title{ column-span:all; }
+  #sheet-menu .menu-item,
+  #sheet-menu .menu-group{ break-inside:avoid; }
+  #sheet-menu .menu-group{ break-after:avoid; }
+}

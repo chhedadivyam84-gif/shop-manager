@@ -183,6 +183,34 @@ function initials(name){
   return (name||"?").split(" ").map(w=>w[0]).filter(Boolean).slice(0,2).join("").toUpperCase();
 }
 
+/**
+ * The shop's mark: its logo where one has been uploaded, its initials where
+ * not.
+ *
+ * Until now an uploaded logo appeared nowhere except the small preview in
+ * Settings — a shop could upload one, see it there, and never find it again.
+ * This puts it on the login screen and in the header badge.
+ *
+ * The printed bill is deliberately NOT touched. Its header has never carried
+ * a logo and changing that moves the layout of a document the shop has
+ * settled on, which is a separate decision from showing the mark on screen.
+ *
+ * Falls back to initials on a missing or broken image, so a corrupt upload
+ * degrades to what was there before rather than an empty gold box.
+ */
+function setBrandMark(el, logo, name){
+  if(!el) return;
+  const text = initials(name || "Shop Manager");
+  if(!logo){ el.textContent = text; return; }
+  el.textContent = "";
+  const img = document.createElement("img");
+  img.alt = "";
+  img.className = "brand-mark-img";
+  img.addEventListener("error", () => { el.textContent = text; });
+  img.src = logo;
+  el.appendChild(img);
+}
+
 /* ============================================================
    BOOT / LOGIN
    ============================================================ */
@@ -446,7 +474,10 @@ async function boot(){
       await initApp();
     } else {
       document.getElementById("login-title").textContent = sess.businessName || "Shop Manager";
-      document.getElementById("login-logo").textContent = initials(sess.businessName||"Shop Manager");
+      /* The shop's own logo where one has been uploaded, initials otherwise.
+         A shop that has never set one sees exactly what it saw before. */
+      setBrandMark(document.getElementById("login-logo"),
+                   sess.logo, sess.businessName || "Shop Manager");
       await initLogin();
     }
   } finally {
@@ -702,7 +733,7 @@ async function initApp(){
   ADDED_TILES  = asList(state.settings && state.settings.home_tiles_added);
   applyHomeTiles();
   document.title = state.settings.business_name + " — Shop Manager";
-  document.getElementById("avatar-btn").textContent = initials(state.settings.business_name);
+  setBrandMark(document.getElementById("avatar-btn"), state.settings.logo_data, state.settings.business_name);
   await refreshLicenseBanner();
 
   if(appInited){ await renderAll(); return; }
@@ -8180,7 +8211,7 @@ function openSettings(){
         email: document.getElementById("st-email").value.trim(),
         website: document.getElementById("st-website").value.trim()
       });
-      document.getElementById("avatar-btn").textContent = initials(state.settings.business_name);
+      setBrandMark(document.getElementById("avatar-btn"), state.settings.logo_data, state.settings.business_name);
       closeAllSheets();
       toast("Settings saved.", "ok");
     }catch(err){ toast(err.message); }
@@ -12469,7 +12500,87 @@ function renderTallySetup(){
     </div>
 
     <button class="btn btn-gold" id="tly-save" style="margin-top:14px;">Save settings</button>
-    <div id="tly-save-out" style="margin-top:8px;"></div>`;
+    <div id="tly-save-out" style="margin-top:8px;"></div>
+
+    <!-- BILLS WRITTEN BEFORE TALLY WAS SWITCHED ON.
+         The create-time hook only fires when a bill is SAVED, so everything
+         billed before today is invisible to the sync — the queue has no way
+         of ever learning about it. A shop turning Tally on wants the year it
+         has already billed, not only tomorrow's. -->
+    <div class="section-title">Old bills</div>
+    <p class="muted" style="font-size:11.5px;line-height:1.6;">
+      Bills made before Tally was switched on do not go across on their own.
+      This puts them in the queue. It only queues — nothing reaches Tally
+      until you press <b>Sync now</b>, and running it twice is safe.</p>
+    <div id="tly-bf-counts" class="muted" style="font-size:12px;margin:6px 0;">Counting…</div>
+    <button class="btn btn-outline" id="tly-backfill">Send old bills to Tally</button>
+    <div id="tly-bf-out" style="margin-top:8px;"></div>`;
+
+  /* WHAT IS WAITING, before anything is pressed.
+     A shop should see "12 purchase bills" and decide, rather than start
+     something open-ended against its own books. Only the document types
+     that are actually switched on are offered — backfilling a type the
+     shop has deliberately turned off would be the opposite of what its
+     settings say. */
+  const bfTypes = () => (s.docTypes || [])
+    .filter(t => s.modules[t.module] && t.ready).map(t => t.key);
+
+  (async () => {
+    const el = document.getElementById("tly-bf-counts");
+    const btn = document.getElementById("tly-backfill");
+    if(!el || !btn) return;
+    try{
+      const r = await api("GET", "/tally/backfill");
+      const wanted = bfTypes();
+      const label = {};
+      (s.docTypes||[]).forEach(t => { label[t.key] = t.label; });
+      const lines = wanted
+        .map(k => [k, (r.counts && r.counts[k]) || {pending:0, total:0}])
+        .filter(([,c]) => c.pending > 0)
+        .map(([k,c]) => `${c.pending} ${label[k] || k}${c.pending===1?"":"s"}`);
+      if(!wanted.length){
+        el.textContent = "Switch on which documents may be sent first.";
+        btn.disabled = true;
+      }else if(!lines.length){
+        el.textContent = "Nothing waiting — every old bill is already queued or sent.";
+        btn.disabled = true;
+      }else{
+        el.innerHTML = "Waiting to be queued: <b>" + escapeHtml(lines.join(", ")) + "</b>";
+        btn.disabled = false;
+      }
+    }catch(e){
+      el.textContent = "Could not count the old bills: " + e.message;
+    }
+  })();
+
+  document.getElementById("tly-backfill").addEventListener("click", async (ev)=>{
+    const types = bfTypes();
+    if(!types.length) return;
+    if(!confirm("Put every old bill of the switched-on types into the Tally queue?\n\n" +
+                "Nothing is sent yet — you press Sync now afterwards.")) return;
+    const out = document.getElementById("tly-bf-out");
+    const btn = ev.currentTarget;
+    btn.disabled = true; btn.textContent = "Queueing…";
+    out.innerHTML = `<div class="muted" style="font-size:12px;">Working through the old bills…</div>`;
+    try{
+      const r = await api("POST", "/tally/backfill", { docTypes: types });
+      const label = {};
+      (s.docTypes||[]).forEach(t => { label[t.key] = t.label; });
+      /* Skips are reported, not hidden. "7 of 8" with no reason is the kind
+         of thing a shop finds out about at its next GST return. */
+      const rows = Object.entries(r.result || {}).map(([k,v]) => {
+        const why = Object.entries(v.reasons || {})
+          .map(([reason,n]) => `${n} skipped — ${escapeHtml(reason)}`).join(", ");
+        return `<div>${escapeHtml(label[k]||k)}: <b>${v.queued}</b> of ${v.found} queued` +
+               (why ? ` <span class="muted">(${why})</span>` : "") + `</div>`;
+      }).join("");
+      out.innerHTML = `<div class="pm-ok">${rows}<div style="margin-top:6px;">` +
+        `Now open <b>Queue</b> and press <b>Sync now</b>.</div></div>`;
+    }catch(e){
+      out.innerHTML = `<div class="pm-warn">${escapeHtml(e.message)}</div>`;
+    }
+    btn.disabled = false; btn.textContent = "Send old bills to Tally";
+  });
 
   document.getElementById("tly-test").addEventListener("click", async (ev)=>{
     const out = document.getElementById("tly-test-out");

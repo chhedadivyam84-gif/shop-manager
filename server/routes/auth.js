@@ -409,10 +409,14 @@ router.post("/logout", (req, res) => {
 });
 
 router.get("/session", (req, res) => {
-  const settings = db.prepare("SELECT business_name FROM settings WHERE id = 1").get();
+  /* The logo comes down with the name because the login screen draws both,
+     before anyone has signed in. It is no more private than the name: both
+     are printed on every bill that leaves the shop. */
+  const settings = db.prepare("SELECT business_name, logo_data FROM settings WHERE id = 1").get();
   const loggedIn = !!(req.session && req.session.loggedIn);
   res.json({
     loggedIn, businessName: settings.business_name,
+    logo: settings.logo_data || "",
     staffName: loggedIn ? req.session.staffName : null,
     role: loggedIn ? req.session.role : null,
     /* WHAT THIS SHOP HAS NOT PAID FOR.

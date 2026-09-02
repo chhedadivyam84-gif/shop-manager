@@ -27,3 +27,8 @@ data/tools/
 # server's own list with the developer's.
 data/companies.json
 data/companies/
+
+# TallyPrime writes its own request logs into whatever folder it runs from.
+# They are Tally's, not this app's, and they grow with every sync.
+tallyhttp.log
+tdlfunc.log

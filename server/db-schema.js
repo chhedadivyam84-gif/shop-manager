@@ -922,6 +922,12 @@ addColumn("customers", "wa_contact_type", "TEXT NOT NULL DEFAULT 'individual'");
    of every voucher failing on a name Tally does not have. JSON so a new
    ledger can be named later without another migration. */
 addColumn("tally_settings", "ledgers", "TEXT NOT NULL DEFAULT '{}'");
+/* The Tally Bridge signs in with a token, not a staff PIN: it runs
+   unattended on a counter PC, and a PIN sitting in a text file there is a
+   PIN anyone at the counter can read. Only the hash is kept, so the token
+   is shown once when it is made and cannot be recovered afterwards. */
+addColumn("tally_settings", "bridge_token_hash", "TEXT NOT NULL DEFAULT ''");
+addColumn("tally_settings", "bridge_token_made_at", "INTEGER");
 
 if (addedItemMode) {
   // Every invoice raised before this feature existed was priced per piece, so

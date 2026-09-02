@@ -129,6 +129,40 @@ router.put("/settings", perms.require("tally","edit"), (req, res) => {
 });
 
 /* ------------------------------------------------------------------ */
+/* the bridge                                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Make a token for the Tally Bridge, replacing any previous one.
+ *
+ * Shown ONCE. Only its hash is kept, so it cannot be read back later —
+ * which also means making a new one immediately stops the old bridge, and
+ * that is how a token is revoked when a PC is sold or a laptop is lost.
+ *
+ * `edit`, not `add`: this decides which machine may relay the shop's
+ * vouchers, which is a setup decision rather than a daily one.
+ */
+router.post("/bridge/token", perms.require("tally", "edit"), (req, res) => {
+  const token = require("crypto").randomBytes(24).toString("base64url");
+  const hash = require("./tallyBridge").hashToken(token);
+  db.prepare("UPDATE tally_settings SET bridge_token_hash = ?, bridge_token_made_at = ? WHERE id = 1")
+    .run(hash, Date.now());
+  logAction(req, "tally.bridge.token", "a new Tally Bridge token was made");
+  /* The only time this value exists anywhere outside the shop's screen. */
+  res.json({ token });
+});
+
+/** Is the shop's bridge running right now? */
+router.get("/bridge/status", (req, res) => {
+  const row = db.prepare("SELECT bridge_token_hash, bridge_token_made_at FROM tally_settings WHERE id = 1").get() || {};
+  res.json({
+    ...require("../tally/bridge").status(),
+    tokenMade: !!row.bridge_token_hash,
+    tokenMadeAt: row.bridge_token_made_at || null
+  });
+});
+
+/* ------------------------------------------------------------------ */
 /* connection                                                          */
 /* ------------------------------------------------------------------ */
 

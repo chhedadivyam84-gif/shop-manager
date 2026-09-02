@@ -49,7 +49,25 @@ function tallyDate(iso) {
  * some stacks refuse them, and this needs to work on whatever Node the
  * shop PC happens to be running.
  */
+/* The shop saying "Tally is not on this machine, reach it through the
+   bridge". A host rather than a separate setting because it is exactly
+   what a host names: where to find Tally. */
+const BRIDGE_HOST = "bridge";
+
+function usingBridge(settings) {
+  return String((settings && settings.host) || "").trim().toLowerCase() === BRIDGE_HOST;
+}
+
 function post(settings, xml) {
+  /* THE HOSTED CASE. There is no socket to open: this server is in a data
+     centre and Tally is behind a shop router. The XML goes to the bridge
+     program on the shop's own PC, which posts it to Tally there and hands
+     back what Tally said. The answer has the same shape either way, so
+     nothing above this line knows which happened. */
+  if (usingBridge(settings)) {
+    return require("./bridge").ask(xml);
+  }
+
   return new Promise((resolve) => {
     const body = Buffer.from(xml, "utf8");
     const req = http.request({
@@ -261,5 +279,6 @@ async function send(settings, xml) {
 module.exports = {
   esc, tallyDate, tag, tagAll,
   post, send, companies, testConnection,
-  importEnvelope, voucherEnvelope, readImportReply
+  importEnvelope, voucherEnvelope, readImportReply,
+  BRIDGE_HOST, usingBridge
 };

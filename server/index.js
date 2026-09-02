@@ -397,6 +397,10 @@ app.use("/api/whatsapp", requireAuth, require("./routes/whatsapp"));
    lock the shop out, which makes it the one honest test of whose copy this
    is, and it holds whether that copy is hosted or run from a folder. */
 if (!require("./license").enabled()) {
+  /* The bridge FIRST, and without requireAuth: it is a program on a shop's
+     counter PC carrying its own token, not a person with a session. Ahead
+     of /api/tally so the session gate below never sees it. */
+  app.use("/api/tally-bridge", require("./routes/tallyBridge"));
   app.use("/api/tally", requireAuth, require("./routes/tally"));
   /* The auto-sync timer, started once the tables exist. Wrapped because a
      sync timer must never be able to stop the shop from billing — if this

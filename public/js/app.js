@@ -12422,16 +12422,42 @@ function renderTallySetup(){
   const conn = tallyState.data.connection;
   const companies = (conn && conn.companies) || [];
 
+  const viaBridge = String(s.host||"").toLowerCase() === "bridge";
+
   el.innerHTML = `
-    <div class="pm-filter-grid">
-      <label class="pm-field"><span>Tally computer</span>
-        <input type="text" id="tly-host" value="${escapeHtml(s.host||"localhost")}"></label>
-      <label class="pm-field"><span>Port</span>
-        <input type="number" id="tly-port" value="${Number(s.port)||9000}"></label>
+    <!-- WHERE TALLY IS decides everything else on this screen. A shop
+         billing on a hosted copy cannot be reached from the data centre at
+         all, so it is asked plainly rather than left to be discovered when
+         Test connection times out. -->
+    <label class="field-label">Where is Tally?</label>
+    <select id="tly-where">
+      <option value="local"${viaBridge?"":" selected"}>On this computer, or on this shop's network</option>
+      <option value="bridge"${viaBridge?" selected":""}>On the shop's computer — this Shop Manager is online</option>
+    </select>
+
+    <div id="tly-local-box" style="${viaBridge?"display:none;":""}">
+      <div class="pm-filter-grid" style="margin-top:10px;">
+        <label class="pm-field"><span>Tally computer</span>
+          <input type="text" id="tly-host" value="${escapeHtml(viaBridge?"localhost":(s.host||"localhost"))}"></label>
+        <label class="pm-field"><span>Port</span>
+          <input type="number" id="tly-port" value="${Number(s.port)||9000}"></label>
+      </div>
+      <p class="muted" style="font-size:11px;margin-top:5px;line-height:1.7;">
+        <b>localhost</b> if Tally runs on this computer. Otherwise the IP address of the PC it
+        is on.</p>
     </div>
-    <p class="muted" style="font-size:11px;margin-top:5px;line-height:1.7;">
-      <b>localhost</b> if Tally runs on this computer. Otherwise the IP address of the PC it
-      is on.</p>
+
+    <div id="tly-bridge-box" style="${viaBridge?"":"display:none;"}">
+      <p class="muted" style="font-size:11.5px;margin-top:8px;line-height:1.7;">
+        This Shop Manager runs on the internet and your Tally sits on a computer in the
+        shop, so it cannot be reached from here — and opening it to the internet is not
+        safe, because <b>Tally's connection has no password of any kind</b>.
+        Instead a small program runs on the shop's computer and fetches the work.
+        Everything it does goes <b>outward</b>: nothing is opened on your router.</p>
+      <div id="tly-bridge-status" class="muted" style="font-size:12px;margin:8px 0;">Checking…</div>
+      <button class="btn btn-outline" id="tly-bridge-token">Make a bridge token</button>
+      <div id="tly-bridge-token-out" style="margin-top:8px;"></div>
+    </div>
     ${/* The menu path differs between the two Tally versions, and the old
          one sends TallyPrime users hunting through a screen that no longer
          holds the setting. Newest first — a shop on ERP 9 knows it is on
@@ -12516,6 +12542,65 @@ function renderTallySetup(){
     <button class="btn btn-outline" id="tly-backfill">Send old bills to Tally</button>
     <div id="tly-bf-out" style="margin-top:8px;"></div>`;
 
+  /* Where Tally is: switching hides the half that does not apply, so a
+     shop is never filling in an IP address it will never use. */
+  const whereEl = document.getElementById("tly-where");
+  const paintWhere = () => {
+    const bridgeMode = whereEl.value === "bridge";
+    document.getElementById("tly-local-box").style.display = bridgeMode ? "none" : "";
+    document.getElementById("tly-bridge-box").style.display = bridgeMode ? "" : "none";
+    if(bridgeMode) refreshBridgeStatus();
+  };
+  whereEl.addEventListener("change", paintWhere);
+
+  async function refreshBridgeStatus(){
+    const out = document.getElementById("tly-bridge-status");
+    if(!out) return;
+    try{
+      const b = await api("GET", "/tally/bridge/status");
+      out.innerHTML = b.connected
+        ? `<span style="color:var(--ok,#178a6e);font-weight:800;">● Bridge running</span> on the shop's computer.`
+        : `<span style="color:var(--danger);font-weight:800;">● Bridge not running.</span> ` +
+          (b.tokenMade
+            ? "Start it on the shop's computer and leave it open."
+            : "Make a token below, then set it up on the shop's computer.");
+    }catch(e){ out.textContent = "Could not check the bridge: " + e.message; }
+  }
+  if(whereEl.value === "bridge") refreshBridgeStatus();
+
+  document.getElementById("tly-bridge-token").addEventListener("click", async (ev)=>{
+    if(!confirm("Make a new bridge token?\n\nAny bridge already using the old one stops working " +
+                "until it is given the new token.")) return;
+    const out = document.getElementById("tly-bridge-token-out");
+    ev.currentTarget.disabled = true;
+    try{
+      const r = await api("POST", "/tally/bridge/token", {});
+      /* Shown once and never again — only its hash is kept. Saying so where
+         it is shown is the difference between a shop copying it now and a
+         shop coming back for it tomorrow. */
+      out.innerHTML = `
+        <div class="pm-ok">
+          <div style="font-weight:800;margin-bottom:4px;">Copy this now — it is not shown again</div>
+          <div style="font-family:monospace;font-size:13px;word-break:break-all;
+                      background:var(--card);border:1px solid var(--border);
+                      border-radius:8px;padding:8px;">${escapeHtml(r.token)}</div>
+          <div style="margin-top:10px;font-size:12px;line-height:1.7;">
+            On the shop's computer, in the Shop Manager folder, open
+            <b>tools</b> and create <b>tally-bridge.json</b>:
+            <div style="font-family:monospace;font-size:11.5px;background:var(--card);
+                        border:1px solid var(--border);border-radius:8px;padding:8px;margin:6px 0;">
+              {<br>&nbsp;&nbsp;"server": "${escapeHtml(location.origin)}",<br>
+              &nbsp;&nbsp;"token": "${escapeHtml(r.token)}"<br>}
+            </div>
+            Then run <b>Tally Bridge.bat</b> and leave the window open,
+            with Tally open and the company loaded.
+          </div>
+        </div>`;
+      refreshBridgeStatus();
+    }catch(e){ out.innerHTML = `<div class="pm-warn">${escapeHtml(e.message)}</div>`; }
+    ev.currentTarget.disabled = false;
+  });
+
   /* WHAT IS WAITING, before anything is pressed.
      A shop should see "12 purchase bills" and decide, rather than start
      something open-ended against its own books. Only the document types
@@ -12588,7 +12673,11 @@ function renderTallySetup(){
     ev.currentTarget.disabled = true;
     try{
       const r = await api("POST", "/tally/test", {
-        host: document.getElementById("tly-host").value.trim(),
+        /* "bridge" is not an address, it is the shop saying Tally is not
+           reachable from here and must be fetched by the program on its
+           own computer. connector.post reads it and routes accordingly. */
+        host: document.getElementById("tly-where").value === "bridge"
+          ? "bridge" : document.getElementById("tly-host").value.trim(),
         port: document.getElementById("tly-port").value,
         company: document.getElementById("tly-company").value.trim()
       });
@@ -12609,7 +12698,11 @@ function renderTallySetup(){
     ev.currentTarget.disabled = true;
     try{
       await api("PUT", "/tally/settings", {
-        host: document.getElementById("tly-host").value.trim(),
+        /* "bridge" is not an address, it is the shop saying Tally is not
+           reachable from here and must be fetched by the program on its
+           own computer. connector.post reads it and routes accordingly. */
+        host: document.getElementById("tly-where").value === "bridge"
+          ? "bridge" : document.getElementById("tly-host").value.trim(),
         port: document.getElementById("tly-port").value,
         company: document.getElementById("tly-company").value.trim(),
         enabled: document.getElementById("tly-enabled").checked,

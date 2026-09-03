@@ -438,6 +438,7 @@ app.use("/api/locations", requireAuth, require("./routes/locations"));
 app.use("/api/transfers", requireAuth, require("./routes/transfers"));
 app.use("/api/stock-history", requireAuth, require("./routes/stockHistory"));
 app.use("/api/position", requireAuth, require("./routes/position"));
+app.use("/api/material-flow", requireAuth, require("./routes/materialFlow"));
 /* requireAuth only, not requireRole: /permissions/me is how a staff member's
    own screen learns what to show them, and it is the one thing here a
    non-owner can read. Everything else inside is behind requireRole. */

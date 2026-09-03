@@ -796,6 +796,11 @@ setTimeout(function () {
 
       <!-- Live Business Position: every figure the owner asks for, on one
            screen, each card opening the report behind it. -->
+      <!-- Material Flow: where every purchase went. -->
+      <div class="screen" id="screen-materialflow">
+        <div id="mf-filters"></div>
+        <div id="mf-body"></div>
+      </div>
       <div class="screen" id="screen-position">
         <div id="pos-body"></div>
       </div>
@@ -1488,6 +1493,7 @@ setTimeout(function () {
        for both, so the two can never drift apart. -->
   <div class="sheet" id="sheet-reminder"></div>
   <div class="sheet" id="sheet-stockentry"></div>
+  <div class="sheet" id="sheet-mfdoc"></div>
 
   <!-- ============ FULLSCREEN: STOCK REPORT PRINT ============
        In-page print (not window.open) — a PWA installed to the home screen

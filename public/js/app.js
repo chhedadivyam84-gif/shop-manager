@@ -1433,7 +1433,7 @@ async function switchTab(tab){
   // brought into view — otherwise switching from a tile leaves it off-screen.
   const activeBtn = document.querySelector(`nav.bottom .tab[data-tab="${tab}"]`);
   if(activeBtn && activeBtn.scrollIntoView) activeBtn.scrollIntoView({ block:"nearest", inline:"nearest" });
-  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",selection:"Selection Slip",quotation:"Quotation",so:"Sales Order",pquery:"Product Query",stockhistory:"Stock History / Stock Ledger",accounts:"Accounts",otherledger:(state.olKind==="income"?"Other Income":"Other Expenses"),fyear:"Financial Year",fyclose:"Financial Year",printmgr:"Print Management",outstanding:"Outstanding",position:"Business Position",ewb:"E-Way Bill",delivery:"Delivery & Dispatch",alerts:"Reminders",notes:"Notepad",backups:"Cloud Backups"};
+  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",selection:"Selection Slip",quotation:"Quotation",so:"Sales Order",pquery:"Product Query",stockhistory:"Stock History / Stock Ledger",accounts:"Accounts",otherledger:(state.olKind==="income"?"Other Income":"Other Expenses"),fyear:"Financial Year",fyclose:"Financial Year",printmgr:"Print Management",outstanding:"Outstanding",position:"Business Position",materialflow:"Material Flow & Document Tracking",ewb:"E-Way Bill",delivery:"Delivery & Dispatch",alerts:"Reminders",notes:"Notepad",backups:"Cloud Backups"};
   document.getElementById("hdr-sub").textContent = subMap[tab];
   document.getElementById("hdr-main").textContent = tab==="home" ? greeting() : subMap[tab];
   if(tab==="billing") await renderBilling();
@@ -1460,6 +1460,7 @@ async function switchTab(tab){
   if(tab==="alerts") await renderAlerts();
   if(tab==="stockhistory") await renderStockHistory();
   if(tab==="position") await renderPosition();
+  if(tab==="materialflow") await renderMaterialFlow();
   if(tab==="notes") await renderNotes();
   if(tab==="permissions") await renderPermissions();
   if(tab==="backups") await renderBackups();
@@ -2081,7 +2082,8 @@ const MENU = [
   ["Stock", [
     ["inventory",   "&#128230;", "Inventory"],
     ["pquery",      "&#128269;", "Product Query"],
-    ["stockhistory","&#128220;", "Stock History"]
+    ["stockhistory","&#128220;", "Stock History"],
+    ["materialflow", "&#128230;", "Material Flow"]
   ]],
   ["Money", [
     ["position",     "&#128200;", "Business Position"],
@@ -2595,6 +2597,160 @@ async function renderBackups(){
    goes; deliver the goods and the line goes. Nothing to tick off, so nothing
    to fall out of step with the ledger.
    ============================================================ */
+/* ------------------------------------------------------------------ */
+/* MATERIAL FLOW — where did this purchase go?                          */
+/* ------------------------------------------------------------------ */
+
+const MF = { meta: null, rows: [], filters: {} };
+
+async function renderMaterialFlow(){
+  const fbox = document.getElementById("mf-filters");
+  const body = document.getElementById("mf-body");
+  if(!fbox || !body) return;
+
+  if(!MF.meta){
+    try{ MF.meta = await api("GET", "/material-flow/meta"); }
+    catch(e){ body.innerHTML = `<div class="pm-warn">${escapeHtml(e.message)}</div>`; return; }
+  }
+  const f = MF.filters;
+  fbox.innerHTML = `
+    <div class="sh-grid">
+      <label class="pm-field"><span>From</span><input type="date" id="mf-from" value="${escapeHtml(f.from||"")}"></label>
+      <label class="pm-field"><span>To</span><input type="date" id="mf-to" value="${escapeHtml(f.to||"")}"></label>
+      <label class="pm-field"><span>Supplier</span>
+        <select id="mf-supplier"><option value="">All</option>
+          ${MF.meta.suppliers.map(s=>`<option value="${escapeHtml(s.id)}"${s.id===f.supplierId?" selected":""}>${escapeHtml(s.name)}</option>`).join("")}</select></label>
+      <label class="pm-field"><span>Product</span>
+        <select id="mf-product"><option value="">All</option>
+          ${MF.meta.products.map(p=>`<option value="${escapeHtml(p.id)}"${p.id===f.productId?" selected":""}>${escapeHtml(p.name)}</option>`).join("")}</select></label>
+    </div>
+    <div class="acts" style="margin-top:10px;">
+      <button class="btn btn-gold" id="mf-search">Search</button>
+      <button class="btn btn-outline" id="mf-reset">Reset</button>
+      <button class="btn btn-outline" id="mf-export">Export Excel</button>
+      <button class="btn btn-outline" id="mf-print">Print</button>
+    </div>`;
+
+  const read = () => ({
+    from: (document.getElementById("mf-from")||{}).value || "",
+    to: (document.getElementById("mf-to")||{}).value || "",
+    supplierId: (document.getElementById("mf-supplier")||{}).value || "",
+    productId: (document.getElementById("mf-product")||{}).value || ""
+  });
+  const qs = o => Object.entries(o).filter(([,v])=>String(v).trim()!=="")
+    .map(([k,v])=>encodeURIComponent(k)+"="+encodeURIComponent(v)).join("&");
+
+  fbox.querySelector("#mf-search").addEventListener("click", async ()=>{ MF.filters = read(); await loadMaterialFlow(); });
+  fbox.querySelector("#mf-reset").addEventListener("click", async ()=>{ MF.filters = {}; await renderMaterialFlow(); });
+  fbox.querySelector("#mf-export").addEventListener("click", ()=>{
+    const q = qs(read());
+    window.location.href = "/api/material-flow/export/xlsx" + (q?"?"+q:"");
+  });
+  fbox.querySelector("#mf-print").addEventListener("click", ()=>window.print());
+
+  await loadMaterialFlow();
+}
+
+async function loadMaterialFlow(){
+  const body = document.getElementById("mf-body");
+  body.innerHTML = `<div class="empty-hint">Working out where each purchase went…</div>`;
+  const qs = Object.entries(MF.filters).filter(([,v])=>String(v).trim()!=="")
+    .map(([k,v])=>encodeURIComponent(k)+"="+encodeURIComponent(v)).join("&");
+  let r;
+  try{ r = await api("GET", "/material-flow" + (qs?"?"+qs:"")); }
+  catch(e){ body.innerHTML = `<div class="pm-warn">${escapeHtml(e.message)}</div>`; return; }
+
+  MF.rows = r.rows || [];
+  if(!MF.rows.length){
+    body.innerHTML = `<div class="empty-hint">No purchases in that range.</div>`;
+    return;
+  }
+  const t = r.totals;
+  /* The four totals across the top, because the first question is always
+     about the whole shop before it is about one bill. */
+  body.innerHTML = `
+    <div class="pos-grid" style="margin-top:10px;">
+      <div class="pos-card pos-good" style="cursor:default;">
+        <span class="pos-label">Total Purchased</span><span class="pos-value">${fmt(t.value)}</span></div>
+      <div class="pos-card pos-warn" style="cursor:default;">
+        <span class="pos-label">Via Sales Challan</span><span class="pos-value">${fmt(t.viaChallanValue)}</span>
+        <span class="pos-sub">delivered, not yet invoiced</span></div>
+      <div class="pos-card pos-good" style="cursor:default;">
+        <span class="pos-label">Via Sales Invoice</span><span class="pos-value">${fmt(t.viaInvoiceValue)}</span>
+        <span class="pos-sub">sold and billed</span></div>
+      <div class="pos-card" style="cursor:default;">
+        <span class="pos-label">Remaining in Stock</span><span class="pos-value">${fmt(t.remainingValue)}</span>
+        <span class="pos-sub">still on the racks</span></div>
+    </div>
+    <div class="muted" style="font-size:11.5px;margin:12px 0 6px;">
+      ${MF.rows.length} purchase document${MF.rows.length===1?"":"s"} · tap one to see exactly where it went</div>
+    <div class="sh-wrap"><table class="sh-table">
+      <thead><tr>
+        <th>Date</th><th>Document</th><th>Supplier</th>
+        <th class="num">Purchased</th><th class="num">Via Challan</th>
+        <th class="num">Via Invoice</th><th class="num">Remaining</th>
+      </tr></thead>
+      <tbody>${MF.rows.map(d=>`
+        <tr data-mf="${escapeHtml(d.docId)}">
+          <td>${escapeHtml(shDate(d.date))}</td>
+          <td><b>${escapeHtml(d.docNo||"—")}</b><div class="muted" style="font-size:10px;">${escapeHtml(d.docType)}</div></td>
+          <td>${escapeHtml(d.party)}</td>
+          <td class="num"><b>${fmt(d.value)}</b></td>
+          <td class="num">${d.viaChallanValue?fmt(d.viaChallanValue):"—"}</td>
+          <td class="num">${d.viaInvoiceValue?fmt(d.viaInvoiceValue):"—"}</td>
+          <td class="num" style="font-weight:800;">${fmt(d.remainingValue)}</td>
+        </tr>`).join("")}</tbody>
+    </table></div>
+    <p class="muted" style="font-size:11px;line-height:1.7;margin-top:12px;">
+      ${escapeHtml(r.basis)}<br>
+      Values are at <b>purchase cost</b>, so the three columns add back up to
+      what was purchased. A challan already converted to an invoice is counted
+      once, under the invoice.</p>`;
+
+  body.querySelectorAll("[data-mf]").forEach(tr =>
+    tr.addEventListener("click", ()=>openMaterialFlowDoc(tr.dataset.mf)));
+}
+
+/** One purchase, and every document its material left through. */
+function openMaterialFlowDoc(docId){
+  const d = MF.rows.find(x => x.docId === docId);
+  if(!d) return;
+  const sheet = document.getElementById("sheet-mfdoc");
+  const row = (k,v) => `<div class="sh-detail-row"><span>${escapeHtml(k)}</span><b>${v}</b></div>`;
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>&#10005;</button>
+    <div class="sheet-title">${escapeHtml(d.docNo||"")}</div>
+    <div class="muted" style="font-size:12px;margin-bottom:8px;">
+      ${escapeHtml(d.docType)} · ${escapeHtml(d.party)} · ${escapeHtml(shDate(d.date))}</div>
+    ${row("Purchased", fmt(d.value) + ` <span class="muted" style="font-weight:400;">(${d.qty})</span>`)}
+    ${row("Via Sales Challan", fmt(d.viaChallanValue) + ` <span class="muted" style="font-weight:400;">(${d.viaChallanQty})</span>`)}
+    ${row("Via Sales Invoice", fmt(d.viaInvoiceValue) + ` <span class="muted" style="font-weight:400;">(${d.viaInvoiceQty})</span>`)}
+    ${row("Remaining in stock", fmt(d.remainingValue) + ` <span class="muted" style="font-weight:400;">(${d.remainingQty})</span>`)}
+    <div class="section-title">Where it went</div>
+    ${d.consumers.length ? d.consumers.map(c=>`
+      <div class="card mf-consumer" data-mf-doc="${escapeHtml(c.docId)}" data-mf-type="${escapeHtml(c.type)}"
+           style="margin-top:0;margin-bottom:6px;">
+        <div class="inv-flex">
+          <div>
+            <div class="row-title">${escapeHtml(c.no||"—")}</div>
+            <div class="row-sub">${escapeHtml(c.type)} · ${escapeHtml(c.party)} · ${escapeHtml(shDate(c.date))}</div>
+          </div>
+          <div style="margin-left:auto;text-align:right;">
+            <div style="font-weight:800;">${fmt(c.value)}</div>
+            <div class="muted" style="font-size:10.5px;">${c.pieces} pcs</div>
+          </div>
+        </div>
+      </div>`).join("")
+      : `<div class="empty-hint">None of this has been sold yet — all of it is still in stock.</div>`}`;
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  sheet.querySelectorAll("[data-mf-doc]").forEach(el => el.addEventListener("click", ()=>{
+    closeAllSheets();
+    openExistingInvoice(el.dataset.mfDoc);
+  }));
+  showSheet("sheet-mfdoc");
+}
+
 /* ------------------------------------------------------------------ */
 /* LIVE BUSINESS POSITION — where the shop stands, right now            */
 /*                                                                      */

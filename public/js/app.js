@@ -8648,6 +8648,66 @@ function openAddCustomer(editing){
 /* ============================================================
    SETTINGS SHEET
    ============================================================ */
+/**
+ * The Bill Scanner box inside Settings.
+ *
+ * Drawn separately from the rest of the settings form because it does not
+ * save with it: the key goes to its own endpoint, sealed, and is never read
+ * back. The box therefore shows only WHETHER a key is set, never the key —
+ * a settings screen that redisplays a secret is a settings screen that
+ * leaks it to whoever is standing at the counter.
+ */
+async function renderScanSettings() {
+  const box = document.getElementById("st-scan-box");
+  if (!box) return;
+  let st;
+  try { st = await api("GET", "/bill-scan/status"); }
+  catch (e) { box.innerHTML = '<div class="pm-warn">' + escapeHtml(e.message) + "</div>"; return; }
+  SCAN.status = st;
+
+  if (st.fromEnv) {
+    box.innerHTML = '<div class="pm-warn" style="margin:0;">The key is set on this server by ' +
+      "whoever installed the app, and that one is used. It cannot be changed from here.</div>";
+    return;
+  }
+
+  box.innerHTML =
+    (st.configured
+      ? '<div class="row-sub" style="margin-bottom:6px;">Switched on. Reading a bill uses ' +
+        escapeHtml(st.model) + ".</div>"
+      : '<div class="row-sub" style="margin-bottom:6px;">Not set up. New Purchase shows no scan button.</div>') +
+    '<input type="password" id="st-scan-key" autocomplete="off" spellcheck="false" placeholder="' +
+    (st.configured ? "Paste a new key to replace the one saved" : "Paste your Anthropic API key") + '">' +
+    '<div class="acts" style="margin-top:8px;">' +
+    '<button class="btn btn-gold" id="st-scan-save">Save key</button>' +
+    (st.configured ? '<button class="btn btn-outline" id="st-scan-clear">Turn it off</button>' : "") +
+    "</div>";
+
+  box.querySelector("#st-scan-save").addEventListener("click", async () => {
+    const el = box.querySelector("#st-scan-key");
+    const key = (el.value || "").trim();
+    if (!key) { toast("Paste the key first.", true); return; }
+    try {
+      await api("PUT", "/bill-scan/key", { apiKey: key });
+      el.value = "";
+      SCAN.status = null;
+      toast("Bill scanning is on.");
+      renderScanSettings();
+    } catch (e) { toast(e.message, true); }
+  });
+
+  const clear = box.querySelector("#st-scan-clear");
+  if (clear) clear.addEventListener("click", async () => {
+    if (!confirm("Turn bill scanning off? The saved key is forgotten.")) return;
+    try {
+      await api("DELETE", "/bill-scan/key");
+      SCAN.status = null;
+      toast("Bill scanning is off.");
+      renderScanSettings();
+    } catch (e) { toast(e.message, true); }
+  });
+}
+
 function openSettings(){
   const sheet = document.getElementById("sheet-settings");
   const cfg = state.settings;
@@ -8677,6 +8737,15 @@ function openSettings(){
       <label class="field-label">UPI ID</label><input type="text" id="st-upi" value="${escapeHtml(cfg.upi_id||"")}">
       <div id="st-license-block"></div>
       <button class="btn btn-primary" id="st-save" style="margin-top:16px;">Save Settings</button>
+
+      <div class="section-title">Bill Scanner</div>
+      <p class="muted" style="font-size:11.5px;margin-top:-4px;">
+        Lets New Purchase read a photo of a supplier's bill and fill the form
+        from it. Nothing is ever saved without you checking it first. Reading
+        a bill costs money on your Anthropic account, so this is off until you
+        paste a key. Everything in the app works without it.
+      </p>
+      <div id="st-scan-box"></div>
 
       <div class="section-title">Opening Balances &amp; Assets</div>
       <p class="muted" style="font-size:11px;margin-bottom:10px;">Capital, fixed assets, loans and deposits — the figures the app can't work out from your sales and purchases. Enter them once; they feed the Balance Sheet from then on.</p>
@@ -9159,6 +9228,7 @@ function openSettings(){
   const licBlock = sheet.querySelector("#st-license-block");
   if(licBlock){ licBlock.innerHTML = licenseSettingsHtml(); wireLicenseSettings(); }
   showSheet("sheet-settings");
+  renderScanSettings();
 }
 
 async function renderBackupStatus(){
@@ -15676,6 +15746,265 @@ function openInquiry(editEntry){
 /* ============================================================
    PURCHASE ENTRY (Phase 1 — core multi-line invoice)
    ============================================================ */
+/* ============================================================
+   SCAN A BILL — a photograph read into a draft purchase
+
+   NOTHING IS SAVED HERE. The server reads the picture and proposes; this
+   screen shows what it read and fills the ordinary purchase form with it.
+   The shop then looks at the form and presses Save, exactly as if they had
+   typed it. A photograph of a handwritten bill is not a document to post
+   stock from unread, and every part of this is built so it cannot quietly
+   become one.
+   ============================================================ */
+const SCAN = { status: null };
+
+async function scanStatus() {
+  if (SCAN.status) return SCAN.status;
+  try { SCAN.status = await api("GET", "/bill-scan/status"); }
+  catch (e) { SCAN.status = { configured: false }; }
+  return SCAN.status;
+}
+
+/** Draw the Scan Bill button, but only where scanning is actually set up.
+ *  A button that explains it cannot work is worse than no button. */
+async function renderScanButton() {
+  const host = document.getElementById("pur-scan-slot");
+  if (!host) return;
+  const st = await scanStatus();
+  if (!st.configured) { host.innerHTML = ""; return; }
+  host.innerHTML =
+    '<button class="btn btn-outline" id="pur-scan-btn" style="width:100%;margin-top:8px;">' +
+    '&#128247; Scan Bill from a photo</button>' +
+    '<input type="file" id="pur-scan-file" accept="image/*" capture="environment" hidden>';
+
+  const file = document.getElementById("pur-scan-file");
+  document.getElementById("pur-scan-btn").addEventListener("click", () => file.click());
+  file.addEventListener("change", async () => {
+    const f = file.files && file.files[0];
+    file.value = "";               /* so the same photo can be picked twice */
+    if (f) await scanBillFile(f);
+  });
+}
+
+/** Read the file in the browser and send it as base64 — the same way an
+ *  attachment already travels, so there is no second upload path to keep
+ *  in step with the first. */
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const s = String(r.result || "");
+      const comma = s.indexOf(",");
+      resolve(comma >= 0 ? s.slice(comma + 1) : s);
+    };
+    r.onerror = () => reject(new Error("Could not read that photo."));
+    r.readAsDataURL(file);
+  });
+}
+
+async function scanBillFile(file) {
+  const btn = document.getElementById("pur-scan-btn");
+  if (btn) { btn.disabled = true; btn.textContent = "Reading the bill…"; }
+  try {
+    const dataBase64 = await fileToBase64(file);
+    const read = await api("POST", "/bill-scan", {
+      mimeType: file.type, dataBase64, filename: file.name
+    });
+    scanReview(read);
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = "&#128247; Scan Bill from a photo"; }
+  }
+}
+
+/**
+ * What was read, before anything is filled in.
+ *
+ * Every line shows what the BILL said and, separately, what it was matched
+ * to with a confidence — those are two different claims and the shop has to
+ * be able to disagree with the second one. A line that matched nothing is
+ * shown as unmatched rather than quietly attached to a best guess.
+ */
+function scanReview(r) {
+  const items = r.items || [];
+  const matched = items.filter(i => i.matched).length;
+  const unreadable = r.unreadable || [];
+
+  const line = (it, i) => {
+    const qty = (it.qty === null || it.qty === undefined)
+      ? "<b>quantity not read</b>"
+      : escapeHtml(String(it.qty)) + " " + escapeHtml(it.unit || "");
+    const money = (it.rate ? " @ " + fmt(it.rate) : "") + (it.amount ? " = " + fmt(it.amount) : "");
+    const picker = it.matched
+      ? '<label class="dim" style="display:block;"><span>Matched to (' + it.confidence + '% sure)</span>' +
+        '<select data-scan-line="' + i + '">' +
+        (it.candidates || []).map(c =>
+          '<option value="' + escapeHtml(String(c.sizeId)) + '"' +
+          (c.sizeId === it.sizeId ? " selected" : "") + ">" +
+          escapeHtml(c.label) + " — " + Math.round((c.score || 0) * 100) + "%</option>").join("") +
+        '<option value="">Do not add this line</option></select></label>'
+      : '<div class="pm-warn" style="margin:0;">Not in your product list' +
+        ((it.candidates || []).length ? " — nearest is " + escapeHtml(it.candidates[0].label) : "") +
+        ". Add this one by hand.</div>";
+    return '<div class="card" style="margin:0 0 6px;">' +
+      '<div class="row-title">' + escapeHtml(it.name || "—") + "</div>" +
+      '<div class="row-sub">' + qty + money + "</div>" +
+      '<div style="margin-top:6px;">' + picker + "</div></div>";
+  };
+
+  const box = document.getElementById("sheet-billscan");
+  box.innerHTML = (
+    '<button class="x" data-close>&#10005;</button>' +
+    "<h2>What the photo says</h2>" +
+    '<div class="pm-warn" style="margin-top:0;">Nothing has been saved. Check every line — ' +
+    "this was read from a photograph, and a photograph can be misread.</div>" +
+
+    '<div class="sh-detail">' +
+    "<div class=\"sh-detail-row\"><span>Supplier</span><b>" + escapeHtml(r.supplierName || "not read") +
+      (r.supplierMatch ? ' <span class="muted">(your supplier: ' + escapeHtml(r.supplierMatch.name) + ")</span>" : "") +
+      "</b></div>" +
+    "<div class=\"sh-detail-row\"><span>Document</span><b>" + (r.docType === "challan" ? "Purchase Challan" : "Purchase Invoice") + "</b></div>" +
+    "<div class=\"sh-detail-row\"><span>Bill number</span><b>" + escapeHtml(r.invoiceNo || "not read") + "</b></div>" +
+    "<div class=\"sh-detail-row\"><span>Date</span><b>" + escapeHtml(r.invoiceDate || "not read") + "</b></div>" +
+    (r.supplierGstin ? "<div class=\"sh-detail-row\"><span>GSTIN</span><b>" + escapeHtml(r.supplierGstin) + "</b></div>" : "") +
+    (r.total !== null && r.total !== undefined ? "<div class=\"sh-detail-row\"><span>Bill total</span><b>" + fmt(r.total) + "</b></div>" : "") +
+    "</div>" +
+
+    (unreadable.length
+      ? '<div class="pm-warn">Could not read: ' + escapeHtml(unreadable.join(", ")) + "</div>" : "") +
+
+    '<div class="section-title">' + items.length + " line" + (items.length === 1 ? "" : "s") +
+      " — " + matched + " matched to your products</div>" +
+    (items.length ? items.map(line).join("") : '<div class="empty-hint">No item lines were readable.</div>') +
+
+    '<div class="acts"><button class="primary" id="scan-use">Fill the form with this</button>' +
+    '<button class="ghost" data-close>Throw it away</button></div>' +
+    '<p class="muted small">Filling the form saves nothing. You still see the whole ' +
+    "purchase, and it is saved only when you press Save on it.</p>");
+  box.querySelectorAll("[data-close]").forEach(b =>
+    b.addEventListener("click", closeAllSheets));
+  showSheet("sheet-billscan");
+
+  /* A dropdown changes only which size that line uses. It cannot invent a
+     product — everything offered came from this shop's own catalogue. */
+  box.querySelectorAll("[data-scan-line]").forEach(sel =>
+    sel.addEventListener("change", () => {
+      const it = items[Number(sel.dataset.scanLine)];
+      const c = (it.candidates || []).find(x => String(x.sizeId) === sel.value);
+      it.sizeId = sel.value ? Number(sel.value) : null;
+      it.productId = c ? c.productId : null;
+    }));
+
+  box.querySelector("#scan-use").addEventListener("click", () => {
+    scanFill(r, items);
+    closeAllSheets();
+  });
+}
+
+/**
+ * Put what was read into the purchase form.
+ *
+ * Lines go in through addToPurchaseCart(), the same function the product
+ * picker uses, so a scanned line is built exactly like a typed one and
+ * cannot end up subtly different in a way that only shows itself on saving.
+ * Quantity and rate are then overwritten with what the bill actually said.
+ */
+function scanFill(r, items) {
+  if (r.docType === "challan") setPurDocType("challan");
+
+  if (r.supplierMatch) {
+    state.pur.supplierId = r.supplierMatch.id;
+    renderPurchaseSuppliers();
+    renderPurchaseSupplierInfo();
+  }
+  if (r.invoiceNo) {
+    state.pur.invoiceNo = r.invoiceNo;
+    const el = document.getElementById("pur-invoice-no");
+    if (el) el.value = r.invoiceNo;
+  }
+  if (r.invoiceDate && /^\d{4}-\d{2}-\d{2}$/.test(r.invoiceDate)) {
+    state.pur.date = r.invoiceDate;
+    const el = document.getElementById("pur-date");
+    if (el) el.value = r.invoiceDate;
+  }
+
+  let added = 0, skipped = 0, rated = 0, unpriced = 0;
+  for (const it of items) {
+    if (!it.productId || !it.sizeId) { skipped++; continue; }
+    const p = state.products.find(x => x.id === it.productId);
+    if (!p) { skipped++; continue; }
+    const idx = p.sizes.findIndex(s => s.id === it.sizeId);
+    if (idx < 0) { skipped++; continue; }
+    if (!addToPurchaseCart(it.productId, idx)) { skipped++; continue; }
+
+    const row = state.pur.cart[state.pur.cart.length - 1];
+    if (it.qty !== null && it.qty !== undefined) row.pieces = Number(it.qty) || row.pieces;
+
+    /* THE BILL'S RATE IS NOT ALWAYS THIS LINE'S RATE.
+       ----------------------------------------------------------------
+       A supplier writes "4 pcs @ 2500". If the shop prices that board by
+       the SQUARE FOOT, writing 2500 into the rate box means 2500 per
+       square foot — and a 32 sq.ft board, four of them, turns ten
+       thousand rupees into three lakh seventy-seven thousand. Caught in
+       testing on exactly that product; it is not a rounding error, it is
+       the wrong number by a factor of thirty.
+
+       So the LINE TOTAL is treated as what the bill actually asserts,
+       and the rate is worked back from it through this line's own unit.
+       computeLine at rate 1 gives the billable quantity in whatever unit
+       the product uses — pieces, square feet, running feet — and the
+       rate that reproduces the bill is simply the total divided by it.
+       Right in every mode, without this code needing to know which. */
+    const billAmount = (it.amount === null || it.amount === undefined)
+      ? null : Number(it.amount);
+    const q = Pricing.computeLine({
+      mode: row.mode, lengthFt: row.lengthFt, widthVal: row.widthVal,
+      thicknessIn: row.thicknessIn, pieces: row.pieces, rate: 1
+    });
+
+    if (billAmount && q.billedQty) {
+      /* Four decimals, not the usual two. A per-square-foot rate worked
+         back from a line total is often not a round number — 10,000 over
+         128 sq.ft is 78.125 — and rounding it to 78.13 puts the line 76
+         paise above what the supplier actually billed. The rate is a
+         derived figure here, so it carries the precision the total needs
+         and the total comes out exactly right. */
+      row.rate = Math.round((billAmount / q.billedQty) * 10000) / 10000;
+      /* The discount is already inside that total — a bill's line amount
+         is what is being charged. Applying the percentage again would
+         take it off twice. */
+      row.discountType = "pct";
+      row.discountValue = 0;
+      rated++;
+    } else if (it.rate !== null && it.rate !== undefined
+               && Pricing.normaliseMode(row.mode) === "UNIT") {
+      /* No line total, but this product IS priced per piece, so the
+         supplier's per-piece rate means the same thing here. */
+      row.rate = Number(it.rate) || row.rate;
+      if (it.discountPct) { row.discountType = "pct"; row.discountValue = Number(it.discountPct) || 0; }
+      rated++;
+    } else {
+      /* Neither is safe. The line keeps the shop's own price and is
+         counted, so the message can tell them to check it rather than
+         letting a wrong rate through quietly. */
+      unpriced++;
+    }
+    added++;
+  }
+  renderPurchaseCart();
+  renderPurchaseTotals();
+
+  /* Says what was NOT done as plainly as what was. A line whose price
+     could not be read keeps the shop's own rate, and the shop has to know
+     that or they will trust a number the bill never gave. */
+  toast(added
+    ? added + " line" + (added === 1 ? "" : "s") + " filled in" +
+      (unpriced ? ", " + unpriced + " kept your own rate — check " + (unpriced === 1 ? "it" : "them") : "") +
+      (skipped ? ", " + skipped + " left for you to add" : "") + ". Nothing is saved yet."
+    : "Nothing matched your products — add the lines by hand.");
+}
+
 async function renderPurchaseScreen(){
   // Refresh the saved-bill list behind the stepper, then draw it. Not awaited —
   // the screen must not wait on it to become usable.
@@ -15696,6 +16025,7 @@ async function renderPurchaseScreen(){
   renderPurchaseProducts();
   renderPurchaseCart();
   setPurDocType(state.pur.docType);
+  renderScanButton();
 }
 /**
  * Shows the number THIS purchase will get before it's saved — mirrors

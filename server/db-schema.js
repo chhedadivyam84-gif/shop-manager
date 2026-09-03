@@ -2340,6 +2340,12 @@ addColumn("invoices", "converted_invoice_id", "TEXT REFERENCES invoices(id) ON D
 // entered; harmless on builds where licensing is switched off.
 addColumn("settings", "license_key", "TEXT DEFAULT ''");
 
+/* The bill scanner's API key, sealed, as JSON so a second setting can join
+   it later without another column. Blank means the feature is simply
+   absent — see server/billScan.js. The environment wins over this, the
+   same way it does for the e-way bill credentials. */
+addColumn("settings", "scan_credentials", "TEXT DEFAULT ''");
+
 addColumn("settings", "email", "TEXT DEFAULT ''");
 addColumn("settings", "website", "TEXT DEFAULT ''");
 

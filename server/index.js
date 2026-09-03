@@ -439,6 +439,11 @@ app.use("/api/transfers", requireAuth, require("./routes/transfers"));
 app.use("/api/stock-history", requireAuth, require("./routes/stockHistory"));
 app.use("/api/position", requireAuth, require("./routes/position"));
 app.use("/api/material-flow", requireAuth, require("./routes/materialFlow"));
+/* Reading a photo of a bill into a draft purchase. requireAuth only: the
+   status check has to answer for any staff member so the purchase screen
+   knows whether to draw the button, and setting the key is owner-gated
+   inside the router. Writes nothing — see server/billScan.js. */
+app.use("/api/bill-scan", requireAuth, require("./routes/billScan"));
 /* requireAuth only, not requireRole: /permissions/me is how a staff member's
    own screen learns what to show them, and it is the one thing here a
    non-owner can read. Everything else inside is behind requireRole. */

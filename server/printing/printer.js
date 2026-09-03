@@ -30,7 +30,23 @@ const { uid, logAction } = require("../util");
 
 const SUMATRA_PATH = process.env.SUMATRA_PATH || path.join(__dirname, "..", "..", "data", "tools", "SumatraPDF.exe");
 const PRINTER_NAME = process.env.PRINTER_NAME || "Canon LBP2900";
-const ARCHIVE_DIR = path.join(__dirname, "..", "..", "data", "print-archive");
+/* THE ARCHIVE BELONGS WITH THE DATA, NOT WITH THE CODE.
+   This was built from __dirname, so it ignored DATA_DIR and wrote the PDFs
+   into the application folder instead. On a host whose disk is ephemeral
+   that is exactly the folder wiped on every redeploy, so a shop kept an
+   archive that quietly disappeared each time the app was updated — and a
+   test boot pointed at some other data directory still littered this one.
+
+   Resolved the same way the database resolves it, so the two always live
+   together. With DATA_DIR unset the path is unchanged, which is every
+   install that keeps its data beside the code.
+
+   Paths already written into print_jobs are absolute and are read back as
+   they were stored, so anything archived under the old path still prints. */
+const DATA_DIR = process.env.DATA_DIR
+  ? path.resolve(process.env.DATA_DIR)
+  : path.join(__dirname, "..", "..", "data");
+const ARCHIVE_DIR = path.join(DATA_DIR, "print-archive");
 if (!fs.existsSync(ARCHIVE_DIR)) fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
 
 const queue = [];

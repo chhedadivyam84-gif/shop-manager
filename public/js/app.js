@@ -2511,7 +2511,9 @@ async function renderBackups(){
     body.innerHTML = `<div class="card" style="margin-top:0;">
       <div class="row-title">Nothing in the bucket yet</div>
       <div class="row-sub">The next backup will appear here.</div>
-      <a class="btn btn-primary" href="/api/backup/download" style="margin-top:10px;">Download current backup</a>
+      <div class="chip-row" style="margin-top:10px;">
+        <a class="chip chip-action" href="/api/backup/download">&#11015; Download current backup</a>
+      </div>
     </div>`;
     return;
   }
@@ -2523,8 +2525,8 @@ async function renderBackups(){
       ${r.limit ? `<div class="row-sub" id="bk-usage" style="color:${r.totalBytes/r.limit>=0.9?"var(--bad)":r.totalBytes/r.limit>=0.7?"var(--gold)":""};">${escapeHtml(r.label||"The store")} is ${(r.totalBytes/r.limit*100).toFixed(1)}% full — ${bkSize(r.totalBytes)} of ${bkSize(r.limit)}</div>` : ""}
       <div class="row-sub">In "${escapeHtml(r.bucket)}". Each one is a complete copy of the shop —
         deleting an old backup never deletes an old bill.</div>
-      <a class="btn btn-primary" href="/api/backup/download" style="margin-top:10px;">Download current backup</a>
-      <div class="chip-row" style="margin-top:8px;">
+      <div class="chip-row" style="margin-top:10px;">
+        <a class="chip chip-action" href="/api/backup/download">&#11015; Download current backup</a>
         <button class="chip" data-bk-pick="week">Older than a week</button>
         <button class="chip" data-bk-pick="month">Older than a month</button>
         <button class="chip" data-bk-pick="none">Clear selection</button>

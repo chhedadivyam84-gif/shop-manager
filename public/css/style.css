@@ -2845,3 +2845,12 @@ body:has(.tpl-grip-row.dragging){ cursor:row-resize; }
 .pos-good{border-left-color:#178a6e;}
 .pos-warn{border-left-color:#e8b73a;}
 .pos-bad{border-left-color:#b42318;}
+
+/* A CHIP THAT IS A LINK, not a button. .btn is a block style and an <a> is
+   inline, so a download link wearing .btn ignored both its width and its
+   margin-top and came to rest ON the paragraph above it. As a chip it sits
+   in the row beside the others, which is where an action of its size
+   belongs anyway. */
+a.chip{display:inline-flex;align-items:center;gap:5px;text-decoration:none;}
+.chip-action{background:var(--navy);color:#fff;border-color:var(--navy);}
+.chip-action:hover{filter:brightness(1.12);}

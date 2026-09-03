@@ -36,6 +36,66 @@ function daysOld(dateStr) {
   return Math.max(0, Math.round((now - then) / 86400000));
 }
 
+/**
+ * CHALLAN OUTSTANDING — goods that moved but were never billed.
+ *
+ * A DIFFERENT THING from money outstanding, and kept apart from it on
+ * purpose. A challan carries no demand for payment, so it is deliberately
+ * excluded from receivables above; what is open about it is the INVOICE
+ * that has not been raised yet. Adding the two together would inflate what
+ * customers owe by the value of goods nobody has been billed for.
+ *
+ * So this answers "what have I delivered and not yet invoiced", which is a
+ * conversion queue with a value on it — the thing a shop chases at month
+ * end, and the thing an auditor asks about when stock has left but no sale
+ * appears.
+ */
+function challanOutstanding(side) {
+  const sales = side !== "supplier";
+  const rows = sales
+    ? db.prepare(`
+        /* A DELIVERY CHALLAN CARRIES NO HEADER TOTAL — it is a list of goods,
+           not a demand for money, so invoices.total is 0 on one. The value is
+           therefore worked out from its own lines, which do hold quantity and
+           rate. Without this the whole report reads zero and looks broken,
+           when in fact nobody ever priced the header. */
+        SELECT i.id, i.challan_no AS no, i.date,
+               COALESCE(NULLIF(i.total, 0), (
+                 SELECT ROUND(SUM(ii.qty * ii.rate * (1 - COALESCE(ii.discount_pct, 0) / 100.0)), 2)
+                   FROM invoice_items ii WHERE ii.invoice_id = i.id
+               ), 0) AS total,
+               c.name AS party_name, i.customer_id AS party_id
+          FROM invoices i
+          LEFT JOIN customers c ON c.id = i.customer_id
+         WHERE i.doc_type = 'challan' AND i.voided = 0
+           AND (i.converted_invoice_id IS NULL OR i.converted_invoice_id = '')
+         ORDER BY i.date DESC, i.created_at DESC
+      `).all()
+    : db.prepare(`
+        SELECT p.id, p.purchase_no AS no, p.date, p.total,
+               s.name AS party_name, p.supplier_id AS party_id
+          FROM purchases p
+          LEFT JOIN suppliers s ON s.id = p.supplier_id
+         WHERE p.doc_type = 'challan' AND p.voided = 0
+           AND (p.converted_purchase_id IS NULL OR p.converted_purchase_id = '')
+         ORDER BY p.date DESC, p.created_at DESC
+      `).all();
+
+  const out = rows.map(r => ({
+    ...r,
+    party_name: r.party_name || (sales ? "Walk-in" : "Unknown supplier"),
+    total: round2(Number(r.total) || 0),
+    daysOld: daysOld(r.date)
+  }));
+  return {
+    side: sales ? "customer" : "supplier",
+    kind: "challan",
+    count: out.length,
+    total: round2(out.reduce((t, r) => t + r.total, 0)),
+    rows: out
+  };
+}
+
 function agingBucket(days) {
   if (days <= 30) return "d0_30";
   if (days <= 60) return "d31_60";
@@ -218,4 +278,4 @@ function outstandingDetails(side) {
   return { side, parties: withDues, partyCount: withDues.length, totals };
 }
 
-module.exports = { outstandingDetails, daysOld, agingBucket };
+module.exports = { outstandingDetails, challanOutstanding, daysOld, agingBucket };

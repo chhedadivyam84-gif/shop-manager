@@ -11,7 +11,7 @@
    ============================================================ */
 const express = require("express");
 const db = require("../db");
-const { outstandingDetails } = require("../outstanding");
+const { outstandingDetails, challanOutstanding } = require("../outstanding");
 const { uid, round2, todayStr, logAction } = require("../util");
 const { requireRole } = require("../auth");
 
@@ -258,6 +258,19 @@ router.post("/outstanding/:id/settle", requireRole("owner"), (req, res) => {
 router.get("/outstanding-details", (req, res) => {
   const side = req.query.side === "supplier" ? "supplier" : "customer";
   res.json(outstandingDetails(side));
+});
+
+/**
+ * Goods delivered (or received) but never billed.
+ *
+ * Kept as its OWN endpoint rather than folded into outstanding-details,
+ * because it is a different question: that one is money owed, this one is
+ * an invoice not yet raised. Adding them together would inflate what a
+ * customer owes by the value of goods nobody has been billed for.
+ */
+router.get("/challan-outstanding", (req, res) => {
+  const side = req.query.side === "supplier" ? "supplier" : "customer";
+  res.json(challanOutstanding(side));
 });
 
 module.exports = router;

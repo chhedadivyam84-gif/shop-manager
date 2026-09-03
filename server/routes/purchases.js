@@ -588,7 +588,7 @@ router.post("/:id/convert-to-invoice", (req, res) => {
   const challan = db.prepare("SELECT * FROM purchases WHERE id = ?").get(req.params.id);
   if (!challan) return res.status(404).json({ error: "Purchase challan not found." });
   if (challan.doc_type !== "challan") {
-    return res.status(400).json({ error: "Only a Cash/Kachha purchase challan can be converted." });
+    return res.status(400).json({ error: "Only a non-GST purchase challan can be converted." });
   }
   if (challan.voided) return res.status(400).json({ error: "This challan has been voided." });
   if (challan.converted_purchase_id) {

@@ -1433,7 +1433,7 @@ async function switchTab(tab){
   // brought into view — otherwise switching from a tile leaves it off-screen.
   const activeBtn = document.querySelector(`nav.bottom .tab[data-tab="${tab}"]`);
   if(activeBtn && activeBtn.scrollIntoView) activeBtn.scrollIntoView({ block:"nearest", inline:"nearest" });
-  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",selection:"Selection Slip",quotation:"Quotation",so:"Sales Order",pquery:"Product Query",stockhistory:"Stock History / Stock Ledger",accounts:"Accounts",otherledger:(state.olKind==="income"?"Other Income":"Other Expenses"),fyear:"Financial Year",fyclose:"Financial Year",printmgr:"Print Management",outstanding:"Outstanding",ewb:"E-Way Bill",delivery:"Delivery & Dispatch",alerts:"Reminders",notes:"Notepad",backups:"Cloud Backups"};
+  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",selection:"Selection Slip",quotation:"Quotation",so:"Sales Order",pquery:"Product Query",stockhistory:"Stock History / Stock Ledger",accounts:"Accounts",otherledger:(state.olKind==="income"?"Other Income":"Other Expenses"),fyear:"Financial Year",fyclose:"Financial Year",printmgr:"Print Management",outstanding:"Outstanding",position:"Business Position",ewb:"E-Way Bill",delivery:"Delivery & Dispatch",alerts:"Reminders",notes:"Notepad",backups:"Cloud Backups"};
   document.getElementById("hdr-sub").textContent = subMap[tab];
   document.getElementById("hdr-main").textContent = tab==="home" ? greeting() : subMap[tab];
   if(tab==="billing") await renderBilling();
@@ -1459,6 +1459,7 @@ async function switchTab(tab){
   if(tab==="delivery") await renderDelivery();
   if(tab==="alerts") await renderAlerts();
   if(tab==="stockhistory") await renderStockHistory();
+  if(tab==="position") await renderPosition();
   if(tab==="notes") await renderNotes();
   if(tab==="permissions") await renderPermissions();
   if(tab==="backups") await renderBackups();
@@ -2083,6 +2084,7 @@ const MENU = [
     ["stockhistory","&#128220;", "Stock History"]
   ]],
   ["Money", [
+    ["position",     "&#128200;", "Business Position"],
     ["cashbook",    "&#128181;", "Cash Book"],
     ["bankbook",    "&#127974;", "Bank Book"],
     ["cheque",      "&#128179;", "Print Cheque"],
@@ -2593,6 +2595,93 @@ async function renderBackups(){
    goes; deliver the goods and the line goes. Nothing to tick off, so nothing
    to fall out of step with the ledger.
    ============================================================ */
+/* ------------------------------------------------------------------ */
+/* LIVE BUSINESS POSITION — where the shop stands, right now            */
+/*                                                                      */
+/* Every card opens the report behind it, because a number the owner    */
+/* cannot follow up is a number they end up asking someone about.       */
+/* ------------------------------------------------------------------ */
+
+async function renderPosition(){
+  const body = document.getElementById("pos-body");
+  if(!body) return;
+  body.innerHTML = `<div class="empty-hint">Working out where the shop stands…</div>`;
+
+  let p;
+  try{ p = await api("GET", "/position"); }
+  catch(e){ body.innerHTML = `<div class="pm-warn">${escapeHtml(e.message)}</div>`; return; }
+
+  /* tone: what the number MEANS, not whether it is big. Money owed to the
+     shop is not bad news; money the shop owes is. */
+  const card = (c) => `
+    <button class="pos-card${c.tone ? " pos-" + c.tone : ""}" data-pos-go="${escapeHtml(c.go||"")}"
+            ${c.side?`data-pos-side="${escapeHtml(c.side)}"`:""}
+            ${c.kind?`data-pos-kind="${escapeHtml(c.kind)}"`:""}>
+      <span class="pos-label">${escapeHtml(c.label)}</span>
+      <span class="pos-value">${c.raw ? escapeHtml(String(c.value)) : fmt(c.value)}</span>
+      ${c.sub ? `<span class="pos-sub">${escapeHtml(c.sub)}</span>` : ""}
+    </button>`;
+
+  const section = (title, cards) => `
+    <div class="section-title">${escapeHtml(title)}</div>
+    <div class="pos-grid">${cards.map(card).join("")}</div>`;
+
+  body.innerHTML =
+    section("Stock", [
+      { label:"Stock Value", value:p.stockValue, go:"stockhistory", tone:"good" },
+      { label:"Total Stock", value:p.stockQty, raw:true, sub:"units on hand", go:"inventory" },
+      { label:"Stock In", value:p.stockIn, raw:true, sub:"all movements", go:"stockhistory" },
+      { label:"Stock Out", value:p.stockOut, raw:true, sub:"all movements", go:"stockhistory" }
+    ]) +
+    section("Purchase", [
+      { label:"Purchase Total", value:p.purchaseTotal, go:"reports" },
+      { label:"Purchase Outstanding", value:p.purchaseOutstanding, sub:"money owed to suppliers",
+        tone:"bad", go:"outstanding", side:"supplier", kind:"money" },
+      { label:"Purchase Challan Outstanding", value:p.purchaseChallanOutstanding,
+        sub:`${p.purchaseChallanCount} received, not yet billed`,
+        tone:"warn", go:"outstanding", side:"supplier", kind:"challan" }
+    ]) +
+    section("Sales", [
+      { label:"Sales Total", value:p.salesTotal, go:"reports", tone:"good" },
+      { label:"Sales Outstanding", value:p.salesOutstanding, sub:"money owed by customers",
+        tone:"warn", go:"outstanding", side:"customer", kind:"money" },
+      { label:"Sales Challan Outstanding", value:p.salesChallanOutstanding,
+        sub:`${p.salesChallanCount} delivered, not yet invoiced`,
+        tone:"warn", go:"outstanding", side:"customer", kind:"challan" }
+    ]) +
+    section("Money", [
+      { label:"Cash Balance", value:p.cash, tone:p.cash<0?"bad":"good", go:"cashbook" },
+      { label:"Bank Balance", value:p.bank, tone:p.bank<0?"bad":"good", go:"bankbook" },
+      { label:"Total Expenses", value:p.expenses, sub:"typed into the cash book", go:"cashbook" }
+    ]) +
+    section("GST", [
+      { label:"GST on Sales", value:p.gstOnSales, go:"reports" },
+      { label:"GST on Purchases", value:p.gstOnPurchases, go:"reports" },
+      { label:"GST Net", value:p.gstNet, sub:p.gstNet>=0?"payable":"credit",
+        tone:p.gstNet>=0?"bad":"good", go:"reports" }
+    ]) +
+    section("Profit", [
+      { label:"Gross Profit", value:p.grossProfit, tone:p.grossProfit<0?"bad":"good",
+        sub:"sales − purchases − expenses", go:"reports" }
+    ]) +
+    `<p class="muted" style="font-size:11px;line-height:1.7;margin-top:12px;">
+       <b>Gross Profit</b> is sales less what the goods cost less expenses — a
+       quick read, not a profit &amp; loss account. Open Reports for the full one.<br>
+       <b>Outstanding</b> is money owed. <b>Challan Outstanding</b> is goods that
+       moved but were never billed — two different questions, so two cards.</p>`;
+
+  body.querySelectorAll("[data-pos-go]").forEach(el => el.addEventListener("click", async () => {
+    const go = el.dataset.posGo;
+    if(!go) return;
+    /* The Outstanding screen has two axes; a card that means "supplier,
+       challan" must land on exactly that, not on whatever was last open. */
+    if(el.dataset.posSide) state.osSide = el.dataset.posSide;
+    if(el.dataset.posKind) state.osKind = el.dataset.posKind;
+    if(go === "stockhistory") SH.filters = {};
+    await switchTab(go);
+  }));
+}
+
 /* ------------------------------------------------------------------ */
 /* STOCK HISTORY — every movement, and what it did to the count         */
 /*                                                                      */
@@ -12901,9 +12990,9 @@ function renderTallySetup(){
 
     <div class="section-title">Which bills</div>
     <label class="pm-check"><input type="checkbox" id="tly-pakka"${s.syncPakka?" checked":""}>
-      <span>Tax invoices (pakka)</span></label>
+      <span>GST invoices</span></label>
     <label class="pm-check"><input type="checkbox" id="tly-kachha"${s.syncKachha?" checked":""}>
-      <span>Estimates and challans (kachha)<span class="pm-hint">off by default — sending one books a sale that was never made</span></span></label>
+      <span>Non-GST estimates and challans<span class="pm-hint">off by default — sending one books a sale that was never made</span></span></label>
 
     <div class="section-title">Ledger names in Tally</div>
     <div class="pm-filter-grid">
@@ -21639,6 +21728,9 @@ function wirePrintManager(){
   document.querySelectorAll("[data-os-side]").forEach(b=>b.addEventListener("click", ()=>{
     state.osSide = b.dataset.osSide; renderOutstanding();
   }));
+  document.querySelectorAll("[data-os-kind]").forEach(b=>b.addEventListener("click", ()=>{
+    state.osKind = b.dataset.osKind; renderOutstanding();
+  }));
   const osSearch = document.getElementById("os-search");
   if(osSearch) osSearch.addEventListener("input", renderOutstandingList);
   const osPrint = document.getElementById("os-print-btn");
@@ -22419,12 +22511,61 @@ function openOutstanding(){
 
 async function renderOutstanding(){
   const side = state.osSide === "supplier" ? "supplier" : "customer";
+  const kind = state.osKind === "challan" ? "challan" : "money";
   document.querySelectorAll("[data-os-side]").forEach(b =>
     b.classList.toggle("selected", b.dataset.osSide === side));
+  document.querySelectorAll("[data-os-kind]").forEach(b =>
+    b.classList.toggle("selected", b.dataset.osKind === kind));
+
+  const list = document.getElementById("os-list");
+  const search = document.getElementById("os-search");
+
+  /* CHALLAN OUTSTANDING IS A DIFFERENT QUESTION, so it gets its own list
+     rather than being folded into the party balances. That one is money
+     owed; this one is an invoice not yet raised. */
+  if(kind === "challan"){
+    document.getElementById("os-total-label").textContent =
+      side === "supplier" ? "RECEIVED, NOT YET BILLED" : "DELIVERED, NOT YET INVOICED";
+    if(search) search.style.display = "none";
+    list.innerHTML = `<div class="empty-hint">Loading…</div>`;
+    let r;
+    try{ r = await api("GET", `/accounting/challan-outstanding?side=${side}`); }
+    catch(e){ list.innerHTML = `<div class="empty-hint">${escapeHtml(e.message)}</div>`; return; }
+
+    document.getElementById("os-total-amt").textContent = fmt(r.total || 0);
+    document.getElementById("os-total-sub").textContent =
+      `${r.count} challan${r.count===1?"":"s"} waiting to be ${side==="supplier"?"billed by the supplier":"invoiced"}`;
+
+    list.innerHTML = !r.rows.length
+      ? `<div class="empty-hint">Nothing waiting — every challan has been ${side==="supplier"?"billed":"invoiced"}.</div>`
+      : r.rows.map(x => `
+          <div class="card os-challan-row" data-os-doc="${escapeHtml(x.id)}" style="margin-top:0;margin-bottom:6px;">
+            <div class="inv-flex">
+              <div>
+                <div class="row-title">${escapeHtml(x.no || "—")}</div>
+                <div class="row-sub">${escapeHtml(x.party_name || "")} · ${escapeHtml(x.date || "")}
+                  ${x.daysOld ? " · " + x.daysOld + " day" + (x.daysOld===1?"":"s") + " old" : " · today"}</div>
+              </div>
+              <div style="margin-left:auto;text-align:right;">
+                <div style="font-weight:800;">${fmt(x.total)}</div>
+                <div class="muted" style="font-size:10.5px;">not yet invoiced</div>
+              </div>
+            </div>
+          </div>`).join("");
+
+    /* Straight to the document, because the next thing a shop wants after
+       seeing this list is to convert one of them. */
+    list.querySelectorAll("[data-os-doc]").forEach(el => el.addEventListener("click", () => {
+      if(side === "supplier") openPurchaseDetail(el.dataset.osDoc);
+      else openExistingInvoice(el.dataset.osDoc);
+    }));
+    return;
+  }
+
+  if(search) search.style.display = "";
   document.getElementById("os-total-label").textContent =
     side === "supplier" ? "TOTAL PAYABLE" : "TOTAL RECEIVABLE";
 
-  const list = document.getElementById("os-list");
   list.innerHTML = `<div class="empty-hint">Loading…</div>`;
   try{
     osData = await api("GET", `/accounting/outstanding-details?side=${side}`);

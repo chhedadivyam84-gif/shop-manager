@@ -794,6 +794,11 @@ setTimeout(function () {
         <div id="ewb-list"></div>
       </div>
 
+      <!-- Live Business Position: every figure the owner asks for, on one
+           screen, each card opening the report behind it. -->
+      <div class="screen" id="screen-position">
+        <div id="pos-body"></div>
+      </div>
       <div class="screen" id="screen-outstanding">
         <a href="#" id="os-back-link" class="muted" style="font-size:12px;font-weight:700;">&larr; Back to Accounts</a>
 
@@ -802,6 +807,12 @@ setTimeout(function () {
           <button class="chip" data-os-side="supplier">Supplier / Creditor</button>
         </div>
 
+        <!-- Money owed and goods-not-yet-billed are different questions, so
+             they get different tabs rather than one confusing total. -->
+        <div class="chip-row" style="margin-top:8px;">
+          <button class="chip selected" data-os-kind="money">Invoice Outstanding</button>
+          <button class="chip" data-os-kind="challan">Challan Outstanding</button>
+        </div>
         <div class="searchbar" style="margin-top:10px;">
           <span>&#128269;</span>
           <input type="text" id="os-search" placeholder="Search party by name or phone">

@@ -157,8 +157,8 @@ function enqueue(docType, doc, opts) {
        sale that was never made, so it goes only if the owner has said so
        in as many words. */
     const isPakka = opts.pakka !== false;
-    if (isPakka && !s.sync_pakka) return { queued: false, reason: "pakka sync is off" };
-    if (!isPakka && !s.sync_kachha) return { queued: false, reason: "kachha sync is off" };
+    if (isPakka && !s.sync_pakka) return { queued: false, reason: "GST invoices are not being sent" };
+    if (!isPakka && !s.sync_kachha) return { queued: false, reason: "non-GST documents are not being sent" };
 
     const fy = fyFor(doc.date);
     const syncId = syncIdFor(docType, doc.id, fy);

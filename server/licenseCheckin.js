@@ -51,7 +51,36 @@ const SERVER_URL = String(process.env.LICENCE_SERVER || "").trim().replace(/\/+$
 /* Six hours. Often enough that a cancellation lands the same day, rare
    enough that a hundred shops are not a load worth thinking about. */
 const EVERY_MS = 6 * 3600 * 1000;
-const REQUEST_TIMEOUT_MS = 15000;
+
+/* FORTY-FIVE SECONDS, AND THE OLD FIFTEEN WAS THE DEMO BUG.
+   ----------------------------------------------------------------------
+   The licence server sleeps when nobody has used it for a quarter of an
+   hour, and the first request afterwards has to wait for it to start.
+   Measured, not guessed: after a 26-minute idle window the first response
+   took 13.3 seconds, and the server's own start time was stamped ten
+   seconds AFTER the request went out — so that request was what woke it.
+
+   Against a fifteen-second limit that leaves 1.7 seconds of headroom, so
+   a check-in succeeded on a good day and failed on a slow one. Which is
+   exactly how it behaved: intermittent, worst on a copy being used for
+   the first time, and fine when tried again a minute later.
+
+   Worse, the margin was shrinking. The panel restores its whole database
+   from cloud storage before it answers, so every customer sold makes that
+   boot slower.
+
+   Forty-five seconds is roughly three times the measured cold start.
+   Nothing waits on this — the boot check is deliberately not awaited and
+   the timer runs in the background — so a long timeout costs a shop
+   nothing at all. A shop that is offline still gets its answer from the
+   cache and its grace days, exactly as before. */
+const REQUEST_TIMEOUT_MS = 45000;
+
+/* One retry, because the first request is the one that pays for the
+   wake-up and the second arrives at a server already running. Retrying is
+   only right for a TIMEOUT: an answer of "no such code" is an answer, and
+   asking again would just be asking a question that has been answered. */
+const RETRY_DELAY_MS = 2000;
 const DEFAULT_GRACE_DAYS = 14;
 
 function enabled() {
@@ -267,7 +296,11 @@ async function checkIn(reason) {
 
   lastAttemptAt = Date.now();
   try {
-    const res = await fetch(`${SERVER_URL}/api/checkin`, {
+    /* Asked at most twice. The first request is the one that pays for
+       waking a sleeping server; a second one two seconds later arrives at
+       a server that is already running. Only a TIMEOUT is retried — a
+       refusal is an answer, and asking again would not change it. */
+    const ask = () => fetch(`${SERVER_URL}/api/checkin`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -277,6 +310,19 @@ async function checkIn(reason) {
       }),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
     });
+
+    let res;
+    try {
+      res = await ask();
+    } catch (first) {
+      if (first && (first.name === "TimeoutError" || first.name === "AbortError")) {
+        console.warn(`[licence] no answer in ${REQUEST_TIMEOUT_MS / 1000}s (${reason}); asking once more`);
+        await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+        res = await ask();
+      } else {
+        throw first;
+      }
+    }
     if (!res.ok) throw new Error(`licence server answered ${res.status}`);
 
     const body = await res.json();

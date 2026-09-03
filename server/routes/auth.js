@@ -74,15 +74,49 @@ router.get("/mode", (req, res) => {
  * on, and for one whose subscription looks finished the cached date is
  * the safe reading.
  */
+/* FORTY-FIVE SECONDS, AND ONE RETRY.
+   ----------------------------------------------------------------------
+   The licence server sleeps when nobody has used it for a quarter of an
+   hour, and the first request afterwards waits for it to start. Measured:
+   after a 26-minute idle window the first response took 13.3 seconds, and
+   the server's own start time was stamped ten seconds AFTER the request
+   went out — so that request is what woke it.
+
+   Twenty seconds left under seven seconds of headroom, which is why a
+   shop signing in for the very first time sometimes could not, and could
+   a minute later. A first-time sign-in is the one case with no cached
+   answer to fall back on, so it is the one that fails visibly.
+
+   The retry matters as much as the number: the first request pays for the
+   wake-up, the second arrives at a server already running. Only a TIMEOUT
+   is retried — a refusal is an answer, and asking again would not change
+   it. Returning null still means "could not reach them", which the caller
+   already turns into "try again when there is internet" rather than into
+   a wrong password. */
+const VENDOR_TIMEOUT_MS = 45000;
+const VENDOR_RETRY_MS = 2000;
+
 async function askVendor(username, password) {
   const server = checkin.serverUrl();
   if (!server) return null;
+  const url = server.replace(/\/+$/, "") + "/api/tenant-login";
+  const ask = () => fetch(url, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username, password }),
+    signal: AbortSignal.timeout(VENDOR_TIMEOUT_MS)
+  });
   try {
-    const r = await fetch(server.replace(/\/+$/, "") + "/api/tenant-login", {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username, password }),
-      signal: AbortSignal.timeout(20000)
-    });
+    let r;
+    try {
+      r = await ask();
+    } catch (first) {
+      if (first && (first.name === "TimeoutError" || first.name === "AbortError")) {
+        await new Promise(res => setTimeout(res, VENDOR_RETRY_MS));
+        r = await ask();
+      } else {
+        throw first;
+      }
+    }
     const body = await r.json().catch(() => null);
     return { ok: r.ok, status: r.status, body };
   } catch (e) { return null; }
@@ -208,30 +242,13 @@ router.post("/shop-login", async (req, res) => {
     return res.status(401).json({ error: WRONG_LOGIN });
   }
 
-  let answer = null;
-  try {
-    const r = await fetch(server.replace(/\/+$/, "") + "/api/tenant-login", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username, password }),
-      signal: AbortSignal.timeout(20000)
-    });
-    answer = await r.json().catch(() => null);
-    if (!r.ok) {
-      recordLoginFailure(req.ip);
-      /* The panel's wording is passed through unchanged when it has
-         something specific to say — "Demo License Expired – Please Contact
-         Admin" is the sentence the shopkeeper was promised. */
-      /* 403 means the vendor has something specific to say — expired,
-         cancelled — and those words are the ones the shopkeeper was
-         promised, so they are passed through. Anything else is a
-         refusal, and every refusal says the same thing. */
-      if (r.status === 403) {
-        return res.status(403).json({ error: (answer && answer.error) || WRONG_LOGIN });
-      }
-      return res.status(401).json({ error: WRONG_LOGIN });
-    }
-  } catch (e) {
+  /* Through the same helper the other caller uses, so the timeout and the
+     retry are decided in ONE place. Two copies of this call is how one of
+     them keeps a shorter timeout than the other and only one of the two
+     sign-in paths keeps failing. */
+  const asked = await askVendor(username, password);
+
+  if (!asked) {
     /* The vendor is unreachable and we have never seen this login, so there
        is nothing to fall back on. Said plainly rather than as "wrong
        password", which would send them hunting for a password that is fine. */
@@ -239,6 +256,20 @@ router.post("/shop-login", async (req, res) => {
       error: "Could not reach your supplier to check this login, and this is the first time it has been used here. "
            + "Try again when there is internet."
     });
+  }
+
+  const answer = asked.body;
+  if (!asked.ok) {
+    recordLoginFailure(req.ip);
+    /* 403 means the vendor has something specific to say — expired,
+       cancelled — and those words are the ones the shopkeeper was
+       promised, so they are passed through. "Demo License Expired – Please
+       Contact Admin" is that sentence. Anything else is a refusal, and
+       every refusal says the same thing. */
+    if (asked.status === 403) {
+      return res.status(403).json({ error: (answer && answer.error) || WRONG_LOGIN });
+    }
+    return res.status(401).json({ error: WRONG_LOGIN });
   }
 
   /* Three places to look before making anything new, because creating a

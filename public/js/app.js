@@ -15878,8 +15878,8 @@ function scanReview(r) {
       " — " + matched + " matched to your products</div>" +
     (items.length ? items.map(line).join("") : '<div class="empty-hint">No item lines were readable.</div>') +
 
-    '<div class="acts"><button class="primary" id="scan-use">Fill the form with this</button>' +
-    '<button class="ghost" data-close>Throw it away</button></div>' +
+    '<div class="acts"><button class="btn btn-gold" id="scan-use">Fill the form with this</button>' +
+    '<button class="btn btn-outline" data-close>Throw it away</button></div>' +
     '<p class="muted small">Filling the form saves nothing. You still see the whole ' +
     "purchase, and it is saved only when you press Save on it.</p>");
   box.querySelectorAll("[data-close]").forEach(b =>

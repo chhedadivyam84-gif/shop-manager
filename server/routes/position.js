@@ -73,12 +73,54 @@ router.get("/", (req, res) => {
       FROM stock_ledger
   `).get();
 
-  const salesTotal = round2(db.prepare(
+  /* ---- purchases and sales, split by document and then added up --------
+     A challan and an invoice are two different promises, so the shop is
+     shown both and their sum rather than one figure that quietly means one
+     of them. Delivered-but-unbilled is a real number a shop needs to see.
+
+     TWO THINGS MAKE THIS EASY TO GET WRONG.
+
+     1. CONVERSION DOUBLE-COUNTS. Turning a challan into an invoice COPIES
+        its lines onto the new document and both keep them. Add every
+        challan to every invoice and each converted one is counted twice —
+        the dashboard would show goods that never moved. A challan that has
+        been converted is therefore left out; its invoice speaks for it.
+        Same rule material flow already uses, for the same reason.
+
+     2. A SALES CHALLAN CARRIES NO HEADER TOTAL. invoices.total is 0 on
+        one, because a delivery challan is a list of goods rather than a
+        demand for money. Read straight, the card would show zero and look
+        broken. The value comes from its own item lines instead. Written
+        the same way on both sides so neither can drift, and harmless where
+        a header total does exist — NULLIF only falls through on zero. */
+  const salesInvoiceTotal = round2(db.prepare(
     "SELECT COALESCE(SUM(total),0) n FROM invoices WHERE voided = 0 AND doc_type = 'invoice'"
   ).get().n);
-  const purchaseTotal = round2(db.prepare(
+  const salesChallanTotal = round2(db.prepare(`
+    SELECT COALESCE(SUM(COALESCE(NULLIF(i.total, 0), (
+             SELECT ROUND(SUM(ii.qty * ii.rate * (1 - COALESCE(ii.discount_pct, 0) / 100.0)), 2)
+               FROM invoice_items ii WHERE ii.invoice_id = i.id
+           ), 0)), 0) AS n
+      FROM invoices i
+     WHERE i.voided = 0 AND i.doc_type = 'challan'
+       AND (i.converted_invoice_id IS NULL OR i.converted_invoice_id = '')
+  `).get().n);
+
+  const purchaseInvoiceTotal = round2(db.prepare(
     "SELECT COALESCE(SUM(total),0) n FROM purchases WHERE voided = 0 AND (doc_type IS NULL OR doc_type <> 'challan')"
   ).get().n);
+  const purchaseChallanTotal = round2(db.prepare(`
+    SELECT COALESCE(SUM(COALESCE(NULLIF(p.total, 0), (
+             SELECT ROUND(SUM(pi.qty * pi.rate - COALESCE(pi.discount_amount, 0)), 2)
+               FROM purchase_items pi WHERE pi.purchase_id = p.id
+           ), 0)), 0) AS n
+      FROM purchases p
+     WHERE p.voided = 0 AND p.doc_type = 'challan'
+       AND (p.converted_purchase_id IS NULL OR p.converted_purchase_id = '')
+  `).get().n);
+
+  const salesTotal = round2(salesInvoiceTotal + salesChallanTotal);
+  const purchaseTotal = round2(purchaseInvoiceTotal + purchaseChallanTotal);
 
   const receivable = round2(db.prepare("SELECT COALESCE(SUM(due),0) n FROM customers").get().n);
   const payable = round2(db.prepare("SELECT COALESCE(SUM(due),0) n FROM suppliers").get().n);
@@ -125,15 +167,31 @@ router.get("/", (req, res) => {
     stockIn: round2(moved.inQty),
     stockOut: round2(moved.outQty),
 
+    /* Both halves and their sum, on both sides. The shop asks "what did I
+       buy" and "how much of it is still only on a challan" as two
+       questions, so it is shown two answers and the total — rather than one
+       number that silently means whichever half somebody chose. */
+    purchaseInvoiceTotal,
+    purchaseChallanTotal,
     purchaseTotal,
-    purchaseOutstanding: payable,
+
+    purchaseInvoiceOutstanding: payable,
     purchaseChallanOutstanding: purchaseChallan.total,
     purchaseChallanCount: purchaseChallan.count,
+    purchaseOutstandingTotal: round2(payable + purchaseChallan.total),
+    /* The old name for the invoice half, still answered so nothing that
+       already reads it starts showing a blank. */
+    purchaseOutstanding: payable,
 
+    salesInvoiceTotal,
+    salesChallanTotal,
     salesTotal,
-    salesOutstanding: receivable,
+
+    salesInvoiceOutstanding: receivable,
     salesChallanOutstanding: salesChallan.total,
     salesChallanCount: salesChallan.count,
+    salesOutstandingTotal: round2(receivable + salesChallan.total),
+    salesOutstanding: receivable,
 
     cash, bank, expenses,
     gstOnSales, gstOnPurchases, gstNet: round2(gstOnSales - gstOnPurchases),
@@ -141,8 +199,17 @@ router.get("/", (req, res) => {
     /* GROSS, and said so on the card. Sales less what the goods cost less
        the expenses above. This is not a profit and loss account —
        /reports/profit-loss is that, and the card links to it rather than
-       pretending to replace it. */
-    grossProfit: round2(salesTotal - purchaseTotal - expenses)
+       pretending to replace it.
+
+       INVOICES ONLY, DELIBERATELY, and this is the one figure on this
+       screen that must not use the combined totals above. A challan is
+       goods delivered and not yet billed: no bill, no revenue. Counting it
+       here would book profit on money nobody has asked for yet, and the
+       figure would fall again the moment the challan was converted and
+       stopped being counted twice. The totals above answer "what has
+       moved"; this one answers "what have I earned", and those are not the
+       same question. */
+    grossProfit: round2(salesInvoiceTotal - purchaseInvoiceTotal - expenses)
   });
 });
 

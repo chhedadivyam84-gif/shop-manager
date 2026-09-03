@@ -2791,21 +2791,45 @@ async function renderPosition(){
       { label:"Stock In", value:p.stockIn, raw:true, sub:"all movements", go:"stockhistory" },
       { label:"Stock Out", value:p.stockOut, raw:true, sub:"all movements", go:"stockhistory" }
     ]) +
+    /* Each side reads the same way: the two halves first, then the sum. The
+       sum sits last rather than first because it is the answer to the two
+       above it, and a total printed before its parts invites the shop to
+       read it as a different figure altogether. */
     section("Purchase", [
-      { label:"Purchase Total", value:p.purchaseTotal, go:"reports" },
-      { label:"Purchase Outstanding", value:p.purchaseOutstanding, sub:"money owed to suppliers",
-        tone:"bad", go:"outstanding", side:"supplier", kind:"money" },
+      { label:"Purchase Challan Total", value:p.purchaseChallanTotal,
+        sub:"received, not yet billed", tone:"warn", go:"reports" },
+      { label:"Purchase Invoice Total", value:p.purchaseInvoiceTotal,
+        sub:"billed by suppliers", go:"reports" },
+      { label:"Total Purchase", value:p.purchaseTotal,
+        sub:"challan + invoice", go:"reports" }
+    ]) +
+    section("Purchase Outstanding", [
       { label:"Purchase Challan Outstanding", value:p.purchaseChallanOutstanding,
         sub:`${p.purchaseChallanCount} received, not yet billed`,
-        tone:"warn", go:"outstanding", side:"supplier", kind:"challan" }
+        tone:"warn", go:"outstanding", side:"supplier", kind:"challan" },
+      { label:"Purchase Invoice Outstanding", value:p.purchaseInvoiceOutstanding,
+        sub:"money owed to suppliers",
+        tone:"bad", go:"outstanding", side:"supplier", kind:"money" },
+      { label:"Total Purchase Outstanding", value:p.purchaseOutstandingTotal,
+        sub:"challan + invoice", tone:"bad", go:"outstanding", side:"supplier", kind:"money" }
     ]) +
     section("Sales", [
-      { label:"Sales Total", value:p.salesTotal, go:"reports", tone:"good" },
-      { label:"Sales Outstanding", value:p.salesOutstanding, sub:"money owed by customers",
-        tone:"warn", go:"outstanding", side:"customer", kind:"money" },
+      { label:"Sales Challan Total", value:p.salesChallanTotal,
+        sub:"delivered, not yet invoiced", tone:"warn", go:"reports" },
+      { label:"Sales Invoice Total", value:p.salesInvoiceTotal,
+        sub:"billed to customers", tone:"good", go:"reports" },
+      { label:"Total Sales", value:p.salesTotal,
+        sub:"challan + invoice", tone:"good", go:"reports" }
+    ]) +
+    section("Sales Outstanding", [
       { label:"Sales Challan Outstanding", value:p.salesChallanOutstanding,
         sub:`${p.salesChallanCount} delivered, not yet invoiced`,
-        tone:"warn", go:"outstanding", side:"customer", kind:"challan" }
+        tone:"warn", go:"outstanding", side:"customer", kind:"challan" },
+      { label:"Sales Invoice Outstanding", value:p.salesInvoiceOutstanding,
+        sub:"money owed by customers",
+        tone:"warn", go:"outstanding", side:"customer", kind:"money" },
+      { label:"Total Sales Outstanding", value:p.salesOutstandingTotal,
+        sub:"challan + invoice", tone:"warn", go:"outstanding", side:"customer", kind:"money" }
     ]) +
     section("Money", [
       { label:"Cash Balance", value:p.cash, tone:p.cash<0?"bad":"good", go:"cashbook" },
@@ -2820,7 +2844,7 @@ async function renderPosition(){
     ]) +
     section("Profit", [
       { label:"Gross Profit", value:p.grossProfit, tone:p.grossProfit<0?"bad":"good",
-        sub:"sales − purchases − expenses", go:"reports" }
+        sub:"invoiced sales − invoiced purchases − expenses", go:"reports" }
     ]) +
     `<p class="muted" style="font-size:11px;line-height:1.7;margin-top:12px;">
        <b>Gross Profit</b> is sales less what the goods cost less expenses — a

@@ -33,9 +33,26 @@ const db = require("./db");
 const secretBox = require("./secretBox");
 
 /* Pure JS, no native build — the app has to keep running under Termux on
-   a phone, which is why the dependency list is short and deliberate. */
-const AnthropicSDK = require("@anthropic-ai/sdk");
-const Anthropic = AnthropicSDK.default || AnthropicSDK;
+   a phone, which is why the dependency list is short and deliberate.
+
+   LOADED WHEN IT IS USED, NOT WHEN THE APP STARTS. A copy is sent to a
+   shopkeeper without node_modules and installed on their machine; if that
+   install misses this package, a require at the top of the file would
+   throw while index.js was still mounting routes and the whole app would
+   refuse to start. A shop cannot bill because a feature it never switched
+   on is missing a library — that is the wrong failure by a wide margin.
+   Loaded here, the worst case is that scanning says it is unavailable and
+   everything else carries on. */
+function loadSdk() {
+  try {
+    const mod = require("@anthropic-ai/sdk");
+    return mod.default || mod;
+  } catch (e) {
+    const err = new Error("Bill scanning needs a library this copy does not have. Run: npm install");
+    err.status = 501;
+    throw err;
+  }
+}
 
 const MODEL = "claude-opus-5";
 
@@ -207,6 +224,7 @@ async function readBill(dataBase64, mimeType) {
     e.status = 400; throw e;
   }
 
+  const Anthropic = loadSdk();
   const client = new Anthropic({ apiKey: key });
 
   const response = await client.messages.create({

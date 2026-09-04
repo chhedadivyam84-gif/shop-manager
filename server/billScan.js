@@ -32,32 +32,26 @@
 const db = require("./db");
 const secretBox = require("./secretBox");
 
-/* Pure JS, no native build — the app has to keep running under Termux on
-   a phone, which is why the dependency list is short and deliberate.
+/* NO SDK, AND THAT IS THE POINT.
+   Google's API is a plain HTTPS POST, so this is done with the fetch that
+   is already in Node — no package to install, nothing native to build, and
+   the dependency list stays at the three it has always been. That property
+   is why this app runs under Termux on a phone, and it is worth protecting
+   for a feature nobody is obliged to switch on.
 
-   LOADED WHEN IT IS USED, NOT WHEN THE APP STARTS. A copy is sent to a
-   shopkeeper without node_modules and installed on their machine; if that
-   install misses this package, a require at the top of the file would
-   throw while index.js was still mounting routes and the whole app would
-   refuse to start. A shop cannot bill because a feature it never switched
-   on is missing a library — that is the wrong failure by a wide margin.
-   Loaded here, the worst case is that scanning says it is unavailable and
-   everything else carries on. */
-function loadSdk() {
-  try {
-    const mod = require("@anthropic-ai/sdk");
-    return mod.default || mod;
-  } catch (e) {
-    const err = new Error("Bill scanning needs a library this copy does not have. Run: npm install");
-    err.status = 501;
-    throw err;
-  }
-}
+   The request shape below was read from Google's current documentation
+   rather than written from memory: the endpoint is /v1beta/interactions
+   with an `input` array, not the older generateContent with `contents`.
+   Anything recalled from a year ago about this API is wrong. */
+const ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/interactions";
 
-const MODEL = "claude-opus-5";
+/* Flash is the right tier for reading a bill: it is the cheap, fast model,
+   and this task is transcription rather than reasoning. */
+const MODEL = "gemini-3.8-flash";
 
-/* A phone photo of a bill. The route caps the upload well below the
-   12MB JSON body limit, and this is the same ceiling attachments use. */
+/* A phone photo of a bill. Google's own ceiling on an inline image is 20MB
+   for the whole request; this is well under it, and matches what the
+   attachment path already accepts. */
 const MAX_BYTES = 8 * 1024 * 1024;
 
 const ALLOWED_TYPES = {
@@ -224,40 +218,99 @@ async function readBill(dataBase64, mimeType) {
     e.status = 400; throw e;
   }
 
-  const Anthropic = loadSdk();
-  const client = new Anthropic({ apiKey: key });
+  /* A plain POST. The shape — /v1beta/interactions, an `input` array of
+     typed parts, the key in an x-goog-api-key header — is Google's current
+     one, read from their documentation rather than recalled. The older
+     generateContent/`contents` form is not this API.
 
-  const response = await client.messages.create({
-    model: MODEL,
-    max_tokens: 16000,
-    system: SYSTEM,
-    /* A creased photograph of a handwritten bill is exactly the kind of
-       reading that repays thinking about. Left adaptive rather than
-       disabled — a wrong quantity here becomes wrong stock. */
-    thinking: { type: "adaptive" },
-    output_config: {
-      effort: "high",
-      format: { type: "json_schema", schema: SCHEMA }
-    },
-    messages: [{
-      role: "user",
-      content: [
-        { type: "image", source: { type: "base64", media_type: mimeType, data: dataBase64 } },
-        { type: "text", text: "Read this bill." }
-      ]
-    }]
-  });
+     A generous timeout because a photograph is a large upload on a shop's
+     connection, and an abort here would look to the shopkeeper exactly
+     like an unreadable bill. */
+  let response;
+  try {
+    response = await fetch(ENDPOINT, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-goog-api-key": key },
+      body: JSON.stringify({
+        model: MODEL,
+        system_instruction: SYSTEM,
+        input: [
+          { type: "text", text: "Read this bill." },
+          { type: "image", mime_type: mimeType, data: dataBase64 }
+        ],
+        /* The schema is enforced by the API rather than asked for in the
+           prompt, so what comes back is a document this code can rely on
+           instead of prose somebody has to parse hopefully. */
+        response_format: {
+          type: "text",
+          mime_type: "application/json",
+          schema: SCHEMA
+        }
+      }),
+      signal: AbortSignal.timeout(120000)
+    });
+  } catch (err) {
+    const e = new Error(err && err.name === "TimeoutError"
+      ? "Reading the bill took too long. Try again, or use a smaller photo."
+      : "Could not reach the bill reading service. Check the internet connection.");
+    e.status = 504;
+    throw e;
+  }
 
-  /* A safety decline is an answer, not a crash — say so plainly rather
-     than letting an empty content array become a confusing parse error. */
-  if (response.stop_reason === "refusal") {
+  if (!response.ok) {
+    /* Google's error text is written for a developer, not a shopkeeper, so
+       the ones that actually happen are translated and anything else is
+       passed through with its status — an unexplained failure is worse
+       than a blunt one.
+
+       THE BODY CAN BE AN ARRAY. This endpoint returns [{"error":{...}}],
+       not {"error":{...}}, so reading j.error straight off threw the real
+       message away and a bad key reported itself as an unreadable photo —
+       sending a shopkeeper to retake a picture that was never the problem.
+       Found by pointing a deliberately invalid key at the live API. */
+    let detail = "", reason = "";
+    try {
+      const raw = await response.json();
+      const j = Array.isArray(raw) ? (raw[0] || {}) : raw;
+      detail = (j.error && j.error.message) || "";
+      reason = (((j.error || {}).details || [])
+        .find(d => d && d.reason) || {}).reason || "";
+    } catch (_) { /* a non-JSON error body is still an error */ }
+
+    const badKey = reason === "API_KEY_INVALID" || /API key/i.test(detail)
+      || response.status === 401 || response.status === 403;
+    const noCredit = response.status === 429
+      || /quota|billing|exceeded/i.test(detail);
+
+    const e = new Error(
+      badKey
+        ? "That API key was not accepted. Check it in Settings — and that the Google account it belongs to is active."
+        : noCredit
+        ? "The bill reading service is out of quota or credit right now. Check the Google account, or try again shortly."
+        : "The bill could not be read (" + response.status + ")" + (detail ? ": " + detail : "."));
+    e.status = noCredit ? 429 : badKey ? 400 : 502;
+    throw e;
+  }
+
+  const body = await response.json().catch(() => null);
+
+  /* The answer sits in steps[].content[].text — the model_output step. A
+     refusal or a safety stop arrives as a completed interaction with no
+     text rather than as an HTTP error, so an empty result is treated as an
+     unreadable picture instead of being allowed to become a parse error
+     nobody can act on. */
+  const text = ((body && body.steps) || [])
+    .flatMap(s => (s && s.content) || [])
+    .filter(c => c && c.type === "text" && typeof c.text === "string")
+    .map(c => c.text)
+    .join("");
+
+  if (!text.trim()) {
     const e = new Error("The picture could not be read. Try a clearer photo of the bill.");
     e.status = 422;
     throw e;
   }
 
-  const text = (response.content || [])
-    .filter(b => b.type === "text").map(b => b.text).join("");
   let out;
   try { out = JSON.parse(text); }
   catch (err) {
@@ -267,8 +320,8 @@ async function readBill(dataBase64, mimeType) {
   }
 
   out.usage = {
-    inputTokens: response.usage ? response.usage.input_tokens : null,
-    outputTokens: response.usage ? response.usage.output_tokens : null
+    inputTokens: body && body.usage ? body.usage.total_input_tokens : null,
+    outputTokens: body && body.usage ? body.usage.total_output_tokens : null
   };
   return out;
 }

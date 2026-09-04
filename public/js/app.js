@@ -8677,7 +8677,7 @@ async function renderScanSettings() {
         escapeHtml(st.model) + ".</div>"
       : '<div class="row-sub" style="margin-bottom:6px;">Not set up. New Purchase shows no scan button.</div>') +
     '<input type="password" id="st-scan-key" autocomplete="off" spellcheck="false" placeholder="' +
-    (st.configured ? "Paste a new key to replace the one saved" : "Paste your Anthropic API key") + '">' +
+    (st.configured ? "Paste a new key to replace the one saved" : "Paste your Google Gemini API key") + '">' +
     '<div class="acts" style="margin-top:8px;">' +
     '<button class="btn btn-gold" id="st-scan-save">Save key</button>' +
     (st.configured ? '<button class="btn btn-outline" id="st-scan-clear">Turn it off</button>' : "") +
@@ -8742,7 +8742,7 @@ function openSettings(){
       <p class="muted" style="font-size:11.5px;margin-top:-4px;">
         Lets New Purchase read a photo of a supplier's bill and fill the form
         from it. Nothing is ever saved without you checking it first. Reading
-        a bill costs money on your Anthropic account, so this is off until you
+        a bill costs money on your Google account, so this is off until you
         paste a key. Everything in the app works without it.
       </p>
       <div id="st-scan-box"></div>

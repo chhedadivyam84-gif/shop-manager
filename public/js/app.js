@@ -9774,8 +9774,19 @@ let docCanvas = null;
  * @param o.landscape  wide tables turn the sheet rather than shrink
  */
 function openRuledDoc(o){
+  /* SCOPED TO ONE TABLE, and the caller says which.
+     Unscoped, these nth-child rules hit EVERY table in the document, so a
+     five-column summary underneath got the seven-column ledger's widths by
+     position and its figures sat under the wrong headings. Scoping to
+     "first table" is not enough either — a document that opens with a
+     one-row banner would then size the banner and leave the ledger to
+     spread its columns evenly, which is how this was found. So the target
+     is a selector, defaulting to the first table for every existing caller
+     that has only one. */
+  const target = o.widthsFor || "table:first-of-type";
   const widths = (o.widths || []).map((w, i) =>
-    w > 0 ? '.lg-doc th:nth-child(' + (i+1) + '),.lg-doc td:nth-child(' + (i+1) + '){width:' + w + 'px;}' : "").join("");
+    w > 0 ? '.lg-doc ' + target + ' th:nth-child(' + (i+1) + '),'
+          + '.lg-doc ' + target + ' td:nth-child(' + (i+1) + '){width:' + w + 'px;}' : "").join("");
 
   const css = `
       .lg-doc{font-family:Arial,Helvetica,sans-serif;color:#000;}
@@ -9790,7 +9801,7 @@ function openRuledDoc(o){
       .lg-doc .num{text-align:right;white-space:nowrap;overflow-wrap:normal;
         font-variant-numeric:tabular-nums;}
       .lg-doc .totals{margin-top:10px;font-size:12px;}
-      ` + widths;
+      ` + widths + (o.css || "");
 
   const html = '<div class="lg-doc"><h1>' + o.heading + '</h1>' +
     (o.sub ? '<div class="sub">' + o.sub + "</div>" : "") +
@@ -15126,34 +15137,44 @@ function openCashEntry(type, editEntry){
 }
 function printCashBook(){
   const rows = [...state.cbEntries].reverse();
-  /* On the canvas, with a preview, like every other document. */
-  const table = `<table><thead><tr><th>Date</th><th>Party</th><th>Category</th><th>Remarks</th><th class="num">Cash In</th><th class="num">Cash Out</th><th class="num">Balance</th></tr></thead>
-    <tbody>${rows.map(e=>`<tr><td>${e.date}</td><td>${escapeHtml(e.party||"")}</td><td>${escapeHtml(e.category||"")}</td><td>${escapeHtml(e.remarks||"")}</td>
-      <td class="num">${e.type==="in"?fmt(e.amount):""}</td><td class="num">${e.type==="out"?fmt(e.amount):""}</td><td class="num">${fmt(e.runningBalance)}</td></tr>`).join("")}</tbody></table>`;
-
-  /* THE DAY-BY-DAY TABLE GOES ON THE PRINTED COPY TOO.
-     A cash book that is printed and filed is the one a shopkeeper reads
-     months later, and "what was in the drawer on the 5th" should not need
-     the reader to add a column up. Taken from state.cbDaily — the same
-     figures the screen is showing — rather than recomputed here, so the
-     paper and the screen cannot disagree.
-
-     Quiet days are included on paper whatever the screen is set to: a
-     printed ledger with a gap in the dates invites the question "what
-     happened on the 6th", and the answer, nothing, is worth printing. */
   const d = state.cbDaily;
+
+  /* OPENING AT THE TOP, CLOSING AT THE BOTTOM — the way a cash book page
+     has always been read. The balance brought forward is the first thing
+     on the sheet, the entries run down the middle, and the balance carried
+     forward is the last. A reader should be able to check the page by
+     covering everything but those two figures and the two column totals. */
+  const opening = d ? d.openingBalance : 0;
+  const closing = d ? d.closingBalance : (rows.length ? rows[rows.length-1].runningBalance : 0);
+  const totalIn = d ? d.totalIn
+    : rows.filter(e=>e.type==="in").reduce((s,e)=>s+e.amount,0);
+  const totalOut = d ? d.totalOut
+    : rows.filter(e=>e.type==="out").reduce((s,e)=>s+e.amount,0);
+
+  const band = (label, value) =>
+    `<table class="cb-band"><tr><th>${label}</th><td class="num">${fmt(value)}</td></tr></table>`;
+
+  const entries = `<table class="cb-entries"><thead><tr><th>Date</th><th>Party</th><th>Category</th><th>Remarks</th><th class="num">Cash In</th><th class="num">Cash Out</th><th class="num">Balance</th></tr></thead>
+    <tbody>${rows.map(e=>`<tr><td>${e.date}</td><td>${escapeHtml(e.party||"")}</td><td>${escapeHtml(e.category||"")}</td><td>${escapeHtml(e.remarks||"")}</td>
+      <td class="num">${e.type==="in"?fmt(e.amount):""}</td><td class="num">${e.type==="out"?fmt(e.amount):""}</td><td class="num">${fmt(e.runningBalance)}</td></tr>`).join("")}
+      <tr><th colspan="4">Total for the period</th><th class="num">${fmt(totalIn)}</th><th class="num">${fmt(totalOut)}</th><th class="num">${fmt(closing)}</th></tr>
+    </tbody></table>`;
+
+  /* The day-by-day table gets its OWN column widths. It has five columns
+     where the ledger above has seven, and before this it was silently
+     inheriting the ledger's by position — figures under wrong headings. */
   const daily = (d && d.days && d.days.length) ? `
-    <h3 style="margin:14px 0 4px;font-size:12px;">Day by Day</h3>
-    <table><thead><tr><th>Date</th><th class="num">Opening</th><th class="num">Cash In</th>
+    <h3 class="cb-h">Day by Day</h3>
+    <table class="cb-days"><thead><tr><th>Date</th><th class="num">Opening</th><th class="num">Cash In</th>
       <th class="num">Cash Out</th><th class="num">Closing</th></tr></thead>
       <tbody>${d.days.map(x=>`<tr>
         <td>${x.date}</td><td class="num">${fmt(x.opening)}</td>
         <td class="num">${x.cashIn?fmt(x.cashIn):""}</td>
         <td class="num">${x.cashOut?fmt(x.cashOut):""}</td>
         <td class="num">${fmt(x.closing)}</td></tr>`).join("")}
-        <tr><td><b>Total</b></td><td class="num"><b>${fmt(d.openingBalance)}</b></td>
-        <td class="num"><b>${fmt(d.totalIn)}</b></td><td class="num"><b>${fmt(d.totalOut)}</b></td>
-        <td class="num"><b>${fmt(d.closingBalance)}</b></td></tr>
+        <tr><th>Total</th><th class="num">${fmt(d.openingBalance)}</th>
+        <th class="num">${fmt(d.totalIn)}</th><th class="num">${fmt(d.totalOut)}</th>
+        <th class="num">${fmt(d.closingBalance)}</th></tr>
       </tbody></table>` : "";
 
   openRuledDoc({
@@ -15161,11 +15182,27 @@ function printCashBook(){
     heading: "Cash Book",
     sub: state.cbFrom || state.cbTo
       ? (state.cbFrom||"…") + " to " + (state.cbTo||"…") : "All entries",
-    table: table + daily,
+    table:
+      band("Opening Balance (brought forward)", opening) +
+      entries +
+      band("Closing Balance (carried forward)", closing) +
+      daily,
     /* Date and the three money columns hold their width so the running
        balance reads straight down the page; Party, Category and Remarks
        share what is left. A date never wraps. */
-    widths: [78, 0, 0, 0, 76, 76, 82]
+    widths: [78, 0, 0, 0, 76, 76, 82],
+    widthsFor: "table.cb-entries",
+    css: `
+      .lg-doc .cb-band{margin:0 0 8px;}
+      .lg-doc .cb-band th{width:auto;text-align:left;font-size:11.5px;}
+      .lg-doc .cb-band td{width:120px;font-weight:bold;font-size:12px;}
+      .lg-doc table + .cb-band{margin-top:8px;}
+      .lg-doc .cb-h{font-size:12px;margin:14px 0 4px;}
+      .lg-doc .cb-days th:nth-child(1),.lg-doc .cb-days td:nth-child(1){width:auto;}
+      .lg-doc .cb-days th:nth-child(2),.lg-doc .cb-days td:nth-child(2),
+      .lg-doc .cb-days th:nth-child(3),.lg-doc .cb-days td:nth-child(3),
+      .lg-doc .cb-days th:nth-child(4),.lg-doc .cb-days td:nth-child(4),
+      .lg-doc .cb-days th:nth-child(5),.lg-doc .cb-days td:nth-child(5){width:92px;}`
   });
 }
 

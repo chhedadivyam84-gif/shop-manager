@@ -2854,3 +2854,7 @@ body:has(.tpl-grip-row.dragging){ cursor:row-resize; }
 a.chip{display:inline-flex;align-items:center;gap:5px;text-decoration:none;}
 .chip-action{background:var(--navy);color:#fff;border-color:var(--navy);}
 .chip-action:hover{filter:brightness(1.12);}
+
+/* A day the shop neither took nor paid anything. Shown when asked for,
+   dimmed because the balance is real but nothing happened to it. */
+.cb-quiet td{ color:var(--muted); }

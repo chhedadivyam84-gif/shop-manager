@@ -120,6 +120,101 @@ router.get("/summary", (req, res) => {
   });
 });
 
+/**
+ * THE CASH BOOK, DAY BY DAY.
+ *
+ *   Opening = the balance carried in from the day before
+ *   Cash In = everything received that day
+ *   Cash Out = everything paid that day
+ *   Closing = Opening + Cash In − Cash Out
+ *   and tomorrow's Opening is today's Closing.
+ *
+ * CARRY-FORWARD IS NOT COMPUTED TWICE. Each day's opening is literally the
+ * previous day's closing variable, not a second sum of everything before it.
+ * Two independent calculations of the same figure is how a cash book comes
+ * to disagree with itself on one day in a year, and nobody finds out until
+ * they are counting the drawer.
+ *
+ * EVERY DAY IN THE RANGE APPEARS, not only the days somebody wrote in. A day
+ * the shop took nothing and paid nothing still has a balance sitting in the
+ * drawer, and a cash book that skips it makes the money look like it jumped.
+ * Those days are marked quiet:true so the screen can fold them away without
+ * this having to guess which the shop wants to see.
+ *
+ * A very long range is the exception — beyond ROW_CAP days only the days
+ * with entries are listed, and the response says so rather than silently
+ * returning something different from what was asked for.
+ */
+const ROW_CAP = 400;
+
+function addDays(dateStr, n) {
+  const d = new Date(dateStr + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+router.get("/daily", (req, res) => {
+  const all = chronoWithBalance();
+  const first = all.length ? all[0].date : todayStr();
+  const last = all.length ? all[all.length - 1].date : todayStr();
+
+  const from = String(req.query.from || "").trim() || first;
+  const to = String(req.query.to || "").trim() || todayStr();
+  if (to < from) return res.status(400).json({ error: "The end date is before the start date." });
+
+  /* What was in the drawer the moment this range began: everything dated
+     earlier, which the chronological scan has already totalled. */
+  const before = all.filter(r => r.date < from);
+  const openingBalance = before.length ? before[before.length - 1].runningBalance : 0;
+
+  /* Each day's movements, gathered once. */
+  const byDay = new Map();
+  for (const r of all) {
+    if (r.date < from || r.date > to) continue;
+    if (!byDay.has(r.date)) byDay.set(r.date, { in: 0, out: 0, n: 0 });
+    const d = byDay.get(r.date);
+    if (r.type === "in") d.in += r.amount; else d.out += r.amount;
+    d.n++;
+  }
+
+  const spanDays = Math.round(
+    (Date.parse(to + "T00:00:00Z") - Date.parse(from + "T00:00:00Z")) / 86400000) + 1;
+  const everyDay = spanDays > 0 && spanDays <= ROW_CAP;
+
+  const dates = everyDay
+    ? Array.from({ length: spanDays }, (_, i) => addDays(from, i))
+    : [...byDay.keys()].sort();
+
+  let carry = openingBalance;
+  let totalIn = 0, totalOut = 0;
+  const days = dates.map(date => {
+    const d = byDay.get(date) || { in: 0, out: 0, n: 0 };
+    const cashIn = round2(d.in);
+    const cashOut = round2(d.out);
+    const opening = round2(carry);
+    const closing = round2(opening + cashIn - cashOut);
+    carry = closing;                 /* tomorrow opens where today closed */
+    totalIn = round2(totalIn + cashIn);
+    totalOut = round2(totalOut + cashOut);
+    return { date, opening, cashIn, cashOut, closing, entryCount: d.n, quiet: d.n === 0 };
+  });
+
+  res.json({
+    from, to,
+    openingBalance,
+    closingBalance: round2(carry),
+    totalIn, totalOut,
+    days,
+    /* Said plainly so a screen cannot present a shortened list as a full
+       one. Beyond the cap the quiet days are missing, and that changes what
+       the reader is looking at. */
+    everyDay,
+    note: everyDay
+      ? "Every day in the range, including days with no cash movement."
+      : `More than ${ROW_CAP} days — only days with entries are listed.`
+  });
+});
+
 router.get("/export", (req, res) => {
   const { from, to, q } = req.query;
   let rows = chronoWithBalance();
@@ -145,6 +240,47 @@ router.get("/export", (req, res) => {
       r.type === "in" ? r.amount : "", r.type === "out" ? r.amount : "", r.runningBalance
     ]);
   });
+
+  /* THE DAY-BY-DAY SUMMARY GOES IN THE SAME SHEET, under the entries.
+     A cash book that is printed and filed has to answer "what was in the
+     drawer on the 5th" without the reader adding a column up, and it is
+     the same question the screen answers — so it comes from the same
+     figures rather than a second calculation that could disagree.
+
+     Left out of a SEARCH export on purpose: those rows come from whatever
+     days happened to match, and an opening balance computed across them
+     would not be the shop's opening balance on any real day. */
+  if (!search && rows.length) {
+    const first = rows[0].date;
+    const last = rows[rows.length - 1].date;
+    const all = chronoWithBalance();
+    const before = all.filter(r => r.date < first);
+    let carry = before.length ? before[before.length - 1].runningBalance : 0;
+
+    const byDay = new Map();
+    for (const r of rows) {
+      if (!byDay.has(r.date)) byDay.set(r.date, { in: 0, out: 0 });
+      const d = byDay.get(r.date);
+      if (r.type === "in") d.in += r.amount; else d.out += r.amount;
+    }
+
+    out.push([]);
+    out.push(["DAY BY DAY"]);
+    out.push(["Date", "Opening Balance", "Cash In", "Cash Out", "Closing Balance"]);
+    let tIn = 0, tOut = 0;
+    const opening = carry;
+    for (const date of [...byDay.keys()].sort()) {
+      const d = byDay.get(date);
+      const cashIn = round2(d.in), cashOut = round2(d.out);
+      const open = round2(carry);
+      const close = round2(open + cashIn - cashOut);
+      carry = close;
+      tIn = round2(tIn + cashIn); tOut = round2(tOut + cashOut);
+      out.push([date, open, cashIn, cashOut, close]);
+    }
+    out.push(["Total", opening, tIn, tOut, round2(carry)]);
+  }
+
   const filename = search
     ? `cash-book-search-${search.replace(/[^a-z0-9]+/gi, "-").slice(0, 30)}`
     : `cash-book-${(from || "all")}-to-${(to || "date")}`;

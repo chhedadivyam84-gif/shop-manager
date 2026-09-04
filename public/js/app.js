@@ -14932,6 +14932,12 @@ async function renderCashBook(){
       state.cbEntries = entries;
       renderCashBookSearchSummary(entries, search);
       renderCashBookList(entries, true);
+      /* A search crosses dates on purpose, so a day-by-day table built from
+         whichever days happened to match would show opening balances that
+         are not the shop's real opening balances. Cleared rather than left
+         showing the previous range's figures under a new heading. */
+      const dayBox = document.getElementById("cashbook-daily");
+      if(dayBox) dayBox.innerHTML = "";
       return;
     }
     const q = cashBookQuery();
@@ -14942,8 +14948,77 @@ async function renderCashBook(){
     state.cbEntries = entries;
     renderCashBookSummary(summary);
     renderCashBookList(entries);
+    renderCashBookDaily();
   }catch(e){ toast(e.message); }
 }
+/* ------------------------------------------------------------------ */
+/* THE CASH BOOK, DAY BY DAY                                            */
+/*                                                                      */
+/* One row per date: what was in the drawer at the start, what came in, */
+/* what went out, and what was left. Each day opens where the last one  */
+/* closed, so the shop can follow the money across a week without       */
+/* adding anything up themselves.                                       */
+/*                                                                      */
+/* Days with no cash movement are hidden by default and one tap away.   */
+/* They are real days with a real balance, so they are not dropped —    */
+/* but a month with eleven working days should not read as thirty rows. */
+/* ------------------------------------------------------------------ */
+async function renderCashBookDaily(){
+  const host = document.getElementById("cashbook-daily");
+  if(!host) return;
+  const q = cashBookQuery();
+  let d;
+  try{ d = await api("GET", "/cashbook/daily" + (q?"?"+q:"")); }
+  catch(e){ host.innerHTML = `<div class="pm-warn">${escapeHtml(e.message)}</div>`; return; }
+
+  state.cbDaily = d;
+  const showQuiet = !!state.cbShowQuiet;
+  const rows = d.days.filter(x => showQuiet || !x.quiet);
+  const hidden = d.days.length - rows.length;
+
+  if(!d.days.length){
+    host.innerHTML = `<div class="empty-hint">No days to show for this range.</div>`;
+    return;
+  }
+
+  host.innerHTML = `
+    <div class="inv-flex" style="margin:14px 0 6px;">
+      <div style="font-weight:800;font-size:14px;">Day by day</div>
+      ${hidden || showQuiet ? `<button class="tiny" id="cb-quiet-toggle" style="margin-left:auto;">
+        ${showQuiet ? "Hide quiet days" : `Show ${hidden} quiet day${hidden===1?"":"s"}`}</button>` : ""}
+    </div>
+    <div class="sh-wrap"><table class="sh-table">
+      <thead><tr>
+        <th>Date</th><th class="num">Opening</th><th class="num">Cash In</th>
+        <th class="num">Cash Out</th><th class="num">Closing</th>
+      </tr></thead>
+      <tbody>${rows.map(x=>`
+        <tr${x.quiet ? ` class="cb-quiet"` : ""}>
+          <td>${escapeHtml(shDate(x.date))}</td>
+          <td class="num">${fmt(x.opening)}</td>
+          <td class="num"${x.cashIn?` style="color:var(--ok);"`:""}>${x.cashIn?"+"+fmt(x.cashIn):"—"}</td>
+          <td class="num"${x.cashOut?` style="color:var(--danger);"`:""}>${x.cashOut?"-"+fmt(x.cashOut):"—"}</td>
+          <td class="num" style="font-weight:800;">${fmt(x.closing)}</td>
+        </tr>`).join("")}</tbody>
+      <tfoot><tr>
+        <th>Total</th>
+        <th class="num">${fmt(d.openingBalance)}</th>
+        <th class="num" style="color:var(--ok);">+${fmt(d.totalIn)}</th>
+        <th class="num" style="color:var(--danger);">-${fmt(d.totalOut)}</th>
+        <th class="num">${fmt(d.closingBalance)}</th>
+      </tr></tfoot>
+    </table></div>
+    <p class="muted" style="font-size:11px;line-height:1.6;margin-top:6px;">
+      ${escapeHtml(d.note)} Each day opens with the previous day's closing balance.
+    </p>`;
+
+  const t = document.getElementById("cb-quiet-toggle");
+  if(t) t.addEventListener("click", ()=>{
+    state.cbShowQuiet = !state.cbShowQuiet;
+    renderCashBookDaily();
+  });
+}
+
 function renderCashBookSearchSummary(entries, search){
   const totalIn = entries.filter(e=>e.type==="in").reduce((s,e)=>s+e.amount,0);
   const totalOut = entries.filter(e=>e.type==="out").reduce((s,e)=>s+e.amount,0);
@@ -15055,12 +15130,38 @@ function printCashBook(){
   const table = `<table><thead><tr><th>Date</th><th>Party</th><th>Category</th><th>Remarks</th><th class="num">Cash In</th><th class="num">Cash Out</th><th class="num">Balance</th></tr></thead>
     <tbody>${rows.map(e=>`<tr><td>${e.date}</td><td>${escapeHtml(e.party||"")}</td><td>${escapeHtml(e.category||"")}</td><td>${escapeHtml(e.remarks||"")}</td>
       <td class="num">${e.type==="in"?fmt(e.amount):""}</td><td class="num">${e.type==="out"?fmt(e.amount):""}</td><td class="num">${fmt(e.runningBalance)}</td></tr>`).join("")}</tbody></table>`;
+
+  /* THE DAY-BY-DAY TABLE GOES ON THE PRINTED COPY TOO.
+     A cash book that is printed and filed is the one a shopkeeper reads
+     months later, and "what was in the drawer on the 5th" should not need
+     the reader to add a column up. Taken from state.cbDaily — the same
+     figures the screen is showing — rather than recomputed here, so the
+     paper and the screen cannot disagree.
+
+     Quiet days are included on paper whatever the screen is set to: a
+     printed ledger with a gap in the dates invites the question "what
+     happened on the 6th", and the answer, nothing, is worth printing. */
+  const d = state.cbDaily;
+  const daily = (d && d.days && d.days.length) ? `
+    <h3 style="margin:14px 0 4px;font-size:12px;">Day by Day</h3>
+    <table><thead><tr><th>Date</th><th class="num">Opening</th><th class="num">Cash In</th>
+      <th class="num">Cash Out</th><th class="num">Closing</th></tr></thead>
+      <tbody>${d.days.map(x=>`<tr>
+        <td>${x.date}</td><td class="num">${fmt(x.opening)}</td>
+        <td class="num">${x.cashIn?fmt(x.cashIn):""}</td>
+        <td class="num">${x.cashOut?fmt(x.cashOut):""}</td>
+        <td class="num">${fmt(x.closing)}</td></tr>`).join("")}
+        <tr><td><b>Total</b></td><td class="num"><b>${fmt(d.openingBalance)}</b></td>
+        <td class="num"><b>${fmt(d.totalIn)}</b></td><td class="num"><b>${fmt(d.totalOut)}</b></td>
+        <td class="num"><b>${fmt(d.closingBalance)}</b></td></tr>
+      </tbody></table>` : "";
+
   openRuledDoc({
     title: "Cash Book",
     heading: "Cash Book",
     sub: state.cbFrom || state.cbTo
       ? (state.cbFrom||"…") + " to " + (state.cbTo||"…") : "All entries",
-    table,
+    table: table + daily,
     /* Date and the three money columns hold their width so the running
        balance reads straight down the page; Party, Category and Remarks
        share what is left. A date never wraps. */

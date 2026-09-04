@@ -8660,6 +8660,13 @@ function openAddCustomer(editing){
 async function renderScanSettings() {
   const box = document.getElementById("st-scan-box");
   if (!box) return;
+  /* A shop that was not sold the scanner is told that, rather than being
+     offered a key box that would take a key and still refuse every scan. */
+  if (!hasFeature("billscan")) {
+    box.innerHTML = '<div class="pm-warn" style="margin:0;">Bill Scanner is not part of ' +
+      "what this copy was sold. Ask your supplier to add it.</div>";
+    return;
+  }
   let st;
   try { st = await api("GET", "/bill-scan/status"); }
   catch (e) { box.innerHTML = '<div class="pm-warn">' + escapeHtml(e.message) + "</div>"; return; }
@@ -16024,6 +16031,12 @@ async function scanStatus() {
 async function renderScanButton() {
   const host = document.getElementById("pur-scan-slot");
   if (!host) return;
+  /* Two reasons there may be no button, and they are different things.
+     Not sold: the vendor did not include Bill Scanner in what this shop
+     bought, and no key would change that — the server refuses the scan
+     too. Not set up: they have it, but no key yet. Neither draws a button;
+     only the second has a Settings box that can do anything about it. */
+  if (!hasFeature("billscan")) { host.innerHTML = ""; return; }
   const st = await scanStatus();
   if (!st.configured) { host.innerHTML = ""; return; }
   host.innerHTML =

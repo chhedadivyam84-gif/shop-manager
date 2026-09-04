@@ -42,7 +42,12 @@ const ROUTES = {
   ewb:         ["/api/ewb", "/api/ewaybill"],
   inquiries:   ["/api/inquiries"],
   printmgr:    ["/api/print-manager"],
-  notes:       ["/api/notes"]
+  notes:       ["/api/notes"],
+  /* Scanning is a POST, so the ordinary write-gate blocks it properly —
+     unlike the read-only report screens above it, which can only be
+     hidden. A shop that was not sold this gets a refusal from the server,
+     not just a missing button. */
+  billscan:    ["/api/bill-scan"]
 };
 
 /** Never gated, whatever the vendor ticks. */

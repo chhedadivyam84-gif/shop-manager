@@ -95,6 +95,100 @@ router.get("/summary", (req, res) => {
   });
 });
 
+/**
+ * THE BANK BOOK, DAY BY DAY — the same rule the cash book follows.
+ *
+ *   Opening = the balance carried in from the day before
+ *   Money In / Money Out = that day's movements on THIS account
+ *   Closing = Opening + In − Out
+ *   and tomorrow's Opening is today's Closing.
+ *
+ * ONE DIFFERENCE FROM THE CASH BOOK, and it matters: a bank account has a
+ * stored opening_balance — what was in it before this app knew about it.
+ * A range that starts before the first entry therefore opens on THAT, not
+ * on zero. Getting this wrong would show a shop's bank book starting empty
+ * and every balance below it short by the same amount.
+ *
+ * Carry-forward is not computed twice: each day's opening is the previous
+ * day's closing value, never a second sum of everything earlier.
+ *
+ * Per account, always. Balances here are per-account — a shop with two
+ * banks has two books, and adding them together would be meaningless.
+ */
+const BB_ROW_CAP = 400;
+
+function bbAddDays(dateStr, n) {
+  const d = new Date(dateStr + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+router.get("/daily", (req, res) => {
+  const accountId = req.query.accountId || defaultAccountId();
+  if (!accountId) {
+    return res.json({ from: todayStr(), to: todayStr(), openingBalance: 0,
+      closingBalance: 0, totalIn: 0, totalOut: 0, days: [], everyDay: true,
+      note: "No bank account yet." });
+  }
+  const account = db.prepare("SELECT * FROM bank_accounts WHERE id = ?").get(accountId);
+  if (!account) return res.status(404).json({ error: "No such bank account." });
+
+  const all = chronoWithBalance(accountId);
+  const from = String(req.query.from || "").trim() || (all.length ? all[0].date : todayStr());
+  const to = String(req.query.to || "").trim() || todayStr();
+  if (to < from) return res.status(400).json({ error: "The end date is before the start date." });
+
+  /* Before the range: the last running balance, or the account's own
+     opening balance when nothing has been entered yet. */
+  const before = all.filter(r => r.date < from);
+  const openingBalance = before.length
+    ? before[before.length - 1].runningBalance
+    : round2(account.opening_balance || 0);
+
+  const byDay = new Map();
+  for (const r of all) {
+    if (r.date < from || r.date > to) continue;
+    if (!byDay.has(r.date)) byDay.set(r.date, { in: 0, out: 0, n: 0 });
+    const d = byDay.get(r.date);
+    if (r.type === "in") d.in += r.amount; else d.out += r.amount;
+    d.n++;
+  }
+
+  const spanDays = Math.round(
+    (Date.parse(to + "T00:00:00Z") - Date.parse(from + "T00:00:00Z")) / 86400000) + 1;
+  const everyDay = spanDays > 0 && spanDays <= BB_ROW_CAP;
+  const dates = everyDay
+    ? Array.from({ length: spanDays }, (_, i) => bbAddDays(from, i))
+    : [...byDay.keys()].sort();
+
+  let carry = openingBalance;
+  let totalIn = 0, totalOut = 0;
+  const days = dates.map(date => {
+    const d = byDay.get(date) || { in: 0, out: 0, n: 0 };
+    const cashIn = round2(d.in);
+    const cashOut = round2(d.out);
+    const opening = round2(carry);
+    const closing = round2(opening + cashIn - cashOut);
+    carry = closing;
+    totalIn = round2(totalIn + cashIn);
+    totalOut = round2(totalOut + cashOut);
+    return { date, opening, cashIn, cashOut, closing, entryCount: d.n, quiet: d.n === 0 };
+  });
+
+  res.json({
+    accountId, accountName: account.name || "",
+    from, to,
+    openingBalance,
+    closingBalance: round2(carry),
+    totalIn, totalOut,
+    days,
+    everyDay,
+    note: everyDay
+      ? "Every day in the range, including days with no movement."
+      : `More than ${BB_ROW_CAP} days — only days with entries are listed.`
+  });
+});
+
 router.get("/export", (req, res) => {
   const accountId = req.query.accountId || defaultAccountId();
   const account = accountId ? db.prepare("SELECT * FROM bank_accounts WHERE id = ?").get(accountId) : null;
@@ -102,6 +196,9 @@ router.get("/export", (req, res) => {
   // Same filter path as the list route, so the spreadsheet always holds the
   // rows on screen rather than the date range sitting unused behind a search.
   const rows = applyFilters(accountId ? chronoWithBalance(accountId) : [], req.query);
+  /* Declared here because BOTH the day-by-day block and the filename
+     below need it. Declared once, not twice. */
+  const searchTerm = String(q || "").trim();
 
   const out = [["Date", "Type", "Transaction Type", "Party", "Payment Mode", "Reference No.", "Remarks", "Bank In", "Bank Out", "Running Balance"]];
   rows.forEach(r => {
@@ -111,8 +208,42 @@ router.get("/export", (req, res) => {
       r.type === "in" ? r.amount : "", r.type === "out" ? r.amount : "", r.runningBalance
     ]);
   });
+
+  /* The day-by-day summary goes in the same sheet, from the same figures
+     the screen and the printed page use. Left out of a SEARCH export: those
+     rows come from whichever days matched, and an opening balance across
+     them is not this account's opening balance on any real day. */
+  if (!searchTerm && rows.length && accountId) {
+    const first = rows[0].date;
+    const all = chronoWithBalance(accountId);
+    const before = all.filter(r => r.date < first);
+    let carry = before.length ? before[before.length - 1].runningBalance
+      : round2((account && account.opening_balance) || 0);
+
+    const byDay = new Map();
+    for (const r of rows) {
+      if (!byDay.has(r.date)) byDay.set(r.date, { in: 0, out: 0 });
+      const d = byDay.get(r.date);
+      if (r.type === "in") d.in += r.amount; else d.out += r.amount;
+    }
+
+    out.push([]);
+    out.push(["DAY BY DAY"]);
+    out.push(["Date", "Opening Balance", "Money In", "Money Out", "Closing Balance"]);
+    const opening = carry;
+    let tIn = 0, tOut = 0;
+    for (const date of [...byDay.keys()].sort()) {
+      const d = byDay.get(date);
+      const cashIn = round2(d.in), cashOut = round2(d.out);
+      const open = round2(carry);
+      const close = round2(open + cashIn - cashOut);
+      carry = close;
+      tIn = round2(tIn + cashIn); tOut = round2(tOut + cashOut);
+      out.push([date, open, cashIn, cashOut, close]);
+    }
+    out.push(["Total", opening, tIn, tOut, round2(carry)]);
+  }
   const accountPart = account ? account.name.replace(/\W+/g, "-") : "all";
-  const searchTerm = String(q || "").trim();
   const filename = searchTerm
     ? `bank-book-${accountPart}-search-${searchTerm.replace(/[^a-z0-9]+/gi, "-").slice(0, 30)}`
     : `bank-book-${accountPart}-${(from || "all")}-to-${(to || "date")}`;

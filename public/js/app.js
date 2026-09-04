@@ -15262,6 +15262,11 @@ async function renderBankBook(){
       state.bbEntries = entries;
       renderBankBookSearchSummary(entries, search);
       renderBankBookList(entries, true);
+      /* Same reason as the cash book: a search crosses dates, so opening
+         balances built from whichever days matched would not be this
+         account's opening balance on any real day. */
+      const bbDayBox = document.getElementById("bankbook-daily");
+      if(bbDayBox) bbDayBox.innerHTML = "";
       return;
     }
     const q = bankBookQuery();
@@ -15272,8 +15277,73 @@ async function renderBankBook(){
     state.bbEntries = entries;
     renderBankBookSummary(summary);
     renderBankBookList(entries);
+    renderBankBookDaily();
   }catch(e){ toast(e.message); }
 }
+/* ------------------------------------------------------------------ */
+/* THE BANK BOOK, DAY BY DAY                                            */
+/*                                                                      */
+/* Same shape as the cash book's: one row per date, each opening where   */
+/* the last one closed. Per account, because balances here are per       */
+/* account — a shop with two banks has two books.                       */
+/* ------------------------------------------------------------------ */
+async function renderBankBookDaily(){
+  const host = document.getElementById("bankbook-daily");
+  if(!host) return;
+  const q = bankBookQuery();
+  let d;
+  try{ d = await api("GET", "/bankbook/daily" + (q?"?"+q:"")); }
+  catch(e){ host.innerHTML = `<div class="pm-warn">${escapeHtml(e.message)}</div>`; return; }
+
+  state.bbDaily = d;
+  const showQuiet = !!state.bbShowQuiet;
+  const rows = d.days.filter(x => showQuiet || !x.quiet);
+  const hidden = d.days.length - rows.length;
+
+  if(!d.days.length){
+    host.innerHTML = `<div class="empty-hint">No days to show for this range.</div>`;
+    return;
+  }
+
+  host.innerHTML = `
+    <div class="inv-flex" style="margin:14px 0 6px;">
+      <div style="font-weight:800;font-size:14px;">Day by day</div>
+      ${hidden || showQuiet ? `<button class="tiny" id="bb-quiet-toggle" style="margin-left:auto;">
+        ${showQuiet ? "Hide quiet days" : `Show ${hidden} quiet day${hidden===1?"":"s"}`}</button>` : ""}
+    </div>
+    <div class="sh-wrap"><table class="sh-table">
+      <thead><tr>
+        <th>Date</th><th class="num">Opening</th><th class="num">Money In</th>
+        <th class="num">Money Out</th><th class="num">Closing</th>
+      </tr></thead>
+      <tbody>${rows.map(x=>`
+        <tr${x.quiet ? ` class="cb-quiet"` : ""}>
+          <td>${escapeHtml(shDate(x.date))}</td>
+          <td class="num">${fmt(x.opening)}</td>
+          <td class="num"${x.cashIn?` style="color:var(--ok);"`:""}>${x.cashIn?"+"+fmt(x.cashIn):"—"}</td>
+          <td class="num"${x.cashOut?` style="color:var(--danger);"`:""}>${x.cashOut?"-"+fmt(x.cashOut):"—"}</td>
+          <td class="num" style="font-weight:800;">${fmt(x.closing)}</td>
+        </tr>`).join("")}</tbody>
+      <tfoot><tr>
+        <th>Total</th>
+        <th class="num">${fmt(d.openingBalance)}</th>
+        <th class="num" style="color:var(--ok);">+${fmt(d.totalIn)}</th>
+        <th class="num" style="color:var(--danger);">-${fmt(d.totalOut)}</th>
+        <th class="num">${fmt(d.closingBalance)}</th>
+      </tr></tfoot>
+    </table></div>
+    <p class="muted" style="font-size:11px;line-height:1.6;margin-top:6px;">
+      ${escapeHtml(d.note)} Each day opens with the previous day's closing balance.
+      ${escapeHtml(d.accountName ? "Account: " + d.accountName + "." : "")}
+    </p>`;
+
+  const t = document.getElementById("bb-quiet-toggle");
+  if(t) t.addEventListener("click", ()=>{
+    state.bbShowQuiet = !state.bbShowQuiet;
+    renderBankBookDaily();
+  });
+}
+
 function renderBankBookSearchSummary(entries, search){
   const account = (state.bankAccounts||[]).find(a=>a.id===state.bbAccountId);
   const totalIn = entries.filter(e=>e.type==="in").reduce((s,e)=>s+e.amount,0);
@@ -15743,20 +15813,66 @@ function openManageBankAccounts(){
 }
 function printBankBook(){
   const rows = [...state.bbEntries].reverse();
-  /* On the canvas, with a preview, like every other document. */
-  const table = `<table><thead><tr><th>Date</th><th>Party</th><th>Category</th><th>Remarks</th><th class="num">Bank In</th><th class="num">Bank Out</th><th class="num">Balance</th></tr></thead>
+  const d = state.bbDaily;
+
+  /* Opening at the top, closing at the bottom — the same page a bank
+     statement is read as, and the same shape the cash book prints in, so
+     the two do not have to be learned separately. */
+  const opening = d ? d.openingBalance : 0;
+  const closing = d ? d.closingBalance : (rows.length ? rows[rows.length-1].runningBalance : 0);
+  const totalIn = d ? d.totalIn : rows.filter(e=>e.type==="in").reduce((s,e)=>s+e.amount,0);
+  const totalOut = d ? d.totalOut : rows.filter(e=>e.type==="out").reduce((s,e)=>s+e.amount,0);
+  const account = (state.bankAccounts||[]).find(a=>a.id===state.bbAccountId);
+
+  const band = (label, value) =>
+    `<table class="cb-band"><tr><th>${label}</th><td class="num">${fmt(value)}</td></tr></table>`;
+
+  const entries = `<table class="cb-entries"><thead><tr><th>Date</th><th>Party</th><th>Category</th><th>Remarks</th><th class="num">Bank In</th><th class="num">Bank Out</th><th class="num">Balance</th></tr></thead>
     <tbody>${rows.map(e=>`<tr><td>${e.date}</td><td>${escapeHtml(e.party||"")}</td><td>${escapeHtml(e.category||"")}</td><td>${escapeHtml(e.remarks||"")}</td>
-      <td class="num">${e.type==="in"?fmt(e.amount):""}</td><td class="num">${e.type==="out"?fmt(e.amount):""}</td><td class="num">${fmt(e.runningBalance)}</td></tr>`).join("")}</tbody></table>`;
+      <td class="num">${e.type==="in"?fmt(e.amount):""}</td><td class="num">${e.type==="out"?fmt(e.amount):""}</td><td class="num">${fmt(e.runningBalance)}</td></tr>`).join("")}
+      <tr><th colspan="4">Total for the period</th><th class="num">${fmt(totalIn)}</th><th class="num">${fmt(totalOut)}</th><th class="num">${fmt(closing)}</th></tr>
+    </tbody></table>`;
+
+  const daily = (d && d.days && d.days.length) ? `
+    <h3 class="cb-h">Day by Day</h3>
+    <table class="cb-days"><thead><tr><th>Date</th><th class="num">Opening</th><th class="num">Money In</th>
+      <th class="num">Money Out</th><th class="num">Closing</th></tr></thead>
+      <tbody>${d.days.map(x=>`<tr>
+        <td>${x.date}</td><td class="num">${fmt(x.opening)}</td>
+        <td class="num">${x.cashIn?fmt(x.cashIn):""}</td>
+        <td class="num">${x.cashOut?fmt(x.cashOut):""}</td>
+        <td class="num">${fmt(x.closing)}</td></tr>`).join("")}
+        <tr><th>Total</th><th class="num">${fmt(d.openingBalance)}</th>
+        <th class="num">${fmt(d.totalIn)}</th><th class="num">${fmt(d.totalOut)}</th>
+        <th class="num">${fmt(d.closingBalance)}</th></tr>
+      </tbody></table>` : "";
+
   openRuledDoc({
     title: "Bank Book",
     heading: "Bank Book",
-    sub: state.bbFrom || state.bbTo
-      ? (state.bbFrom||"…") + " to " + (state.bbTo||"…") : "All entries",
-    table,
+    sub: (account ? account.name + " · " : "") + (state.bbFrom || state.bbTo
+      ? (state.bbFrom||"…") + " to " + (state.bbTo||"…") : "All entries"),
+    table:
+      band("Opening Balance (brought forward)", opening) +
+      entries +
+      band("Closing Balance (carried forward)", closing) +
+      daily,
     /* Date and the three money columns hold their width so the running
        balance reads straight down the page; Party, Category and Remarks
        share what is left. A date never wraps. */
-    widths: [78, 0, 0, 0, 76, 76, 82]
+    widths: [78, 0, 0, 0, 76, 76, 82],
+    widthsFor: "table.cb-entries",
+    css: `
+      .lg-doc .cb-band{margin:0 0 8px;}
+      .lg-doc .cb-band th{width:auto;text-align:left;font-size:11.5px;}
+      .lg-doc .cb-band td{width:120px;font-weight:bold;font-size:12px;}
+      .lg-doc table + .cb-band{margin-top:8px;}
+      .lg-doc .cb-h{font-size:12px;margin:14px 0 4px;}
+      .lg-doc .cb-days th:nth-child(1),.lg-doc .cb-days td:nth-child(1){width:auto;}
+      .lg-doc .cb-days th:nth-child(2),.lg-doc .cb-days td:nth-child(2),
+      .lg-doc .cb-days th:nth-child(3),.lg-doc .cb-days td:nth-child(3),
+      .lg-doc .cb-days th:nth-child(4),.lg-doc .cb-days td:nth-child(4),
+      .lg-doc .cb-days th:nth-child(5),.lg-doc .cb-days td:nth-child(5){width:92px;}`
   });
 }
 

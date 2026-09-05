@@ -41,9 +41,34 @@ function sameHash(a, b) {
   return crypto.timingSafeEqual(x, y);
 }
 
-function authed(req, res, next) {
+/**
+ * The token this installation accepts.
+ *
+ * BRIDGE_TOKEN WINS, AND THAT IS THE POINT. The made-in-the-app token lives
+ * in tally_settings, which lives in shop.db — and on a host that hands the
+ * app a fresh disk on every restart, shop.db comes back from the last cloud
+ * snapshot. A token made after that snapshot is simply not in it, so the
+ * shop's bridge is refused by a server that has quietly rolled back to a
+ * token nobody holds. The shopkeeper sees "not recognised", makes another,
+ * and the same thing happens on the next restart.
+ *
+ * An environment variable is not in the database and cannot roll back with
+ * it. Set BRIDGE_TOKEN on the host and the pairing survives every restart,
+ * redeploy and restore.
+ *
+ * The database token is left exactly as it was for installs that do not set
+ * one — a shop running from a folder on its own PC never had this problem
+ * and should not have to learn what an environment variable is.
+ */
+function acceptedHash() {
+  const fromEnv = String(process.env.BRIDGE_TOKEN || "").trim();
+  if (fromEnv) return { hash: hashToken(fromEnv), source: "env" };
   const row = db.prepare("SELECT bridge_token_hash FROM tally_settings WHERE id = 1").get();
-  const stored = (row && row.bridge_token_hash) || "";
+  return { hash: (row && row.bridge_token_hash) || "", source: "db" };
+}
+
+function authed(req, res, next) {
+  const { hash: stored, source } = acceptedHash();
   if (!stored) {
     return res.status(403).json({
       error: "No bridge token has been made yet. In Shop Manager open " +
@@ -52,7 +77,12 @@ function authed(req, res, next) {
   }
   const sent = String(req.get("x-bridge-token") || "").trim();
   if (!sent || !sameHash(hashToken(sent), stored)) {
-    return res.status(401).json({ error: "That bridge token is not recognised." });
+    /* Which token was checked, so a mismatch is diagnosable without ever
+       printing either of them. */
+    return res.status(401).json({
+      error: "That bridge token is not recognised.",
+      checkedAgainst: source
+    });
   }
   next();
 }

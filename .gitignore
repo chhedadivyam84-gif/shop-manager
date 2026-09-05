@@ -32,3 +32,8 @@ data/companies/
 # They are Tally's, not this app's, and they grow with every sync.
 tallyhttp.log
 tdlfunc.log
+
+# The bridge config holds the token the shop PC authenticates with. Same
+# rule as every other credential here: a file that can be committed is one
+# that eventually is.
+tools/tally-bridge.json

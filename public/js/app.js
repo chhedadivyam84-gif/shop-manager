@@ -13304,12 +13304,21 @@ function renderTallySetup(){
     if(!out) return;
     try{
       const b = await api("GET", "/tally/bridge/status");
-      out.innerHTML = b.connected
+      /* A token fixed on the server cannot be replaced from here, and
+         offering the button would hand out a code the server then ignores. */
+      const mk = document.getElementById("tly-bridge-token");
+      if(mk) mk.style.display = b.fixed ? "none" : "";
+      out.innerHTML = (b.connected
         ? `<span style="color:var(--ok,#178a6e);font-weight:800;">● Bridge running</span> on the shop's computer.`
         : `<span style="color:var(--danger);font-weight:800;">● Bridge not running.</span> ` +
           (b.tokenMade
             ? "Start it on the shop's computer and leave it open."
-            : "Make a token below, then set it up on the shop's computer.");
+            : "Make a token below, then set it up on the shop's computer."))
+        + (b.fixed
+            ? `<div class="muted" style="font-size:11.5px;margin-top:6px;">The token for this
+               installation is set on the server, so it survives every restart and cannot be
+               changed from this screen.</div>`
+            : "");
     }catch(e){ out.textContent = "Could not check the bridge: " + e.message; }
   }
   if(whereEl.value === "bridge") refreshBridgeStatus();

@@ -143,6 +143,16 @@ router.put("/settings", perms.require("tally","edit"), (req, res) => {
  * vouchers, which is a setup decision rather than a daily one.
  */
 router.post("/bridge/token", perms.require("tally", "edit"), (req, res) => {
+  /* When the host sets BRIDGE_TOKEN, that is the token — issuing another
+     here would hand the shop a code that is stored, looks right, and is
+     then ignored by the door it is meant to open. Refusing plainly is the
+     only honest answer. */
+  if (String(process.env.BRIDGE_TOKEN || "").trim()) {
+    return res.status(409).json({
+      error: "This installation's bridge token is set on the server (BRIDGE_TOKEN), " +
+             "so it cannot be changed from here. Use that value in tally-bridge.json."
+    });
+  }
   const token = require("crypto").randomBytes(24).toString("base64url");
   const hash = require("./tallyBridge").hashToken(token);
   db.prepare("UPDATE tally_settings SET bridge_token_hash = ?, bridge_token_made_at = ? WHERE id = 1")
@@ -155,10 +165,15 @@ router.post("/bridge/token", perms.require("tally", "edit"), (req, res) => {
 /** Is the shop's bridge running right now? */
 router.get("/bridge/status", (req, res) => {
   const row = db.prepare("SELECT bridge_token_hash, bridge_token_made_at FROM tally_settings WHERE id = 1").get() || {};
+  /* A token set on the host counts as made, or the screen would offer to
+     create one that would then be ignored. `fixed` tells the screen not to
+     offer it at all. */
+  const fromEnv = !!String(process.env.BRIDGE_TOKEN || "").trim();
   res.json({
     ...require("../tally/bridge").status(),
-    tokenMade: !!row.bridge_token_hash,
-    tokenMadeAt: row.bridge_token_made_at || null
+    tokenMade: fromEnv || !!row.bridge_token_hash,
+    tokenMadeAt: fromEnv ? null : (row.bridge_token_made_at || null),
+    fixed: fromEnv
   });
 });
 

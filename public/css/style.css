@@ -696,6 +696,18 @@ nav.bottom .tab.active{color:var(--navy);}
    app's chrome. */
 .fs-stick{position:sticky;top:0;z-index:4;background:var(--navy);}
 .fs-stick #challan-rate-toggle-row{padding:0 16px 8px;}
+/* The rate toggle is a tab, not a filter chip. Whether the customer sees
+   rates on a printed challan is a decision about the document, and on the
+   navy bar the filled style hid it: .chip.selected is navy on navy, so the
+   CHOSEN option looked like the plain one and the unchosen one wore the
+   white pill. Underlining says which is on without inverting that.
+   Scoped to this row deliberately - .chip appears about 350 times in this
+   app, and restyling the class would change every screen that uses it. */
+#challan-rate-toggle-row{gap:20px;}
+#challan-rate-toggle-row .chip,
+#challan-rate-toggle-row .chip.selected{background:transparent;border:none;border-radius:0;padding:6px 2px;border-bottom:2px solid transparent;}
+#challan-rate-toggle-row .chip{color:rgba(255,255,255,.62);}
+#challan-rate-toggle-row .chip.selected{color:#fff;border-bottom-color:var(--gold);}
 @media print{ .fs-stick{position:static;} }
 .fs-bar{display:flex;align-items:center;justify-content:space-between;padding:var(--fs-bar-pad);}
 .fs-bar .fs-title{font-weight:800;font-size:14px;}

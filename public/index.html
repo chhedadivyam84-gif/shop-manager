@@ -607,6 +607,10 @@ setTimeout(function () {
       </div>
 
       <!-- Notepad: typed text and pen strokes in the same note. -->
+      <!-- STAFF PAY. Body is built by renderEmployees(); the screen itself is
+           empty markup so the module owns its own layout, the same way the
+           Business Position screen does. -->
+      <div class="screen" id="screen-employees"><div id="emp-body"></div></div>
       <div class="screen" id="screen-notes">
         <div class="searchbar" style="margin-top:0;">
           <span>&#128269;</span>
@@ -1590,6 +1594,10 @@ setTimeout(function () {
   <div class="sheet" id="sheet-wa-groups"></div>
   <!-- Tally sync: settings, dashboard, queue and mappings. Owner only. -->
   <div class="sheet" id="sheet-tally"></div>
+  <div class="sheet" id="sheet-employee"></div>
+  <div class="sheet" id="sheet-emp-form"></div>
+  <div class="sheet" id="sheet-emp-money"></div>
+  <div class="sheet" id="sheet-attendance"></div>
   <div class="sheet" id="sheet-pm-templates"></div>
   <div class="sheet" id="sheet-pm-designer"></div>
 

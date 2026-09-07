@@ -1433,7 +1433,7 @@ async function switchTab(tab){
   // brought into view — otherwise switching from a tile leaves it off-screen.
   const activeBtn = document.querySelector(`nav.bottom .tab[data-tab="${tab}"]`);
   if(activeBtn && activeBtn.scrollIntoView) activeBtn.scrollIntoView({ block:"nearest", inline:"nearest" });
-  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",selection:"Selection Slip",quotation:"Quotation",so:"Sales Order",pquery:"Product Query",stockhistory:"Stock History / Stock Ledger",accounts:"Accounts",otherledger:(state.olKind==="income"?"Other Income":"Other Expenses"),fyear:"Financial Year",fyclose:"Financial Year",printmgr:"Print Management",outstanding:"Outstanding",position:"Business Position",materialflow:"Material Flow & Document Tracking",ewb:"E-Way Bill",delivery:"Delivery & Dispatch",alerts:"Reminders",notes:"Notepad",backups:"Cloud Backups"};
+  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",selection:"Selection Slip",quotation:"Quotation",so:"Sales Order",pquery:"Product Query",stockhistory:"Stock History / Stock Ledger",accounts:"Accounts",otherledger:(state.olKind==="income"?"Other Income":"Other Expenses"),fyear:"Financial Year",fyclose:"Financial Year",printmgr:"Print Management",outstanding:"Outstanding",position:"Business Position",materialflow:"Material Flow & Document Tracking",ewb:"E-Way Bill",delivery:"Delivery & Dispatch",alerts:"Reminders",notes:"Notepad",backups:"Cloud Backups",employees:"Staff Pay"};
   document.getElementById("hdr-sub").textContent = subMap[tab];
   document.getElementById("hdr-main").textContent = tab==="home" ? greeting() : subMap[tab];
   if(tab==="billing") await renderBilling();
@@ -1441,6 +1441,7 @@ async function switchTab(tab){
   if(tab==="customers") await renderCustomersList();
   if(tab==="reports") await renderReport();
   if(tab==="cashbook") await renderCashBook();
+  if(tab==="employees") await renderEmployees();
   if(tab==="outstanding") await renderOutstanding();
   if(tab==="ewb") await renderEwb();
   if(tab==="bankbook") await renderBankBook();
@@ -2101,6 +2102,9 @@ const MENU = [
     ["ewb",         "&#128739;", "E-Way Bill"],
     ["printmgr",    "&#128424;", "Print Manager"],
     ["fyear",       "&#128198;", "Financial Year"]
+  ]],
+  ["Staff", [
+    ["employees",  "&#128100;", "Staff Pay"]
   ]],
   ["Tools", [
     ["alerts",      "&#128276;", "Reminders"],
@@ -26524,6 +26528,411 @@ function openPriceImport(partyName, side, after){
   });
 
   showSheet("sheet-price-import");
+}
+
+
+/* ============================================================
+   STAFF PAY — the screens
+
+   Mobile first, because this is used standing at a counter: the four
+   things a shop does every day — add an employee, mark attendance, hand
+   out kharchi, pay a salary — are four buttons at the top, and nothing
+   else needs more than one tap to reach.
+
+   Every figure here comes from the server. Nothing on this screen adds
+   money up in JavaScript: the payroll module is the one place that knows
+   what an employee costs, and a second opinion computed in the browser
+   is how a screen and a report come to disagree.
+   ============================================================ */
+
+const empState = { month: "", tab: "overview", empId: null, data: null };
+
+function empThisMonth(){
+  const d = new Date();
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+}
+function empMonthLabel(m){
+  const [y, mo] = String(m || "").split("-").map(Number);
+  if(!y) return m || "";
+  return new Date(y, mo - 1, 1).toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+}
+function empShiftMonth(m, by){
+  const [y, mo] = String(m).split("-").map(Number);
+  const d = new Date(y, mo - 1 + by, 1);
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+}
+function empStatusChip(s){
+  const cls = s === "Paid" ? "ok" : s === "Partially Paid" ? "warn" : "danger";
+  return `<span class="pill pill-${cls}">${escapeHtml(s)}</span>`;
+}
+
+/* ------------------------------------------------------------ the screen */
+
+async function renderEmployees(){
+  if(!empState.month) empState.month = empThisMonth();
+  const host = document.getElementById("emp-body");
+  if(!host) return;
+  host.innerHTML = `<div class="empty-hint">Loading…</div>`;
+
+  let d;
+  try{ d = await api("GET", "/employees/dashboard?month=" + empState.month); }
+  catch(e){
+    host.innerHTML = `<div class="card"><p class="muted">${escapeHtml(e.message || "Could not load staff pay.")}</p></div>`;
+    return;
+  }
+  empState.data = d;
+  const t = d.totals;
+
+  host.innerHTML = `
+    <div class="chip-row" style="margin-bottom:10px;">
+      <button class="chip" id="emp-prev">‹ ${escapeHtml(empMonthLabel(empShiftMonth(empState.month,-1)))}</button>
+      <button class="chip selected">${escapeHtml(empMonthLabel(empState.month))}</button>
+      <button class="chip" id="emp-next">${escapeHtml(empMonthLabel(empShiftMonth(empState.month,1)))} ›</button>
+    </div>
+
+    <div class="stat-grid">
+      <div class="stat-card navy"><div class="label">Total Employee Cost</div>
+        <div class="value">${fmt(t.totalCost)}</div></div>
+      <div class="stat-card plain"><div class="label">Employees</div>
+        <div class="value">${d.employees}</div></div>
+      <div class="stat-card plain"><div class="label">Present Today</div>
+        <div class="value">${d.todayAttendance.present}</div></div>
+      <div class="stat-card plain"><div class="label">Absent Today</div>
+        <div class="value">${d.todayAttendance.absent}</div></div>
+      <div class="stat-card plain"><div class="label">Kharchi This Week</div>
+        <div class="value">${fmt(d.weekKharchi.total)}</div></div>
+      <div class="stat-card plain"><div class="label">Kharchi This Month</div>
+        <div class="value">${fmt(d.monthKharchi)}</div></div>
+      <div class="stat-card plain"><div class="label">Salary Payable</div>
+        <div class="value">${fmt(t.netPayable)}</div></div>
+      <div class="stat-card plain"><div class="label">Salary Paid</div>
+        <div class="value">${fmt(t.paid)}</div></div>
+      <div class="stat-card plain"><div class="label">Salary Outstanding</div>
+        <div class="value red">${fmt(t.outstanding)}</div></div>
+    </div>
+
+    <div class="quick-actions" style="grid-template-columns:repeat(4,1fr);margin-top:12px;">
+      <button class="qa-btn" id="emp-add"><span class="ic">&#128100;</span>Add Employee</button>
+      <button class="qa-btn" id="emp-att"><span class="ic">&#9989;</span>Attendance</button>
+      <button class="qa-btn" id="emp-kh"><span class="ic">&#128176;</span>Add Kharchi</button>
+      <button class="qa-btn" id="emp-pay"><span class="ic">&#128181;</span>Pay Salary</button>
+    </div>
+
+    <div class="section-title">This Month — ${escapeHtml(empMonthLabel(empState.month))}</div>
+    ${d.rows.length ? `
+    <div style="overflow-x:auto;">
+      <table class="rep-table" style="width:100%;border-collapse:collapse;font-size:11.5px;white-space:nowrap;">
+        <thead><tr>
+          <th style="text-align:left;">Employee</th><th>Salary</th><th>Kharchi</th>
+          <th>Advances</th><th>Deductions</th><th>Paid</th><th>Remaining</th><th>Total Cost</th><th></th>
+        </tr></thead>
+        <tbody>
+          ${d.rows.map(r => `
+          <tr data-emp="${escapeHtml(r.id)}" style="cursor:pointer;">
+            <td style="text-align:left;"><b>${escapeHtml(r.name)}</b>
+              ${r.role ? `<div class="muted" style="font-size:10px;">${escapeHtml(r.role)}</div>` : ""}</td>
+            <td>${fmt(r.salary)}</td>
+            <td>${fmt(r.kharchi)}</td>
+            <td>${fmt(r.advances)}</td>
+            <td>${fmt(r.deductions)}</td>
+            <td>${fmt(r.paid)}</td>
+            <td><b>${fmt(r.remaining)}</b></td>
+            <td>${fmt(r.totalCost)}</td>
+            <td>${empStatusChip(r.status)}</td>
+          </tr>`).join("")}
+        </tbody>
+        <tfoot><tr style="font-weight:800;border-top:2px solid var(--text);">
+          <td style="text-align:left;">Total</td>
+          <td>${fmt(t.salary)}</td><td>${fmt(t.kharchi)}</td><td>${fmt(t.advances)}</td>
+          <td>${fmt(t.deductions)}</td><td>${fmt(t.paid)}</td><td>${fmt(t.outstanding)}</td>
+          <td>${fmt(t.totalCost)}</td><td></td>
+        </tr></tfoot>
+      </table>
+    </div>
+
+    <div class="card" style="margin-top:10px;">
+      <div class="muted" style="font-size:11px;line-height:1.7;">
+        <b>How Total Employee Cost is worked out:</b><br>
+        salary ${fmt(t.salary)} + employer expenses ${fmt(t.expenses)} = <b>${fmt(t.totalCost)}</b><br>
+        Kharchi ${fmt(t.kharchi)} and advances ${fmt(t.advances)} are <b>not added</b> — that is
+        salary paid early, and counting it again would charge the shop twice for the same rupee.
+      </div>
+    </div>` : `<div class="empty-hint">No employees yet. Add the first one above.</div>`}
+  `;
+
+  document.getElementById("emp-prev").onclick = () => { empState.month = empShiftMonth(empState.month,-1); renderEmployees(); };
+  document.getElementById("emp-next").onclick = () => { empState.month = empShiftMonth(empState.month, 1); renderEmployees(); };
+  document.getElementById("emp-add").onclick = () => openEmpForm(null);
+  document.getElementById("emp-att").onclick = () => openAttendanceBoard();
+  document.getElementById("emp-kh").onclick  = () => openEmpMoney("kharchi");
+  document.getElementById("emp-pay").onclick = () => openEmpMoney("salary");
+  host.querySelectorAll("tr[data-emp]").forEach(tr =>
+    tr.onclick = () => openEmployeeProfile(tr.dataset.emp));
+}
+
+/* ------------------------------------------------------- add / edit */
+
+async function openEmpForm(id){
+  let e = { name:"", mobile:"", job_role:"", joining_date:"", monthly_salary:"", salary_type:"monthly", active:1, notes:"" };
+  if(id){
+    try{ const r = await api("GET", "/employees/" + id + "?month=" + empState.month); e = r.profile || e; }
+    catch(err){ toast(err.message); return; }
+  }
+  const sheet = document.getElementById("sheet-emp-form");
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>&#10005;</button>
+    <div class="sheet-title">${id ? "Edit Employee" : "Add Employee"}</div>
+    <label class="field-label">Name</label>
+    <input type="text" id="ef-name" value="${escapeHtml(e.name||"")}" placeholder="Employee name">
+    <label class="field-label">Mobile</label>
+    <input type="tel" id="ef-mobile" value="${escapeHtml(e.mobile||"")}" placeholder="10 digits">
+    <label class="field-label">Job / Role</label>
+    <input type="text" id="ef-role" value="${escapeHtml(e.job_role||"")}" placeholder="Fitter, Helper, Driver…">
+    <label class="field-label">Joining date</label>
+    <input type="date" id="ef-join" value="${escapeHtml(e.joining_date||"")}">
+    <label class="field-label">Monthly salary (₹)</label>
+    <input type="number" id="ef-salary" inputmode="decimal" value="${e.monthly_salary!==""?e.monthly_salary:""}" placeholder="20000">
+    <label class="field-label">Salary type</label>
+    <select id="ef-type">
+      ${["monthly","daily","weekly"].map(t=>`<option value="${t}"${e.salary_type===t?" selected":""}>${t}</option>`).join("")}
+    </select>
+    <label class="pm-check" style="margin-top:10px;"><input type="checkbox" id="ef-active"${e.active?" checked":""}> Working here now</label>
+    <label class="field-label">Notes</label>
+    <textarea id="ef-notes" rows="2">${escapeHtml(e.notes||"")}</textarea>
+    <button class="btn btn-gold" id="ef-save" style="margin-top:12px;">${id?"Save changes":"Add employee"}</button>
+    <div id="ef-out" style="margin-top:8px;"></div>`;
+  showSheet("sheet-emp-form");
+
+  document.getElementById("ef-save").onclick = async (ev) => {
+    const body = {
+      name: document.getElementById("ef-name").value.trim(),
+      mobile: document.getElementById("ef-mobile").value.trim(),
+      jobRole: document.getElementById("ef-role").value.trim(),
+      joiningDate: document.getElementById("ef-join").value,
+      monthlySalary: document.getElementById("ef-salary").value,
+      salaryType: document.getElementById("ef-type").value,
+      active: document.getElementById("ef-active").checked,
+      notes: document.getElementById("ef-notes").value
+    };
+    const out = document.getElementById("ef-out");
+    ev.currentTarget.disabled = true;
+    try{
+      await api(id ? "PUT" : "POST", "/employees" + (id ? "/" + id : ""), body);
+      toast(id ? "Saved." : "Employee added.", "ok");
+      closeAllSheets();
+      await renderEmployees();
+    }catch(err){
+      out.innerHTML = `<div class="muted" style="color:var(--danger);font-size:12px;">${escapeHtml(err.message)}</div>`;
+      ev.currentTarget.disabled = false;
+    }
+  };
+}
+
+/* --------------------------------------------------------- attendance */
+
+async function openAttendanceBoard(date){
+  const d = date || (new Date()).toISOString().slice(0,10);
+  let board;
+  try{ board = await api("GET", "/employees/attendance?date=" + d); }
+  catch(e){ toast(e.message); return; }
+
+  const sheet = document.getElementById("sheet-attendance");
+  const btn = (id, st, label, cur) =>
+    `<button class="chip${cur===st?" selected":""}" data-att="${escapeHtml(id)}" data-st="${st}">${label}</button>`;
+
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>&#10005;</button>
+    <div class="sheet-title">Attendance</div>
+    <input type="date" id="att-date" value="${d}" style="margin-bottom:10px;">
+    <div class="muted" style="font-size:11.5px;margin-bottom:8px;">
+      Present ${board.present} · Absent ${board.absent} · Half ${board.half} · Leave ${board.leave}
+      ${board.unmarked ? ` · <b>${board.unmarked} not marked</b>` : ""}
+    </div>
+    ${board.rows.length ? board.rows.map(r => `
+      <div class="card" style="margin-top:0;margin-bottom:6px;padding:10px 12px;">
+        <div style="font-weight:800;font-size:13px;margin-bottom:6px;">${escapeHtml(r.name)}</div>
+        <div class="chip-row">
+          ${btn(r.id,"present","Present",r.status)}
+          ${btn(r.id,"absent","Absent",r.status)}
+          ${btn(r.id,"half","Half Day",r.status)}
+          ${btn(r.id,"leave","Leave",r.status)}
+        </div>
+      </div>`).join("") : `<div class="empty-hint">No employees yet.</div>`}`;
+  showSheet("sheet-attendance");
+
+  document.getElementById("att-date").onchange = (ev) => openAttendanceBoard(ev.target.value);
+  sheet.querySelectorAll("[data-att]").forEach(b => b.onclick = async () => {
+    try{
+      await api("POST", "/employees/attendance",
+        { employeeId: b.dataset.att, date: document.getElementById("att-date").value, status: b.dataset.st });
+      await openAttendanceBoard(document.getElementById("att-date").value);
+      renderEmployees();
+    }catch(e){ toast(e.message); }
+  });
+}
+
+/* ------------------------------------------------------------- money */
+
+const EMP_MONEY = {
+  kharchi:   { title:"Add Kharchi",      path:"/employees/kharchi",        reason:true,  method:true  },
+  advance:   { title:"Add Advance",      path:"/employees/advance",        reason:true,  method:true  },
+  deduction: { title:"Add Deduction",    path:"/employees/deduction",      reason:true,  method:false },
+  expense:   { title:"Employer Expense", path:"/employees/expense",        reason:true,  method:false, category:true },
+  salary:    { title:"Pay Salary",       path:"/employees/salary-payment", reason:false, method:true,  salary:true }
+};
+
+async function openEmpMoney(kind, empId){
+  const cfg = EMP_MONEY[kind];
+  if(!cfg) return;
+  let list;
+  try{ list = await api("GET", "/employees?month=" + empState.month); }
+  catch(e){ toast(e.message); return; }
+  if(!list.employees.length){ toast("Add an employee first."); return; }
+
+  const sheet = document.getElementById("sheet-emp-money");
+  const today = (new Date()).toISOString().slice(0,10);
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>&#10005;</button>
+    <div class="sheet-title">${cfg.title}</div>
+    <label class="field-label">Employee</label>
+    <select id="em-emp">${list.employees.map(e =>
+      `<option value="${escapeHtml(e.id)}"${empId===e.id?" selected":""}>${escapeHtml(e.name)}${
+        cfg.salary ? ` — owes ${fmt(e.remaining)}` : ""}</option>`).join("")}</select>
+    <label class="field-label">Amount (₹)</label>
+    <input type="number" id="em-amt" inputmode="decimal" placeholder="0">
+    <label class="field-label">Date</label>
+    <input type="date" id="em-date" value="${today}">
+    ${cfg.category ? `<label class="field-label">Category</label>
+      <select id="em-cat">${["Tea","Uniform","PF","Travel","Other"].map(c=>`<option>${c}</option>`).join("")}</select>` : ""}
+    ${cfg.reason ? `<label class="field-label">Reason / note</label>
+      <input type="text" id="em-reason" placeholder="optional">` : ""}
+    ${cfg.method ? `<label class="field-label">Paid by</label>
+      <select id="em-method"><option>Cash</option><option>UPI</option><option>Other</option></select>` : ""}
+    ${cfg.salary ? `<label class="field-label">Notes</label>
+      <input type="text" id="em-notes" placeholder="optional">` : ""}
+    <button class="btn btn-gold" id="em-save" style="margin-top:12px;">${cfg.title}</button>
+    <div id="em-out" style="margin-top:8px;"></div>`;
+  showSheet("sheet-emp-money");
+
+  document.getElementById("em-save").onclick = async (ev) => {
+    const body = {
+      employeeId: document.getElementById("em-emp").value,
+      amount: document.getElementById("em-amt").value,
+      date: document.getElementById("em-date").value,
+      month: empState.month
+    };
+    if(cfg.reason)   body.reason   = (document.getElementById("em-reason")||{}).value || "";
+    if(cfg.method)   body.method   = (document.getElementById("em-method")||{}).value || "Cash";
+    if(cfg.category) body.category = (document.getElementById("em-cat")||{}).value || "";
+    if(cfg.salary)   body.notes    = (document.getElementById("em-notes")||{}).value || "";
+
+    const out = document.getElementById("em-out");
+    ev.currentTarget.disabled = true;
+    try{
+      await api("POST", cfg.path, body);
+      toast("Saved.", "ok");
+      closeAllSheets();
+      await renderEmployees();
+    }catch(err){
+      out.innerHTML = `<div class="muted" style="color:var(--danger);font-size:12px;">${escapeHtml(err.message)}</div>`;
+      ev.currentTarget.disabled = false;
+    }
+  };
+}
+
+/* ------------------------------------------------------------ profile */
+
+async function openEmployeeProfile(id, tab){
+  empState.empId = id;
+  empState.tab = tab || "overview";
+  let m;
+  try{ m = await api("GET", `/employees/${id}?month=${empState.month}`); }
+  catch(e){ toast(e.message); return; }
+
+  const sheet = document.getElementById("sheet-employee");
+  const tabs = ["overview","attendance","kharchi","salary","ledger"];
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>&#10005;</button>
+    <div class="sheet-title">${escapeHtml(m.employee.name)}</div>
+    <div class="muted" style="font-size:11.5px;margin-top:-6px;">
+      ${escapeHtml(m.employee.job_role||"")}${m.employee.mobile?" · "+escapeHtml(m.employee.mobile):""}
+      · ${escapeHtml(empMonthLabel(empState.month))}</div>
+    <div class="chip-row" style="margin:10px 0;">
+      ${tabs.map(t=>`<button class="chip${empState.tab===t?" selected":""}" data-etab="${t}">${t[0].toUpperCase()+t.slice(1)}</button>`).join("")}
+    </div>
+    <div id="emp-tab-body"></div>`;
+  showSheet("sheet-employee");
+  sheet.querySelectorAll("[data-etab]").forEach(b =>
+    b.onclick = () => openEmployeeProfile(id, b.dataset.etab));
+  await renderEmpTab(m);
+}
+
+async function renderEmpTab(m){
+  const host = document.getElementById("emp-tab-body");
+  if(!host) return;
+  const id = m.employee.id;
+  const row = (k,v,strong) => `<div class="sh-detail-row"><span>${escapeHtml(k)}</span><span${strong?' style="font-weight:800;"':''}>${v}</span></div>`;
+
+  if(empState.tab === "overview"){
+    host.innerHTML =
+      row("Monthly salary", fmt(m.gross)) +
+      row("Attendance deduction", (m.attendanceDeduction.applied ? fmt(m.attendanceDeduction.amount) : "not applied")) +
+      row("Kharchi", fmt(m.kharchi)) +
+      row("Advances", fmt(m.advances)) +
+      row("Other deductions", fmt(m.deductions)) +
+      row("Net salary payable", fmt(m.netPayable), true) +
+      row("Salary paid", fmt(m.paid)) +
+      row("Remaining", fmt(m.remaining), true) +
+      `<div class="section-title">What this employee costs</div>` +
+      row("Salary", fmt(m.gross)) +
+      row("Employer expenses", fmt(m.expenses)) +
+      row("Total monthly cost", fmt(m.totalCost), true) +
+      `<div class="muted" style="font-size:11px;margin-top:6px;line-height:1.6;">
+        Kharchi and advances are <b>not</b> added here — they are salary paid early.</div>
+      <div class="chip-row" style="margin-top:12px;">
+        <button class="chip" id="ep-edit">Edit</button>
+        <button class="chip" id="ep-kh">+ Kharchi</button>
+        <button class="chip" id="ep-adv">+ Advance</button>
+        <button class="chip" id="ep-ded">+ Deduction</button>
+        <button class="chip" id="ep-exp">+ Expense</button>
+        <button class="chip chip-action" id="ep-pay">Pay Salary</button>
+      </div>`;
+    document.getElementById("ep-edit").onclick = () => openEmpForm(id);
+    document.getElementById("ep-kh").onclick  = () => openEmpMoney("kharchi", id);
+    document.getElementById("ep-adv").onclick = () => openEmpMoney("advance", id);
+    document.getElementById("ep-ded").onclick = () => openEmpMoney("deduction", id);
+    document.getElementById("ep-exp").onclick = () => openEmpMoney("expense", id);
+    document.getElementById("ep-pay").onclick = () => openEmpMoney("salary", id);
+    return;
+  }
+
+  if(empState.tab === "attendance"){
+    const a = await api("GET", `/employees/${id}/attendance?month=${empState.month}`);
+    host.innerHTML =
+      row("Present", a.summary.present) + row("Absent", a.summary.absent) +
+      row("Half days", a.summary.half) + row("Leave", a.summary.leave) +
+      `<div class="section-title">Days marked</div>` +
+      (a.days.length ? a.days.map(x =>
+        `<div class="sh-detail-row"><span>${escapeHtml(x.date)}</span><span>${escapeHtml(x.status)}</span></div>`).join("")
+        : `<div class="empty-hint">Nothing marked this month.</div>`);
+    return;
+  }
+
+  const kindFor = { kharchi:["Kharchi"], salary:["Salary Paid","Deduction"], ledger:null };
+  const led = await api("GET", `/employees/${id}/ledger?month=${empState.month}`);
+  const want = kindFor[empState.tab];
+  const lines = want ? led.lines.filter(l => want.includes(l.kind)) : led.lines;
+
+  host.innerHTML = lines.length ? lines.map(l => `
+    <div class="sh-detail-row"${l.voided?' style="opacity:.5;text-decoration:line-through;"':''}>
+      <span>${escapeHtml(l.date)} · <b>${escapeHtml(l.kind)}</b>
+        ${l.label?`<span class="muted"> · ${escapeHtml(l.label)}</span>`:""}</span>
+      <span style="font-weight:800;">${fmt(l.amount)}</span>
+    </div>`).join("") : `<div class="empty-hint">Nothing here this month.</div>`;
 }
 
 })();

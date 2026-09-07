@@ -83,7 +83,25 @@ const MODULES = [
      shop that wants someone to push the queue without redefining the sync
      grants view + add and withholds edit. Granting nothing leaves Tally
      invisible, exactly as before. */
-  { key: "tally",         label: "Tally Sync" }
+  { key: "tally",         label: "Tally Sync" },
+
+  /* STAFF PAY. Employees, attendance, kharchi and salary.
+
+     The three actions split along the line the shop actually cares about:
+       view  - see employees, the dashboards, a ledger and the reports
+       add   - the daily work: mark attendance, hand out kharchi
+       edit  - the money decisions: change a salary, add a deduction, pay
+               a salary, void a record, change the payroll rules
+
+     edit is deliberately where salary PAYMENT sits, not add. Handing over
+     a month of wages is not the same kind of act as writing down that
+     somebody took 500 rupees on Tuesday, and a shop that lets a counter
+     hand do the first has no control over its payroll at all.
+
+     Granted to nobody by default. This module is invisible until the
+     owner gives it out, so switching the feature on changes nothing for
+     any staff member who already exists. */
+  { key: "employee",      label: "Staff Pay" }
 ];
 
 const ACTIONS = ["view", "add", "edit", "print"];
@@ -97,7 +115,14 @@ const SENSITIVE = [
   { key: "purchase_cost",   label: "Purchase rate and cost" },
   { key: "stock_value",     label: "Stock valuation" },
   { key: "cash_balance",    label: "Cash and bank balances" },
-  { key: "company_totals",  label: "Whole-company totals" }
+  { key: "company_totals",  label: "Whole-company totals" },
+  /* What a person is paid. The most disputed number in any shop, and
+     the one a counter hand has no business reading off a colleague's
+     row. Attendance and kharchi stay visible to whoever was granted
+     Staff Pay — somebody has to mark the register and hand out money
+     — but salary, what is still owed and what an employee costs are
+     the owner's alone. */
+  { key: "salary",          label: "Employee salaries" }
 ];
 
 const SCOPES = ["Own Only", "Assigned Staff", "All Staff", "All Data"];

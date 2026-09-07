@@ -396,6 +396,11 @@ app.use("/api/reminders", requireAuth, require("./routes/reminders"));
 app.use("/api/notes", requireAuth, require("./routes/notes"));
 app.use("/api/categories", requireAuth, require("./routes/categories"));
 app.use("/api/cashbook", requireAuth, require("./routes/cashbook"));
+
+/* Staff pay: employees, attendance, kharchi, salary. Behind requireAuth
+   like everything else, and gated per action inside the router by the
+   employee module, which is granted to nobody until the owner grants it. */
+app.use("/api/employees", requireAuth, require("./routes/employees"));
 app.use("/api/bankbook", requireAuth, require("./routes/bankbook"));
 app.use("/api/bank-accounts", requireAuth, require("./routes/bankAccounts"));
 app.use("/api/cheques", requireAuth, require("./routes/cheques"));

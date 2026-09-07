@@ -3230,6 +3230,169 @@ CREATE INDEX IF NOT EXISTS idx_pl_log ON price_list_log(party_id, at);
 CREATE INDEX IF NOT EXISTS idx_pl_log_product ON price_list_log(product_id, at);
 `);
 
+/* ============================================================
+   STAFF PAY - employees, attendance, kharchi, salary
+
+   WHY THESE ARE TRANSACTIONS AND NOT TOTALS. A shop that stores only
+   "kharchi so far" can never answer "which ones?", cannot correct one
+   without recomputing the rest, and quietly disagrees with itself the
+   first time two people write at once. Every amount below is a dated row
+   carrying who recorded it, and every total in the app is a SUM over
+   these rows.
+
+   THE ONE MODELLING DECISION THAT MATTERS, and the whole reason double
+   counting cannot happen here:
+
+     kharchi_transactions   money handed to an employee AGAINST their
+     salary_advances        salary. It REDUCES what is still owed to
+                            them and is NOT an extra cost to the shop -
+                            that salary was always going to be paid.
+
+     employee_expenses      money the shop spends ON an employee over
+                            and above salary - tea, uniform, PF, a bus
+                            fare. This IS an extra cost and DOES add.
+
+   So Total Employee Cost = salary + employee_expenses, never + kharchi.
+   They are separate tables so the two sums cannot be confused for one
+   another by anything written later.
+
+   VOIDED, NEVER DELETED. A cash record that can vanish is one nobody
+   can audit, and this shop's rule is that nothing is destroyed - a
+   mistake is marked, and the mark is part of the history.
+   ============================================================ */
+db.exec(`
+CREATE TABLE IF NOT EXISTS employees (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  mobile TEXT DEFAULT '',
+  job_role TEXT DEFAULT '',
+  joining_date TEXT DEFAULT '',
+  monthly_salary REAL NOT NULL DEFAULT 0,
+  salary_type TEXT NOT NULL DEFAULT 'monthly',   -- monthly | daily | weekly
+  active INTEGER NOT NULL DEFAULT 1,
+  notes TEXT DEFAULT '',
+  created_at INTEGER NOT NULL,
+  created_by TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_emp_active ON employees(active, name);
+
+/* One row per employee per day. The unique index IS the rule: marking a
+   day twice CORRECTS it rather than leaving two contradictory rows. */
+CREATE TABLE IF NOT EXISTS attendance (
+  id TEXT PRIMARY KEY,
+  employee_id TEXT NOT NULL REFERENCES employees(id),
+  date TEXT NOT NULL,                            -- YYYY-MM-DD
+  status TEXT NOT NULL,                          -- present | absent | half | leave
+  note TEXT DEFAULT '',
+  marked_by TEXT DEFAULT '',
+  at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_att_emp_date ON attendance(employee_id, date);
+CREATE INDEX IF NOT EXISTS idx_att_date ON attendance(date);
+
+/* Weekly kharchi. Small amounts taken often, so this is written to more
+   than anything else here and is indexed for the two questions a shop
+   actually asks: this employee's history, and this week's total. */
+CREATE TABLE IF NOT EXISTS kharchi_transactions (
+  id TEXT PRIMARY KEY,
+  employee_id TEXT NOT NULL REFERENCES employees(id),
+  amount REAL NOT NULL,
+  date TEXT NOT NULL,
+  reason TEXT DEFAULT '',
+  method TEXT NOT NULL DEFAULT 'Cash',           -- Cash | UPI | Other
+  recorded_by TEXT DEFAULT '',
+  at INTEGER NOT NULL,
+  voided INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_kh_emp ON kharchi_transactions(employee_id, date);
+CREATE INDEX IF NOT EXISTS idx_kh_date ON kharchi_transactions(date, voided);
+
+/* A larger advance. Kept apart from kharchi only because a shop thinks of
+   them differently; both behave identically in the arithmetic. */
+CREATE TABLE IF NOT EXISTS salary_advances (
+  id TEXT PRIMARY KEY,
+  employee_id TEXT NOT NULL REFERENCES employees(id),
+  amount REAL NOT NULL,
+  date TEXT NOT NULL,
+  reason TEXT DEFAULT '',
+  method TEXT NOT NULL DEFAULT 'Cash',
+  recorded_by TEXT DEFAULT '',
+  at INTEGER NOT NULL,
+  voided INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_adv_emp ON salary_advances(employee_id, date);
+CREATE INDEX IF NOT EXISTS idx_adv_date ON salary_advances(date, voided);
+
+/* Anything else withheld - a fine, a breakage, a loan instalment. Carries
+   its month, because a deduction belongs to a payroll month rather than
+   to the day somebody happened to type it. */
+CREATE TABLE IF NOT EXISTS salary_deductions (
+  id TEXT PRIMARY KEY,
+  employee_id TEXT NOT NULL REFERENCES employees(id),
+  month TEXT NOT NULL,                           -- YYYY-MM
+  amount REAL NOT NULL,
+  date TEXT NOT NULL,
+  reason TEXT DEFAULT '',
+  recorded_by TEXT DEFAULT '',
+  at INTEGER NOT NULL,
+  voided INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_ded_emp ON salary_deductions(employee_id, month);
+
+/* What was actually handed over for one payroll month. Several rows are
+   allowed on purpose: part-payment is normal, and Partially Paid is a SUM
+   of these against what was payable - never a flag somebody sets. */
+CREATE TABLE IF NOT EXISTS salary_payments (
+  id TEXT PRIMARY KEY,
+  employee_id TEXT NOT NULL REFERENCES employees(id),
+  month TEXT NOT NULL,                           -- YYYY-MM
+  amount REAL NOT NULL,
+  date TEXT NOT NULL,
+  method TEXT NOT NULL DEFAULT 'Cash',
+  notes TEXT DEFAULT '',
+  recorded_by TEXT DEFAULT '',
+  at INTEGER NOT NULL,
+  voided INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_pay_emp ON salary_payments(employee_id, month);
+CREATE INDEX IF NOT EXISTS idx_pay_month ON salary_payments(month, voided);
+
+/* THE ONLY TABLE HERE THAT ADDS TO WHAT AN EMPLOYEE COSTS. Everything
+   above is salary being paid early; this is money spent on top of it, so
+   it is the only one the total adds. */
+CREATE TABLE IF NOT EXISTS employee_expenses (
+  id TEXT PRIMARY KEY,
+  employee_id TEXT NOT NULL REFERENCES employees(id),
+  month TEXT NOT NULL,                           -- YYYY-MM
+  amount REAL NOT NULL,
+  date TEXT NOT NULL,
+  category TEXT DEFAULT '',                      -- Tea | Uniform | PF | Travel | Other
+  note TEXT DEFAULT '',
+  recorded_by TEXT DEFAULT '',
+  at INTEGER NOT NULL,
+  voided INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_eexp_emp ON employee_expenses(employee_id, month);
+CREATE INDEX IF NOT EXISTS idx_eexp_month ON employee_expenses(month, voided);
+
+/* Shop-wide payroll rules, one row. Kept out of settings because these
+   are a module's rules rather than the shop's identity - the same reason
+   tally_settings is its own table.
+
+   deduct_by_attendance is OFF by default, deliberately. A shop switching
+   this module on must not discover that its salaries silently changed.
+   Attendance is recorded from day one; whether it touches pay is the
+   owner's decision, made once and knowingly. */
+CREATE TABLE IF NOT EXISTS employee_settings (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  deduct_by_attendance INTEGER NOT NULL DEFAULT 0,
+  day_basis TEXT NOT NULL DEFAULT 'month_days',  -- month_days | fixed_26 | fixed_30
+  half_day_factor REAL NOT NULL DEFAULT 0.5,
+  leave_is_paid INTEGER NOT NULL DEFAULT 1
+);
+INSERT OR IGNORE INTO employee_settings (id) VALUES (1);
+`);
+
 /* The salesman a party belongs to.
 
    Free text, matching purchase_orders.salesman and selection_slips.salesman

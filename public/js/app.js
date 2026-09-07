@@ -1441,6 +1441,10 @@ async function switchTab(tab){
   if(tab==="customers") await renderCustomersList();
   if(tab==="reports") await renderReport();
   if(tab==="cashbook") await renderCashBook();
+  /* Belt to the menu's braces: anything that can still call switchTab —
+     a stale button, a deep link — is turned back here rather than
+     showing an empty screen full of failed requests. */
+  if(tab==="employees" && !isOwner()){ toast("Staff Pay is for the owner."); return switchTab("home"); }
   if(tab==="employees") await renderEmployees();
   if(tab==="outstanding") await renderOutstanding();
   if(tab==="ewb") await renderEwb();
@@ -2129,7 +2133,12 @@ function openMenu(){
     <div class="sheet-handle"></div>
     <button class="sheet-close" data-sheetclose>&#10005;</button>
     <div class="sheet-title">Menu</div>
-    ${MENU.map(([group, items]) => `
+    ${MENU
+      /* Staff Pay is the owner's. The server refuses it outright for
+         anyone else, so drawing the item would only offer a door that
+         cannot open. */
+      .filter(([group]) => group !== "Staff" || isOwner())
+      .map(([group, items]) => `
       <div class="menu-group">${group}</div>
       ${items.map(([tab, icon, label]) =>
         `<button class="menu-item" data-menu="${tab}"><span class="ic">${icon}</span>${label}</button>`

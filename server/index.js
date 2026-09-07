@@ -400,7 +400,17 @@ app.use("/api/cashbook", requireAuth, require("./routes/cashbook"));
 /* Staff pay: employees, attendance, kharchi, salary. Behind requireAuth
    like everything else, and gated per action inside the router by the
    employee module, which is granted to nobody until the owner grants it. */
-app.use("/api/employees", requireAuth, require("./routes/employees"));
+/* OWNER ONLY, at the mount rather than inside.
+
+   What people are paid, what they took during the week and what they
+   still owe is the owner's business alone in this shop. Gating it here
+   means no route inside can be reached by anybody else even if one of
+   them is later written without its own check — a hidden menu item is
+   not a lock, and a permission somebody could be granted by accident is
+   not one either. The employee module stays in the permissions list so
+   the screen can still be refused per action, but it can never widen
+   past this line. */
+app.use("/api/employees", requireAuth, requireRole("owner"), require("./routes/employees"));
 app.use("/api/bankbook", requireAuth, require("./routes/bankbook"));
 app.use("/api/bank-accounts", requireAuth, require("./routes/bankAccounts"));
 app.use("/api/cheques", requireAuth, require("./routes/cheques"));

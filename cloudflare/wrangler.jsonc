@@ -1,0 +1,66 @@
+{
+  // Nothing here touches the running app. This deploys alongside Render,
+  // never over it, until a cutover is explicitly decided.
+  "name": "shop-manager-cf",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-10",
+
+  // node:crypto, node:path, node:zlib and AsyncLocalStorage are all used by
+  // the existing server. nodejs_compat is what makes them resolvable.
+  // node:sqlite is NOT covered by it — that is what the shim replaces.
+  "compatibility_flags": ["nodejs_compat"],
+
+  "observability": { "enabled": true },
+
+  // The 58 route files all do require("express"). Without this they resolve
+  // to the REAL express in node_modules, which bundles cleanly and then
+  // fails at runtime deep inside its own router ("fn.apply is not a
+  // function") because it expects a Node http server underneath. Pointing
+  // the bare specifier at the shim is what makes those files run unchanged.
+  "alias": {
+    "express": "./src/express-shim.cjs"
+  },
+
+  // The DEPLOYED worker is production. Local `wrangler dev` overrides this
+  // via .dev.vars, so development-only paths exist only there and can never
+  // be reached on the live URL. Defaulting the other way round would mean a
+  // forgotten variable quietly opens a seeding route in production.
+  "vars": {
+    "ENVIRONMENT": "production",
+    // Which shop the bare URL opens. Until there is a custom domain with a
+    // subdomain per shop, this is what stops someone landing on an error.
+    "DEFAULT_TENANT": "swagat"
+  },
+
+  // The existing frontend, served untouched: index.html, the 26,947-line
+  // app.js, the stylesheet and the vendor bundles. Not being able to reuse
+  // this is what would have made the port expensive; being able to is the
+  // single biggest saving in the whole project.
+  "assets": {
+    "directory": "../public",
+    "binding": "ASSETS"
+  },
+
+  "durable_objects": {
+    "bindings": [
+      { "name": "TENANT", "class_name": "ShopTenant" }
+    ]
+  },
+
+  // Object storage for backups — the Supabase Storage replacement.
+  "r2_buckets": [
+    { "binding": "BACKUPS", "bucket_name": "shop-manager-backups" },
+    // Pre-existing bucket from 25 Aug, 334 objects / 580 MB. Bound to find out
+    // what is in it. Read-only by intent — nothing here writes to it.
+    { "binding": "LEGACY_BACKUPS", "bucket_name": "shop-backups" }
+  ],
+
+  // new_sqlite_classes selects the SQLite storage backend rather than the
+  // older key-value one. Without it there is no ctx.storage.sql and the whole
+  // shim has nothing to sit on.
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["ShopTenant"] }
+  ]
+
+  // Still to come: attachments in R2, and the 57 unported route mounts.
+}

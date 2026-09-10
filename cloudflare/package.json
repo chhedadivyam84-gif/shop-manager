@@ -1,0 +1,9 @@
+{
+  "name": "shop-manager-cloudflare",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Workers + Durable Objects port of Shop Manager. Nothing here is wired into the running app.",
+  "scripts": {
+    "test:shim": "node test/shim.test.js"
+  }
+}

@@ -37,3 +37,10 @@ tdlfunc.log
 # rule as every other credential here: a file that can be committed is one
 # that eventually is.
 tools/tally-bridge.json
+
+cloudflare/.migration-token
+cloudflare/.dev.vars
+cloudflare/server/
+cloudflare/public/
+cloudflare/.wrangler/
+cloudflare/mounts.json

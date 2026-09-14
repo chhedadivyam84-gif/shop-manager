@@ -159,7 +159,68 @@ async function uploadToCloud(filePath, objectName) {
  * A local-snapshot failure throws (something is genuinely wrong); a cloud
  * failure is captured in the result, not thrown.
  */
+/* ============================================================
+   NEVER LET AN EMPTY DATABASE BECOME THE NEWEST BACKUP
+
+   Snapshots here are timestamped (shop-<stamp>.db), so unlike the
+   licence panel a bad run cannot destroy a good one — every previous
+   file is still there. But restore.js takes the NEWEST by filename, so
+   an empty snapshot still becomes the one that comes back, and the shop
+   opens to blank books. The old data is recoverable, but nobody knows
+   that at the till on a Monday morning.
+
+   On 14 Sep 2026 the licence panel lost sixteen customers to exactly
+   this shape of fault — it restored nothing, then saved that nothing
+   over the only copy. This app is one step safer and one step short.
+
+   THE RULE: if not one business has a single product, customer,
+   supplier, invoice, purchase or cash entry, there is nothing worth
+   snapshotting, and the run is refused. A brand-new shop loses nothing
+   by this — it has nothing — and the first real record it enters makes
+   the next run proceed normally.
+
+   Judged on the DATA, not on a flag. Seed rows (areas, locations,
+   document templates) are deliberately NOT counted: every fresh install
+   has them, so counting them would make every empty database look
+   occupied and the guard would never fire. */
+const LIVELIHOOD_TABLES = [
+  "products", "customers", "suppliers", "invoices", "purchases", "cash_entries",
+];
+
+function hasSomethingWorthKeeping() {
+  const countIn = () => {
+    for (const table of LIVELIHOOD_TABLES) {
+      try {
+        if (db.prepare(`SELECT COUNT(*) AS n FROM "${table}"`).get().n > 0) return true;
+      } catch (err) {
+        /* A table that cannot be read is not evidence of emptiness. Treat it
+           as occupied: a broken guard must never become a way to lose data. */
+        return true;
+      }
+    }
+    return false;
+  };
+
+  for (const company of C.list()) {
+    try {
+      if (C.runAs(company.id, countIn)) return true;
+    } catch (err) {
+      return true;   /* same reasoning — uncertainty means back it up */
+    }
+  }
+  return false;
+}
+
 async function runBackup(trigger = "manual") {
+  if (!hasSomethingWorthKeeping()) {
+    const why =
+      "refused: no business has any products, customers, suppliers, invoices, " +
+      "purchases or cash entries. Backing this up would make an empty database " +
+      "the newest snapshot, and that is what a restore would bring back.";
+    console.error(`[backup] REFUSED (${trigger}) — ${why}`);
+    return { refused: true, reason: why, local: { ok: false }, cloud: { ok: false } };
+  }
+
   const s = stamp();
   const companies = C.list();
   const written = [];

@@ -47,6 +47,38 @@ function chronoWithBalance() {
   });
 }
 
+/**
+ * Does one entry match what was typed in the search box?
+ *
+ * Party, category and remarks have always matched as text. Two more:
+ *
+ * AMOUNTS MATCH EXACTLY, not as text. "500" finding 1500, 5000 and
+ * 500.50 because all three contain those digits is noise in a book of
+ * money — the reason to search an amount is that you remember the
+ * figure. Commas and a rupee sign are stripped first, because that is
+ * how a figure is read off a screen or a bill: "₹1,500".
+ *
+ * DATES STAY A TEXT MATCH, on purpose. "2026-09" is a whole month and
+ * "-14" is a day in any month, and people type both.
+ *
+ * Defined once because /cashbook and /cashbook/export both need it and
+ * previously held identical copies. The export is meant to return what
+ * the screen is showing, which stops being true the moment one copy
+ * gains a rule the other does not.
+ */
+function matchesSearch(r, search) {
+  if (!search) return true;
+  const cleaned = search.replace(/[,₹\s]/g, "");
+  const asNumber = Number(cleaned);
+  const isAmount = /^[₹\s]*[\d,]+(\.\d+)?\s*$/.test(search) && cleaned !== "" && isFinite(asNumber);
+
+  return (r.party || "").toLowerCase().includes(search) ||
+         (r.category || "").toLowerCase().includes(search) ||
+         (r.remarks || "").toLowerCase().includes(search) ||
+         (r.date || "").includes(search) ||
+         (isAmount && round2(r.amount) === round2(asNumber));
+}
+
 router.get("/", (req, res) => {
   const { from, to, q } = req.query;
   let rows = chronoWithBalance();
@@ -57,11 +89,7 @@ router.get("/", (req, res) => {
     // the from/to range instead of narrowing within it — otherwise the
     // common case of searching while the range is still on "Today" would
     // return nothing and look broken.
-    rows = rows.filter(r =>
-      (r.party || "").toLowerCase().includes(search) ||
-      (r.category || "").toLowerCase().includes(search) ||
-      (r.remarks || "").toLowerCase().includes(search)
-    );
+    rows = rows.filter(r => matchesSearch(r, search));
   } else {
     if (from) rows = rows.filter(r => r.date >= from);
     if (to) rows = rows.filter(r => r.date <= to);
@@ -117,6 +145,161 @@ router.get("/summary", (req, res) => {
     openingBalance, totalIn, totalOut, closingBalance,
     netCashFlow: round2(totalIn - totalOut),
     entryCount: inRange.length
+  });
+});
+
+/* ============================================================
+   WHO AND WHAT THE MONEY WENT TO
+
+   Three additions, all read-only. Nothing below writes, edits or voids
+   anything, and none of the existing routes changed — the day-by-day
+   cash book, its balances and its entries are exactly as they were.
+
+   WHY THE TOTALS ARE BUILT FROM chronoWithBalance() AND NOT FROM THEIR
+   OWN QUERY: the cash book's opening and closing already come from that
+   one running total over all history. A second, independent sum of the
+   same money is how a book comes to disagree with itself on one day in
+   a year, and nobody finds out until they are counting the drawer. So
+   these group the SAME rows rather than re-deriving them.
+
+   CATEGORY AND PARTY ARE FREE TEXT on cash_entries, not linked ids.
+   That is how the shop has always used them and it is not being
+   changed here. The consequence is honest and worth stating: grouping
+   is by the name as typed, so "Ramesh" and "ramesh " are one group only
+   because these trim and compare case-insensitively. A genuinely
+   different spelling is a genuinely different party, and no total can
+   guess otherwise.
+   ============================================================ */
+
+/* The key a name groups under; the display name is the first spelling seen. */
+const groupKey = (s) => String(s || "").trim().toLowerCase();
+
+function groupTotals(field, from, to, only) {
+  const all = chronoWithBalance();
+  const rangeFrom = from || "0000-01-01";
+  const rangeTo = to || "9999-12-31";
+
+  /* Narrow to one category (or one party) before grouping, so "the people
+     inside Labour Charges" is answerable without the screen downloading
+     every entry and working it out for itself. */
+  const onlyField = only && only.field;
+  const onlyKey = only && groupKey(only.value);
+
+  const groups = new Map();
+  const take = (row, where) => {
+    const key = groupKey(row[field]) || "(none)";
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        name: String(row[field] || "").trim() || "(none)",
+        opening: 0, income: 0, expense: 0, transactions: 0, lastDate: "",
+      });
+    }
+    const g = groups.get(key);
+    const signed = row.type === "in" ? row.amount : -row.amount;
+
+    if (where === "before") {
+      /* A category has no running cash balance of its own, so "opening"
+         here means what this name had netted BEFORE the range — the
+         figure a shopkeeper means by "and where did we stand with them
+         before this month". */
+      g.opening = round2(g.opening + signed);
+      return;
+    }
+    if (row.type === "in") g.income = round2(g.income + row.amount);
+    else g.expense = round2(g.expense + row.amount);
+    g.transactions += 1;
+    if (row.date > g.lastDate) g.lastDate = row.date;
+  };
+
+  for (const row of all) {
+    if (onlyField && groupKey(row[onlyField]) !== onlyKey) continue;
+    if (row.date < rangeFrom) take(row, "before");
+    else if (row.date <= rangeTo) take(row, "in");
+  }
+
+  return [...groups.values()]
+    .map(g => ({ ...g, closing: round2(g.opening + g.income - g.expense) }))
+    /* Names that only ever appeared before the range would otherwise show
+       as rows with nothing in them for the period being looked at. */
+    .filter(g => g.transactions > 0 || g.opening !== 0)
+    .sort((a, b) => (b.income + b.expense) - (a.income + a.expense));
+}
+
+/** Every category name the cash book has actually used, plus the master
+ *  list — so the picker offers both what exists and what was set up. */
+router.get("/categories-used", (req, res) => {
+  const used = db.prepare(`
+    SELECT category AS name, COUNT(*) AS uses, MAX(date) AS lastDate
+    FROM cash_entries
+    WHERE voided = 0 AND TRIM(COALESCE(category,'')) <> ''
+    GROUP BY LOWER(TRIM(category))
+    ORDER BY uses DESC
+  `).all();
+  res.json(used);
+});
+
+/** Every party the cash book has dealt with. Feeds the person picker. */
+router.get("/parties", (req, res) => {
+  const rows = db.prepare(`
+    SELECT party AS name, COUNT(*) AS transactions, MAX(date) AS lastDate
+    FROM cash_entries
+    WHERE voided = 0 AND TRIM(COALESCE(party,'')) <> ''
+    GROUP BY LOWER(TRIM(party))
+    ORDER BY transactions DESC, name ASC
+  `).all();
+  res.json(rows);
+});
+
+/** Opening, income, expense, closing and a count, per category.
+ *  ?party= narrows it to one person's categories. */
+router.get("/by-category", (req, res) => {
+  const { from, to, party } = req.query;
+  const only = party ? { field: "party", value: party } : null;
+  res.json({ from: from || null, to: to || null, party: party || null,
+             groups: groupTotals("category", from, to, only) });
+});
+
+/** The same, per person/party.
+ *  ?category= narrows it to the people inside one category. */
+router.get("/by-party", (req, res) => {
+  const { from, to, category } = req.query;
+  const only = category ? { field: "category", value: category } : null;
+  res.json({ from: from || null, to: to || null, category: category || null,
+             groups: groupTotals("party", from, to, only) });
+});
+
+/**
+ * One person's transactions, in full.
+ *
+ * The cash book's own list is the place to read entries, but it filters by
+ * date and search text — there was no way to ask "everything we have ever
+ * done with Ramesh". This answers exactly that, optionally inside one
+ * category, and returns the entries themselves rather than a total, so the
+ * screen can show the history behind a figure it has just displayed.
+ */
+router.get("/history", (req, res) => {
+  const { party, category, from, to } = req.query;
+  const wantParty = groupKey(party);
+  const wantCategory = groupKey(category);
+  if (!wantParty && !wantCategory) {
+    return res.status(400).json({ error: "Ask for a party, a category, or both." });
+  }
+
+  const rows = chronoWithBalance().filter(r => {
+    if (wantParty && groupKey(r.party) !== wantParty) return false;
+    if (wantCategory && groupKey(r.category) !== wantCategory) return false;
+    if (from && r.date < from) return false;
+    if (to && r.date > to) return false;
+    return true;
+  });
+
+  const income = round2(rows.filter(r => r.type === "in").reduce((s, r) => s + r.amount, 0));
+  const expense = round2(rows.filter(r => r.type === "out").reduce((s, r) => s + r.amount, 0));
+  res.json({
+    party: party || null, category: category || null,
+    transactions: rows.length, income, expense, net: round2(income - expense),
+    entries: rows.slice().reverse(),        /* newest first, as the screen reads */
   });
 });
 
@@ -223,11 +406,7 @@ router.get("/export", (req, res) => {
   // hand back the whole date range instead of the search results.
   const search = String(q || "").trim().toLowerCase();
   if (search) {
-    rows = rows.filter(r =>
-      (r.party || "").toLowerCase().includes(search) ||
-      (r.category || "").toLowerCase().includes(search) ||
-      (r.remarks || "").toLowerCase().includes(search)
-    );
+    rows = rows.filter(r => matchesSearch(r, search));
   } else {
     if (from) rows = rows.filter(r => r.date >= from);
     if (to) rows = rows.filter(r => r.date <= to);

@@ -1045,6 +1045,54 @@ async function initApp(){
     window.open("/api/cashbook/export" + (q?"?"+q:""), "_blank");
   });
 
+    /* ---- Explore by category and person ----
+     Bound here with the rest of the cash book rather than on every render,
+     so opening the panel twice does not stack a second copy of every
+     handler and make one tap count as two. */
+  document.getElementById("cb-explore-toggle").addEventListener("click", ()=>{
+    state.cbExploreOpen = !state.cbExploreOpen;
+    const box = document.getElementById("cb-explore");
+    const btn = document.getElementById("cb-explore-toggle");
+    if(box) box.hidden = !state.cbExploreOpen;
+    if(btn) btn.textContent = state.cbExploreOpen ? "Close" : "Open";
+    if(state.cbExploreOpen) renderCashExplore();
+  });
+  document.querySelectorAll(".cb-period").forEach(b=>{
+    b.addEventListener("click", ()=>{
+      const r = cbPeriodRange(b.dataset.period);
+      /* Custom deliberately changes nothing: the From/To boxes above are
+         the only place a date range lives, and a second pair that could
+         disagree with them is how a total ends up describing a different
+         period from the ledger printed beside it. */
+      if(r){
+        clearCbSearch();
+        state.cbFrom = r.from; state.cbTo = r.to;
+        renderCashBook();
+      }
+      renderCashExplore();
+    });
+  });
+  document.getElementById("cb-cat-search").addEventListener("input", (e)=>{
+    state.cbCatSearch = e.target.value; cbDrawCategories();
+  });
+  document.getElementById("cb-person-search").addEventListener("input", (e)=>{
+    state.cbPersonSearch = e.target.value; cbDrawPeople();
+  });
+  document.getElementById("cb-person-clear").addEventListener("click", ()=>{
+    state.cbCat = null; state.cbPerson = null; renderCashExplore();
+  });
+  document.getElementById("cb-add-category").addEventListener("click", openAddCashCategory);
+  /* Delegated: the rows are redrawn on every search keystroke, so binding
+     one listener per row would rebind hundreds of times while typing. */
+  document.getElementById("cb-cat-list").addEventListener("click", (e)=>{
+    const row = e.target.closest("[data-cat]"); if(!row) return;
+    state.cbCat = row.dataset.cat; state.cbPerson = null; renderCashExplore();
+  });
+  document.getElementById("cb-person-list").addEventListener("click", (e)=>{
+    const row = e.target.closest("[data-person]"); if(!row) return;
+    state.cbPerson = row.dataset.person; renderCashExplore();
+  });
+
   document.getElementById("bb-back-link").addEventListener("click", (e)=>{ e.preventDefault(); switchTab("home"); });
   document.getElementById("bb-manage-accounts-link").addEventListener("click", (e)=>{ e.preventDefault(); openManageBankAccounts(); });
   document.getElementById("bb-add-entry").addEventListener("click", ()=>openBankEntry());
@@ -26943,5 +26991,244 @@ async function renderEmpTab(m){
       <span style="font-weight:800;">${fmt(l.amount)}</span>
     </div>`).join("") : `<div class="empty-hint">Nothing here this month.</div>`;
 }
+
+
+/* ============================================================
+   CASH BOOK — EXPLORE BY CATEGORY AND PERSON
+
+   Read-only. Nothing here creates, edits or voids an entry; the only
+   write is adding a category name to the master, which is the same
+   owner-only route the Categories screen already uses.
+
+   The date range is NOT kept here. It lives in state.cbFrom/cbTo with
+   the rest of the cash book, so the totals always describe the same
+   period as the ledger printed below them. A second range of its own
+   would drift, and the first anyone would know is a total that does
+   not match the entries under it.
+   ============================================================ */
+
+/* Ranges a shopkeeper actually asks for. Built from local date parts,
+   not from toISOString(), which is UTC and quietly reports yesterday
+   for anyone east of Greenwich — this shop is IST, so every "Today"
+   would have been wrong after midnight UTC. */
+function cbPeriodRange(period){
+  const pad = (n)=>String(n).padStart(2,"0");
+  const iso = (d)=>d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate());
+  const now = new Date();
+
+  if(period === "today"){ const t = iso(now); return {from:t, to:t}; }
+
+  if(period === "week"){
+    /* Monday to today. A shop's week starts when it reopens, and a
+       Sunday-start week puts Monday's takings in "last week" on Monday. */
+    const d = new Date(now);
+    const back = (d.getDay() + 6) % 7;
+    d.setDate(d.getDate() - back);
+    return {from: iso(d), to: iso(now)};
+  }
+
+  if(period === "month"){
+    return {from: iso(new Date(now.getFullYear(), now.getMonth(), 1)), to: iso(now)};
+  }
+
+  if(period === "lastmonth"){
+    const first = new Date(now.getFullYear(), now.getMonth()-1, 1);
+    const last  = new Date(now.getFullYear(), now.getMonth(), 0);   /* day 0 = last of previous */
+    return {from: iso(first), to: iso(last)};
+  }
+
+  /* Custom: leave the dates alone. The From/To boxes above are the
+     control; this button only tells the user that. */
+  if(period === "custom"){
+    toast("Pick the dates in From and To above.");
+    return null;
+  }
+  return null;
+}
+
+async function renderCashExplore(){
+  if(!state.cbExploreOpen) return;
+  const q = [];
+  if(state.cbFrom) q.push("from=" + encodeURIComponent(state.cbFrom));
+  if(state.cbTo)   q.push("to="   + encodeURIComponent(state.cbTo));
+  const range = q.length ? "&" + q.join("&") : "";
+
+  try{
+    /* Categories are always shown in full, never narrowed by whoever is
+       selected below. This list is how you move around: narrowing it by
+       the person you just picked leaves one row on screen and no way to
+       reach another category. People ARE narrowed to the chosen category,
+       because "who did we pay for Labour Charges" is the question, not
+       "everyone we have ever dealt with" — narrowing the child by the
+       parent helps, narrowing the parent by the child strands you. */
+    const cats = await api("GET", "/cashbook/by-category?x=1" + range);
+    state.cbCatTotals = cats.groups || [];
+
+    if(state.cbCat){
+      const ppl = await api("GET", "/cashbook/by-party?x=1" + range +
+        "&category=" + encodeURIComponent(state.cbCat));
+      state.cbPersonTotals = ppl.groups || [];
+    } else {
+      state.cbPersonTotals = [];
+    }
+  }catch(err){
+    const box = document.getElementById("cb-explore-detail");
+    if(box) box.innerHTML = '<div class="card"><div class="empty-hint">' +
+      escapeHtml(err.message || "Could not load totals.") + '</div></div>';
+    return;
+  }
+
+  cbDrawCategories();
+  cbDrawPeople();
+  cbDrawDetail();
+}
+
+/* One row of figures, used for both categories and people so the two
+   lists cannot drift apart in how they present the same numbers. */
+function cbTotalsRow(g, attr){
+  const sel = (attr === "data-cat" ? state.cbCat : state.cbPerson);
+  const on  = sel && sel.toLowerCase() === (g.name||"").toLowerCase();
+  return '<div ' + attr + '="' + escapeHtml(g.name) + '" class="cb-row' + (on ? " cb-on" : "") + '">' +
+    '<div class="cb-row-top">' +
+      '<strong>' + escapeHtml(g.name) + '</strong>' +
+      '<span class="cb-row-txn">' + g.transactions + ' txn</span>' +
+    '</div>' +
+    '<div class="cb-row-figs">' +
+      '<span class="muted">Open ' + fmtMoney(g.opening) + '</span>' +
+      '<span class="cb-in">In ' + fmtMoney(g.income) + '</span>' +
+      '<span class="cb-out">Out ' + fmtMoney(g.expense) + '</span>' +
+      '<strong>Close ' + fmtMoney(g.closing) + '</strong>' +
+    '</div>' +
+  '</div>';
+}
+
+function cbDrawCategories(){
+  const box = document.getElementById("cb-cat-list");
+  if(!box) return;
+  const term = (state.cbCatSearch||"").trim().toLowerCase();
+  const rows = (state.cbCatTotals||[]).filter(g => !term || (g.name||"").toLowerCase().includes(term));
+
+  const adding = state.cbAddingCat ? cbAddCategoryFormHtml() : "";
+  box.innerHTML = adding + (rows.length
+    ? rows.map(g => cbTotalsRow(g, "data-cat")).join("")
+    : '<div class="empty-hint">' + (term ? "No category matches that." :
+        "No categorised entries in this period.") + '</div>');
+}
+
+function cbDrawPeople(){
+  const card = document.getElementById("cb-person-card");
+  const box  = document.getElementById("cb-person-list");
+  const forEl = document.getElementById("cb-person-for");
+  if(!card || !box) return;
+
+  if(!state.cbCat){ card.hidden = true; return; }
+  card.hidden = false;
+  if(forEl) forEl.textContent = state.cbCat;
+
+  const term = (state.cbPersonSearch||"").trim().toLowerCase();
+  const rows = (state.cbPersonTotals||[]).filter(g => !term || (g.name||"").toLowerCase().includes(term));
+  box.innerHTML = rows.length
+    ? rows.map(g => cbTotalsRow(g, "data-person")).join("")
+    : '<div class="empty-hint">' + (term ? "Nobody matches that."
+        : "No named party on these entries.") + '</div>';
+}
+
+/* The history behind the figure just shown. Loaded only when a person
+   is chosen — a shop with hundreds of parties should not fetch every
+   entry to draw a list of names. */
+async function cbDrawDetail(){
+  const box = document.getElementById("cb-explore-detail");
+  if(!box) return;
+  if(!state.cbPerson){ box.innerHTML = ""; return; }
+
+  const q = ["party=" + encodeURIComponent(state.cbPerson)];
+  if(state.cbCat) q.push("category=" + encodeURIComponent(state.cbCat));
+  if(state.cbFrom) q.push("from=" + encodeURIComponent(state.cbFrom));
+  if(state.cbTo)   q.push("to="   + encodeURIComponent(state.cbTo));
+
+  box.innerHTML = '<div class="card"><div class="empty-hint">Loading…</div></div>';
+  let h;
+  try{ h = await api("GET", "/cashbook/history?" + q.join("&")); }
+  catch(err){
+    box.innerHTML = '<div class="card"><div class="empty-hint">' +
+      escapeHtml(err.message || "Could not load history.") + '</div></div>';
+    return;
+  }
+
+  const rows = (h.entries||[]).map(e =>
+    '<tr>' +
+      '<td class="cb-nowrap">' + escapeHtml(e.date) + '</td>' +
+      '<td>' + escapeHtml(e.category || "-") + '</td>' +
+      '<td>' + escapeHtml(e.remarks || "") + '</td>' +
+      '<td class="cb-amt ' + (e.type === "in" ? "cb-in" : "cb-out") + '">' +
+        (e.type === "in" ? "+" : "-") + fmtMoney(e.amount) + '</td>' +
+    '</tr>').join("");
+
+  box.innerHTML =
+    '<div class="card cb-detail">' +
+      '<div class="cb-detail-head">' +
+        '<strong>' + escapeHtml(state.cbPerson) + '</strong>' +
+        '<span class="muted cb-row-txn">' + h.transactions + ' transactions</span>' +
+      '</div>' +
+      '<div class="cb-detail-figs">' +
+        '<span class="cb-in">Received ' + fmtMoney(h.income) + '</span>' +
+        '<span class="cb-out">Paid ' + fmtMoney(h.expense) + '</span>' +
+        '<strong>Net ' + fmtMoney(h.net) + '</strong>' +
+      '</div>' +
+      (rows
+        ? '<div class="table-scroll"><table class="table"><thead><tr>' +
+          '<th class="cb-nowrap">Date</th><th>Category</th><th>Remarks</th><th class="cb-amt">Amount</th>' +
+          '</tr></thead><tbody>' + rows + '</tbody></table></div>'
+        : '<div class="empty-hint">No entries in this period.</div>') +
+    '</div>';
+}
+
+/* ---- adding a category ----
+   Inline rather than a new sheet: the list it joins is three lines above,
+   and a full-screen form to type one word is a worse answer than a row.
+   Owner-only, because POST /categories already is — this does not widen
+   who may change the master. */
+function openAddCashCategory(){
+  if(!isOwner()){ toast("Only the shop owner can add a category."); return; }
+  state.cbAddingCat = !state.cbAddingCat;
+  cbDrawCategories();
+  const el = document.getElementById("cb-new-cat-name");
+  if(el) el.focus();
+}
+
+function cbAddCategoryFormHtml(){
+  return '<div class="cb-add">' +
+    '<div class="cb-add-fields">' +
+      '<input type="text" id="cb-new-cat-name" placeholder="New category name">' +
+      '<select id="cb-new-cat-kind">' +
+        '<option value="expense">Expense</option>' +
+        '<option value="income">Income</option>' +
+      '</select>' +
+      '<button class="btn btn-gold" id="cb-new-cat-save">Save</button>' +
+      '<button class="btn btn-outline" id="cb-new-cat-cancel">Cancel</button>' +
+    '</div>' +
+  '</div>';
+}
+/* Delegated from the list container, because the form is redrawn on every
+   keystroke in the category search and per-element handlers would be lost. */
+document.addEventListener("click", async (e)=>{
+  if(e.target && e.target.id === "cb-new-cat-cancel"){
+    state.cbAddingCat = false; cbDrawCategories(); return;
+  }
+  if(!e.target || e.target.id !== "cb-new-cat-save") return;
+
+  const nameEl = document.getElementById("cb-new-cat-name");
+  const kindEl = document.getElementById("cb-new-cat-kind");
+  const name = (nameEl && nameEl.value || "").trim();
+  if(!name){ toast("Type a category name first."); return; }
+
+  try{
+    await api("POST", "/categories", { kind: (kindEl && kindEl.value) || "expense", name });
+    await loadCategories();          /* so the entry form offers it straight away */
+    state.cbAddingCat = false;
+    toast("Category added — pick it on a Cash In or Cash Out entry. It shows up in this list once it has entries.");
+    renderCashExplore();
+  }catch(err){ toast(err.message); }
+});
 
 })();

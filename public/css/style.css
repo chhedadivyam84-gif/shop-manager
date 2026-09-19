@@ -70,6 +70,7 @@
   --fs-hint:     12.5px;
   --fs-nav:        10px;
   --nav-icon:      18px;
+  --nav-h:         67px;   /* measured: the bottom nav, so a pinned bar clears it */
 
   /* ---- controls ---- */
   --btn-pad-y:     12px;
@@ -134,6 +135,7 @@
     --fs-hint:       13px;
     --fs-nav:        11px;
     --nav-icon:      20px;
+    --nav-h:         71px;
     --input-pad-y:   10px;
     --input-pad-x:   12px;
     --input-min-h:   42px;
@@ -183,6 +185,7 @@
        every screen — the height it gives back is height the work gets. */
     --fs-nav:      10.5px;
     --nav-icon:      18px;
+    --nav-h:         56px;
     --btn-pad-y:     11px;
     --btn-pad-x:     16px;
     --input-min-h:   38px;
@@ -223,6 +226,7 @@
     --fs-input:    14.5px;
     --fs-nav:      11.5px;
     --nav-icon:      21px;
+    --nav-h:         60px;
     --btn-pad-y:     12px;
     --input-pad-y:   11px;
     --input-pad-x:   14px;
@@ -2954,3 +2958,54 @@ a.chip{display:inline-flex;align-items:center;gap:5px;text-decoration:none;}
   .qa-btn .ic{ width:50px; height:50px; background-size:31px 31px; border-radius:15px; }
   .qa-btn{ font-size:12.5px; }
 }
+
+/* ============================================================
+   PINNED ACTION BAR
+
+   The screens that take data have the primary action at the very
+   bottom of a long form. On Billing that is 29 inputs and 18 buttons
+   away, so Save was always below the fold, and before this the only
+   position:sticky element in the whole app was the bottom nav.
+
+   sticky rather than fixed, so the bar sits in the flow and stops
+   where it naturally ends instead of floating over the page footer.
+   bottom is --nav-h, not 0, because nav.bottom is also sticky at the
+   foot of the viewport and the two would otherwise overlap.
+
+   Full-bleed via a negative inline margin, so the bar reaches the
+   edges of the column and the content scrolling underneath is
+   properly covered rather than showing through at the sides.
+   ============================================================ */
+
+/* FIXED, not sticky. main carries overflow-y:auto (style.css:558), which
+   makes it the nearest scroll container for a sticky child — but the body
+   is what actually scrolls, so a sticky bar inside it never engages and
+   just sat at its natural place 3200px down the form. Fixed is safe here
+   because an inactive .screen is display:none, so only the screen you are
+   looking at ever paints its bar. */
+.cta-bar{
+  position:fixed;
+  left:0; right:0;
+  bottom:var(--nav-h);
+  z-index:3;
+  max-width:var(--app-max);
+  margin:0 auto;
+  padding:10px var(--gutter) 12px;
+  background:var(--bg);
+  border-top:1px solid var(--border);
+  box-shadow:0 -6px 18px rgba(0,0,0,.07);
+}
+
+/* The bar is out of flow, so the form has to reserve the room it covers or
+   the last field hides behind it. */
+.screen:has(.cta-bar){ padding-bottom:86px; }
+
+/* On a wide screen the actions sit side by side rather than stacked —
+   there is no reason for a full-width button on a 1280px desk. */
+@media (min-width:768px){
+  .cta-bar{ flex-direction:row !important; justify-content:flex-end; }
+  .cta-bar .btn{ width:auto; min-width:170px; }
+}
+
+/* Printing a bill must not print a floating toolbar over it. */
+@media print{ .cta-bar{ display:none !important; } .screen:has(.cta-bar){ padding-bottom:0; } }

@@ -472,6 +472,11 @@ app.use("/api/numbering", requireAuth, require("./routes/numbering"));
 app.use("/api/attachments", requireAuth, require("./routes/attachments"));
 app.use("/api/reset", requireAuth, requireRole("owner"), require("./routes/reset"));
 app.use("/api/financial-years", requireAuth, requireRole("owner"), require("./routes/financialYears"));
+/* Historical import and the opening count. Both are owner-only inside their
+   own routers as well as here — the module reads a shop's whole past off a
+   spreadsheet, which is not a counter job. */
+app.use("/api/imports", requireAuth, require("./routes/imports"));
+app.use("/api/opening-stock", requireAuth, require("./routes/openingStock"));
 
 // Belt-and-braces cache busting on top of the no-cache header below: every
 // script/stylesheet URL in index.html gets a ?v=<boot time> query string,

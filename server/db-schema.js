@@ -3391,6 +3391,145 @@ CREATE TABLE IF NOT EXISTS employee_settings (
   leave_is_paid INTEGER NOT NULL DEFAULT 1
 );
 INSERT OR IGNORE INTO employee_settings (id) VALUES (1);
+
+/* ============================================================
+   HISTORICAL IMPORT — the books from before this app
+
+   A shop arriving with three years of bills in Tally wants them visible
+   here. What it does NOT want is those bills moving today's stock or
+   today's balances: the goods were sold years ago and the drawer was
+   counted this morning.
+
+   SO THEY LIVE IN THEIR OWN TABLES. Writing them into invoices and
+   purchases would bump customers.due on every historical sale, collide
+   with challan_no's UNIQUE index, advance the live bill counter, and make
+   an undo indistinguishable from deleting real work. Kept apart, none of
+   those problems arises, and "historical" versus "current" is a table
+   name rather than a flag somebody has to remember to check.
+
+   NOTHING HERE IS WIRED TO STOCK. There is no size_id, no location_id and
+   no quantity in these tables, because a historical bill must never be
+   able to reach size_location_stock. Opening stock is entered separately,
+   once, as a figure somebody counted.
+
+   dup_key is what makes two rows the same row — see importMap.dupKey. It
+   is stored rather than recomputed so a later import finds a clash with
+   one index lookup instead of rebuilding every key it has ever seen.
+   ============================================================ */
+
+CREATE TABLE IF NOT EXISTS import_batches (
+  id TEXT PRIMARY KEY,
+  at INTEGER NOT NULL,
+  staff TEXT NOT NULL DEFAULT '',
+  category TEXT NOT NULL,
+  filename TEXT NOT NULL DEFAULT '',
+  rows_total INTEGER NOT NULL DEFAULT 0,
+  rows_imported INTEGER NOT NULL DEFAULT 0,
+  rows_skipped INTEGER NOT NULL DEFAULT 0,
+  rows_duplicate INTEGER NOT NULL DEFAULT 0,
+  rows_error INTEGER NOT NULL DEFAULT 0,
+  mapping_json TEXT NOT NULL DEFAULT '',
+  -- 'imported' until it is undone, then 'reversed'. Never deleted: what was
+  -- imported and later withdrawn is itself worth being able to look up.
+  status TEXT NOT NULL DEFAULT 'imported'
+    CHECK (status IN ('imported','reversed')),
+  reversed_at INTEGER,
+  reversed_by TEXT NOT NULL DEFAULT '',
+  notes TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_import_batches_at ON import_batches(at DESC);
+
+/* One row per line the import considered — taken, skipped or refused.
+   target_table and target_id are what an undo follows, so a reversal
+   removes exactly what this batch created and nothing that was already
+   there. A customer the import FOUND rather than made is recorded with
+   created = 0, and that is what stops an undo deleting a party the shop
+   had been billing for years. */
+CREATE TABLE IF NOT EXISTS import_rows (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  batch_id TEXT NOT NULL REFERENCES import_batches(id) ON DELETE CASCADE,
+  row_no INTEGER NOT NULL,
+  status TEXT NOT NULL,            -- imported | duplicate | error | skipped
+  reason TEXT NOT NULL DEFAULT '',
+  target_table TEXT NOT NULL DEFAULT '',
+  target_id TEXT NOT NULL DEFAULT '',
+  created INTEGER NOT NULL DEFAULT 0,
+  raw_json TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_import_rows_batch ON import_rows(batch_id);
+
+CREATE TABLE IF NOT EXISTS hist_sales (
+  id TEXT PRIMARY KEY,
+  batch_id TEXT NOT NULL REFERENCES import_batches(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  bill_no TEXT NOT NULL DEFAULT '',
+  party TEXT NOT NULL DEFAULT '',
+  amount REAL NOT NULL DEFAULT 0,
+  taxable REAL,
+  tax REAL,
+  gstin TEXT NOT NULL DEFAULT '',
+  remarks TEXT NOT NULL DEFAULT '',
+  dup_key TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_hist_sales_date ON hist_sales(date);
+CREATE INDEX IF NOT EXISTS idx_hist_sales_dup ON hist_sales(dup_key);
+CREATE INDEX IF NOT EXISTS idx_hist_sales_batch ON hist_sales(batch_id);
+
+CREATE TABLE IF NOT EXISTS hist_purchases (
+  id TEXT PRIMARY KEY,
+  batch_id TEXT NOT NULL REFERENCES import_batches(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  bill_no TEXT NOT NULL DEFAULT '',
+  party TEXT NOT NULL DEFAULT '',
+  amount REAL NOT NULL DEFAULT 0,
+  taxable REAL,
+  tax REAL,
+  gstin TEXT NOT NULL DEFAULT '',
+  remarks TEXT NOT NULL DEFAULT '',
+  dup_key TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_hist_purchases_date ON hist_purchases(date);
+CREATE INDEX IF NOT EXISTS idx_hist_purchases_dup ON hist_purchases(dup_key);
+CREATE INDEX IF NOT EXISTS idx_hist_purchases_batch ON hist_purchases(batch_id);
+
+/* Direction rather than a signed amount, the same way the live cash book
+   keeps it — so the two read alike and nobody has to work out which
+   convention a given table follows. */
+CREATE TABLE IF NOT EXISTS hist_cash_entries (
+  id TEXT PRIMARY KEY,
+  batch_id TEXT NOT NULL REFERENCES import_batches(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  direction TEXT NOT NULL CHECK (direction IN ('in','out')),
+  amount REAL NOT NULL DEFAULT 0,
+  party TEXT NOT NULL DEFAULT '',
+  category TEXT NOT NULL DEFAULT '',
+  remarks TEXT NOT NULL DEFAULT '',
+  dup_key TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_hist_cash_date ON hist_cash_entries(date);
+CREATE INDEX IF NOT EXISTS idx_hist_cash_dup ON hist_cash_entries(dup_key);
+CREATE INDEX IF NOT EXISTS idx_hist_cash_batch ON hist_cash_entries(batch_id);
+
+CREATE TABLE IF NOT EXISTS hist_gst_records (
+  id TEXT PRIMARY KEY,
+  batch_id TEXT NOT NULL REFERENCES import_batches(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  bill_no TEXT NOT NULL DEFAULT '',
+  party TEXT NOT NULL DEFAULT '',
+  gstin TEXT NOT NULL DEFAULT '',
+  irn TEXT NOT NULL DEFAULT '',
+  taxable REAL,
+  tax REAL,
+  amount REAL,
+  dup_key TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_hist_gst_date ON hist_gst_records(date);
+CREATE INDEX IF NOT EXISTS idx_hist_gst_dup ON hist_gst_records(dup_key);
+CREATE INDEX IF NOT EXISTS idx_hist_gst_batch ON hist_gst_records(batch_id);
 `);
 
 /* The salesman a party belongs to.

@@ -1093,6 +1093,7 @@ async function initApp(){
     state.cbPerson = row.dataset.person; renderCashExplore();
   });
 
+  document.getElementById("imp-back-link").addEventListener("click", (e)=>{ e.preventDefault(); switchTab("home"); });
   document.getElementById("bb-back-link").addEventListener("click", (e)=>{ e.preventDefault(); switchTab("home"); });
   document.getElementById("bb-manage-accounts-link").addEventListener("click", (e)=>{ e.preventDefault(); openManageBankAccounts(); });
   document.getElementById("bb-add-entry").addEventListener("click", ()=>openBankEntry());
@@ -1481,7 +1482,7 @@ async function switchTab(tab){
   // brought into view — otherwise switching from a tile leaves it off-screen.
   const activeBtn = document.querySelector(`nav.bottom .tab[data-tab="${tab}"]`);
   if(activeBtn && activeBtn.scrollIntoView) activeBtn.scrollIntoView({ block:"nearest", inline:"nearest" });
-  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",selection:"Selection Slip",quotation:"Quotation",so:"Sales Order",pquery:"Product Query",stockhistory:"Stock History / Stock Ledger",accounts:"Accounts",otherledger:(state.olKind==="income"?"Other Income":"Other Expenses"),fyear:"Financial Year",fyclose:"Financial Year",printmgr:"Print Management",outstanding:"Outstanding",position:"Business Position",materialflow:"Material Flow & Document Tracking",ewb:"E-Way Bill",delivery:"Delivery & Dispatch",alerts:"Reminders",notes:"Notepad",backups:"Cloud Backups",employees:"Staff Pay"};
+  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",selection:"Selection Slip",quotation:"Quotation",so:"Sales Order",pquery:"Product Query",stockhistory:"Stock History / Stock Ledger",accounts:"Accounts",otherledger:(state.olKind==="income"?"Other Income":"Other Expenses"),fyear:"Financial Year",fyclose:"Financial Year",printmgr:"Print Management",outstanding:"Outstanding",position:"Business Position",materialflow:"Material Flow & Document Tracking",ewb:"E-Way Bill",delivery:"Delivery & Dispatch",alerts:"Reminders",notes:"Notepad",backups:"Cloud Backups",employees:"Staff Pay",imports:"Import Old Data"};
   document.getElementById("hdr-sub").textContent = subMap[tab];
   document.getElementById("hdr-main").textContent = tab==="home" ? greeting() : subMap[tab];
   if(tab==="billing") await renderBilling();
@@ -1494,6 +1495,8 @@ async function switchTab(tab){
      showing an empty screen full of failed requests. */
   if(tab==="employees" && !isOwner()){ toast("Staff Pay is for the owner."); return switchTab("home"); }
   if(tab==="employees") await renderEmployees();
+  if(tab==="imports" && !isOwner()){ toast("Importing old data is for the owner."); return switchTab("home"); }
+  if(tab==="imports") await renderImports();
   if(tab==="outstanding") await renderOutstanding();
   if(tab==="ewb") await renderEwb();
   if(tab==="bankbook") await renderBankBook();
@@ -2162,6 +2165,7 @@ const MENU = [
     ["alerts",      "&#128276;", "Reminders"],
     ["notes",       "&#128221;", "Notepad"],
     ["backups",     "&#128190;", "Cloud Backups"],
+    ["imports",     "&#128228;", "Import Old Data"],
   ]]
 ];
 
@@ -27369,5 +27373,516 @@ document.addEventListener("click", async (e)=>{
     renderCashExplore();
   }catch(err){ toast(err.message); }
 });
+
+
+/* ============================================================
+   IMPORT OLD DATA — the screen
+
+   Four steps, and nothing is written until the last one. The operator
+   picks a file, says what is in it, checks what the app made of every row,
+   chooses which to take, and only then confirms.
+
+   THE PREVIEW IS THE POINT. A shop importing three years of bills cannot
+   check them afterwards — by then they are mixed in with everything else.
+   So every row is shown with what the app read out of it, every refusal
+   carries its reason in place, and the counts always describe the whole
+   file rather than the page being looked at.
+   ============================================================ */
+/** Date and time the way the audit log and WhatsApp history already show
+ *  it. There is no shared formatter in this file to reuse — the app spells
+ *  en-IN out at each call site — so this follows that rather than adding a
+ *  general one the rest of the app would not use. */
+function impWhen(ms){
+  const d = new Date(Number(ms) || 0);
+  if(isNaN(d)) return "";
+  return d.toLocaleDateString("en-IN", { day:"numeric", month:"short", year:"2-digit" }) +
+    " · " + d.toLocaleTimeString("en-IN", { hour:"2-digit", minute:"2-digit" });
+}
+
+const impState = {
+  tab: "import", step: 1,
+  category: "sales", upload: null, mapping: null, how: null,
+  preview: null, filters: {}, page: 0,
+  selected: null,        /* a Set of row numbers, or null meaning "all clean" */
+  result: null, busy: false, cats: null,
+};
+
+async function renderImports(){
+  const tabs = document.getElementById("imp-tabs");
+  if(!tabs) return;
+  if(!impState.cats){
+    try{ impState.cats = await api("GET", "/imports/categories"); }
+    catch(err){ toast(err.message); impState.cats = []; }
+  }
+  tabs.innerHTML = [["import","Import a file"],["history","Import history"],["opening","Opening stock"]]
+    .map(([k,l])=>`<button class="chip ${impState.tab===k?"selected":""}" data-imp-tab="${k}">${l}</button>`).join("");
+  tabs.querySelectorAll("[data-imp-tab]").forEach(b=>b.addEventListener("click", ()=>{
+    impState.tab = b.dataset.impTab; renderImports();
+  }));
+  if(impState.tab === "history") return renderImportHistory();
+  if(impState.tab === "opening") return renderOpeningStock();
+  renderImportWizard();
+}
+
+/* ---- step 1: the file ---- */
+function renderImportWizard(){
+  const el = document.getElementById("imp-body");
+  if(impState.step === 2) return impDrawMapping();
+  if(impState.step === 3) return impDrawReview();
+  if(impState.step === 4) return impDrawDone();
+
+  const cats = impState.cats || [];
+  el.innerHTML = `
+    <div class="card">
+      <div class="section-title" style="margin-top:0;">What is in the file?</div>
+      <div class="chip-row">
+        ${cats.map(c=>`<button class="chip ${impState.category===c.key?"selected":""}" data-imp-cat="${c.key}">${escapeHtml(c.label)}</button>`).join("")}
+      </div>
+      <p class="muted" style="font-size:11.5px;margin-top:10px;">
+        Sales, purchases, cash entries and GST records are kept as <b>history</b> —
+        they never change today&rsquo;s stock or balances. Customers and suppliers
+        join the shop&rsquo;s own lists, and one already on file is never overwritten.</p>
+    </div>
+
+    <div class="card" style="margin-top:12px;">
+      <div class="section-title" style="margin-top:0;">Choose the file</div>
+      <input type="file" id="imp-file" accept=".csv,.xlsx,.xlsm,text/csv">
+      <p class="muted" style="font-size:11.5px;margin-top:8px;">
+        CSV or Excel (.xlsx), up to 8MB. Export from Tally as CSV or Excel;
+        a file that opens with the shop name and a report title above the
+        headings is fine &mdash; you can point at the heading row next.</p>
+      <button class="btn btn-primary" id="imp-read" style="margin-top:12px;" ${impState.busy?"disabled":""}>
+        ${impState.busy ? "Reading…" : "Read the file"}</button>
+    </div>`;
+
+  el.querySelectorAll("[data-imp-cat]").forEach(b=>b.addEventListener("click", ()=>{
+    impState.category = b.dataset.impCat; renderImportWizard();
+  }));
+  el.querySelector("#imp-read").addEventListener("click", impReadFile);
+}
+
+async function impReadFile(){
+  const input = document.getElementById("imp-file");
+  const file = input && input.files && input.files[0];
+  if(!file){ toast("Choose a file first."); return; }
+  if(file.size > 8 * 1024 * 1024){ toast("That file is larger than 8MB. Split it and import the parts."); return; }
+
+  impState.busy = true; renderImportWizard();
+  try{
+    const dataBase64 = await new Promise((res, rej)=>{
+      const r = new FileReader();
+      r.onload = ()=>res(String(r.result).split(",")[1] || "");
+      r.onerror = ()=>rej(new Error("That file could not be read from this device."));
+      r.readAsDataURL(file);
+    });
+    const out = await api("POST", "/imports/read", {
+      filename: file.name, dataBase64, category: impState.category,
+      headerRow: impState.headerRow || 0,
+    });
+    impState.upload = out;
+    impState.mapping = out.mapping || {};
+    impState.how = out.how || {};
+    impState.step = 2;
+  }catch(err){ toast(err.message); }
+  finally{ impState.busy = false; renderImportWizard(); }
+}
+
+/* ---- step 2: which column is which ---- */
+function impDrawMapping(){
+  const el = document.getElementById("imp-body");
+  const u = impState.upload;
+  const cat = (impState.cats || []).find(c=>c.key === impState.category) || { fields: [] };
+
+  const opts = (sel) => [`<option value="">— not in this file —</option>`,
+    ...u.headers.map((h,i)=>`<option value="${i}" ${String(sel)===String(i)?"selected":""}>${escapeHtml(h)}</option>`)].join("");
+
+  el.innerHTML = `
+    <div class="card">
+      <div class="row" style="align-items:baseline;gap:8px;flex-wrap:wrap;">
+        <b style="font-size:13.5px;">${escapeHtml(u.filename)}</b>
+        <span class="muted" style="font-size:11.5px;">${u.rowCount} row(s)${u.sheet?` · sheet ${escapeHtml(u.sheet)}`:""}</span>
+      </div>
+      ${u.truncated ? `<p class="muted" style="font-size:11.5px;color:var(--warn-text);">Only the first ${u.limits.maxRows} rows were read.</p>` : ""}
+      <label class="field-label" style="margin-top:10px;">Which line holds the column headings?</label>
+      <select id="imp-headerrow">
+        ${(u.firstLines||[]).map((line,i)=>`<option value="${i}" ${i===u.headerRow?"selected":""}>Line ${i+1}: ${escapeHtml(line.slice(0,4).join(" | ")).slice(0,60)}</option>`).join("")}
+      </select>
+    </div>
+
+    <div class="card" style="margin-top:12px;">
+      <div class="section-title" style="margin-top:0;">Match the columns</div>
+      <p class="muted" style="font-size:11.5px;margin-top:-4px;">
+        A guess marked <b>found</b> matched the heading exactly. Check the rest.</p>
+      ${cat.fields.map(f=>`
+        <div style="margin-top:10px;">
+          <label class="field-label">${escapeHtml(f.label)}
+            ${f.required?`<span style="color:var(--danger);">*</span>`:""}
+            ${impState.how && impState.how[f.key]==="exact"?`<span class="muted" style="font-weight:400;"> — found</span>`:""}
+            ${impState.how && impState.how[f.key]==="similar"?`<span class="muted" style="font-weight:400;"> — a guess, please check</span>`:""}
+          </label>
+          <select data-imp-map="${f.key}">${opts(impState.mapping[f.key])}</select>
+        </div>`).join("")}
+    </div>
+
+    <div style="display:flex;gap:8px;margin-top:12px;">
+      <button class="btn btn-outline" id="imp-back2" style="flex:1;">Back</button>
+      <button class="btn btn-primary" id="imp-check" style="flex:2;">Check every row</button>
+    </div>`;
+
+  el.querySelectorAll("[data-imp-map]").forEach(sel=>sel.addEventListener("change", (e)=>{
+    const v = e.target.value;
+    impState.mapping[e.target.dataset.impMap] = v === "" ? null : Number(v);
+  }));
+  el.querySelector("#imp-headerrow").addEventListener("change", async (e)=>{
+    impState.headerRow = Number(e.target.value);
+    toast("Choose the file again to re-read it from that line.");
+    impState.step = 1; renderImportWizard();
+  });
+  el.querySelector("#imp-back2").addEventListener("click", ()=>{ impState.step = 1; renderImportWizard(); });
+  el.querySelector("#imp-check").addEventListener("click", ()=>{ impState.page = 0; impState.selected = null; impLoadPreview(); });
+}
+
+/* ---- step 3: look at what it made of the file ---- */
+async function impLoadPreview(){
+  impState.busy = true;
+  const el = document.getElementById("imp-body");
+  el.innerHTML = `<div class="card"><div class="empty-hint">Checking every row…</div></div>`;
+  try{
+    impState.preview = await api("POST", "/imports/preview", {
+      uploadId: impState.upload.uploadId, category: impState.category,
+      mapping: impState.mapping, filters: impState.filters,
+      page: impState.page, pageSize: 100,
+    });
+    impState.step = 3;
+  }catch(err){ toast(err.message); impState.step = 2; }
+  finally{ impState.busy = false; renderImportWizard(); }
+}
+
+/** The rows that will actually be imported: what was ticked, or every clean
+ *  row the current filter covers when nothing has been ticked. */
+function impChosen(){
+  const p = impState.preview;
+  if(!p) return [];
+  if(impState.selected) return [...impState.selected];
+  return p.rows.filter(r=>r.status === "ok").map(r=>r.rowNo);
+}
+
+function impDrawReview(){
+  const el = document.getElementById("imp-body");
+  const p = impState.preview;
+  const f = impState.filters || {};
+  const chosen = impChosen();
+  const cat = (impState.cats || []).find(c=>c.key === impState.category) || { fields: [] };
+  const cols = cat.fields.slice(0, 4);
+
+  const pill = (st) => st === "ok" ? `<span class="pill ok">clean</span>`
+    : st === "duplicate" ? `<span class="pill warn">duplicate</span>`
+    : `<span class="pill danger">refused</span>`;
+
+  el.innerHTML = `
+    <div class="card">
+      <div class="row" style="gap:10px;flex-wrap:wrap;align-items:baseline;">
+        <b style="font-size:13.5px;">${escapeHtml(impState.upload.filename)}</b>
+        <span class="muted" style="font-size:11.5px;">
+          ${p.counts.total} row(s) · <b style="color:var(--ok);">${p.counts.ok} clean</b>
+          ${p.counts.duplicate?` · <b style="color:var(--warn-text);">${p.counts.duplicate} duplicate</b>`:""}
+          ${p.counts.error?` · <b style="color:var(--danger);">${p.counts.error} refused</b>`:""}
+        </span>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:12px;">
+      <div class="section-title" style="margin-top:0;">Narrow it down</div>
+      <div class="row" style="gap:8px;flex-wrap:wrap;">
+        <div style="flex:1;min-width:130px;"><label class="field-label">From</label>
+          <input type="date" id="imp-f-from" value="${f.from||""}"></div>
+        <div style="flex:1;min-width:130px;"><label class="field-label">To</label>
+          <input type="date" id="imp-f-to" value="${f.to||""}"></div>
+      </div>
+      <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px;">
+        <div style="flex:1;min-width:130px;"><label class="field-label">Party</label>
+          <input type="text" id="imp-f-party" value="${escapeHtml(f.party||"")}" placeholder="name"></div>
+        <div style="flex:1;min-width:130px;"><label class="field-label">Bill number</label>
+          <input type="text" id="imp-f-bill" value="${escapeHtml(f.billNo||"")}" placeholder="number"></div>
+      </div>
+      <label class="field-label" style="margin-top:8px;">Anything else</label>
+      <input type="text" id="imp-f-q" value="${escapeHtml(f.q||"")}" placeholder="search every column, mapped or not">
+      <div class="chip-row" style="margin-top:10px;">
+        ${[["","All"],["ok","Clean"],["duplicate","Duplicates"],["error","Refused"]].map(([k,l])=>
+          `<button class="chip ${String(f.status||"")===k?"selected":""}" data-imp-status="${k}">${l}</button>`).join("")}
+      </div>
+      <div style="display:flex;gap:8px;margin-top:10px;">
+        <button class="btn btn-outline" id="imp-f-clear" style="flex:1;">Clear</button>
+        <button class="btn btn-primary" id="imp-f-apply" style="flex:2;">Apply</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:12px;">
+      <div class="row" style="align-items:center;gap:8px;flex-wrap:wrap;">
+        <b style="font-size:13px;flex:1;">Showing ${p.rows.length} of ${p.filtered.total}</b>
+        <button class="btn btn-outline btn-sm" id="imp-sel-clean">Tick every clean row</button>
+        <button class="btn btn-outline btn-sm" id="imp-sel-none">Untick all</button>
+      </div>
+      <div class="table-scroll" style="margin-top:10px;">
+        <table class="table" style="min-width:520px;">
+          <thead><tr><th style="width:34px;"></th><th style="width:44px;">#</th>
+            ${cols.map(c=>`<th>${escapeHtml(c.label)}</th>`).join("")}<th>Status</th></tr></thead>
+          <tbody>
+            ${p.rows.map(r=>`<tr class="${r.status!=="ok"?"imp-row-flag":""}">
+              <td>${r.status==="error"?"":`<input type="checkbox" data-imp-row="${r.rowNo}" ${chosen.indexOf(r.rowNo)>=0?"checked":""}>`}</td>
+              <td class="muted">${r.rowNo}</td>
+              ${cols.map(c=>`<td>${escapeHtml(String(r.values[c.key] ?? ""))}</td>`).join("")}
+              <td>${pill(r.status)}${r.reason?`<div class="muted" style="font-size:10.5px;margin-top:2px;">${escapeHtml(r.reason)}</div>`:""}</td>
+            </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
+      ${p.filtered.total > p.rows.length ? `
+        <div style="display:flex;gap:8px;margin-top:10px;align-items:center;">
+          <button class="btn btn-outline btn-sm" id="imp-prev" ${p.page===0?"disabled":""}>Previous</button>
+          <span class="muted" style="font-size:11.5px;flex:1;text-align:center;">Page ${p.page+1}</span>
+          <button class="btn btn-outline btn-sm" id="imp-next" ${(p.page+1)*p.pageSize>=p.filtered.total?"disabled":""}>Next</button>
+        </div>` : ""}
+    </div>
+
+    <div class="cta-bar">
+      <button class="btn btn-outline" id="imp-back3">Back</button>
+      <button class="btn btn-primary" id="imp-go">Import ${chosen.length} row(s)</button>
+    </div>`;
+
+  const readFilters = () => ({
+    from: el.querySelector("#imp-f-from").value,
+    to: el.querySelector("#imp-f-to").value,
+    party: el.querySelector("#imp-f-party").value,
+    billNo: el.querySelector("#imp-f-bill").value,
+    q: el.querySelector("#imp-f-q").value,
+    status: impState.filters.status || "",
+  });
+  el.querySelector("#imp-f-apply").addEventListener("click", ()=>{
+    impState.filters = readFilters(); impState.page = 0; impLoadPreview();
+  });
+  el.querySelector("#imp-f-clear").addEventListener("click", ()=>{
+    impState.filters = {}; impState.page = 0; impLoadPreview();
+  });
+  el.querySelectorAll("[data-imp-status]").forEach(b=>b.addEventListener("click", ()=>{
+    impState.filters = { ...readFilters(), status: b.dataset.impStatus };
+    impState.page = 0; impLoadPreview();
+  }));
+  el.querySelectorAll("[data-imp-row]").forEach(cb=>cb.addEventListener("change", (e)=>{
+    const n = Number(e.target.dataset.impRow);
+    if(!impState.selected) impState.selected = new Set(impChosen());
+    if(e.target.checked) impState.selected.add(n); else impState.selected.delete(n);
+    const btn = document.getElementById("imp-go");
+    if(btn) btn.textContent = `Import ${impState.selected.size} row(s)`;
+  }));
+  el.querySelector("#imp-sel-clean").addEventListener("click", ()=>{
+    impState.selected = new Set(p.rows.filter(r=>r.status!=="error").map(r=>r.rowNo));
+    impDrawReview();
+  });
+  el.querySelector("#imp-sel-none").addEventListener("click", ()=>{
+    impState.selected = new Set(); impDrawReview();
+  });
+  const prev = el.querySelector("#imp-prev"), next = el.querySelector("#imp-next");
+  if(prev) prev.addEventListener("click", ()=>{ impState.page--; impLoadPreview(); });
+  if(next) next.addEventListener("click", ()=>{ impState.page++; impLoadPreview(); });
+  el.querySelector("#imp-back3").addEventListener("click", ()=>{ impState.step = 2; renderImportWizard(); });
+  el.querySelector("#imp-go").addEventListener("click", impConfirm);
+}
+
+/* ---- confirm, then write ---- */
+async function impConfirm(){
+  const chosen = impChosen();
+  if(!chosen.length){ toast("Nothing is ticked."); return; }
+  const cat = (impState.cats||[]).find(c=>c.key===impState.category);
+  const where = cat && cat.live
+    ? "They will be added to the shop\u2019s own list. Anything already on file is left exactly as it is."
+    : "They will be kept as history. Your stock, balances and bill numbers do not change.";
+  if(!confirm(`Import ${chosen.length} row(s) of ${cat?cat.label.toLowerCase():"data"}?\n\n${where}`)) return;
+
+  const el = document.getElementById("imp-body");
+  el.innerHTML = `<div class="card"><div class="empty-hint">Importing ${chosen.length} row(s)…</div></div>`;
+  try{
+    impState.result = await api("POST", "/imports/run", {
+      uploadId: impState.upload.uploadId, category: impState.category,
+      mapping: impState.mapping, take: chosen,
+    });
+    impState.step = 4;
+  }catch(err){ toast(err.message); impState.step = 3; }
+  renderImportWizard();
+}
+
+function impDrawDone(){
+  const el = document.getElementById("imp-body");
+  const c = (impState.result && impState.result.counts) || {};
+  el.innerHTML = `
+    <div class="card">
+      <div class="section-title" style="margin-top:0;">Done</div>
+      <div style="font-size:26px;font-weight:800;color:var(--ok);">${c.imported||0}</div>
+      <div class="muted" style="font-size:12px;">row(s) imported from ${escapeHtml(impState.upload.filename)}</div>
+      <div style="margin-top:10px;font-size:12.5px;line-height:1.7;">
+        ${c.duplicate?`<div>${c.duplicate} taken over a duplicate warning</div>`:""}
+        ${c.skipped?`<div class="muted">${c.skipped} not selected</div>`:""}
+        ${c.error?`<div style="color:var(--danger);">${c.error} could not be read</div>`:""}
+      </div>
+      <p class="muted" style="font-size:11.5px;margin-top:10px;">
+        This can be undone from <b>Import history</b>.</p>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:12px;">
+      <button class="btn btn-outline" id="imp-again" style="flex:1;">Import another file</button>
+      <button class="btn btn-primary" id="imp-see" style="flex:1;">See the history</button>
+    </div>`;
+  el.querySelector("#imp-again").addEventListener("click", ()=>{
+    Object.assign(impState, { step:1, upload:null, mapping:null, preview:null, filters:{}, selected:null, result:null, page:0 });
+    renderImportWizard();
+  });
+  el.querySelector("#imp-see").addEventListener("click", ()=>{ impState.tab = "history"; renderImports(); });
+}
+
+/* ---- history ---- */
+async function renderImportHistory(){
+  const el = document.getElementById("imp-body");
+  el.innerHTML = `<div class="card"><div class="empty-hint">Loading…</div></div>`;
+  let d;
+  try{ d = await api("GET", "/imports/history"); }
+  catch(err){ el.innerHTML = `<div class="card"><div class="empty-hint">${escapeHtml(err.message)}</div></div>`; return; }
+
+  if(!d.batches.length){
+    el.innerHTML = `<div class="card"><div class="empty-hint">Nothing has been imported yet.</div></div>`;
+    return;
+  }
+  el.innerHTML = d.batches.map(b=>`
+    <div class="card" style="margin-bottom:10px;${b.status==="reversed"?"opacity:.66;":""}">
+      <div class="row" style="gap:8px;align-items:baseline;flex-wrap:wrap;">
+        <b style="font-size:13px;flex:1;min-width:140px;">${escapeHtml(b.filename||"(file)")}</b>
+        <span class="muted" style="font-size:11px;">${impWhen(b.at)}</span>
+      </div>
+      <div class="muted" style="font-size:11.5px;margin-top:3px;">
+        ${escapeHtml(b.category)} · by ${escapeHtml(b.staff||"—")}
+        ${b.status==="reversed"?` · <b>undone</b>`:""}
+      </div>
+      <div style="font-size:12.5px;margin-top:6px;line-height:1.7;">
+        <span style="color:var(--ok);">${b.rows_imported} imported</span>
+        ${b.rows_duplicate?` · <span style="color:var(--warn-text);">${b.rows_duplicate} duplicate</span>`:""}
+        ${b.rows_error?` · <span style="color:var(--danger);">${b.rows_error} refused</span>`:""}
+        ${b.rows_skipped?` · <span class="muted">${b.rows_skipped} not selected</span>`:""}
+      </div>
+      <div style="display:flex;gap:8px;margin-top:10px;">
+        <button class="btn btn-outline btn-sm" data-imp-detail="${b.id}">Row by row</button>
+        ${b.status!=="reversed"?`<button class="btn btn-outline btn-sm" data-imp-undo="${b.id}" style="color:var(--danger);">Undo this import</button>`:""}
+      </div>
+      <div data-imp-detail-for="${b.id}"></div>
+    </div>`).join("");
+
+  el.querySelectorAll("[data-imp-detail]").forEach(b=>b.addEventListener("click", async ()=>{
+    const box = el.querySelector(`[data-imp-detail-for="${b.dataset.impDetail}"]`);
+    if(box.innerHTML){ box.innerHTML = ""; return; }
+    box.innerHTML = `<div class="empty-hint">Loading…</div>`;
+    try{
+      const d2 = await api("GET", "/imports/history/" + encodeURIComponent(b.dataset.impDetail));
+      box.innerHTML = `<div class="table-scroll" style="margin-top:10px;">
+        <table class="table" style="min-width:420px;"><thead><tr><th>#</th><th>What happened</th><th>Why</th></tr></thead>
+        <tbody>${d2.rows.map(r=>`<tr><td class="muted">${r.row_no}</td><td>${escapeHtml(r.status)}</td>
+          <td class="muted" style="font-size:11px;">${escapeHtml(r.reason||"")}</td></tr>`).join("")}</tbody></table></div>`;
+    }catch(err){ box.innerHTML = `<div class="empty-hint">${escapeHtml(err.message)}</div>`; }
+  }));
+
+  el.querySelectorAll("[data-imp-undo]").forEach(b=>b.addEventListener("click", async ()=>{
+    if(!confirm("Undo this import?\n\nOnly what this import created is removed. Anything it merely matched — a customer you already had — is left alone.")) return;
+    try{
+      const r = await api("POST", "/imports/history/" + encodeURIComponent(b.dataset.impUndo) + "/reverse", {});
+      toast(`${r.removed} removed${r.kept?`, ${r.kept} left alone`:""}.`, "ok");
+      if(r.blocked && r.blocked.length) toast(`${r.blocked.length} kept because they are in use.`);
+      renderImportHistory();
+    }catch(err){ toast(err.message); }
+  }));
+}
+
+/* ---- opening stock ---- */
+const openState = { location: null, q: "", sheet: null, edits: {} };
+
+async function renderOpeningStock(){
+  const el = document.getElementById("imp-body");
+  el.innerHTML = `<div class="card"><div class="empty-hint">Loading…</div></div>`;
+  let d;
+  try{
+    const q = [];
+    if(openState.location) q.push("location=" + encodeURIComponent(openState.location));
+    if(openState.q) q.push("q=" + encodeURIComponent(openState.q));
+    d = await api("GET", "/opening-stock/sheet" + (q.length?"?"+q.join("&"):""));
+    openState.sheet = d; openState.location = d.location.id;
+  }catch(err){ el.innerHTML = `<div class="card"><div class="empty-hint">${escapeHtml(err.message)}</div></div>`; return; }
+
+  el.innerHTML = `
+    <div class="card">
+      <div class="section-title" style="margin-top:0;">The count you start from</div>
+      <p class="muted" style="font-size:11.5px;margin-top:-4px;">
+        Imported bills never change stock. This is where today&rsquo;s actual
+        figures go in &mdash; what somebody counted on the racks. Future stock
+        is worked out from here.</p>
+      <label class="field-label" style="margin-top:10px;">Location</label>
+      <select id="open-loc">${d.locations.map(l=>`<option value="${l.id}" ${l.id===d.location.id?"selected":""}>${escapeHtml(l.name)}</option>`).join("")}</select>
+      <label class="field-label" style="margin-top:10px;">Find a product</label>
+      <input type="text" id="open-q" value="${escapeHtml(openState.q)}" placeholder="name, brand or size">
+    </div>
+
+    <div class="card" style="margin-top:12px;">
+      <b style="font-size:13px;">${d.rows.length} of ${d.total} size(s)</b>
+      ${d.truncated?`<div class="muted" style="font-size:11px;">Showing the first 500 — search to narrow.</div>`:""}
+      <div class="table-scroll" style="margin-top:10px;">
+        <table class="table" style="min-width:460px;">
+          <thead><tr><th>Product</th><th>Size</th><th class="num">On file</th><th class="num" style="width:110px;">Counted</th></tr></thead>
+          <tbody>${d.rows.map(r=>`<tr>
+            <td>${escapeHtml(r.product_name)}${r.brand?`<div class="muted" style="font-size:10.5px;">${escapeHtml(r.brand)}</div>`:""}</td>
+            <td>${escapeHtml(r.size_label)}</td>
+            <td class="num ${r.quantity>0?"":"muted"}">${r.quantity}</td>
+            <td><input type="number" step="any" min="0" inputmode="decimal" data-open-size="${r.size_id}"
+                 value="${openState.edits[r.size_id] ?? ""}" placeholder="—" style="width:96px;text-align:right;"></td>
+          </tr>`).join("")}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="cta-bar">
+      <button class="btn btn-primary" id="open-apply">Set opening stock</button>
+    </div>`;
+
+  el.querySelector("#open-loc").addEventListener("change", (e)=>{
+    openState.location = e.target.value; openState.edits = {}; renderOpeningStock();
+  });
+  let t = null;
+  el.querySelector("#open-q").addEventListener("input", (e)=>{
+    clearTimeout(t); const v = e.target.value;
+    t = setTimeout(()=>{ openState.q = v; renderOpeningStock(); }, 350);
+  });
+  el.querySelectorAll("[data-open-size]").forEach(inp=>inp.addEventListener("input", (e)=>{
+    const id = e.target.dataset.openSize;
+    if(e.target.value === "") delete openState.edits[id];
+    else openState.edits[id] = e.target.value;
+  }));
+  el.querySelector("#open-apply").addEventListener("click", ()=>impApplyOpening(false));
+}
+
+async function impApplyOpening(overwrite){
+  const lines = Object.entries(openState.edits)
+    .map(([sizeId, quantity])=>({ sizeId: Number(sizeId), quantity: Number(quantity) }))
+    .filter(l=>isFinite(l.quantity) && l.quantity >= 0);
+  if(!lines.length){ toast("Type at least one counted figure."); return; }
+  if(!overwrite && !confirm(`Set opening stock for ${lines.length} size(s)?\n\nThis replaces the figure on file with what you counted. It is not added to it.`)) return;
+
+  try{
+    const r = await api("POST", "/opening-stock/apply", {
+      location: openState.location, lines, overwrite: !!overwrite,
+    });
+    if(r.held && r.held.length && !overwrite){
+      const names = r.held.slice(0,5).map(h=>`${h.product} ${h.size}: ${h.current} → ${h.proposed}`).join("\n");
+      if(confirm(`${r.held.length} size(s) already carry stock and were left alone:\n\n${names}${r.held.length>5?"\n…":""}\n\nReplace them with the counted figures?`)){
+        return impApplyOpening(true);
+      }
+    }
+    toast(`${r.changed} set${r.held.length?`, ${r.held.length} left alone`:""}.`, "ok");
+    openState.edits = {};
+    renderOpeningStock();
+  }catch(err){ toast(err.message); }
+}
 
 })();

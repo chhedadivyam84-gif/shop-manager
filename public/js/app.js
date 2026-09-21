@@ -2194,8 +2194,8 @@ function openMenu(){
     <div class="menu-group">Shop</div>
     ${isOwner() ? `<button class="menu-item" id="menu-permissions"><span class="ic">&#128100;</span>Staff Access</button>` : ""}
     <button class="menu-item" id="menu-wa-history"><span class="ic">&#128172;</span>WhatsApp History</button>
-    ${mayI("tally", "view") && !state.multiTenant && !state.sellBuild
-      ? `<button class="menu-item" id="menu-tally"><span class="ic">&#128202;</span>Tally Sync</button>` : ""}
+    ${mayI("tally", "view")
+      ? `<button class="menu-item" id="menu-tally"><span class="ic">&#128202;</span>${tallyOffline() ? "Tally Export" : "Tally Sync"}</button>` : ""}
     <button class="menu-item" id="menu-settings"><span class="ic">&#9881;</span>Settings</button>
     <button class="menu-item" id="menu-logout" style="color:var(--danger);">
       <span class="ic">&#128682;</span>Log out${state.me.staffName ? " (" + escapeHtml(state.me.staffName) + ")" : ""}</button>`;
@@ -13158,15 +13158,18 @@ function waLog(entry){
    ============================================================ */
 const tallyState = { tab: "setup", data: null, queue: [], mapKind: "ledger", maps: [] };
 
+/* Tally sits on port 9000 of the PC it runs on. A hosted copy cannot reach
+   that and never will — but it can still BUILD the vouchers and hand them
+   over as a file, which is the whole point of the export. So a hosted copy
+   is not turned away any more; it is shown the one tab that works. */
+function tallyOffline(){ return !!(state.multiTenant || state.sellBuild); }
+
 async function openTallySync(){
   if(!isOwner()){ toast("Only the owner can set up Tally sync."); return; }
-  /* Belt to the menu's braces. The menu is hidden on a hosted copy, but a
-     screen that cannot work should refuse plainly if it is reached any
-     other way rather than showing a connection panel that never connects. */
-  if(state.multiTenant || state.sellBuild){
-    toast("Tally sync runs on the copy installed at your shop, beside Tally itself.");
-    return;
-  }
+  /* A hosted copy gets the export and nothing else: setup, the live queue
+     and the name map all depend on reaching Tally, and a panel that can
+     never connect is worse than one that is not offered. */
+  if(tallyOffline()) tallyState.tab = "export";
   const sheet = document.getElementById("sheet-tally");
   if(!sheet) return;
   sheet.innerHTML = `<div class="sheet-handle"></div>
@@ -13195,18 +13198,20 @@ function renderTally(){
     <button class="sheet-close" data-sheetclose>✕</button>
     <div class="sheet-title">Tally Sync</div>
     <p class="muted" style="font-size:11.5px;margin-top:-6px;">
-      Shop Manager sends to Tally. Nothing is ever read back.</p>
+      ${tallyOffline()
+        ? "This copy cannot reach Tally directly. Build the file here and import it in Tally."
+        : "Shop Manager sends to Tally. Nothing is ever read back."}</p>
 
-    <div class="row" style="align-items:center;gap:8px;margin-top:10px;">
+    ${tallyOffline() ? "" : `<div class="row" style="align-items:center;gap:8px;margin-top:10px;">
       <span style="width:10px;height:10px;border-radius:50%;background:${light[0]};
         display:inline-block;flex:0 0 auto;"></span>
       <b style="font-size:13px;">${escapeHtml(light[1])}</b>
       <span class="muted" style="font-size:11.5px;">${escapeHtml(
         conn && conn.ok ? (conn.message || "") : (conn ? conn.error : ""))}</span>
-    </div>
+    </div>`}
 
     <div class="chip-row" style="margin-top:12px;">
-      ${[["setup","Setup"],["queue","Queue"],["map","Names in Tally"],["export","Export file"]].map(([k,l])=>
+      ${(tallyOffline() ? [["export","Export file"]] : [["setup","Setup"],["queue","Queue"],["map","Names in Tally"],["export","Export file"]]).map(([k,l])=>
         `<button class="chip ${tallyState.tab===k?"selected":""}" data-tally-tab="${k}">${l}</button>`).join("")}
     </div>
 

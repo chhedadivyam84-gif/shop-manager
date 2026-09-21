@@ -15293,7 +15293,94 @@ function renderCashBookList(entries, searching){
   });
 }
 /** One sheet serves both "add" (editEntry omitted) and "edit" of a cash entry. */
-function openCashEntry(type, editEntry){
+/* ============================================================
+   THE PARTY LINK ON A CASH ENTRY
+
+   Typing a name is still enough. Picking one of the shop's own customers or
+   suppliers does one extra thing: the entry joins that party's account, so
+   what they owe is worked out from the cash book itself, instead of being
+   written down a second time on the Customers screen.
+   ============================================================ */
+
+/** Loaded once and kept, because the picker opens on every entry and the
+ *  list only changes when a customer or supplier is added. */
+async function loadCashLinkTargets(){
+  if(state.cbLinkTargets) return state.cbLinkTargets;
+  try{ state.cbLinkTargets = await api("GET", "/cashbook/link-targets"); }
+  catch(err){ state.cbLinkTargets = []; }
+  return state.cbLinkTargets;
+}
+
+function cbPartyOptionsHtml(){
+  const list = state.cbLinkTargets || [];
+  /* The type is the visible label, not the value, so picking "Ramesh" puts
+     "Ramesh" in the box — the name the ledger, the search and the export all
+     show — while the reader can still tell a customer from a supplier. */
+  return list.map(p =>
+    '<option value="' + escapeHtml(p.name) + '" label="' +
+    (p.type === "customer" ? "Customer" : "Supplier") + '"></option>').join("");
+}
+
+/**
+ * Turns what was typed into a party, if it is one.
+ *
+ * Exact name match, case and spacing ignored. Anything else is left as free
+ * text rather than guessed at: attaching money to the wrong account because
+ * two names looked alike is a worse outcome than not attaching it at all.
+ *
+ * When a customer and a supplier share a name the direction decides — money
+ * coming IN is usually a customer paying, money going OUT is usually the shop
+ * paying a supplier — and the badge under the field says which was chosen, so
+ * a wrong guess is visible rather than silent.
+ */
+function cbMatchParty(typed, type){
+  const norm = (x)=>String(x||"").trim().toLowerCase().replace(/\s+/g," ");
+  const want = norm(typed);
+  if(!want) return null;
+  const hits = (state.cbLinkTargets||[]).filter(p=>norm(p.name)===want);
+  if(!hits.length) return null;
+  const preferred = type === "in" ? "customer" : "supplier";
+  const pick = hits.find(p=>p.type===preferred) || hits[0];
+  return { type: pick.type, id: pick.id, name: pick.name };
+}
+
+/** Shows what the entry is attached to and what that party stands at right
+ *  now, so the effect of saving is visible before it is saved. */
+async function cbRefreshPartyLink(){
+  const box = document.getElementById("cbe-party-link");
+  if(!box) return;
+  const link = state.cbePartyLink;
+  if(!link){
+    box.className = "cbe-link";
+    box.innerHTML = '<span class="muted">Not linked — just a name on this entry.</span>';
+    return;
+  }
+  const who = escapeHtml(link.name) + ' · ' + (link.type === "customer" ? "Customer" : "Supplier");
+  box.className = "cbe-link cbe-link-on";
+  box.innerHTML = '<strong>' + who + '</strong> · <span class="muted">loading…</span>';
+  let info;
+  try{ info = await api("GET", "/cashbook/party/" + link.type + "/" + encodeURIComponent(link.id)); }
+  catch(err){ box.innerHTML = '<strong>' + who + '</strong>'; return; }
+  /* Still the same party by the time the balance came back? */
+  if(!state.cbePartyLink || state.cbePartyLink.id !== link.id) return;
+  box.innerHTML = '<strong>' + who + '</strong> · ' + cbBalanceWords(info.balance) +
+    ' <span class="muted">(' + info.entries + ' entr' + (info.entries===1?"y":"ies") + ')</span>';
+}
+
+/** One figure, said the way a shopkeeper says it. Positive means the party
+ *  owes the shop; negative means the shop is out of pocket with them. */
+function cbBalanceWords(balance){
+  if(!balance) return '<span class="muted">settled</span>';
+  return balance > 0
+    ? '<span class="cb-out">owes ' + fmtMoney(balance) + '</span>'
+    : '<span class="cb-in">advance ' + fmtMoney(-balance) + '</span>';
+}
+
+async function openCashEntry(type, editEntry){
+  /* Awaited before the sheet is drawn: a datalist built from an empty list
+     would silently offer nothing, and the operator would conclude the shop
+     has no customers rather than that the list had not arrived yet. */
+  await loadCashLinkTargets();
   const sheet = document.getElementById("sheet-cash-entry");
   const isIn = type==="in";
   sheet.innerHTML = `
@@ -15305,7 +15392,14 @@ function openCashEntry(type, editEntry){
     <label class="field-label">Amount (₹)</label>
     <input type="number" inputmode="decimal" step="any" min="0" id="cbe-amount" value="${editEntry ? editEntry.amount : ""}" placeholder="0">
     <label class="field-label">Party / Person <span class="muted" style="font-weight:400;">— optional</span></label>
-    <input type="text" id="cbe-party" value="${editEntry ? escapeHtml(editEntry.party||"") : ""}" placeholder="e.g. Ramesh, Electricity Board">
+    <input type="text" id="cbe-party" list="cbe-party-options" autocomplete="off"
+           value="${editEntry ? escapeHtml(editEntry.party||"") : ""}"
+           placeholder="Type a name, or pick a customer / supplier">
+    <datalist id="cbe-party-options">${cbPartyOptionsHtml()}</datalist>
+    <!-- Says whether this entry is attached to a real account or is just a
+         name written down. Both are allowed; only the first moves a balance,
+         so the difference has to be visible before the entry is saved. -->
+    <div id="cbe-party-link" class="cbe-link"></div>
     <label class="field-label">Category <span class="muted" style="font-weight:400;">— decides the Profit &amp; Loss line</span></label>
     ${categoryInputHtml("cbe-category", type === "in" ? "income" : "expense", editEntry ? editEntry.category : "")}
     <label class="field-label">Remarks <span class="muted" style="font-weight:400;">— optional</span></label>
@@ -15314,6 +15408,19 @@ function openCashEntry(type, editEntry){
     ${editEntry && isOwner() ? `<div style="margin-top:12px;text-align:center;"><a href="#" id="cbe-delete-link" class="btn-danger-link">Delete this entry</a></div>` : ""}
   `;
   sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+
+  /* The link this entry is being written against, if any. Held on state
+     rather than read back off the input at save time, because the input
+     holds a NAME and two parties can share one. */
+  state.cbePartyLink = (editEntry && editEntry.party_type && editEntry.party_id)
+    ? { type: editEntry.party_type, id: editEntry.party_id, name: editEntry.party || "" }
+    : null;
+  cbRefreshPartyLink();
+  sheet.querySelector("#cbe-party").addEventListener("input", (e)=>{
+    state.cbePartyLink = cbMatchParty(e.target.value, type);
+    cbRefreshPartyLink();
+  });
+
   sheet.querySelector("#cbe-save").addEventListener("click", async ()=>{
     const amount = parseFloat(document.getElementById("cbe-amount").value);
     if(!amount || amount<=0){ toast("Enter a valid amount."); return; }
@@ -15322,6 +15429,10 @@ function openCashEntry(type, editEntry){
       type,
       amount,
       party: document.getElementById("cbe-party").value.trim(),
+      /* Empty strings rather than omitted: on an edit that is what clears a
+         link the entry should no longer have. */
+      partyType: state.cbePartyLink ? state.cbePartyLink.type : "",
+      partyId: state.cbePartyLink ? state.cbePartyLink.id : "",
       category: document.getElementById("cbe-category").value.trim(),
       remarks: document.getElementById("cbe-remarks").value.trim()
     };
@@ -27307,8 +27418,28 @@ async function cbDrawDetail(){
         (e.type === "in" ? "+" : "-") + fmtMoney(e.amount) + '</td>' +
     '</tr>').join("");
 
+  /* WHAT THEY OWE, when this person is one of the shop's own accounts.
+
+     Shown above the period figures because it answers the question the
+     shop actually opens this for. Absent entirely when the name is only a
+     name: a zero here would read as "settled", which is a different and
+     wrong answer from "this person has no account". */
+  const khata = h.khata ? (
+    '<div class="cb-khata">' +
+      '<strong>' + escapeHtml(h.khata.name) + '</strong>' +
+      '<span class="muted">' + (h.khata.partyType === 'customer' ? 'Customer' : 'Supplier') + '</span>' +
+      '<span class="muted">Given ' + fmtMoney(h.khata.given) + ' · Received ' + fmtMoney(h.khata.received) + '</span>' +
+      '<span class="cb-khata-figure ' + (h.khata.balance > 0 ? 'cb-out' : h.khata.balance < 0 ? 'cb-in' : 'muted') + '">' +
+        (h.khata.balance > 0 ? 'Owes ' + fmtMoney(h.khata.balance)
+          : h.khata.balance < 0 ? 'Advance ' + fmtMoney(-h.khata.balance)
+          : 'Settled') +
+      '</span>' +
+    '</div>'
+  ) : '';
+
   box.innerHTML =
     '<div class="card cb-detail">' +
+      khata +
       '<div class="cb-detail-head">' +
         '<strong>' + escapeHtml(state.cbPerson) + '</strong>' +
         '<span class="muted cb-row-txn">' + h.transactions + ' transactions</span>' +
@@ -27388,10 +27519,7 @@ document.addEventListener("click", async (e)=>{
    carries its reason in place, and the counts always describe the whole
    file rather than the page being looked at.
    ============================================================ */
-/** Date and time the way the audit log and WhatsApp history already show
- *  it. There is no shared formatter in this file to reuse — the app spells
- *  en-IN out at each call site — so this follows that rather than adding a
- *  general one the rest of the app would not use. */
+/** Date and time the way the audit log and WhatsApp history already show it. */
 function impWhen(ms){
   const d = new Date(Number(ms) || 0);
   if(isNaN(d)) return "";

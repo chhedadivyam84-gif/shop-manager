@@ -15,6 +15,11 @@
   --warn-text: oklch(0.42 0.1 85);
   --danger: oklch(0.58 0.19 25);
   --danger-bg: oklch(0.92 0.07 25);
+  /* Blue and violet exist only so the home cards and tiles can say what
+     they mean. Everything else in the app still uses navy and gold. */
+  --info: oklch(0.52 0.13 250);
+  --info-bg: oklch(0.93 0.05 250);
+  --tile-money: oklch(0.93 0.05 300);
 }
 
 /* ============================================================
@@ -97,6 +102,7 @@
   --tbl-fs:        12px;
   --tbl-pad-y:      6px;
   --tbl-pad-x:      8px;
+  --cb-list-h:    240px;   /* how tall the category / person lists scroll */
 
   /* ---- the starting screen ----
      Sized here like everything else rather than fixed in the component, so
@@ -149,6 +155,7 @@
     --tbl-fs:      12.5px;
     --tbl-pad-y:      7px;
     --tbl-pad-x:      9px;
+    --cb-list-h:    300px;
     --sp-mark:       92px;
     --sp-mark-fs:    33px;
     --sp-name:       28px;
@@ -197,6 +204,7 @@
     --tbl-fs:        13px;
     --tbl-pad-y:      8px;
     --tbl-pad-x:     10px;
+    --cb-list-h:    340px;
     --sp-mark:      104px;
     --sp-mark-fs:    37px;
     --sp-name:       32px;
@@ -227,6 +235,7 @@
     --fs-nav:      11.5px;
     --nav-icon:      21px;
     --nav-h:         60px;
+    --cb-list-h:    380px;
     --btn-pad-y:     12px;
     --input-pad-y:   11px;
     --input-pad-x:   14px;
@@ -561,6 +570,48 @@ main{flex:1;padding:14px 16px 90px;overflow-y:auto;}
 .stat-card .value{font-size:18px;font-weight:800;margin-top:4px;}
 .stat-card.plain{background:var(--card);border:1px solid var(--border);}
 .stat-card.plain .label{color:var(--muted);}
+/* ============================================================
+   HOME CARDS AND TILES — colour that carries meaning
+
+   Seven identical white cards meant money you HOLD looked exactly like
+   money you OWE. A shopkeeper glancing at a phone had to read every
+   label to find the one figure they wanted. A coloured edge and figure
+   fixes that without adding a single box: green is money held, red is
+   money owed, blue is the bank, amber wants attention.
+
+   Done with :has() so NO markup changes and nothing in app.js needs to
+   know these exist. A browser without :has() shows the cards exactly as
+   they look today — the feature degrades to what was already there.
+   ============================================================ */
+.stat-card.plain:has(#stat-profit){ border-left:4px solid var(--ok); }
+.stat-card.plain:has(#stat-profit) .value{ color:var(--ok); }
+.stat-card.plain:has(#stat-outstanding){ border-left:4px solid var(--danger); }
+.stat-card.plain:has(#stat-payable){ border-left:4px solid var(--danger); }
+.stat-card.plain:has(#stat-cash){ border-left:4px solid var(--ok); }
+.stat-card.plain:has(#stat-cash) .value{ color:var(--ok); }
+.stat-card.plain:has(#stat-bank){ border-left:4px solid var(--info); }
+.stat-card.plain:has(#stat-bank) .value{ color:var(--info); }
+.stat-card.plain:has(#stat-lowstock){ border-left:4px solid var(--gold-2); }
+.stat-card.plain:has(#stat-lowstock) .value{ color:var(--warn-text); }
+
+/* Tiles tinted by what they are FOR, so the grid reads as groups rather
+   than one long row of identical buttons. Selling keeps the gold it
+   already had; only the others change. */
+.qa-btn[data-tile="purchase"] .ic,
+.qa-btn[data-tile="po"] .ic,
+.qa-btn[data-tile="accounts"] .ic,
+.qa-btn[data-tile="payment"] .ic{ background:var(--info-bg); }
+
+.qa-btn[data-tile="shop"] .ic,
+.qa-btn[data-tile="warehouse"] .ic,
+.qa-btn[data-tile="scan"] .ic,
+.qa-btn[data-tile="labels"] .ic,
+.qa-btn[data-tile="product-search"] .ic,
+.qa-btn[data-tile="pquery"] .ic{ background:var(--ok-bg); }
+
+.qa-btn[data-tile="cashbook"] .ic,
+.qa-btn[data-tile="bankbook"] .ic,
+.qa-btn[data-tile="cheque"] .ic{ background:var(--tile-money); }
 .stat-card .value.red{color:var(--danger);}
 
 .quick-actions{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-top:14px;}
@@ -673,6 +724,92 @@ nav.bottom .tab.active{color:var(--navy);}
 .cb-cell.cb-sel .cb-dot{background:var(--gold);}
 .cb-cell:focus-visible{outline:2px solid var(--gold);outline-offset:1px;}
 @media print{ .cb-cal{display:none !important;} }
+
+/* Cash Book — Explore by Category & Person.
+
+   Laid out for the device rather than for one screen width. The two panels
+   are flex children with a sensible minimum, so they sit side by side the
+   moment there is room for both and stack the rest of the time — and when
+   the People panel is hidden, Categories simply takes the full width with
+   no empty column left behind. No breakpoint decides that; the content does.
+
+   360px is the narrowest a panel can be while "Open … In … Out … Close …"
+   still reads as a line of figures rather than a wrapped block. So a phone
+   and a portrait tablet get one column, a laptop and a desktop get two —
+   which falls out of the width available, not out of a magic number. */
+/* The section title carries the collapse toggle, so it is a row. */
+.cb-explore-head{display:flex;align-items:center;gap:var(--gap);flex-wrap:wrap;}
+.cb-explore-head > span{flex:1;min-width:0;}
+.cb-explore-head .btn{width:auto;padding:var(--chip-pad-y) var(--chip-pad-x);font-size:var(--fs-btn-sm);}
+.cb-periods{display:flex;flex-wrap:wrap;gap:var(--gap);margin-bottom:var(--gap);}
+/* .btn is width:100%, which makes every one of these take a row of its own.
+   Same fix the product-quote button row already uses. */
+.cb-periods .btn{
+  width:auto;flex:1 1 auto;
+  padding:var(--chip-pad-y) var(--chip-pad-x);
+  font-size:var(--fs-btn-sm);
+  white-space:nowrap;
+}
+
+.cb-cols{display:flex;flex-wrap:wrap;gap:var(--gap);align-items:flex-start;}
+.cb-cols > .card{flex:1 1 360px;min-width:0;}
+
+.cb-panel-head{display:flex;gap:var(--gap);align-items:center;flex-wrap:wrap;margin-bottom:var(--gap);}
+.cb-panel-head strong{flex:1;min-width:0;font-size:var(--fs-title);}
+.cb-panel-head .btn{width:auto;padding:var(--chip-pad-y) var(--chip-pad-x);font-size:var(--fs-btn-sm);white-space:nowrap;}
+
+.cb-search-row{margin:0 0 var(--gap);}
+.cb-list{overflow-y:auto;max-height:var(--cb-list-h);-webkit-overflow-scrolling:touch;}
+
+/* One row of figures, shared by both lists so they cannot drift apart. */
+.cb-row{cursor:pointer;padding:var(--row-pad-y) var(--tbl-pad-x);border-radius:var(--btn-radius);border-bottom:1px solid var(--border);}
+.cb-row:last-child{border-bottom:none;}
+.cb-row.cb-on{background:var(--ok-bg);}
+.cb-row:focus-visible{outline:2px solid var(--gold);outline-offset:-2px;}
+.cb-row-top{display:flex;gap:var(--gap);align-items:baseline;flex-wrap:wrap;}
+.cb-row-top strong{flex:1;min-width:0;font-size:var(--fs-row-title);overflow-wrap:anywhere;}
+.cb-row-txn{font-size:var(--fs-row-sub);color:var(--muted);white-space:nowrap;}
+.cb-row-figs{display:flex;gap:var(--gap);flex-wrap:wrap;font-size:var(--fs-row-sub);margin-top:2px;font-variant-numeric:tabular-nums;}
+.cb-in{color:var(--ok);}
+.cb-out{color:var(--danger);}
+
+/* Adding a category, inline above the list it joins. */
+.cb-add{padding:var(--tbl-pad-x);border:1px dashed var(--border);border-radius:var(--btn-radius);margin-bottom:var(--gap);}
+.cb-add-fields{display:flex;gap:var(--gap);flex-wrap:wrap;align-items:center;}
+.cb-add-fields input{flex:2 1 150px;min-width:0;}
+.cb-add-fields select{flex:1 1 110px;min-width:0;}
+.cb-add-fields .btn{width:auto;flex:0 0 auto;padding:var(--chip-pad-y) var(--chip-pad-x);font-size:var(--fs-btn-sm);}
+
+/* The chosen person's history. */
+.cb-detail-head{display:flex;gap:var(--gap);align-items:baseline;flex-wrap:wrap;margin-bottom:4px;}
+.cb-detail-head strong{flex:1;min-width:0;font-size:var(--fs-title);overflow-wrap:anywhere;}
+.cb-detail-figs{display:flex;gap:var(--gap);flex-wrap:wrap;font-size:var(--fs-row-sub);margin-bottom:var(--gap);font-variant-numeric:tabular-nums;}
+.cb-detail .table{min-width:340px;}
+.cb-nowrap{white-space:nowrap;}
+.cb-amt{text-align:right;font-variant-numeric:tabular-nums;}
+
+
+/* The badge under the Party field on a cash entry, and the same figure
+   repeated on the party's page in the Explore panel. Sizes come from the
+   device tokens like everything else here. */
+.cbe-link{margin-top:6px;font-size:var(--fs-row-sub);line-height:1.5;}
+.cbe-link-on{
+  padding:var(--chip-pad-y) var(--chip-pad-x);
+  border-radius:var(--btn-radius);
+  background:var(--ok-bg);
+}
+.cb-khata{
+  display:flex;gap:var(--gap);flex-wrap:wrap;align-items:baseline;
+  padding:var(--chip-pad-y) var(--chip-pad-x);
+  border-radius:var(--btn-radius);
+  background:var(--ok-bg);
+  font-size:var(--fs-row-sub);
+  margin-bottom:var(--gap);
+  font-variant-numeric:tabular-nums;
+}
+.cb-khata strong{font-size:var(--fs-row-title);}
+.cb-khata-figure{margin-left:auto;font-size:var(--fs-title);font-weight:800;}
+
 
 /* Overlays / sheets */
 .scrim{position:fixed;inset:0;background:rgba(15,20,30,.5);z-index:40;display:none;}

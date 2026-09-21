@@ -3,6 +3,7 @@ const db = require("../db");
 const { uid, logAction, round2, todayStr } = require("../util");
 const { requireRole } = require("../auth");
 const { buildXlsx } = require("../xlsx");
+const partyCash = require("../partyCash");
 
 const router = express.Router();
 
@@ -47,6 +48,38 @@ function chronoWithBalance() {
   });
 }
 
+/**
+ * Does one entry match what was typed in the search box?
+ *
+ * Party, category and remarks have always matched as text. Two more:
+ *
+ * AMOUNTS MATCH EXACTLY, not as text. "500" finding 1500, 5000 and
+ * 500.50 because all three contain those digits is noise in a book of
+ * money — the reason to search an amount is that you remember the
+ * figure. Commas and a rupee sign are stripped first, because that is
+ * how a figure is read off a screen or a bill: "₹1,500".
+ *
+ * DATES STAY A TEXT MATCH, on purpose. "2026-09" is a whole month and
+ * "-14" is a day in any month, and people type both.
+ *
+ * Defined once because /cashbook and /cashbook/export both need it and
+ * previously held identical copies. The export is meant to return what
+ * the screen is showing, which stops being true the moment one copy
+ * gains a rule the other does not.
+ */
+function matchesSearch(r, search) {
+  if (!search) return true;
+  const cleaned = search.replace(/[,₹\s]/g, "");
+  const asNumber = Number(cleaned);
+  const isAmount = /^[₹\s]*[\d,]+(\.\d+)?\s*$/.test(search) && cleaned !== "" && isFinite(asNumber);
+
+  return (r.party || "").toLowerCase().includes(search) ||
+         (r.category || "").toLowerCase().includes(search) ||
+         (r.remarks || "").toLowerCase().includes(search) ||
+         (r.date || "").includes(search) ||
+         (isAmount && round2(r.amount) === round2(asNumber));
+}
+
 router.get("/", (req, res) => {
   const { from, to, q } = req.query;
   let rows = chronoWithBalance();
@@ -57,11 +90,7 @@ router.get("/", (req, res) => {
     // the from/to range instead of narrowing within it — otherwise the
     // common case of searching while the range is still on "Today" would
     // return nothing and look broken.
-    rows = rows.filter(r =>
-      (r.party || "").toLowerCase().includes(search) ||
-      (r.category || "").toLowerCase().includes(search) ||
-      (r.remarks || "").toLowerCase().includes(search)
-    );
+    rows = rows.filter(r => matchesSearch(r, search));
   } else {
     if (from) rows = rows.filter(r => r.date >= from);
     if (to) rows = rows.filter(r => r.date <= to);
@@ -117,6 +146,196 @@ router.get("/summary", (req, res) => {
     openingBalance, totalIn, totalOut, closingBalance,
     netCashFlow: round2(totalIn - totalOut),
     entryCount: inRange.length
+  });
+});
+
+/* ============================================================
+   WHO AND WHAT THE MONEY WENT TO
+
+   Three additions, all read-only. Nothing below writes, edits or voids
+   anything, and none of the existing routes changed — the day-by-day
+   cash book, its balances and its entries are exactly as they were.
+
+   WHY THE TOTALS ARE BUILT FROM chronoWithBalance() AND NOT FROM THEIR
+   OWN QUERY: the cash book's opening and closing already come from that
+   one running total over all history. A second, independent sum of the
+   same money is how a book comes to disagree with itself on one day in
+   a year, and nobody finds out until they are counting the drawer. So
+   these group the SAME rows rather than re-deriving them.
+
+   CATEGORY AND PARTY ARE FREE TEXT on cash_entries, not linked ids.
+   That is how the shop has always used them and it is not being
+   changed here. The consequence is honest and worth stating: grouping
+   is by the name as typed, so "Ramesh" and "ramesh " are one group only
+   because these trim and compare case-insensitively. A genuinely
+   different spelling is a genuinely different party, and no total can
+   guess otherwise.
+   ============================================================ */
+
+/* The label a nameless row groups under. It is shown to the reader AND sent
+   back as the filter when that group is clicked, so both sides have to agree
+   on it — hence one constant rather than a string written twice. */
+const NO_NAME = "(none)";
+
+/* The key a name groups under; the display name is the first spelling seen.
+   A blank resolves to NO_NAME so that grouping and filtering cannot disagree
+   about what an unnamed row is called. */
+const groupKey = (s) => String(s || "").trim().toLowerCase() || NO_NAME;
+
+function groupTotals(field, from, to, only) {
+  const all = chronoWithBalance();
+  const rangeFrom = from || "0000-01-01";
+  const rangeTo = to || "9999-12-31";
+
+  /* Narrow to one category (or one party) before grouping, so "the people
+     inside Labour Charges" is answerable without the screen downloading
+     every entry and working it out for itself. */
+  const onlyField = only && only.field;
+  const onlyKey = only && groupKey(only.value);
+
+  const groups = new Map();
+  const take = (row, where) => {
+    const key = groupKey(row[field]);
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        name: String(row[field] || "").trim() || NO_NAME,
+        opening: 0, income: 0, expense: 0, transactions: 0, lastDate: "",
+      });
+    }
+    const g = groups.get(key);
+    const signed = row.type === "in" ? row.amount : -row.amount;
+
+    if (where === "before") {
+      /* A category has no running cash balance of its own, so "opening"
+         here means what this name had netted BEFORE the range — the
+         figure a shopkeeper means by "and where did we stand with them
+         before this month". */
+      g.opening = round2(g.opening + signed);
+      return;
+    }
+    if (row.type === "in") g.income = round2(g.income + row.amount);
+    else g.expense = round2(g.expense + row.amount);
+    g.transactions += 1;
+    if (row.date > g.lastDate) g.lastDate = row.date;
+  };
+
+  for (const row of all) {
+    if (onlyField && groupKey(row[onlyField]) !== onlyKey) continue;
+    if (row.date < rangeFrom) take(row, "before");
+    else if (row.date <= rangeTo) take(row, "in");
+  }
+
+  return [...groups.values()]
+    .map(g => ({ ...g, closing: round2(g.opening + g.income - g.expense) }))
+    /* Names that only ever appeared before the range would otherwise show
+       as rows with nothing in them for the period being looked at. */
+    .filter(g => g.transactions > 0 || g.opening !== 0)
+    .sort((a, b) => (b.income + b.expense) - (a.income + a.expense));
+}
+
+/** Every category name the cash book has actually used, plus the master
+ *  list — so the picker offers both what exists and what was set up. */
+router.get("/categories-used", (req, res) => {
+  const used = db.prepare(`
+    SELECT category AS name, COUNT(*) AS uses, MAX(date) AS lastDate
+    FROM cash_entries
+    WHERE voided = 0 AND TRIM(COALESCE(category,'')) <> ''
+    GROUP BY LOWER(TRIM(category))
+    ORDER BY uses DESC
+  `).all();
+  res.json(used);
+});
+
+/** Every party the cash book has dealt with. Feeds the person picker. */
+router.get("/parties", (req, res) => {
+  const rows = db.prepare(`
+    SELECT party AS name, COUNT(*) AS transactions, MAX(date) AS lastDate
+    FROM cash_entries
+    WHERE voided = 0 AND TRIM(COALESCE(party,'')) <> ''
+    GROUP BY LOWER(TRIM(party))
+    ORDER BY transactions DESC, name ASC
+  `).all();
+  res.json(rows);
+});
+
+/** Opening, income, expense, closing and a count, per category.
+ *  ?party= narrows it to one person's categories. */
+router.get("/by-category", (req, res) => {
+  const { from, to, party } = req.query;
+  const only = party ? { field: "party", value: party } : null;
+  res.json({ from: from || null, to: to || null, party: party || null,
+             groups: groupTotals("category", from, to, only) });
+});
+
+/** The same, per person/party.
+ *  ?category= narrows it to the people inside one category. */
+router.get("/by-party", (req, res) => {
+  const { from, to, category } = req.query;
+  const only = category ? { field: "category", value: category } : null;
+  res.json({ from: from || null, to: to || null, category: category || null,
+             groups: groupTotals("party", from, to, only) });
+});
+
+/**
+ * One person's transactions, in full.
+ *
+ * The cash book's own list is the place to read entries, but it filters by
+ * date and search text — there was no way to ask "everything we have ever
+ * done with Ramesh". This answers exactly that, optionally inside one
+ * category, and returns the entries themselves rather than a total, so the
+ * screen can show the history behind a figure it has just displayed.
+ */
+router.get("/history", (req, res) => {
+  const { party, category, from, to } = req.query;
+  /* Asked for nothing at all, versus asked for the nameless ones. groupKey
+     turns "" into NO_NAME, so the presence of the query parameter — not its
+     value — is what says whether a filter was requested. */
+  const wantParty = party !== undefined && party !== "" ? groupKey(party) : null;
+  const wantCategory = category !== undefined && category !== "" ? groupKey(category) : null;
+  if (!wantParty && !wantCategory) {
+    return res.status(400).json({ error: "Ask for a party, a category, or both." });
+  }
+
+  const rows = chronoWithBalance().filter(r => {
+    if (wantParty && groupKey(r.party) !== wantParty) return false;
+    if (wantCategory && groupKey(r.category) !== wantCategory) return false;
+    if (from && r.date < from) return false;
+    if (to && r.date > to) return false;
+    return true;
+  });
+
+  const income = round2(rows.filter(r => r.type === "in").reduce((s, r) => s + r.amount, 0));
+  const expense = round2(rows.filter(r => r.type === "out").reduce((s, r) => s + r.amount, 0));
+
+  /* IS THIS PERSON ONE OF THE SHOP'S ACCOUNTS?
+
+     The list above is grouped by the name written on the entry, because that
+     is all most rows have. If any of those rows also carries a link, the same
+     name is a real customer or supplier, and the question changes from "what
+     moved this month" to "what do they still owe" — which is the whole reason
+     for linking. The balance comes from partyCash so the figure here and the
+     figure on their account can never be two different calculations.
+
+     Taken from the entries themselves rather than by matching the name against
+     the customer list: the link is what the operator actually chose, and a name
+     that merely looks like a customer is not one. */
+  let khata = null;
+  const linked = rows.find(r => r.party_type && r.party_id);
+  if (linked) {
+    const name = partyCash.partyName(linked.party_type, linked.party_id);
+    if (name) {
+      khata = { ...partyCash.partyCashBalance(linked.party_type, linked.party_id), name };
+    }
+  }
+
+  res.json({
+    party: party || null, category: category || null,
+    transactions: rows.length, income, expense, net: round2(income - expense),
+    /* Null when the name is just a name. The screen says so rather than
+       showing a zero balance, which would read as "settled". */
+    khata,
+    entries: rows.slice().reverse(),        /* newest first, as the screen reads */
   });
 });
 
@@ -223,11 +442,7 @@ router.get("/export", (req, res) => {
   // hand back the whole date range instead of the search results.
   const search = String(q || "").trim().toLowerCase();
   if (search) {
-    rows = rows.filter(r =>
-      (r.party || "").toLowerCase().includes(search) ||
-      (r.category || "").toLowerCase().includes(search) ||
-      (r.remarks || "").toLowerCase().includes(search)
-    );
+    rows = rows.filter(r => matchesSearch(r, search));
   } else {
     if (from) rows = rows.filter(r => r.date >= from);
     if (to) rows = rows.filter(r => r.date <= to);
@@ -290,6 +505,84 @@ router.get("/export", (req, res) => {
   res.send(buf);
 });
 
+/** Everyone a cash entry may be attached to — the dropdown's contents. */
+router.get("/link-targets", (req, res) => {
+  res.json(partyCash.linkTargets());
+});
+
+/**
+ * KHATA BALANCES — what each linked party owes the shop, worked out from
+ * the cash book alone. See server/partyCash.js for the sign rule and for
+ * why rows auto-posted from a recorded payment are left out.
+ *
+ * Deliberately NOT merged with customers.due: that figure comes from bills
+ * and the payments made against them, this one comes from cash handed over
+ * and taken back. A shop that uses both would be shown the same money twice
+ * if they were added together here, so they are returned apart and labelled.
+ */
+router.get("/party-balances", (req, res) => {
+  const type = String(req.query.type || "").trim();
+  if (type && type !== "customer" && type !== "supplier") {
+    return res.status(400).json({ error: "Party type must be customer or supplier." });
+  }
+  const rows = partyCash.allPartyCashBalances(type || null);
+
+  /* Names are attached here rather than joined in SQL so the balance query
+     stays one grouped scan, and so a party deleted since the entry was
+     written still shows its money instead of vanishing from the total. */
+  const named = rows.map(r => ({
+    ...r,
+    name: partyCash.partyName(r.partyType, r.partyId) || "(deleted party)",
+  }));
+  res.json({
+    parties: named,
+    owedToShop: round2(named.filter(r => r.balance > 0).reduce((t, r) => t + r.balance, 0)),
+    owedByShop: round2(named.filter(r => r.balance < 0).reduce((t, r) => t - r.balance, 0)),
+  });
+});
+
+/** One party's khata: the balance and the entries that make it up. */
+router.get("/party/:type/:id", (req, res) => {
+  const { type, id } = req.params;
+  const name = partyCash.partyName(type, id);
+  if (!name) return res.status(404).json({ error: "Customer or supplier not found." });
+  const { from, to } = req.query;
+  /* `entries` stays the COUNT that partyCashBalance returns; the rows go in
+     `history`. Spreading the balance and then writing `entries` again with
+     the array silently replaced a number with a list, and every caller
+     reading it as a count got "[object Object]". */
+  res.json({
+    ...partyCash.partyCashBalance(type, id),
+    name,
+    history: partyCash.partyCashHistory(type, id, from, to),
+  });
+});
+
+
+/**
+ * The customer or supplier an entry is being attached to, if any.
+ *
+ * Optional on purpose: a cash entry that names nobody is still a cash entry,
+ * and every row written before this existed has no link at all. An id that
+ * does not resolve is refused rather than stored, because a balance against
+ * a party that is not there is worse than no balance.
+ *
+ * Returns { partyType, partyId, name } — name so the free-text party column
+ * can be kept in step, which is what the ledger, the search and the export
+ * all still read.
+ */
+function readPartyLink(body) {
+  const partyType = String(body.partyType || "").trim();
+  const partyId = String(body.partyId || "").trim();
+  if (!partyType && !partyId) return { partyType: "", partyId: "", name: null };
+  if (partyType !== "customer" && partyType !== "supplier") {
+    throw new Error("A cash entry can only be linked to a customer or a supplier.");
+  }
+  const name = partyCash.partyName(partyType, partyId);
+  if (!name) throw new Error("That customer or supplier no longer exists.");
+  return { partyType, partyId, name };
+}
+
 router.post("/", (req, res) => {
   const { date, type, party, category, remarks } = req.body;
   const amount = round2(Number(req.body.amount));
@@ -297,11 +590,21 @@ router.post("/", (req, res) => {
   if (type !== "in" && type !== "out") return res.status(400).json({ error: "Choose Cash In or Cash Out." });
   const entryDate = (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) ? date : todayStr();
 
+  let link;
+  try { link = readPartyLink(req.body); }
+  catch (err) { return res.status(400).json({ error: err.message }); }
+
+  /* A linked entry carries the party's real name in the free-text column too.
+     The ledger, the search and the Excel export all read that column, and a
+     row that shows a blank party because the name now lives in an id would be
+     a step backwards from what the shop has today. */
+  const partyText = link.name || (party || "").trim();
+
   const id = uid("CASH");
   db.prepare(`
-    INSERT INTO cash_entries (id, date, type, amount, party, category, remarks, voided, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
-  `).run(id, entryDate, type, amount, (party || "").trim(), (category || "").trim(), (remarks || "").trim(), Date.now());
+    INSERT INTO cash_entries (id, date, type, amount, party, category, remarks, voided, party_type, party_id, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+  `).run(id, entryDate, type, amount, partyText, (category || "").trim(), (remarks || "").trim(), link.partyType, link.partyId, Date.now());
 
   /* Straight into Tally as a Receipt or a Payment against the category.
      This route only ever writes rows the shop TYPED, so there is no
@@ -329,9 +632,19 @@ router.put("/:id", (req, res) => {
   const entryType = (type === "in" || type === "out") ? type : e.type;
   const entryDate = (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) ? date : e.date;
 
+  /* Left out of the body entirely, the existing link stands; sent empty, it
+     is cleared. Re-pointing an entry at the wrong party is an ordinary typo
+     and must be fixable here, not only by deleting and re-entering. */
+  let link;
+  try {
+    link = (req.body.partyType === undefined && req.body.partyId === undefined)
+      ? { partyType: e.party_type || "", partyId: e.party_id || "", name: null }
+      : readPartyLink(req.body);
+  } catch (err) { return res.status(400).json({ error: err.message }); }
+
   db.prepare(`
-    UPDATE cash_entries SET date=?, type=?, amount=?, party=?, category=?, remarks=? WHERE id=?
-  `).run(entryDate, entryType, amount, (party ?? e.party).trim(), (category ?? e.category).trim(), (remarks ?? e.remarks).trim(), e.id);
+    UPDATE cash_entries SET date=?, type=?, amount=?, party=?, category=?, remarks=?, party_type=?, party_id=? WHERE id=?
+  `).run(entryDate, entryType, amount, (link.name ?? party ?? e.party).trim(), (category ?? e.category).trim(), (remarks ?? e.remarks).trim(), link.partyType, link.partyId, e.id);
 
   logAction(req, "cashbook.edit", `${e.id}: ${e.amount} -> ${amount}`);
   res.json(db.prepare("SELECT * FROM cash_entries WHERE id = ?").get(e.id));

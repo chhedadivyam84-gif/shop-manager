@@ -2275,6 +2275,21 @@ addColumn("cash_entries", "link_id", "TEXT DEFAULT ''");
 addColumn("cash_entries", "source_type", "TEXT DEFAULT ''");
 addColumn("cash_entries", "source_id", "TEXT DEFAULT ''");
 
+// WHICH customer or supplier a cash entry belongs to.
+//
+// bank_entries has carried party_type/party_id since the Bank Entry module;
+// cash_entries never got them, so a hand-typed cash row could only say WHO in
+// free text — "ramesh lodha", "praful bhai" — which nothing can join on. That
+// is why a shop keeping its accounts in the Cash Book had to type every
+// receipt twice: once here and again against the party, just to know what was
+// still owed.
+//
+// Blank on every existing row and optional on every new one: a cash entry that
+// names nobody is still a perfectly good cash entry, and the 697 rows already
+// in this book keep working exactly as they are.
+addColumn("cash_entries", "party_type", "TEXT DEFAULT ''");   // 'customer' | 'supplier' | ''
+addColumn("cash_entries", "party_id", "TEXT DEFAULT ''");
+
 // Which bank account a Bank-method customer/supplier payment hit, so it can
 // auto-post the matching bank_entries row. NULL for Cash-method payments.
 addColumn("payments", "bank_account_id", "TEXT REFERENCES bank_accounts(id)");

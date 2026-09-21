@@ -649,7 +649,7 @@ setTimeout(function () {
              active. -->
         <div class="searchbar" style="margin-top:10px;">
           <span>&#128269;</span>
-          <input type="text" id="cb-search" placeholder="Search party, category or remarks — any date">
+          <input type="text" id="cb-search" placeholder="Search party, category, remarks or amount — any date">
         </div>
 
         <div class="charge-grid" style="margin-top:10px;">
@@ -666,6 +666,64 @@ setTimeout(function () {
           <button class="btn btn-outline" id="cb-add-out" style="flex:1;border-color:var(--danger);color:var(--danger);">+ Cash Out</button>
         </div>
 
+        <!-- EXPLORE BY CATEGORY AND PERSON.
+
+             Added below the entry buttons on purpose: taking cash and paying
+             it out is what this screen is opened for every day, and that must
+             not move down the page to make room for something used monthly.
+
+             Collapsed by default, so a staff member who never opens it sees
+             the cash book exactly as it was. Nothing above this block changed. -->
+        <div class="section-title cb-explore-head">
+          <span>Explore by Category &amp; Person</span>
+          <button class="btn btn-outline" id="cb-explore-toggle">Open</button>
+        </div>
+
+        <div id="cb-explore" hidden>
+          <!-- Period. The From/To inputs above stay the single source of
+               truth — these buttons fill them in rather than keeping a second,
+               competing idea of the date range. -->
+          <div class="cb-periods">
+            <button class="btn btn-outline cb-period" data-period="today">Today</button>
+            <button class="btn btn-outline cb-period" data-period="week">This Week</button>
+            <button class="btn btn-outline cb-period" data-period="month">This Month</button>
+            <button class="btn btn-outline cb-period" data-period="lastmonth">Last Month</button>
+            <button class="btn btn-outline cb-period" data-period="custom">Custom</button>
+          </div>
+
+          <!-- Side by side once there is room for both, stacked on a phone,
+               and Categories alone takes the full width. See .cb-cols. -->
+          <div class="cb-cols">
+            <div class="card">
+              <div class="cb-panel-head">
+                <strong>Categories</strong>
+                <button class="btn btn-outline" id="cb-add-category">+ Add New Category</button>
+              </div>
+              <div class="searchbar cb-search-row">
+                <span>&#128269;</span>
+                <input type="text" id="cb-cat-search" placeholder="Search categories">
+              </div>
+              <!-- Scrolls rather than growing: a shop with sixty categories must
+                   not push the totals off the screen. Height comes from
+                   --cb-list-h, so it grows with the device. -->
+              <div id="cb-cat-list" class="cb-list"></div>
+            </div>
+
+            <div class="card" id="cb-person-card" hidden>
+              <div class="cb-panel-head">
+                <strong>People in <span id="cb-person-for"></span></strong>
+                <button class="btn btn-outline" id="cb-person-clear">Back to all</button>
+              </div>
+              <div class="searchbar cb-search-row">
+                <span>&#128269;</span>
+                <input type="text" id="cb-person-search" placeholder="Search person or party">
+              </div>
+              <div id="cb-person-list" class="cb-list"></div>
+            </div>
+          </div>
+
+          <div id="cb-explore-detail"></div>
+        </div>
         <div class="section-title">Ledger</div>
         <div id="cashbook-daily"></div>
         <div class="card" id="cashbook-list"></div>

@@ -13206,7 +13206,7 @@ function renderTally(){
     </div>
 
     <div class="chip-row" style="margin-top:12px;">
-      ${[["setup","Setup"],["queue","Queue"],["map","Names in Tally"]].map(([k,l])=>
+      ${[["setup","Setup"],["queue","Queue"],["map","Names in Tally"],["export","Export file"]].map(([k,l])=>
         `<button class="chip ${tallyState.tab===k?"selected":""}" data-tally-tab="${k}">${l}</button>`).join("")}
     </div>
 
@@ -13219,7 +13219,141 @@ function renderTally(){
 
   if(tallyState.tab === "setup") renderTallySetup();
   else if(tallyState.tab === "queue") renderTallyQueue();
+  else if(tallyState.tab === "export") renderTallyExport();
   else renderTallyMap();
+}
+
+/* ---- export to a file, no bridge ----
+   Tally listens on port 9000 of the PC it runs on, which a hosted copy of
+   this app can never reach — that is the only reason the bridge exists.
+   The XML itself needs no bridge at all, so it can simply be handed over
+   and fed to Gateway of Tally > Import Data.
+
+   Nothing here marks anything as synced. A downloaded file says nothing
+   about whether Tally accepted it, so the queue is advanced only by the
+   confirm button below, pressed by whoever watched the import report. */
+function renderTallyExport(){
+  const el = document.getElementById("tally-body");
+  const st = tallyState.exportState || (tallyState.exportState = { scope:"pending", from:"", to:"", preview:null, busy:false });
+
+  el.innerHTML = `
+    <p class="muted" style="font-size:12px;margin:0 0 10px;">
+      For when Tally is not reachable from this app. Download the two files,
+      then in Tally: <b>Gateway of Tally &rarr; Import Data</b>. Masters first.</p>
+
+    <div class="chip-row">
+      ${[["pending","Waiting to send"],["range","A date range"]].map(([k,l])=>
+        `<button class="chip ${st.scope===k?"selected":""}" data-tex-scope="${k}">${l}</button>`).join("")}
+    </div>
+
+    ${st.scope==="range" ? `
+      <div class="row" style="gap:8px;margin-top:10px;">
+        <div style="flex:1;"><label class="field-label">From</label>
+          <input type="date" id="tex-from" value="${st.from}"></div>
+        <div style="flex:1;"><label class="field-label">To</label>
+          <input type="date" id="tex-to" value="${st.to}"></div>
+      </div>` : ""}
+
+    <button class="btn btn-outline" id="tex-preview" style="margin-top:12px;">
+      ${st.busy ? "Checking…" : "Check what will be exported"}</button>
+
+    <div id="tex-result" style="margin-top:12px;"></div>`;
+
+  el.querySelectorAll("[data-tex-scope]").forEach(b=>b.addEventListener("click", ()=>{
+    st.scope = b.dataset.texScope; st.preview = null; renderTallyExport();
+  }));
+  const from = el.querySelector("#tex-from"), to = el.querySelector("#tex-to");
+  if(from) from.addEventListener("change", e=>{ st.from = e.target.value; });
+  if(to)   to.addEventListener("change",   e=>{ st.to   = e.target.value; });
+  el.querySelector("#tex-preview").addEventListener("click", tallyExportPreview);
+
+  if(st.preview) drawTallyExportResult(st.preview);
+}
+
+function tallyExportQuery(){
+  const st = tallyState.exportState;
+  const q = ["scope=" + encodeURIComponent(st.scope)];
+  if(st.scope === "range"){
+    if(st.from) q.push("from=" + encodeURIComponent(st.from));
+    if(st.to)   q.push("to="   + encodeURIComponent(st.to));
+  }
+  return q.join("&");
+}
+
+async function tallyExportPreview(){
+  const st = tallyState.exportState;
+  st.busy = true; renderTallyExport();
+  try{
+    st.preview = await api("GET", "/tally/export/preview?" + tallyExportQuery());
+  }catch(err){ toast(err.message); st.preview = null; }
+  finally{ st.busy = false; renderTallyExport(); }
+}
+
+function drawTallyExportResult(p){
+  const box = document.getElementById("tex-result");
+  if(!box) return;
+  const c = p.counts || {};
+  if(!c.vouchers){
+    box.innerHTML = `<div class="empty-hint">Nothing to export for that choice.</div>`;
+    return;
+  }
+  const q = tallyExportQuery();
+  /* Problems are listed, never summarised away: a voucher that silently
+     did not make it into the file is one the accountant finds later. */
+  const problems = (p.problems||[]).length ? `
+    <div class="card" style="margin-top:10px;border-left:3px solid var(--danger);">
+      <b style="font-size:12.5px;">${p.problems.length} could not be built</b>
+      ${p.problems.slice(0,8).map(x=>`<div class="muted" style="font-size:11.5px;margin-top:4px;">
+        ${escapeHtml(x.docNo||x.type)} · ${escapeHtml(x.date||"")} — ${escapeHtml(x.reason||"")}</div>`).join("")}
+      ${p.problems.length>8 ? `<div class="muted" style="font-size:11.5px;margin-top:4px;">…and ${p.problems.length-8} more</div>` : ""}
+    </div>` : "";
+
+  box.innerHTML = `
+    <div class="card">
+      <div style="font-size:13px;font-weight:700;">Ready for ${escapeHtml(p.company||"Tally")}</div>
+      <div class="muted" style="font-size:12px;margin-top:4px;">
+        ${c.vouchers} voucher${c.vouchers===1?"":"s"}
+        ${c.masters ? ` · ${c.masters} ledger/item master${c.masters===1?"":"s"}` : ""}
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px;">
+      <button class="btn btn-outline" id="tex-dl-m">1 · Download masters</button>
+      <button class="btn btn-primary" id="tex-dl-v">2 · Download vouchers</button>
+    </div>
+    <p class="muted" style="font-size:11.5px;margin-top:8px;">
+      Import masters into Tally first, then vouchers. Re-importing the same
+      file is safe — each voucher carries an id Tally matches on, so it
+      updates rather than duplicates.</p>
+
+    ${problems}
+
+    <div class="card" style="margin-top:12px;">
+      <b style="font-size:12.5px;">After Tally has taken them</b>
+      <p class="muted" style="font-size:11.5px;margin-top:4px;">
+        Downloading changes nothing here — these ${c.included} document(s) are
+        still marked as waiting. Press this only once Tally&rsquo;s import
+        report says it worked.</p>
+      <button class="btn btn-outline" id="tex-confirm" style="margin-top:8px;">
+        Mark ${c.included} as sent to Tally</button>
+    </div>`;
+
+  box.querySelector("#tex-dl-m").addEventListener("click", ()=>
+    window.open("/api/tally/export/download?kind=masters&" + q, "_blank"));
+  box.querySelector("#tex-dl-v").addEventListener("click", ()=>
+    window.open("/api/tally/export/download?kind=vouchers&" + q, "_blank"));
+  box.querySelector("#tex-confirm").addEventListener("click", async ()=>{
+    const ids = (p.included||[]).map(x=>x.syncId);
+    if(!ids.length) return;
+    if(!confirm(`Mark ${ids.length} document(s) as sent to Tally? Do this only if Tally imported them.`)) return;
+    try{
+      const r = await api("POST", "/tally/export/confirm", { syncIds: ids });
+      toast(`${r.updated} marked as sent.`, "ok");
+      tallyState.exportState.preview = null;
+      tallyState.data = await api("GET", "/tally/dashboard");
+      renderTally();
+    }catch(err){ toast(err.message); }
+  });
 }
 
 /* ---- setup ---- */

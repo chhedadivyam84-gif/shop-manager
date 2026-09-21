@@ -281,7 +281,28 @@ async function processOne(rowOrSyncId, opts) {
   if (!s.enabled) return { ok: false, error: "Tally sync is switched off." };
   if (!s.company) return { ok: false, error: "No Tally company has been chosen yet." };
 
+  /* CAPTURE MODE — build the XML, send nothing, write nothing.
+
+     The offline Tally export needs exactly the XML this function would
+     have sent. Building it a second time somewhere else would mean two
+     copies of the GST splits, the ledger mapping, the party grouping and
+     the rule that stops a cash row being booked twice — and the copy
+     nobody is watching is the one that goes wrong. So the one engine
+     runs, and in capture mode its outbound calls are collected instead
+     of dispatched.
+
+     Nothing is marked SUCCESS and the queue is not advanced, because an
+     exported file tells us nothing about whether Tally accepted it. The
+     operator confirms that separately, after importing. */
+  const capture = Array.isArray(opts.capture);
+  const captured = capture ? opts.capture : null;
+  const sendXml = capture
+    ? async (_s, xml) => { captured.push(xml); return { ok: true, created: 0, altered: 0 }; }
+    : connector.send;
+  const log = capture ? () => {} : svc.log;
+
   const mark = (status, extra) => {
+    if (capture) return;
     db.prepare(`
       UPDATE tally_queue SET status = ?, attempts = attempts + ?, last_error = ?,
         voucher_no = COALESCE(NULLIF(?, ''), voucher_no),
@@ -294,8 +315,10 @@ async function processOne(rowOrSyncId, opts) {
            row.sync_id);
   };
 
-  db.prepare("UPDATE tally_queue SET status='PROCESSING', updated_at=? WHERE sync_id=?")
-    .run(Date.now(), row.sync_id);
+  if (!capture) {
+    db.prepare("UPDATE tally_queue SET status='PROCESSING', updated_at=? WHERE sync_id=?")
+      .run(Date.now(), row.sync_id);
+  }
 
   try {
     const spec = svc.DOC_TYPES[row.doc_type];
@@ -319,16 +342,16 @@ async function processOne(rowOrSyncId, opts) {
         syncId: row.sync_id, type: row.voucher_type || spec.voucher,
         number: row.doc_no, date: row.doc_date
       })]);
-      const r = await connector.send(s, xml);
+      const r = await sendXml(s, xml);
       if (!r.ok) {
         mark("FAILED", { error: r.error, countAttempt: true });
-        svc.log({ syncId: row.sync_id, docType: row.doc_type, docId: row.doc_id,
+        log({ syncId: row.sync_id, docType: row.doc_type, docId: row.doc_id,
                   docNo: row.doc_no, action: "cancel", status: "FAILED",
                   attempt: row.attempts + 1, message: r.error, staff: opts.staff });
         return { ok: false, error: r.error };
       }
       mark("CANCELLED", { countAttempt: true });
-      svc.log({ syncId: row.sync_id, docType: row.doc_type, docId: row.doc_id,
+      log({ syncId: row.sync_id, docType: row.doc_type, docId: row.doc_id,
                 docNo: row.doc_no, action: "cancel", status: "CANCELLED",
                 voucherNo: row.voucher_no, attempt: row.attempts + 1,
                 message: "voucher cancelled in Tally", staff: opts.staff });
@@ -368,7 +391,7 @@ async function processOne(rowOrSyncId, opts) {
           money.isBank ? "Bank Accounts" : "Cash-in-Hand", { billwise: false }));
       }
       if (msgs.length) {
-        const mr = await connector.send(s, connector.importEnvelope(s.company, msgs));
+        const mr = await sendXml(s, connector.importEnvelope(s.company, msgs));
         if (!mr.ok) {
           mark("FAILED", { error: "Setting up ledgers failed: " + mr.error, countAttempt: true });
           return { ok: false, error: "Setting up ledgers failed: " + mr.error };
@@ -384,19 +407,19 @@ async function processOne(rowOrSyncId, opts) {
       };
       const xml = connector.voucherEnvelope(s.company,
         [isReceipt ? V.receiptVoucher(build) : V.paymentVoucher(build)]);
-      const rr = await connector.send(s, xml);
+      const rr = await sendXml(s, xml);
       if (!rr.ok) {
         mark("FAILED", { error: rr.error, countAttempt: true });
         db.prepare("UPDATE tally_settings SET last_fail_at=?, last_error=? WHERE id=1")
           .run(Date.now(), String(rr.error).slice(0, 400));
-        svc.log({ syncId: row.sync_id, docType: row.doc_type, docId: row.doc_id,
+        log({ syncId: row.sync_id, docType: row.doc_type, docId: row.doc_id,
                   docNo: row.doc_no, action: "send", status: "FAILED",
                   attempt: row.attempts + 1, message: rr.error, staff: opts.staff });
         return { ok: false, error: rr.error };
       }
       mark("SUCCESS", { voucherNo: build.number, voucherType: spec.voucher, countAttempt: true });
       db.prepare("UPDATE tally_settings SET last_ok_at=?, last_error='' WHERE id=1").run(Date.now());
-      svc.log({ syncId: row.sync_id, docType: row.doc_type, docId: row.doc_id,
+      log({ syncId: row.sync_id, docType: row.doc_type, docId: row.doc_id,
                 docNo: row.doc_no, action: "send", status: "SUCCESS",
                 voucherNo: build.number, attempt: row.attempts + 1, staff: opts.staff,
                 message: spec.voucher + " posted" });
@@ -415,14 +438,14 @@ async function processOne(rowOrSyncId, opts) {
     const prep = mastersFor(doc, customerSide);
     if (prep.ignore) {
       mark("CANCELLED", { error: prep.why });
-      svc.log({ syncId: row.sync_id, docType: row.doc_type, docId: row.doc_id,
+      log({ syncId: row.sync_id, docType: row.doc_type, docId: row.doc_id,
                 docNo: row.doc_no, action: "send", status: "SKIPPED",
                 message: prep.why, staff: opts.staff });
       return { ok: true, skipped: true, reason: prep.why };
     }
     if (prep.error) {
       mark("FAILED", { error: prep.error, countAttempt: true });
-      svc.log({ syncId: row.sync_id, docType: row.doc_type, docId: row.doc_id,
+      log({ syncId: row.sync_id, docType: row.doc_type, docId: row.doc_id,
                 docNo: row.doc_no, action: "send", status: "FAILED",
                 attempt: row.attempts + 1, message: prep.error, staff: opts.staff });
       return { ok: false, error: prep.error };
@@ -432,10 +455,10 @@ async function processOne(rowOrSyncId, opts) {
        not attempted — a voucher naming a ledger Tally does not have fails
        with a message about the ledger, and the shop is left guessing which
        bill it came from. */
-    const mres = await connector.send(s, connector.importEnvelope(s.company, prep.msgs));
+    const mres = await sendXml(s, connector.importEnvelope(s.company, prep.msgs));
     if (!mres.ok) {
       mark("FAILED", { error: "Setting up ledgers/items failed: " + mres.error, countAttempt: true });
-      svc.log({ syncId: row.sync_id, docType: row.doc_type, docId: row.doc_id,
+      log({ syncId: row.sync_id, docType: row.doc_type, docId: row.doc_id,
                 docNo: row.doc_no, action: "send", status: "FAILED",
                 attempt: row.attempts + 1, message: mres.error, staff: opts.staff });
       return { ok: false, error: "Setting up ledgers/items failed: " + mres.error };
@@ -497,12 +520,12 @@ async function processOne(rowOrSyncId, opts) {
     const xml = connector.voucherEnvelope(s.company,
       [salesShape ? V.salesVoucher(build) : V.purchaseVoucher(build)]);
 
-    const r = await connector.send(s, xml);
+    const r = await sendXml(s, xml);
     if (!r.ok) {
       mark("FAILED", { error: r.error, countAttempt: true });
       db.prepare("UPDATE tally_settings SET last_fail_at=?, last_error=? WHERE id=1")
         .run(Date.now(), String(r.error).slice(0, 400));
-      svc.log({ syncId: row.sync_id, docType: row.doc_type, docId: row.doc_id,
+      log({ syncId: row.sync_id, docType: row.doc_type, docId: row.doc_id,
                 docNo: row.doc_no, action: action === "Alter" ? "retry" : "send",
                 status: "FAILED", attempt: row.attempts + 1, message: r.error,
                 staff: opts.staff });
@@ -513,14 +536,14 @@ async function processOne(rowOrSyncId, opts) {
     mark("SUCCESS", { voucherNo, voucherType: spec.voucher, countAttempt: true });
     db.prepare("UPDATE tally_settings SET last_ok_at=?, last_error='' WHERE id=1")
       .run(Date.now());
-    svc.log({ syncId: row.sync_id, docType: row.doc_type, docId: row.doc_id,
+    log({ syncId: row.sync_id, docType: row.doc_type, docId: row.doc_id,
               docNo: row.doc_no, action: "send", status: "SUCCESS",
               voucherNo, attempt: row.attempts + 1, staff: opts.staff,
               message: action === "Alter" ? "voucher updated" : "voucher created" });
     return { ok: true, voucherNo, altered: action === "Alter" };
   } catch (e) {
     mark("FAILED", { error: e.message, countAttempt: true });
-    svc.log({ syncId: row.sync_id, docType: row.doc_type, docId: row.doc_id,
+    log({ syncId: row.sync_id, docType: row.doc_type, docId: row.doc_id,
               docNo: row.doc_no, action: "send", status: "FAILED",
               attempt: row.attempts + 1, message: e.message, staff: opts.staff });
     return { ok: false, error: e.message };

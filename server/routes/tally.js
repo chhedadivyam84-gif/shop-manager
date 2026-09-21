@@ -27,6 +27,7 @@ const perms = require("../permissions");
 const svc = require("../tally/service");
 const proc = require("../tally/processor");
 const connector = require("../tally/connector");
+const tallyExport = require("../tally/exportXml");
 const autosync = require("../tally/autosync");
 const backfill = require("../tally/backfill");
 
@@ -366,6 +367,56 @@ router.put("/map/:kind/:localId", perms.require("tally","edit"), (req, res) => {
 
 /* Readable, never deletable. There is deliberately no DELETE route: a sync
    history that can be tidied up is not a history. */
+/* ── EXPORT TO A FILE, no bridge ───────────────────────────────
+   Same vouchers the live sync would push, handed over as XML for
+   Gateway of Tally > Import Data. Building it changes nothing, so the
+   preview is safe to call as often as you like. */
+
+router.get("/export/preview", perms.require("tally","add"), async (req, res) => {
+  try {
+    const r = await tallyExport.buildExport({
+      scope: req.query.scope, from: req.query.from, to: req.query.to,
+      staff: (req.session && req.session.staffName) || ""
+    });
+    /* The XML itself is deliberately left out of the preview — it can run
+       to megabytes and the screen only needs the tally of what is in it. */
+    res.json({ company: r.company, counts: r.counts, included: r.included.slice(0, 200),
+               problems: r.problems.slice(0, 200) });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+router.get("/export/download", perms.require("tally","add"), async (req, res) => {
+  const kind = req.query.kind === "masters" ? "masters" : "vouchers";
+  try {
+    const r = await tallyExport.buildExport({
+      scope: req.query.scope, from: req.query.from, to: req.query.to,
+      staff: (req.session && req.session.staffName) || ""
+    });
+    const xml = kind === "masters" ? r.mastersXml : r.vouchersXml;
+    if (!xml) return res.status(400).json({ error: kind === "masters"
+      ? "Nothing needs creating in Tally for these vouchers."
+      : "There is nothing waiting to send." });
+
+    const stamp = new Date().toISOString().slice(0, 10);
+    const name = `tally-${kind}-${stamp}.xml`;
+    logAction(req, "tally.export", `${kind}: ${r.counts.included} document(s)`);
+    res.setHeader("Content-Type", "application/xml; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${name}"`);
+    /* Tally's parser wants a declaration on the file it is handed. */
+    res.send('<?xml version="1.0" encoding="UTF-8"?>' + xml);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+/* Only the person who watched Tally's import report knows whether it took,
+   so the queue is advanced here and never by the download itself. */
+router.post("/export/confirm", perms.require("tally","add"), (req, res) => {
+  const ids = Array.isArray(req.body && req.body.syncIds) ? req.body.syncIds.map(String) : [];
+  if (!ids.length) return res.status(400).json({ error: "Nothing was selected to confirm." });
+  const r = tallyExport.confirmImported(ids, (req.session && req.session.staffName) || "");
+  logAction(req, "tally.export.confirm", `${r.updated} voucher(s) marked as in Tally`);
+  res.json(r);
+});
+
 router.get("/log", (req, res) => {
   const q = req.query || {};
   const where = [], params = [];

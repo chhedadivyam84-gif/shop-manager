@@ -60,13 +60,27 @@ export class ShopTenant extends DurableObject {
     /* Schema setup is the one thing that legitimately blocks concurrency:
        no request may see a half-built database. */
     ctx.blockConcurrencyWhile(async () => {
-      const built = await ctx.storage.get("schemaVersion");
-      if (built === SCHEMA_VERSION) return;
+      try {
+        const built = await ctx.storage.get("schemaVersion");
+        if (built === SCHEMA_VERSION) return;
 
-      ctx.storage.transactionSync(() => {
-        for (const statement of SCHEMA) ctx.storage.sql.exec(statement);
-      });
-      await ctx.storage.put("schemaVersion", SCHEMA_VERSION);
+        ctx.storage.transactionSync(() => {
+          for (const statement of SCHEMA) ctx.storage.sql.exec(statement);
+        });
+        await ctx.storage.put("schemaVersion", SCHEMA_VERSION);
+      } catch (err) {
+        /* A CONSTRUCTOR THAT THROWS TAKES THE WHOLE SHOP DOWN.
+
+           Anything thrown inside blockConcurrencyWhile aborts the object,
+           so every request fails — including reads that need no writes at
+           all. That is how a storage WRITE limit turned into "Couldn't
+           reach the server" on a screen doing nothing but listing staff.
+
+           The schema is IF NOT EXISTS throughout and re-runs on the next
+           wake, so swallowing this costs nothing when it is transient. A
+           shop that cannot write should still be able to show its books. */
+        console.error("[schema] setup deferred: " + (err && err.message));
+      }
     });
 
     /* NO ALARM IS ARMED HERE, deliberately.

@@ -1094,6 +1094,7 @@ async function initApp(){
   });
 
   document.getElementById("imp-back-link").addEventListener("click", (e)=>{ e.preventDefault(); switchTab("home"); });
+  document.getElementById("exp-back-link").addEventListener("click", (e)=>{ e.preventDefault(); switchTab("home"); });
   document.getElementById("bb-back-link").addEventListener("click", (e)=>{ e.preventDefault(); switchTab("home"); });
   document.getElementById("bb-manage-accounts-link").addEventListener("click", (e)=>{ e.preventDefault(); openManageBankAccounts(); });
   document.getElementById("bb-add-entry").addEventListener("click", ()=>openBankEntry());
@@ -1497,6 +1498,11 @@ async function switchTab(tab){
   if(tab==="employees") await renderEmployees();
   if(tab==="imports" && !isOwner()){ toast("Importing old data is for the owner."); return switchTab("home"); }
   if(tab==="imports") await renderImports();
+  /* Deliberately NOT owner-gated. Most of what this screen offers is
+     already reachable from Reports by anyone signed in; the catalogue
+     leaves out what the person may not have, and every route refuses
+     again on its own. */
+  if(tab==="exports") await renderExports();
   if(tab==="outstanding") await renderOutstanding();
   if(tab==="ewb") await renderEwb();
   if(tab==="bankbook") await renderBankBook();
@@ -2166,6 +2172,7 @@ const MENU = [
     ["notes",       "&#128221;", "Notepad"],
     ["backups",     "&#128190;", "Cloud Backups"],
     ["imports",     "&#128228;", "Import Old Data"],
+    ["exports",     "&#128229;", "Export Data"],
   ]]
 ];
 
@@ -2624,6 +2631,132 @@ function paintStaffPermissions(data){
       renderPermissions();
     }catch(e){ toast(e.message); btn.disabled = false; }
   });
+}
+
+/* ============================================================
+   EXPORT DATA
+
+   Everything that can leave the shop as a file, in one place.
+
+   The exports are NOT reimplemented here. Each entry downloads from the
+   route that already produces it — the same file the Reports screen
+   gives, byte for byte — so there is no second version of any export to
+   drift out of step with the first. Staff Pay and Reminders are the two
+   that had none until now, and they are ordinary routes like the rest.
+
+   Straight to the browser's own download, the way the Reports screen
+   already does it: these are file responses with a Content-Disposition,
+   not JSON, so fetching them through api() would only mean holding a
+   spreadsheet in memory in order to hand it to the same downloader.
+   ============================================================ */
+const EXP = { catalogue: null, from: "", to: "" };
+
+async function renderExports(){
+  const body = document.getElementById("exp-body");
+  body.innerHTML = `<p class="muted" style="font-size:13px;">Loading…</p>`;
+
+  try{ EXP.catalogue = await api("GET", "/export/catalogue"); }
+  catch(e){
+    body.innerHTML = `<div class="card" style="margin-top:0;">
+      <div class="row-title">Couldn't load the list</div>
+      <div class="row-sub">${escapeHtml(e.message)}</div></div>`;
+    return;
+  }
+
+  const groups = (EXP.catalogue && EXP.catalogue.groups) || [];
+  const anyDated = groups.some(g => g.items.some(i => i.dated));
+
+  body.innerHTML = `
+    <div class="muted" style="font-size:12px;margin-bottom:10px;">
+      Everything this shop can hand out as a spreadsheet. Tap one and it downloads —
+      on a phone it lands in Downloads and can be shared from there.
+    </div>
+
+    ${anyDated ? `
+      <div class="card" style="margin-top:0;">
+        <div class="row-title" style="margin-bottom:8px;">Period</div>
+        <div class="charge-grid">
+          <label class="dim"><span>From</span><input type="date" id="exp-from" value="${escapeHtml(EXP.from)}"></label>
+          <label class="dim"><span>To</span><input type="date" id="exp-to" value="${escapeHtml(EXP.to)}"></label>
+        </div>
+        <div class="muted" style="font-size:11px;margin-top:6px;">
+          Applies to the exports marked with a period. Leave both blank for everything.
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px;">
+          <button class="btn btn-outline" id="exp-this-month" style="flex:1;">This month</button>
+          <button class="btn btn-outline" id="exp-this-year" style="flex:1;">This year</button>
+          <button class="btn btn-outline" id="exp-clear" style="flex:1;">All dates</button>
+        </div>
+      </div>` : ""}
+
+    ${groups.map(g => `
+      <div class="section-title">${escapeHtml(g.group)}</div>
+      <div class="card" style="margin-top:0;">
+        ${g.items.map(i => `
+          <div class="list-row exp-row" data-exp="${escapeHtml(i.key)}" style="cursor:pointer;">
+            <div>
+              <div class="row-title">${escapeHtml(i.label)}${
+                i.dated ? ` <span class="pill">period</span>` : ""}</div>
+              ${i.note ? `<div class="row-sub">${escapeHtml(i.note)}</div>` : ""}
+            </div>
+            <div class="row-right"><span class="chip sm">Download</span></div>
+          </div>`).join("")}
+      </div>`).join("")}
+
+    <div class="card perm-locked" style="margin-top:12px;">
+      <div class="row-title">Putting data back in</div>
+      <div class="row-sub">Old books come in through <b>Import Old Data</b> — sales, purchases,
+        cash, customers, suppliers and GST, with a preview before anything is saved.</div>
+    </div>`;
+
+  const setRange = (from, to) => {
+    EXP.from = from; EXP.to = to;
+    const f = document.getElementById("exp-from"), t = document.getElementById("exp-to");
+    if(f) f.value = from;
+    if(t) t.value = to;
+  };
+  const pad = n => String(n).padStart(2, "0");
+  const iso = d => d.getFullYear() + "-" + pad(d.getMonth()+1) + "-" + pad(d.getDate());
+
+  const fEl = document.getElementById("exp-from");
+  if(fEl) fEl.addEventListener("change", e => { EXP.from = e.target.value; });
+  const tEl = document.getElementById("exp-to");
+  if(tEl) tEl.addEventListener("change", e => { EXP.to = e.target.value; });
+
+  const thisMonth = document.getElementById("exp-this-month");
+  if(thisMonth) thisMonth.addEventListener("click", ()=>{
+    const n = new Date();
+    setRange(iso(new Date(n.getFullYear(), n.getMonth(), 1)), iso(n));
+  });
+  const thisYear = document.getElementById("exp-this-year");
+  if(thisYear) thisYear.addEventListener("click", ()=>{
+    /* The shop's year, not January's — a financial year starts in April
+       and that is the one every figure in this app is reported against. */
+    const n = new Date();
+    const startYear = n.getMonth() >= 3 ? n.getFullYear() : n.getFullYear() - 1;
+    setRange(startYear + "-04-01", iso(n));
+  });
+  const clear = document.getElementById("exp-clear");
+  if(clear) clear.addEventListener("click", ()=> setRange("", ""));
+
+  body.querySelectorAll("[data-exp]").forEach(row => row.addEventListener("click", ()=>{
+    const item = groups.flatMap(g => g.items).find(i => i.key === row.dataset.exp);
+    if(!item) return;
+    let url = item.url;
+    if(item.dated && (EXP.from || EXP.to)){
+      const sep = url.includes("?") ? "&" : "?";
+      const qs = [];
+      if(EXP.from) qs.push("from=" + encodeURIComponent(EXP.from));
+      if(EXP.to) qs.push("to=" + encodeURIComponent(EXP.to));
+      url += sep + qs.join("&");
+    }
+    /* A file response, so the browser is told to fetch it directly — the
+       same mechanism the Reports screen's export already uses. Fetching
+       it through api() would only mean holding a spreadsheet in memory
+       in order to hand it to the same downloader. */
+    window.open(url, "_blank");
+    toast("Preparing " + item.label + "…", "ok");
+  }));
 }
 
 async function renderBackups(){

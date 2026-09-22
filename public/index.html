@@ -642,6 +642,9 @@ setTimeout(function () {
              the days worth opening are visible without paging through. Drawn
              by renderCashCalendar(); everything below it is unchanged. -->
         <div class="card cb-cal" id="cb-calendar" style="margin-top:0;"></div>
+        <!-- Empty for the owner and for anyone with no access period set;
+             carries one line naming the period for anyone who has one. -->
+        <div id="cb-access-note"></div>
         <div class="card" id="cashbook-summary" style="margin-top:0;"></div>
 
         <!-- Searching looks across EVERY date, not just the range below —

@@ -18,6 +18,7 @@
    ============================================================ */
 
 const express = require("express");
+const cashAccess = require("../cashAccess");
 const db = require("../db");
 const { round2 } = require("../util");
 const { requireRole } = require("../auth");
@@ -127,10 +128,11 @@ router.get("/", (req, res) => {
   const salesChallan = challanOutstanding("customer");
   const purchaseChallan = challanOutstanding("supplier");
 
+  const cashWin = cashAccess.sqlAnd(req, "date");
   const cash = round2(db.prepare(`
     SELECT COALESCE(SUM(CASE WHEN type = 'in' THEN amount ELSE -amount END), 0) AS n
-      FROM cash_entries WHERE voided = 0
-  `).get().n);
+      FROM cash_entries WHERE voided = 0${cashWin.sql}
+  `).get(...cashWin.params).n);
 
   const bank = round2(db.prepare("SELECT * FROM bank_accounts WHERE active = 1").all()
     .reduce((sum, a) => {
@@ -147,8 +149,8 @@ router.get("/", (req, res) => {
   const expenses = round2(db.prepare(`
     SELECT COALESCE(SUM(amount),0) n FROM cash_entries
      WHERE voided = 0 AND type = 'out'
-       AND (source_type IS NULL OR TRIM(source_type) = '')
-  `).get().n);
+       AND (source_type IS NULL OR TRIM(source_type) = '')${cashWin.sql}
+  `).get(...cashWin.params).n);
 
   const gs = db.prepare(`
     SELECT COALESCE(SUM(cgst),0) c, COALESCE(SUM(sgst),0) s, COALESCE(SUM(igst),0) i

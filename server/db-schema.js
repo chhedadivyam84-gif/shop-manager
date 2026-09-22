@@ -2750,6 +2750,18 @@ addColumn("staff", "salesman_name", "TEXT DEFAULT ''");
    an unconfigured login should see the least, not the most. */
 addColumn("staff", "data_scope", "TEXT DEFAULT ''");
 
+/* WHICH DAYS OF THE CASH BOOK THIS PERSON MAY SEE.
+   permanent | day | range — see server/cashAccess.js for what each means
+   and for why blank is the permissive one here and nowhere else. Held on
+   the staff row rather than in staff_permissions because that table is
+   keyed per module and these four are one setting, not four modules; a
+   second row type in it would have to be excluded from every count and
+   every wipe the permission screen already does. */
+addColumn("staff", "cash_access_type", "TEXT DEFAULT ''");
+addColumn("staff", "cash_access_date", "TEXT DEFAULT ''");   // One Day
+addColumn("staff", "cash_access_from", "TEXT DEFAULT ''");   // Date Range
+addColumn("staff", "cash_access_to",   "TEXT DEFAULT ''");
+
 db.exec(`
 CREATE TABLE IF NOT EXISTS staff_permissions (
   staff_id TEXT NOT NULL REFERENCES staff(id) ON DELETE CASCADE,

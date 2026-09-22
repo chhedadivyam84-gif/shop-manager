@@ -42,6 +42,7 @@
    describes. Change a cash entry and the balance is already correct.
    ============================================================ */
 const db = require("./db");
+const cashAccess = require("./cashAccess");
 
 const round2 = n => Math.round((Number(n) || 0) * 100) / 100;
 
@@ -54,19 +55,33 @@ const LINKED = `
     AND COALESCE(party_id, '') <> ''
 `;
 
+/* THE READER'S ACCESS PERIOD, if they have one.
+   A balance is a sum, and a sum is the most compact way there is to hand
+   somebody data they may not read: "Ramesh owes 15,000" is built from
+   entries that might all sit outside a one-day window. So every query
+   below is narrowed the same way the ledger is, and a limited reader sees
+   the balance as it stands WITHIN their period — the entries they can
+   actually open, adding up to the figure they are shown.
+
+   `req` is optional throughout: called without it (a background job, a
+   test) there is no session and therefore no limit, which is the same
+   answer cashAccess gives for the owner. */
+const win = req => cashAccess.sqlAnd(req, "date");
+
 /**
  * One party's balance, plus the two totals it is made of so the figure can
  * always be checked rather than trusted.
  */
-function partyCashBalance(partyType, partyId) {
+function partyCashBalance(partyType, partyId, req) {
+  const w = win(req);
   const r = db.prepare(`
     SELECT
       COALESCE(SUM(CASE WHEN type = 'out' THEN amount ELSE 0 END), 0) AS given,
       COALESCE(SUM(CASE WHEN type = 'in'  THEN amount ELSE 0 END), 0) AS received,
       COUNT(*) AS entries,
       COALESCE(MAX(date), '') AS lastDate
-    ${LINKED} AND party_type = ? AND party_id = ?
-  `).get(partyType, partyId) || {};
+    ${LINKED} AND party_type = ? AND party_id = ?${w.sql}
+  `).get(partyType, partyId, ...w.params) || {};
 
   const given = round2(r.given);
   const received = round2(r.received);
@@ -82,7 +97,8 @@ function partyCashBalance(partyType, partyId) {
 
 /** Every party with a khata balance, heaviest first. One query rather than
  *  one per party, so a screen listing them does not fan out. */
-function allPartyCashBalances(partyType) {
+function allPartyCashBalances(partyType, req) {
+  const w = win(req);
   const rows = db.prepare(`
     SELECT
       party_type AS partyType,
@@ -91,9 +107,9 @@ function allPartyCashBalances(partyType) {
       COALESCE(SUM(CASE WHEN type = 'in'  THEN amount ELSE 0 END), 0) AS received,
       COUNT(*) AS entries,
       COALESCE(MAX(date), '') AS lastDate
-    ${LINKED} ${partyType ? "AND party_type = ?" : ""}
+    ${LINKED} ${partyType ? "AND party_type = ?" : ""}${w.sql}
     GROUP BY party_type, party_id
-  `).all(...(partyType ? [partyType] : []));
+  `).all(...(partyType ? [partyType] : []), ...w.params);
 
   return rows
     .map(r => ({
@@ -109,12 +125,13 @@ function allPartyCashBalances(partyType) {
  * The entries behind one party's balance, oldest first with a running total,
  * so the number can be read down the page the way a khata page is read.
  */
-function partyCashHistory(partyType, partyId, from, to) {
+function partyCashHistory(partyType, partyId, from, to, req) {
+  const w = win(req);
   const rows = db.prepare(`
     SELECT id, date, type, amount, category, remarks
-    ${LINKED} AND party_type = ? AND party_id = ?
+    ${LINKED} AND party_type = ? AND party_id = ?${w.sql}
     ORDER BY date ASC, created_at ASC
-  `).all(partyType, partyId);
+  `).all(partyType, partyId, ...w.params);
 
   let running = 0;
   const out = [];

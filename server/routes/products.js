@@ -51,8 +51,30 @@ function stampSizeBarcode(sizeId, sku) {
     .run(labelCode(sku) + "-" + sizeId, sizeId);
 }
 
+/* ============================================================
+   THE ARTWORK NEVER TRAVELS WITH A PRODUCT
+
+   products.artwork_data holds a branding image as a data: URI, up to a few
+   hundred kilobytes. Spread into every product the way every other column
+   is, a catalogue of a few hundred items would put tens of megabytes of
+   images into a response whose job is to draw a list of names — on a
+   request this app makes on almost every screen.
+
+   So both serializers strip it and report has_artwork instead. That is a
+   flag the screens can act on — show the thumbnail slot, mark the row —
+   without anybody downloading anything. The image itself is fetched one
+   product at a time by the master screen that edits it, or in a batch by a
+   document about to print it.
+
+   Done here rather than by naming columns in the SELECT, so a column added
+   to products later still flows through without this file knowing. */
+function stripArtwork(p) {
+  const { artwork_data, ...rest } = p;
+  return { ...rest, has_artwork: !!(artwork_data || "").trim() };
+}
+
 function serialize(p) {
-  return { ...p, gst: p.gst_rate, sizes: loadSizes(p.id) };
+  return { ...stripArtwork(p), gst: p.gst_rate, sizes: loadSizes(p.id) };
 }
 
 /**
@@ -113,7 +135,7 @@ function serializeAll(products) {
     byProduct.get(product_id).push(rest);
   }
 
-  return products.map(p => ({ ...p, gst: p.gst_rate, sizes: byProduct.get(p.id) || [] }));
+  return products.map(p => ({ ...stripArtwork(p), gst: p.gst_rate, sizes: byProduct.get(p.id) || [] }));
 }
 
 /**
@@ -814,6 +836,101 @@ router.get("/:id/usage", (req, res) => {
   ).get(p.id).n;
   const stockInCount = db.prepare("SELECT COUNT(*) AS n FROM stock_ins WHERE product_id = ?").get(p.id).n;
   res.json({ invoiceCount, stockInCount, stock: p.stock });
+});
+
+/* ============================================================
+   PARTICULAR BRANDING ARTWORK
+
+   One image per product, held as a data: URI — see the note on
+   products.artwork_data in db-schema.js for why it is not a file.
+
+   Three routes, and the batch one is the point of the design: a document
+   about to print needs the artwork for the handful of particulars ON it,
+   and asking product by product would be one round trip per line. Asking
+   for the whole catalogue would be worse.
+   ============================================================ */
+
+/* A branded board design is a bigger picture than a letterhead logo, but
+   not by much — it prints a few centimetres wide. The same ceiling the
+   logo uses is generous for it, and keeps one number to reason about
+   rather than two. */
+const ARTWORK_MAX_BYTES = 400 * 1024;
+
+/** The artwork for one particular. Its own route because the list and the
+ *  product body deliberately do not carry it. */
+router.get("/:id/artwork", (req, res) => {
+  const p = db.prepare("SELECT id, name, artwork_data FROM products WHERE id = ?").get(req.params.id);
+  if (!p) return res.status(404).json({ error: "Product not found." });
+  res.json({ id: p.id, name: p.name, artwork: p.artwork_data || "" });
+});
+
+/**
+ * The artwork for several particulars at once — what a document asks for
+ * as it prints.
+ *
+ * POST rather than GET because a bill can carry a couple of dozen lines
+ * and a query string of that many ids is a URL nobody can debug. It reads
+ * nothing and writes nothing; the verb is about the shape of the request.
+ *
+ * Products with no artwork are simply absent from the answer rather than
+ * returned blank, so the caller's "does this line have artwork" test is
+ * the presence of a key and the payload stays as small as it can be.
+ */
+router.post("/artwork/batch", (req, res) => {
+  const ids = Array.isArray(req.body && req.body.ids) ? req.body.ids : [];
+  /* A document has lines, not a catalogue. The cap is here so a malformed
+     or hostile caller cannot ask for every image in the shop in one go. */
+  const wanted = [...new Set(ids.filter(x => typeof x === "string" && x))].slice(0, 200);
+  if (!wanted.length) return res.json({ artwork: {} });
+
+  const rows = db.prepare(
+    `SELECT id, artwork_data FROM products
+      WHERE id IN (${wanted.map(() => "?").join(",")}) AND TRIM(artwork_data) <> ''`
+  ).all(...wanted);
+
+  const artwork = {};
+  for (const r of rows) artwork[r.id] = r.artwork_data;
+  res.json({ artwork });
+});
+
+/**
+ * Set or remove one particular's artwork.
+ *
+ * An explicit null or empty string REMOVES it — a real instruction, and
+ * the only way back to a plain line once an image has been set. Same
+ * shape as the letterhead logo route in settings.js, deliberately: two
+ * image uploads in one app that validate differently is how one of them
+ * ends up accepting something the other rejects.
+ */
+router.put("/:id/artwork", requireRole("owner"), (req, res) => {
+  const p = db.prepare("SELECT id, name FROM products WHERE id = ?").get(req.params.id);
+  if (!p) return res.status(404).json({ error: "Product not found." });
+
+  const { artwork } = req.body || {};
+  if (artwork === null || artwork === "") {
+    db.prepare("UPDATE products SET artwork_data = '' WHERE id = ?").run(p.id);
+    logAction(req, "product.artwork", `${p.name}: artwork removed`);
+    return res.json({ ok: true, hasArtwork: false });
+  }
+
+  if (typeof artwork !== "string" ||
+      !/^data:image\/(png|jpeg|jpg|webp|gif|svg\+xml);base64,/.test(artwork)) {
+    return res.status(400).json({
+      error: "That does not look like an image. Choose a PNG, JPG or WebP file — PNG if the design needs a transparent background."
+    });
+  }
+
+  /* Rough decoded size — base64 carries 3 bytes in every 4 characters. */
+  const approxBytes = Math.floor((artwork.length - artwork.indexOf(",") - 1) * 0.75);
+  if (approxBytes > ARTWORK_MAX_BYTES) {
+    return res.status(400).json({
+      error: `That image is about ${Math.round(approxBytes / 1024)} KB. Please use one under ${ARTWORK_MAX_BYTES / 1024} KB — the artwork prints a few centimetres wide, so a small file is plenty.`
+    });
+  }
+
+  db.prepare("UPDATE products SET artwork_data = ? WHERE id = ?").run(artwork, p.id);
+  logAction(req, "product.artwork", `${p.name}: artwork set (${Math.round(approxBytes / 1024)} KB)`);
+  res.json({ ok: true, hasArtwork: true });
 });
 
 /* Retire a product without destroying it — the ordinary alternative to

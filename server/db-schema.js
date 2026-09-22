@@ -2782,6 +2782,59 @@ CREATE TABLE IF NOT EXISTS staff_assigned (
 CREATE INDEX IF NOT EXISTS idx_staff_perm ON staff_permissions(staff_id);
 `);
 
+/* ============================================================
+   GIVE THE CASH BOOK BACK TO THE STAFF WHO ALREADY HAD IT
+
+   The Cash Book carried View/Add/Edit/Print on the permission screen for a
+   long time while no route checked them, so in practice every staff member
+   could open it whatever the owner had ticked. Enforcing those ticks — the
+   right thing, and the reason this migration exists — took it away from
+   everyone the owner had never explicitly granted it to, which is most of
+   them. This hands it back.
+
+   VIEW ONLY. Reading the book is what they had; writing it is a decision
+   the owner makes per person on the Staff Access screen.
+
+   IT NEVER TOUCHES A ROW THAT ALREADY EXISTS. A staff member the owner HAS
+   configured — with Cash Book on, or deliberately off — keeps exactly what
+   was configured. INSERT OR IGNORE against the (staff_id, module) primary
+   key is what guarantees that: an owner who has already thought about this
+   person is not second-guessed.
+
+   AND IT RUNS ONCE, EVER. The marker is the column's own existence, the
+   same one-time idiom the backfills further up this file use. That matters
+   more here than anywhere: a shop that unticks somebody tomorrow must not
+   find them ticked again after the next deploy, and on a hosted copy a
+   deploy happens whenever anything ships.
+   ============================================================ */
+if (addColumn("settings", "cash_view_backfilled_at", "INTEGER NOT NULL DEFAULT 0")) {
+  const now = Date.now();
+  const grant = db.prepare(`
+    INSERT OR IGNORE INTO staff_permissions (staff_id, module, can_view, can_add, can_edit, can_print)
+    VALUES (?, 'cash', 1, 0, 0, 0)`);
+
+  /* Owners are skipped because no permission row is ever consulted for
+     them — a row would look meaningful and do nothing. */
+  const people = db.prepare("SELECT id, name FROM staff WHERE role <> 'owner'").all();
+  const given = [];
+  for (const p of people) {
+    if (grant.run(p.id).changes) given.push(p.name);
+  }
+
+  db.prepare("UPDATE settings SET cash_view_backfilled_at = ? WHERE id = 1").run(now);
+
+  /* On the record, because this changes what real people can open and the
+     shop is entitled to know it was the upgrade that did it rather than
+     somebody at the counter. logAction lives in util.js, which requires
+     this file — hence the direct insert, as elsewhere in here. */
+  if (given.length) {
+    db.prepare(`INSERT INTO audit_log (at, staff_id, staff_name, role, action, details)
+                VALUES (?, NULL, 'System', 'system', ?, ?)`)
+      .run(now, "staff.permissions.backfill",
+           `Cash Book View restored for ${given.length} staff: ${given.join(", ")}`);
+  }
+}
+
 /* Indexes for the party- and salesman-wise reports: without them every
    report scans every PO line the shop has ever raised. */
 db.exec("CREATE INDEX IF NOT EXISTS idx_po_customer ON purchase_orders(against_customer_id)");

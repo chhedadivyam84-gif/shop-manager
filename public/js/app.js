@@ -10282,8 +10282,8 @@ function openPrintWindow(html, opts){
       @media print{ .pw-bar{display:none !important;} }
     </style>
     <div class="pw-bar">
-      <button class="pw-back" onclick="window.close();setTimeout(function(){history.back();},120)">&larr; Back</button>
-      <button class="pw-print" onclick="window.print()">Print</button>
+      <button class="pw-back">&larr; Back</button>
+      <button class="pw-print">Print</button>
       <span class="pw-ttl">${label}</span>
     </div>`;
 
@@ -10297,6 +10297,26 @@ function openPrintWindow(html, opts){
   if(!w){ toast("Your browser blocked the print window. Allow pop-ups for this app."); return null; }
   w.document.write(withBar);
   w.document.close();
+
+  /* THE TWO BUTTONS ARE WIRED FROM HERE, not with onclick attributes.
+
+     This window is about:blank opened by us, so it INHERITS this page's
+     Content-Security-Policy — and that policy has no 'unsafe-inline' for
+     scripts, which is what makes it worth having. An inline handler would
+     simply not fire, and the only symptom would be a Print button that
+     does nothing on a page somebody is standing at a counter trying to
+     print. Same origin, so reaching in like this is allowed and needs no
+     exception at all. */
+  try{
+    const back = w.document.querySelector(".pw-back");
+    if(back) back.addEventListener("click", ()=>{
+      w.close();
+      setTimeout(()=>{ try{ w.history.back(); }catch(e){ /* already gone */ } }, 120);
+    });
+    const print = w.document.querySelector(".pw-print");
+    if(print) print.addEventListener("click", ()=> w.print());
+  }catch(e){ /* the window was closed before we got to it */ }
+
   return w;
 }
 

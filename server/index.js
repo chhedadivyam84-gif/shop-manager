@@ -148,6 +148,90 @@ const isProduction = process.env.NODE_ENV === "production";
 // over plain HTTP with X-Forwarded-Proto set — trust it so secure cookies work.
 app.set("trust proxy", 1);
 
+/* ------------------------------------------------------------
+   SECURITY HEADERS
+
+   Four lines that cost nothing and close four different doors. No
+   dependency: helmet would add one to set headers this app can state
+   itself, and the zero-build-step design is worth more than the
+   convenience.
+
+   The Content-Security-Policy below is written to match what this app
+   actually does, because a policy written from a template breaks it
+   SILENTLY — no error, just a blank square where an icon was. Every
+   directive here was checked against the code:
+
+     script-src 'self'   — and nothing else. No 'unsafe-inline', which
+       is the whole point: an injected <script> cannot run. That cost
+       two edits to earn — the theme/splash block moved out of the head
+       into /js/boot.js, and the print window's two buttons are now
+       wired with addEventListener instead of onclick attributes. Do
+       not reintroduce either; nothing will look broken until somebody
+       tries to print.
+
+     style-src 'self' 'unsafe-inline'  — honest about the app as built.
+       There are roughly 1,900 style="..." attributes, and the printed
+       sheet is assembled as a string with its own <style>. Inline
+       styles cannot carry an XSS on their own, so this is the cheap
+       half of the trade.
+
+     img-src 'self' data: blob:  — the tile marks are data: URIs in the
+       stylesheet, and so are the letterhead logo and every particular's
+       branding artwork, because this host wipes its filesystem on every
+       deploy and images have to live in the database. blob: is the PDF
+       preview and the CSV download.
+
+     frame-src 'self' blob:  — the print canvas is an iframe the app
+       builds itself.
+
+     connect-src 'self'  — this app talks to nobody else. Worth stating:
+       it means data cannot be posted out to another origin.
+
+     object-src 'none', base-uri 'self', form-action 'self',
+     frame-ancestors 'self'  — closing the doors nothing here uses.
+   ------------------------------------------------------------ */
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  "connect-src 'self'",
+  "frame-src 'self' blob:",
+  "media-src 'self' blob:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'self'"
+].join("; ");
+app.use((req, res, next) => {
+  /* Stops a browser second-guessing a Content-Type — the trick that turns
+     an uploaded file served as text into a script. */
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  /* No framing. A shop's books have no business inside somebody else's
+     page, and this is what stops a click on an invisible overlay landing
+     on a real button in here. */
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");
+  /* A bill's URL can carry its number. Send the origin to other sites and
+     nothing more, so a document id never rides out in a Referer header. */
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  /* This app asks for none of these. Saying so means a script that somehow
+     got in cannot ask either. */
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
+  res.setHeader("Content-Security-Policy", CSP);
+
+  /* HTTPS ONLY, FROM NOW ON — and only in production. TLS is terminated
+     upstream (see trust proxy above), so traffic is already encrypted;
+     what this adds is the browser REFUSING plain HTTP next time rather
+     than making the request and being redirected. Never set in
+     development: a shop PC reaching the app at http://192.168.0.149:3000
+     would be locked out of its own till by a header it cannot clear. */
+  if (isProduction) {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
+  next();
+});
+
 // Raised from Express's 100kb default so a payment's base64-encoded receipt
 // attachment (up to 8MB decoded, see attachments.js) fits in one JSON request.
 app.use(express.json({ limit: "12mb" }));

@@ -26,7 +26,10 @@ const CO = db.companies.create({ name: "Khata Test" });
 const app = express();
 app.use(express.json());
 app.use((req, _res, next) => {
-  req.session = { staffId: "S1", staffName: "Tester", role: "owner" };
+  /* loggedIn is what auth.js sets on a real sign-in, and what the Cash
+     Book's permission gate checks before it consults anything else. A stub
+     without it is not a session any route would ever see. */
+  req.session = { loggedIn: true, staffId: "S1", staffName: "Tester", role: "owner" };
   db.companies.runAs(CO.id, next);
 });
 app.use("/api/cashbook", require(path.join(ROOT, "server/routes/cashbook.js")));

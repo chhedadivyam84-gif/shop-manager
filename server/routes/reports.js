@@ -13,6 +13,7 @@ const ownerOnly = requireRole("owner");
 
 /** Report types under /export that expose cost or margin. */
 const OWNER_ONLY_TYPES = new Set(["Profit", "ProfitByInvoice", "ProfitLoss", "BalanceSheet"]);
+const cashAccess = require("../cashAccess");
 
 /**
  * A product's most recent purchase cost, whichever of the two purchase
@@ -132,10 +133,13 @@ router.get("/dashboard", (req, res) => {
   const products = db.prepare("SELECT * FROM products").all();
   const lowStockCount = products.filter(p => p.stock < 15).length;
 
+  /* Narrowed to whatever days this person may see. For the owner, and for
+     anyone with no period set, that is the whole book exactly as before. */
+  const cashWin = cashAccess.sqlAnd(req, "date");
   const cashBalance = round2(db.prepare(`
     SELECT COALESCE(SUM(CASE WHEN type = 'in' THEN amount ELSE -amount END), 0) AS net
-    FROM cash_entries WHERE voided = 0
-  `).get().net);
+    FROM cash_entries WHERE voided = 0${cashWin.sql}
+  `).get(...cashWin.params).net);
   const bankAccountsList = db.prepare("SELECT * FROM bank_accounts WHERE active = 1").all();
   const bankBalance = round2(bankAccountsList.reduce((sum, a) => {
     const net = db.prepare(`
@@ -912,12 +916,16 @@ const incomeCategoryNames = () => categoryNames("income");
  *    not earning or spending it. Counting both legs would add the same rupees
  *    to income AND expenses, inflating the P&L from both ends at once.
  */
-function ledgerMovements(range, direction) {
+function ledgerMovements(range, direction, req) {
   const where = `voided = 0 AND type = ? AND COALESCE(source_type,'') = '' AND COALESCE(link_id,'') = ''`;
+  /* The cash leg carries the reader's access period; the bank leg does not,
+     because a bank entry is the Bank Book's row and answers to the Bank
+     Book's own permission. */
+  const win = cashAccess.sqlAnd(req, "date");
   const cash = db.prepare(
     `SELECT id, 'cash' AS source, date, amount, COALESCE(category,'') AS category, COALESCE(party,'') AS party, COALESCE(remarks,'') AS remarks, created_at
-     FROM cash_entries WHERE ${where}${range.sql("date")}`
-  ).all(direction, ...range.params());
+     FROM cash_entries WHERE ${where}${range.sql("date")}${win.sql}`
+  ).all(direction, ...range.params(), ...win.params);
   const bank = db.prepare(
     `SELECT id, 'bank' AS source, date, amount, COALESCE(category,'') AS category, COALESCE(party,'') AS party, COALESCE(remarks,'') AS remarks, created_at
      FROM bank_entries WHERE ${where}${range.sql("date")}`
@@ -937,7 +945,7 @@ function ledgerMovements(range, direction) {
 router.get("/other-entries", (req, res) => {
   const kind = req.query.kind === "income" ? "income" : "expense";
   const range = dateRange(req);
-  const rows = ledgerMovements(range, kind === "income" ? "in" : "out")
+  const rows = ledgerMovements(range, kind === "income" ? "in" : "out", req)
     .sort((a, b) => (b.date || "").localeCompare(a.date || "") || b.created_at - a.created_at);
   const total = round2(rows.reduce((s, r) => s + (Number(r.amount) || 0), 0));
 
@@ -965,7 +973,7 @@ router.get("/other-entries", (req, res) => {
  * (opening stock + purchases − closing stock) needs dated stock snapshots
  * this app does not keep, so it would have to be guessed.
  */
-function computePnl(range) {
+function computePnl(range, req) {
   const inv = db.prepare(`
     SELECT COALESCE(SUM(subtotal - discount_amount),0) AS net_sales,
            COALESCE(SUM(transport + loading),0) AS charges,
@@ -1007,8 +1015,8 @@ function computePnl(range) {
     });
     return out;
   };
-  const expenseRows = ledgerMovements(range, "out");
-  const incomeRows = ledgerMovements(range, "in");
+  const expenseRows = ledgerMovements(range, "out", req);
+  const incomeRows = ledgerMovements(range, "in", req);
   const expenses = bucket(expenseRows, expenseCategoryNames());
   const otherIncome = bucket(incomeRows, incomeCategoryNames());
 
@@ -1033,7 +1041,7 @@ function computePnl(range) {
   };
 }
 
-router.get("/pnl", ownerOnly, (req, res) => res.json(computePnl(dateRange(req))));
+router.get("/pnl", ownerOnly, (req, res) => res.json(computePnl(dateRange(req), req)));
 
 /** Output GST (collected on sales) vs input GST (paid on purchases). Whichever
  *  side is larger decides whether GST sits on the asset or liability side. */
@@ -1053,11 +1061,12 @@ function gstPosition() {
   };
 }
 
-function computeBalanceSheet() {
+function computeBalanceSheet(req) {
+  const bsWin = cashAccess.sqlAnd(req, "date");
   const cashInHand = round2(db.prepare(`
     SELECT COALESCE(SUM(CASE WHEN type = 'in' THEN amount ELSE -amount END), 0) AS net
-    FROM cash_entries WHERE voided = 0
-  `).get().net);
+    FROM cash_entries WHERE voided = 0${bsWin.sql}
+  `).get(...bsWin.params).net);
 
   const bankAccounts = db.prepare("SELECT * FROM bank_accounts WHERE active = 1 ORDER BY name").all().map(a => {
     const net = db.prepare(`
@@ -1134,7 +1143,7 @@ function computeBalanceSheet() {
   // Retained profit since inception — an unbounded range, because the Balance
   // Sheet's capital is cumulative, not "this period's" profit.
   const allTime = { from: null, to: null, active: false, sql: () => "", params: () => [] };
-  const pnl = computePnl(allTime);
+  const pnl = computePnl(allTime, req);
   const closingCapital = round2(openingCapital + capitalIntroduced - drawings + pnl.netProfit);
 
   const assetsTotalFull = round2(
@@ -1181,7 +1190,7 @@ function computeBalanceSheet() {
   };
 }
 
-router.get("/balance-sheet", ownerOnly, (req, res) => res.json(computeBalanceSheet()));
+router.get("/balance-sheet", ownerOnly, (req, res) => res.json(computeBalanceSheet(req)));
 
 /* Row data for a report, as a header row followed by data rows.
    The Excel download, the CSV, the PDF and the printed sheet all come from
@@ -1280,7 +1289,7 @@ function buildReportRows(req) {
   } else if (type === "BalanceSheet") {
     // Same function the screen reads, so the file can never drift from it.
     filename = "balance-sheet";
-    const bs = computeBalanceSheet();
+    const bs = computeBalanceSheet(req);
     rows = [["Balance Sheet — as of " + bs.asOf], [], ["ASSETS", ""]];
     rows.push(["Cash in Hand", bs.assets.cashInHand]);
     bs.assets.bankAccounts.forEach(a => rows.push(["Bank — " + a.name, a.balance]));
@@ -1435,7 +1444,7 @@ function buildReportRows(req) {
       .forEach(d => rows.push([d, byDate[d].sn, round2(byDate[d].sv), byDate[d].pn, round2(byDate[d].pv)]));
   } else if (type === "ProfitLoss") {
     filename = "profit-and-loss";
-    const pnl = computePnl(range);
+    const pnl = computePnl(range, req);
     rows = [["Section", "Particulars", "Amount"]];
     rows.push(["Income", "Sales Revenue", round2(pnl.income.salesRevenue)]);
     rows.push(["Income", "Transport & Loading Recovered", round2(pnl.income.chargesRecovered)]);
@@ -1803,6 +1812,14 @@ router.get("/documents", (req, res) => {
 
 
 router.get("/data", (req, res) => {
+  /* THE SAME GUARD AS /export, WHICH THIS ROUTE NEVER HAD. The download
+     refuses an owner-only report to staff; this returns the identical rows
+     as JSON, so without it the refusal was decoration. Balance Sheet is one
+     of those reports and it carries Cash in Hand. */
+  if (OWNER_ONLY_TYPES.has(req.query.type) &&
+      !(req.session && req.session.role === "owner")) {
+    return res.status(403).json({ error: "Only the shop owner can open this report." });
+  }
   try {
     const out = buildReportRows(req);
     res.json({

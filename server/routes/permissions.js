@@ -3,6 +3,7 @@ const db = require("../db");
 const { logAction } = require("../util");
 const { requireRole } = require("../auth");
 const permissions = require("../permissions");
+const cashAccess = require("../cashAccess");
 
 const router = express.Router();
 
@@ -50,6 +51,13 @@ router.get("/me", (req, res) => {
     : null;
   out.realRole = req.session.role || "";
 
+  /* Which days of the Cash Book this person may see, so their own screen
+     can say so plainly. A short book with no explanation reads as a broken
+     one, and the window is not a secret from the person it applies to —
+     it is the server that enforces it, not this line. */
+  const win = cashAccess.windowFor(req);
+  out.cashAccess = win ? { ...win, note: cashAccess.describe(req) } : null;
+
   /* A salesman sees their own name here so their screens can say "your
      sales" rather than making them work out whose data they are looking at. */
   out.salesman = "";
@@ -70,6 +78,14 @@ router.get("/catalogue", requireRole("owner"), (req, res) => {
     sensitive: permissions.SENSITIVE,
     scopes: permissions.SCOPES,
     roles: Object.keys(permissions.ROLE_DEFAULTS),
+    /* The three Cash Book access periods, labelled for the screen. The
+       keys are what the server checks; the labels are what the owner
+       reads, the same split the module list above uses. */
+    cashAccessTypes: [
+      { key: "permanent", label: "Permanent" },
+      { key: "day",       label: "One Day" },
+      { key: "range",     label: "Date Range" }
+    ],
     /* Said out loud so the screen can print it rather than imply it by
        leaving a column out. */
     deleteNote: "Delete belongs to the owner alone and cannot be granted."
@@ -150,6 +166,16 @@ router.get("/:id", requireRole("owner"), (req, res) => {
     salesman: s.salesman_name || "",
     scope: permissions.SCOPES.includes(String(s.data_scope || "")) ? s.data_scope : "Own Only",
     active: s.active,
+    /* Blank reads back as Permanent, which is what blank means — see
+       cashAccess.js. The screen shows a period selected either way, so
+       the owner is never looking at an empty control wondering which of
+       the three is in force. */
+    cashAccess: {
+      type: String(s.cash_access_type || "").trim() || "permanent",
+      date: s.cash_access_date || "",
+      from: s.cash_access_from || "",
+      to: s.cash_access_to || ""
+    },
     modules, assigned
   });
 });
@@ -181,13 +207,31 @@ router.put("/:id", requireRole("owner"), (req, res) => {
   const wanted = (body.modules && typeof body.modules === "object") ? body.modules : {};
   const assigned = Array.isArray(body.assigned) ? body.assigned : [];
 
+  /* Checked BEFORE the transaction opens. A half-set period refused halfway
+     through would leave the modules saved and the window not, which is the
+     one combination nobody asked for. Left out of the body entirely, the
+     existing setting stands — an older screen that does not know about this
+     must not silently clear it. */
+  let cash;
+  try {
+    cash = body.cashAccess === undefined
+      ? { type: String(s.cash_access_type || "").trim() || "permanent",
+          date: s.cash_access_date || "", from: s.cash_access_from || "", to: s.cash_access_to || "" }
+      : cashAccess.validate(body.cashAccess);
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+
   const insert = db.prepare(`
     INSERT INTO staff_permissions (staff_id, module, can_view, can_add, can_edit, can_print)
     VALUES (?,?,?,?,?,?)`);
 
   db.transaction(() => {
-    db.prepare("UPDATE staff SET job_role=?, salesman_name=?, login_id=?, data_scope=? WHERE id=?")
-      .run(jobRole, salesman, loginId, scope, s.id);
+    db.prepare(`UPDATE staff SET job_role=?, salesman_name=?, login_id=?, data_scope=?,
+                cash_access_type=?, cash_access_date=?, cash_access_from=?, cash_access_to=?
+                WHERE id=?`)
+      .run(jobRole, salesman, loginId, scope,
+           cash.type, cash.date, cash.from, cash.to, s.id);
 
     db.prepare("DELETE FROM staff_permissions WHERE staff_id = ?").run(s.id);
     permissions.MODULES.forEach(m => {
@@ -213,7 +257,10 @@ router.put("/:id", requireRole("owner"), (req, res) => {
     const w = wanted[m.key] || {};
     return w.view || w.add || w.edit || w.print;
   }).length;
-  logAction(req, "staff.permissions", `${s.name}: ${granted} module(s), scope ${scope}`);
+  const period = cash.type === "day" ? `Cash Book ${cash.date} only`
+    : cash.type === "range" ? `Cash Book ${cash.from} to ${cash.to}`
+    : "Cash Book unrestricted";
+  logAction(req, "staff.permissions", `${s.name}: ${granted} module(s), scope ${scope}, ${period}`);
 
   res.json({ ok: true });
 });

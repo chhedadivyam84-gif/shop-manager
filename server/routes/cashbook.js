@@ -4,8 +4,34 @@ const { uid, logAction, round2, todayStr } = require("../util");
 const { requireRole } = require("../auth");
 const { buildXlsx } = require("../xlsx");
 const partyCash = require("../partyCash");
+const permissions = require("../permissions");
+const cashAccess = require("../cashAccess");
 
 const router = express.Router();
+
+/* ============================================================
+   WHO MAY READ AND WRITE THIS BOOK
+
+   Two gates, asked in this order on every route below:
+
+     1. PERMISSION — the "cash" module in Staff Access, which has carried
+        View / Add / Edit / Print since the permission screen was built.
+        It was never checked here, so every signed-in person could read
+        and write the whole book whatever the owner had ticked. It is
+        checked now.
+
+     2. PERIOD — which days of it, from server/cashAccess.js.
+
+   Both are server-side and neither is reachable from the browser. A
+   staff member can retype a URL, edit the query string, call the API by
+   hand or change the page's own JavaScript; none of it widens what the
+   SQL below is willing to return, because the window is read from their
+   staff row on every request and never from anything they sent.
+   ============================================================ */
+const mayView  = permissions.require("cash", "view");
+const mayAdd   = permissions.require("cash", "add");
+const mayEdit  = permissions.require("cash", "edit");
+const mayPrint = permissions.require("cash", "print");
 
 /**
  * Offer a finished document to Tally.
@@ -37,10 +63,20 @@ function offerToTally(req, docType, doc, opts) {
  * over ALL history, never just whatever date range is being viewed, so a
  * filtered day still shows the true balance at that point in time.
  */
-function chronoWithBalance() {
+/* THE ACCESS PERIOD IS APPLIED IN THE QUERY, not to the answer.
+   Every route below reads through this one function, so narrowing here
+   narrows the list, the totals, the day view, the category and party
+   breakdowns, the search, the export and the khata at once — and a route
+   added later inherits it rather than having to remember it.
+
+   The running balance is then built over what is left, which is why a
+   limited person's book opens at zero on their first allowed day instead
+   of carrying in the total of everything they may not see. */
+function chronoWithBalance(req) {
+  const win = cashAccess.sqlAnd(req, "date");
   const rows = db.prepare(`
-    SELECT * FROM cash_entries WHERE voided = 0 ORDER BY date ASC, created_at ASC
-  `).all();
+    SELECT * FROM cash_entries WHERE voided = 0${win.sql} ORDER BY date ASC, created_at ASC
+  `).all(...win.params);
   let running = 0;
   return rows.map(r => {
     running = round2(running + (r.type === "in" ? r.amount : -r.amount));
@@ -80,9 +116,9 @@ function matchesSearch(r, search) {
          (isAmount && round2(r.amount) === round2(asNumber));
 }
 
-router.get("/", (req, res) => {
+router.get("/", mayView, (req, res) => {
   const { from, to, q } = req.query;
-  let rows = chronoWithBalance();
+  let rows = chronoWithBalance(req);
   const search = String(q || "").trim().toLowerCase();
   if (search) {
     // A search is for finding an entry whatever day it landed on ("who did
@@ -114,25 +150,26 @@ router.get("/", (req, res) => {
  * put a dot, and a month of full rows to draw thirty dots would be the whole
  * ledger fetched twice over. Voided entries do not count — a day whose only
  * entry was cancelled has nothing on it. */
-router.get("/days", (req, res) => {
+router.get("/days", mayView, (req, res) => {
   const month = String(req.query.month || "").trim();
   if (!/^\d{4}-\d{2}$/.test(month)) {
     return res.status(400).json({ error: "Give the month as YYYY-MM." });
   }
+  const win = cashAccess.sqlAnd(req, "date");
   const days = db.prepare(`
     SELECT DISTINCT date FROM cash_entries
-     WHERE voided = 0 AND date LIKE ?
-     ORDER BY date`).all(month + "-%").map(r => r.date);
+     WHERE voided = 0 AND date LIKE ?${win.sql}
+     ORDER BY date`).all(month + "-%", ...win.params).map(r => r.date);
   res.json({ month, days });
 });
 
-router.get("/summary", (req, res) => {
+router.get("/summary", mayView, (req, res) => {
   const { from, to } = req.query;
   const date = req.query.date || todayStr();
   const rangeFrom = from || date;
   const rangeTo = to || date;
 
-  const all = chronoWithBalance();
+  const all = chronoWithBalance(req);
   const before = all.filter(r => r.date < rangeFrom);
   const inRange = all.filter(r => r.date >= rangeFrom && r.date <= rangeTo);
 
@@ -156,7 +193,7 @@ router.get("/summary", (req, res) => {
    anything, and none of the existing routes changed — the day-by-day
    cash book, its balances and its entries are exactly as they were.
 
-   WHY THE TOTALS ARE BUILT FROM chronoWithBalance() AND NOT FROM THEIR
+   WHY THE TOTALS ARE BUILT FROM chronoWithBalance(req) AND NOT FROM THEIR
    OWN QUERY: the cash book's opening and closing already come from that
    one running total over all history. A second, independent sum of the
    same money is how a book comes to disagree with itself on one day in
@@ -182,8 +219,8 @@ const NO_NAME = "(none)";
    about what an unnamed row is called. */
 const groupKey = (s) => String(s || "").trim().toLowerCase() || NO_NAME;
 
-function groupTotals(field, from, to, only) {
-  const all = chronoWithBalance();
+function groupTotals(req, field, from, to, only) {
+  const all = chronoWithBalance(req);
   const rangeFrom = from || "0000-01-01";
   const rangeTo = to || "9999-12-31";
 
@@ -236,45 +273,47 @@ function groupTotals(field, from, to, only) {
 
 /** Every category name the cash book has actually used, plus the master
  *  list — so the picker offers both what exists and what was set up. */
-router.get("/categories-used", (req, res) => {
+router.get("/categories-used", mayView, (req, res) => {
+  const win = cashAccess.sqlAnd(req, "date");
   const used = db.prepare(`
     SELECT category AS name, COUNT(*) AS uses, MAX(date) AS lastDate
     FROM cash_entries
-    WHERE voided = 0 AND TRIM(COALESCE(category,'')) <> ''
+    WHERE voided = 0 AND TRIM(COALESCE(category,'')) <> ''${win.sql}
     GROUP BY LOWER(TRIM(category))
     ORDER BY uses DESC
-  `).all();
+  `).all(...win.params);
   res.json(used);
 });
 
 /** Every party the cash book has dealt with. Feeds the person picker. */
-router.get("/parties", (req, res) => {
+router.get("/parties", mayView, (req, res) => {
+  const win = cashAccess.sqlAnd(req, "date");
   const rows = db.prepare(`
     SELECT party AS name, COUNT(*) AS transactions, MAX(date) AS lastDate
     FROM cash_entries
-    WHERE voided = 0 AND TRIM(COALESCE(party,'')) <> ''
+    WHERE voided = 0 AND TRIM(COALESCE(party,'')) <> ''${win.sql}
     GROUP BY LOWER(TRIM(party))
     ORDER BY transactions DESC, name ASC
-  `).all();
+  `).all(...win.params);
   res.json(rows);
 });
 
 /** Opening, income, expense, closing and a count, per category.
  *  ?party= narrows it to one person's categories. */
-router.get("/by-category", (req, res) => {
+router.get("/by-category", mayView, (req, res) => {
   const { from, to, party } = req.query;
   const only = party ? { field: "party", value: party } : null;
   res.json({ from: from || null, to: to || null, party: party || null,
-             groups: groupTotals("category", from, to, only) });
+             groups: groupTotals(req, "category", from, to, only) });
 });
 
 /** The same, per person/party.
  *  ?category= narrows it to the people inside one category. */
-router.get("/by-party", (req, res) => {
+router.get("/by-party", mayView, (req, res) => {
   const { from, to, category } = req.query;
   const only = category ? { field: "category", value: category } : null;
   res.json({ from: from || null, to: to || null, category: category || null,
-             groups: groupTotals("party", from, to, only) });
+             groups: groupTotals(req, "party", from, to, only) });
 });
 
 /**
@@ -286,7 +325,7 @@ router.get("/by-party", (req, res) => {
  * category, and returns the entries themselves rather than a total, so the
  * screen can show the history behind a figure it has just displayed.
  */
-router.get("/history", (req, res) => {
+router.get("/history", mayView, (req, res) => {
   const { party, category, from, to } = req.query;
   /* Asked for nothing at all, versus asked for the nameless ones. groupKey
      turns "" into NO_NAME, so the presence of the query parameter — not its
@@ -297,7 +336,7 @@ router.get("/history", (req, res) => {
     return res.status(400).json({ error: "Ask for a party, a category, or both." });
   }
 
-  const rows = chronoWithBalance().filter(r => {
+  const rows = chronoWithBalance(req).filter(r => {
     if (wantParty && groupKey(r.party) !== wantParty) return false;
     if (wantCategory && groupKey(r.category) !== wantCategory) return false;
     if (from && r.date < from) return false;
@@ -325,7 +364,7 @@ router.get("/history", (req, res) => {
   if (linked) {
     const name = partyCash.partyName(linked.party_type, linked.party_id);
     if (name) {
-      khata = { ...partyCash.partyCashBalance(linked.party_type, linked.party_id), name };
+      khata = { ...partyCash.partyCashBalance(linked.party_type, linked.party_id, req), name };
     }
   }
 
@@ -372,8 +411,8 @@ function addDays(dateStr, n) {
   return d.toISOString().slice(0, 10);
 }
 
-router.get("/daily", (req, res) => {
-  const all = chronoWithBalance();
+router.get("/daily", mayView, (req, res) => {
+  const all = chronoWithBalance(req);
   const first = all.length ? all[0].date : todayStr();
   const last = all.length ? all[all.length - 1].date : todayStr();
 
@@ -434,9 +473,9 @@ router.get("/daily", (req, res) => {
   });
 });
 
-router.get("/export", (req, res) => {
+router.get("/export", mayPrint, (req, res) => {
   const { from, to, q } = req.query;
-  let rows = chronoWithBalance();
+  let rows = chronoWithBalance(req);
   // Mirrors the list route exactly, so the spreadsheet always contains the
   // rows the user is actually looking at — exporting mid-search used to
   // hand back the whole date range instead of the search results.
@@ -468,7 +507,7 @@ router.get("/export", (req, res) => {
   if (!search && rows.length) {
     const first = rows[0].date;
     const last = rows[rows.length - 1].date;
-    const all = chronoWithBalance();
+    const all = chronoWithBalance(req);
     const before = all.filter(r => r.date < first);
     let carry = before.length ? before[before.length - 1].runningBalance : 0;
 
@@ -506,7 +545,7 @@ router.get("/export", (req, res) => {
 });
 
 /** Everyone a cash entry may be attached to — the dropdown's contents. */
-router.get("/link-targets", (req, res) => {
+router.get("/link-targets", mayView, (req, res) => {
   res.json(partyCash.linkTargets());
 });
 
@@ -520,12 +559,12 @@ router.get("/link-targets", (req, res) => {
  * and taken back. A shop that uses both would be shown the same money twice
  * if they were added together here, so they are returned apart and labelled.
  */
-router.get("/party-balances", (req, res) => {
+router.get("/party-balances", mayView, (req, res) => {
   const type = String(req.query.type || "").trim();
   if (type && type !== "customer" && type !== "supplier") {
     return res.status(400).json({ error: "Party type must be customer or supplier." });
   }
-  const rows = partyCash.allPartyCashBalances(type || null);
+  const rows = partyCash.allPartyCashBalances(type || null, req);
 
   /* Names are attached here rather than joined in SQL so the balance query
      stays one grouped scan, and so a party deleted since the entry was
@@ -542,7 +581,7 @@ router.get("/party-balances", (req, res) => {
 });
 
 /** One party's khata: the balance and the entries that make it up. */
-router.get("/party/:type/:id", (req, res) => {
+router.get("/party/:type/:id", mayView, (req, res) => {
   const { type, id } = req.params;
   const name = partyCash.partyName(type, id);
   if (!name) return res.status(404).json({ error: "Customer or supplier not found." });
@@ -552,9 +591,9 @@ router.get("/party/:type/:id", (req, res) => {
      the array silently replaced a number with a list, and every caller
      reading it as a count got "[object Object]". */
   res.json({
-    ...partyCash.partyCashBalance(type, id),
+    ...partyCash.partyCashBalance(type, id, req),
     name,
-    history: partyCash.partyCashHistory(type, id, from, to),
+    history: partyCash.partyCashHistory(type, id, from, to, req),
   });
 });
 
@@ -583,12 +622,19 @@ function readPartyLink(body) {
   return { partyType, partyId, name };
 }
 
-router.post("/", (req, res) => {
+router.post("/", mayAdd, (req, res) => {
   const { date, type, party, category, remarks } = req.body;
   const amount = round2(Number(req.body.amount));
   if (!amount || amount <= 0) return res.status(400).json({ error: "Enter a valid amount." });
   if (type !== "in" && type !== "out") return res.status(400).json({ error: "Choose Cash In or Cash Out." });
   const entryDate = (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) ? date : todayStr();
+
+  /* An entry has to fall on a day this person may see. Otherwise somebody
+     limited to the 10th could write Tuesday's takings into last month,
+     where they are the one person who cannot check them again. */
+  if (!cashAccess.allows(req, entryDate)) {
+    return res.status(403).json({ error: cashAccess.describe(req) + " This entry is dated outside that." });
+  }
 
   let link;
   try { link = readPartyLink(req.body); }
@@ -620,8 +666,15 @@ router.post("/", (req, res) => {
   res.status(201).json(db.prepare("SELECT * FROM cash_entries WHERE id = ?").get(id));
 });
 
-router.put("/:id", (req, res) => {
+router.put("/:id", mayEdit, (req, res) => {
   const e = db.prepare("SELECT * FROM cash_entries WHERE id = ?").get(req.params.id);
+  /* AN ENTRY OUTSIDE THE WINDOW IS NOT FOUND, not forbidden. Answering
+     "you may not edit that" confirms the id exists and that something
+     happened that day, which is the fact being withheld. The lookup above
+     cannot be windowed — it is by primary key — so the check is here. */
+  if (e && !cashAccess.allows(req, e.date)) {
+    return res.status(404).json({ error: "Entry not found." });
+  }
   if (!e) return res.status(404).json({ error: "Entry not found." });
   if (e.voided) return res.status(400).json({ error: "Can't edit a deleted entry." });
   if (e.source_type) return res.status(400).json({ error: `This entry was created automatically from a ${e.source_type === "payment" ? "customer receipt" : "supplier payment"} — edit it there instead.` });
@@ -631,6 +684,15 @@ router.put("/:id", (req, res) => {
   if (!amount || amount <= 0) return res.status(400).json({ error: "Enter a valid amount." });
   const entryType = (type === "in" || type === "out") ? type : e.type;
   const entryDate = (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) ? date : e.date;
+
+  /* BOTH SIDES OF THE EDIT ARE CHECKED. The row being edited is already
+     known to be inside the window; this is the date it is being moved TO.
+     Without it, an entry could be walked out of the window a day at a
+     time — and once outside, its author is the one person who can no
+     longer see what they did. */
+  if (!cashAccess.allows(req, entryDate)) {
+    return res.status(403).json({ error: cashAccess.describe(req) + " You can't move an entry outside that." });
+  }
 
   /* Left out of the body entirely, the existing link stands; sent empty, it
      is cleared. Re-pointing an entry at the wrong party is an ordinary typo

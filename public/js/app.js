@@ -2414,9 +2414,70 @@ async function openStaffPermissions(staffId){
   PERM.draft = {
     jobRole: data.jobRole, salesman: data.salesman, loginId: data.loginId,
     scope: data.scope, modules: JSON.parse(JSON.stringify(data.modules)),
-    assigned: data.assigned.slice()
+    assigned: data.assigned.slice(),
+    /* An older server does not send this. Defaulting to Permanent rather
+       than to nothing means saving from this screen cannot accidentally
+       impose a restriction the owner never chose. */
+    cashAccess: Object.assign({ type:"permanent", date:"", from:"", to:"" }, data.cashAccess || {})
   };
   paintStaffPermissions(data);
+}
+
+/* ============================================================
+   CASH BOOK DATA ACCESS
+
+   Sits under the permission grid because it only narrows what the Cash
+   Book row up there has already granted: somebody with no Cash Book tick
+   sees nothing whatever period is set, and a period is not a way to give
+   access, only to limit it.
+
+   Built from the same chips and the same field grid as everything else in
+   this sheet. The dates are <input type="date">, which is what the rest of
+   the app uses for a date, so the picker, the format and the keyboard on a
+   phone are the ones the owner already knows.
+   ============================================================ */
+function cashAccessBlockHtml(){
+  const d = PERM.draft;
+  const ca = d.cashAccess || { type:"permanent", date:"", from:"", to:"" };
+  /* An older server's catalogue has no list; the three periods are fixed
+     and the screen can still draw them. */
+  const types = (PERM.catalogue && PERM.catalogue.cashAccessTypes) || [
+    { key:"permanent", label:"Permanent" }, { key:"day", label:"One Day" }, { key:"range", label:"Date Range" }
+  ];
+  const cashOn = d.modules && d.modules.cash &&
+    (d.modules.cash.view || d.modules.cash.add || d.modules.cash.edit || d.modules.cash.print);
+
+  return `
+    <div class="section-title">Cash Book data access</div>
+    <div class="muted" style="font-size:12px;margin-bottom:8px;">
+      Which days of the Cash Book this person may open. Checked on the server for
+      every request — totals, reports, search and export included.
+    </div>
+    ${cashOn ? "" : `<div class="muted" style="font-size:12px;margin-bottom:8px;">
+      Cash Book is not ticked above, so this person cannot open it at all yet.
+    </div>`}
+    <div class="chip-row" id="perm-cash-types">
+      ${types.map(t => `<button class="chip ${t.key===ca.type?"selected":""}" data-perm-cash="${escapeHtml(t.key)}">${escapeHtml(t.label)}</button>`).join("")}
+    </div>
+    ${ca.type === "day" ? `
+      <div class="charge-grid" style="margin-top:10px;">
+        <label class="dim"><span>Date</span>
+          <input type="date" id="perm-cash-date" value="${escapeHtml(ca.date||"")}"></label>
+      </div>` : ""}
+    ${ca.type === "range" ? `
+      <div class="charge-grid" style="margin-top:10px;">
+        <label class="dim"><span>From date</span>
+          <input type="date" id="perm-cash-from" value="${escapeHtml(ca.from||"")}"></label>
+        <label class="dim"><span>To date</span>
+          <input type="date" id="perm-cash-to" value="${escapeHtml(ca.to||"")}"></label>
+      </div>` : ""}
+    <div class="muted" style="font-size:11px;margin-top:6px;">
+      ${ca.type === "permanent"
+        ? "No date limit — the ticks above alone decide what they see."
+        : ca.type === "day"
+          ? "That one date only. Any other day is refused, however it is asked for."
+          : "Those two dates and everything between them. Anything outside is refused."}
+    </div>`;
 }
 
 function paintStaffPermissions(data){
@@ -2474,6 +2535,8 @@ function paintStaffPermissions(data){
       </table>
     </div>
 
+    ${cashAccessBlockHtml()}
+
     <div class="card perm-locked">
       <div class="row-title">Delete</div>
       <div class="row-sub">${escapeHtml(cat.deleteNote)} It is refused by the server, not just hidden here.</div>
@@ -2528,6 +2591,20 @@ function paintStaffPermissions(data){
       if(viewBox) viewBox.checked = true;
     }
   }));
+
+  sheet.querySelectorAll("[data-perm-cash]").forEach(b => b.addEventListener("click", ()=>{
+    d.cashAccess.type = b.dataset.permCash;
+    paintStaffPermissions(data);
+  }));
+  /* Typed straight into the draft, no repaint: redrawing on every keystroke
+     would take the date picker away mid-choice. */
+  const bindDate = (id, key) => {
+    const el = sheet.querySelector(id);
+    if(el) el.addEventListener("change", e => { d.cashAccess[key] = e.target.value; });
+  };
+  bindDate("#perm-cash-date", "date");
+  bindDate("#perm-cash-from", "from");
+  bindDate("#perm-cash-to", "to");
 
   sheet.querySelector("#perm-login").addEventListener("input", e => { d.loginId = e.target.value; });
   sheet.querySelector("#perm-salesman").addEventListener("input", e => { d.salesman = e.target.value; });
@@ -15138,7 +15215,20 @@ function renderCashCalendar(){
   });
 }
 
+/* SAY SO WHEN THE BOOK IS SHORT ON PURPOSE.
+   Somebody limited to one week opens the Cash Book, sees a week, and has
+   no way to tell a restriction from a fault — and the first thing they do
+   is report it as one. The server is what enforces the period; this only
+   explains it, and it is never drawn for anyone who has no period set. */
+function cbAccessNoteHtml(){
+  const a = state.access && state.access.cashAccess;
+  if(!a || !a.note) return "";
+  return '<div class="muted" style="font-size:12px;margin:0 0 10px;">' + escapeHtml(a.note) + '</div>';
+}
+
 async function renderCashBook(){
+  const noteEl = document.getElementById("cb-access-note");
+  if(noteEl) noteEl.innerHTML = cbAccessNoteHtml();
   const fromEl = document.getElementById("cb-filter-from");
   const toEl = document.getElementById("cb-filter-to");
   if(fromEl) fromEl.value = state.cbFrom;

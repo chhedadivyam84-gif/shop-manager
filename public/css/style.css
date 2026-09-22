@@ -3169,3 +3169,71 @@ a.chip{display:inline-flex;align-items:center;gap:5px;text-decoration:none;}
 
 /* Bank Entry — the columned front every bank in the bazaar still uses. */
 #acc-bank-entry .ic{font-size:0;background-color:#E4E9F6;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2.4l10 5.2v2.2H2V7.6z' fill='%231F3778'/%3E%3Crect x='4.4' y='11' width='2.6' height='7.4' fill='%233457B0'/%3E%3Crect x='10.7' y='11' width='2.6' height='7.4' fill='%233457B0'/%3E%3Crect x='17' y='11' width='2.6' height='7.4' fill='%233457B0'/%3E%3Crect x='2' y='19.4' width='20' height='2.4' rx='.8' fill='%231F3778'/%3E%3C/svg%3E");}
+
+/* ============================================================
+   PARTICULAR BRANDING / ARTWORK
+
+   The thumbnail in the product form, and the block on the printed page.
+
+   object-fit:contain everywhere an artwork is shown. A branded board
+   design stretched to fill a box is a different design — the proportions
+   are the mark. Fitting inside the box and leaving the spare room empty
+   is the only honest way to show one at a size it was not drawn for.
+   ============================================================ */
+.art-row{ display:flex; gap:12px; align-items:flex-start; flex-wrap:wrap; }
+.art-thumb{
+  width:104px; height:104px; flex:none;
+  border:1px solid var(--border); border-radius:10px;
+  background:var(--bg-outer);
+  display:flex; align-items:center; justify-content:center;
+  overflow:hidden; padding:6px;
+}
+.art-thumb img{ max-width:100%; max-height:100%; object-fit:contain; display:block; }
+.art-actions{ display:flex; flex-direction:column; gap:7px; min-width:170px; flex:1; }
+
+/* On a phone the two sit under each other rather than squeezing the
+   buttons into whatever is left beside a 104px square. */
+@media (max-width:420px){
+  .art-actions{ min-width:100%; }
+}
+
+
+/* The size pair in the Artwork Layout group. Sits on one line on a laptop
+   and stacks on a phone, like every other bp-row in this panel. */
+.bp-num{ display:flex; align-items:center; gap:6px; font-size:12px; flex:1; min-width:120px; }
+.bp-num .bp-input{ width:70px; flex:none; }
+
+/* ------------------------------------------------------------
+   PARTICULAR BRANDING ARTWORK — the on-screen copy of the band
+
+   These rules are ALSO in document.css, and both copies are needed.
+   This app renders the bill twice from the same markup:
+
+     · the printed sheet, inside the print-canvas iframe, which links
+       document.css and nothing else;
+     · #invoice-page-content in this document, which is what
+       html2canvas rasterises to build the PDF, and which is styled
+       from here.
+
+     Every .erp-* rule in this file has a twin in document.css for the
+     same reason. Delete this block and the sheet still prints correctly
+     while the PDF comes out with the artwork at its natural size,
+     spilling over whatever is beside it — which is exactly the bug that
+     put this comment here.
+   ------------------------------------------------------------ */
+.erp-art{
+  display:flex; flex-wrap:wrap; align-items:flex-end; justify-content:center;
+  gap:4mm; margin:3mm 0; width:100%;
+  break-inside:avoid; page-break-inside:avoid;
+}
+.erp-art-item{
+  display:flex; align-items:center; justify-content:center;
+  max-width:100%; overflow:hidden;
+}
+.erp-art-item img{
+  /* The proportions ARE the mark — a stretched brand design is a
+     different design. Only given up when the aspect-ratio lock is
+     switched off, which sets object-fit:fill inline. */
+  max-width:100%; max-height:100%; object-fit:contain; display:block;
+}
+.invoice-page.size-a5 .erp-art-item{ max-width:60mm; }

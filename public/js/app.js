@@ -8468,6 +8468,112 @@ function openAddSupplier(editing){
    ============================================================ */
 const UNIT_OPTIONS = ["Sheet","Piece","Sq.ft","Sq.mtr","Cu.mtr","Running ft"];
 
+/* ============================================================
+   PARTICULAR BRANDING / ARTWORK
+
+   A brand's own mark, kept as a PICTURE. It is never read into text:
+   the whole point is the design that is printed on the board, and a
+   transcription of the words on it is a different thing.
+
+   HELD IN STATE UNTIL THE PRODUCT IS SAVED, so creating a product with
+   artwork and adding artwork to an existing one are the same three steps
+   — choose, see it, save. A new product has no id to attach an image to
+   until it exists, and asking somebody to save twice to get one picture
+   onto one particular is not a flow anybody should have to learn.
+
+   `data` is undefined while nothing has been chosen this session, which is
+   what tells the save step to leave whatever is stored alone. Null means
+   "remove it", a real instruction and the only way back to a plain line.
+   ============================================================ */
+const ARTWORK_MAX_KB = 400;
+
+/** The artwork being edited: undefined = untouched, null = remove, string = set. */
+function artDraft(){
+  if(!state.ctx.productArtwork) state.ctx.productArtwork = { data: undefined, name: "" };
+  return state.ctx.productArtwork;
+}
+
+/** What is currently on screen for this particular — the pending choice if
+ *  there is one, otherwise whatever was loaded from the server. */
+function artShown(){
+  const d = artDraft();
+  return d.data !== undefined ? d.data : (d.stored || "");
+}
+
+function artworkSectionHtml(editing){
+  const shown = artShown();
+  return `
+    <div class="section-title" style="margin-top:14px;">Particular Branding / Artwork</div>
+    <p class="muted" style="font-size:11.5px;margin-bottom:8px;">
+      Optional. The brand's own design for this particular — logo, name, tagline,
+      whatever is on the board. It stays a picture and is never turned into text.
+      Where it prints is set once under Bill Print Settings.
+    </p>
+    <div class="art-row">
+      <div class="art-thumb" id="np-art-thumb">${
+        shown ? `<img src="${escapeHtml(shown)}" alt="Artwork for this particular">`
+              : `<span class="muted" style="font-size:11px;">No artwork</span>`
+      }</div>
+      <div class="art-actions">
+        <button type="button" class="btn btn-outline" id="np-art-pick">${shown ? "Change image" : "Upload artwork"}</button>
+        ${shown ? `<a href="#" id="np-art-clear" class="btn-danger-link" style="font-size:12px;">Remove artwork</a>` : ""}
+        <div class="muted" style="font-size:11px;">
+          PNG, JPG or WebP, under ${ARTWORK_MAX_KB} KB.
+          PNG keeps a transparent background.
+        </div>
+      </div>
+    </div>
+    <input type="file" id="np-art-file" accept="image/png,image/jpeg,image/webp" style="display:none;">
+    ${editing && !shown && editing.has_artwork
+      ? `<div class="muted" style="font-size:11px;">Loading the saved artwork…</div>` : ""}`;
+}
+
+/** Wires the section up. Called on every re-render of the form, so the
+ *  buttons belong to the elements currently on screen. */
+function bindArtworkSection(sheet, context){
+  const pick = sheet.querySelector("#np-art-pick");
+  const file = sheet.querySelector("#np-art-file");
+  const clear = sheet.querySelector("#np-art-clear");
+  if(!pick || !file) return;
+
+  pick.addEventListener("click", ()=> file.click());
+
+  file.addEventListener("change", ()=>{
+    const f = file.files && file.files[0];
+    if(!f) return;
+    /* Checked here as well as on the server, so somebody who picked a
+       4 MB photo is told immediately instead of after the upload. */
+    if(f.size > ARTWORK_MAX_KB * 1024){
+      toast(`That image is ${Math.round(f.size/1024)} KB. Please use one under ${ARTWORK_MAX_KB} KB.`);
+      file.value = "";
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = ()=>{
+      artDraft().data = String(reader.result || "");
+      renderAddProductSheet(context);
+    };
+    reader.onerror = ()=> toast("Could not read that file.");
+    reader.readAsDataURL(f);
+  });
+
+  if(clear) clear.addEventListener("click", (e)=>{
+    e.preventDefault();
+    artDraft().data = null;          // an instruction, not an absence
+    renderAddProductSheet(context);
+  });
+}
+
+/** Saves the pending choice against a product that now certainly exists.
+ *  Returns quietly when nothing was chosen — the common case. */
+async function saveArtworkFor(productId){
+  const d = artDraft();
+  if(d.data === undefined) return;                 // untouched
+  await api("PUT", `/products/${productId}/artwork`, { artwork: d.data });
+  d.stored = d.data || "";
+  d.data = undefined;
+}
+
 /**
  * One form serves both "New Product" and "Edit Product". Editing shares every
  * field and validation rule with creation, so a corrected product can never end
@@ -8476,6 +8582,21 @@ const UNIT_OPTIONS = ["Sheet","Piece","Sq.ft","Sq.mtr","Cu.mtr","Running ft"];
  */
 function openProductForm(context, product){
   state.ctx.editingProductId = product ? product.id : null;
+  /* A fresh draft per opening, so artwork chosen for one particular and
+     then abandoned cannot follow the next one that is opened. */
+  state.ctx.productArtwork = { data: undefined, stored: "" };
+  /* The image is not in the product list — see stripArtwork in
+     routes/products.js — so it is fetched when the form that edits it
+     opens, and only then. */
+  if(product && product.has_artwork){
+    api("GET", `/products/${product.id}/artwork`)
+      .then(r => {
+        if(state.ctx.editingProductId !== product.id) return;   // moved on
+        state.ctx.productArtwork.stored = r.artwork || "";
+        renderAddProductSheet(context);
+      })
+      .catch(()=>{ /* the form still works; the picture just is not shown */ });
+  }
   // `id` is carried along for existing sizes so the server can update the
   // row in place (see PUT /products/:id) rather than delete-and-reinsert,
   // which would otherwise sever the link a past sale/purchase keeps to it.
@@ -8546,6 +8667,7 @@ function renderAddProductSheet(context){
     </div>
     ${editing ? `<p class="muted" style="font-size:11px;margin-top:8px;">Correcting a miscount here is fine. For goods actually received, use “Record Stock In” so the purchase is kept in the history.</p>` : ""}
     <label class="field-label">Godown / Rack</label><input type="text" id="np-godown" placeholder="e.g. Godown A / R3" value="${v("godown")}">
+    ${artworkSectionHtml(editing)}
     <button class="btn btn-primary" id="np-save" style="margin-top:16px;">${editing ? "Update Product" : "Save Product"}</button>
   `;
   /** Shop + Warehouse for one size row. Kept as a function so the Total can be
@@ -8624,6 +8746,8 @@ function renderAddProductSheet(context){
   }));
   sheet.querySelector("#np-add-size").addEventListener("click", (e)=>{ e.preventDefault(); sizes.push({label:"",price:"",stock:0,cost:0,shopStock:0,warehouseStock:0}); renderSizes(); });
   sheet.querySelector("#np-add-range").addEventListener("click", (e)=>{ e.preventDefault(); openRangeBuilder(sizes, renderSizes); });
+  bindArtworkSection(sheet, context);
+
   sheet.querySelector("#np-save").addEventListener("click", async ()=>{
     const name = document.getElementById("np-name").value.trim();
     if(!name){ toast("Enter a product name."); return; }
@@ -8647,8 +8771,15 @@ function renderAddProductSheet(context){
     try{
       // Each size row carries its own stock now, so create/update both send
       // it as part of `sizes` — no separate stock call needed either way.
-      if(editing) await api("PUT", `/products/${editing.id}`, payload);
-      else await api("POST","/products", payload);
+      /* The artwork goes up AFTER the product is saved, because a new one
+         has no id until then. A failure here is reported without losing the
+         product that did save — "the product is saved but the picture is
+         not" is a state somebody can act on; a silent half-save is not. */
+      let saved;
+      if(editing){ await api("PUT", `/products/${editing.id}`, payload); saved = editing; }
+      else saved = await api("POST","/products", payload);
+      try{ await saveArtworkFor(saved.id); }
+      catch(artErr){ toast("Product saved, but the artwork was not: " + artErr.message); }
       await loadProducts();
       closeAllSheets();
       renderInventoryList(); renderBillingProducts();
@@ -9857,13 +9988,24 @@ async function openTemplatedDoc(docKey, doc, opts){
      The canvas owns the sheet now, and takes its width and its margin from
      one number each — so there is nothing left for the two to disagree
      about. */
+  /* The branding artwork for this document's particulars. Awaited rather
+     than drawn-then-redrawn the way the bill does it, because this path is
+     already async and a document built once is simpler than one built
+     twice. A failure leaves the images out; it never stops the document. */
+  await artLoad(doc.items);
+
   let built;
   try{
     built = DocPrint.build(docKey, doc, {
       settings: state.settings || {},
       party: docPartyFor(docKey, doc),
       config: cfg,
-      enrich: docLineExtras
+      enrich: docLineExtras,
+      /* Only the marks this document needs, and where the shop wants them.
+         Both read at build time, so a layout changed in Bill Print Settings
+         applies to a quotation printed after it without a reload. */
+      artwork: artMapFor(doc.items),
+      artworkCfg: billPrefs().artwork
     });
   }catch(e){
     toast("Could not build this document: " + e.message);
@@ -11071,6 +11213,12 @@ function openInvoicePreview(existingInvoice){
         const r = lineCalc(c);
         const p = state.products.find(p=>p.id===c.productId);
         return {
+          /* WHICH PARTICULAR THIS LINE IS. A saved bill's rows carry it —
+             invoice_items.product_id — and an unsaved preview must too, or
+             the two stop being the same shape and anything that looks a
+             line up by its particular works on one and silently not on the
+             other. The branding artwork is the first thing to need it. */
+          product_id: c.productId || "",
           name:c.name, code:(p&&p.code)||"", brand:(p&&p.brand)||"", hsn_code:(p&&p.hsn_code)||"",
           gst_rate:c.gstRate||0,
           mode:r.mode, size_label:r.sizeLabel,
@@ -11772,12 +11920,16 @@ function renderTallyInvoiceHtml(inv, cust, cols, rowsHtml, ctx){
       </div>
     </div>
 
+    ${artBandHtml(inv.items, billPrefs(), "top")}
+
     <div class="erp-table-wrap">
       <table class="erp-table tly-items">
         <thead><tr>${cols.map(billHeadCell).join("")}</tr></thead>
         <tbody>${rowsHtml}</tbody>
       </table>
     </div>
+
+    ${artBandHtml(inv.items, billPrefs(), "middle")}
 
     <div class="tly-amtwords">
       <span>Amount Chargeable (in words)</span>
@@ -11786,6 +11938,8 @@ function renderTallyInvoiceHtml(inv, cust, cols, rowsHtml, ctx){
     </div>
 
     ${gstEnabled ? tallyHsnSummary(inv, inv.items || [], { gstEnabled, isIGST }) : ""}
+
+    ${artBandHtml(inv.items, billPrefs(), "bottom")}
 
     <div class="tly-foot">
       <div class="tly-foot-l">
@@ -11980,6 +12134,9 @@ async function saveBillLayoutToTemplate(challan){
 
 function renderInvoicePageContent(){
   const inv = lastPreviewInvoice; if(!inv) return;
+  /* Asks for any artwork this document's particulars have. Cold, it draws
+     now without them and draws again when they arrive. */
+  artReady(inv.items, renderInvoicePageContent);
   const cfg = state.settings;
   const cust = state.customers.find(c=>c.id===inv.customer_id);
   const isA4 = state.paperSize==="A4";
@@ -12293,6 +12450,8 @@ function renderInvoicePageContent(){
       </div>
     </div>
 
+    ${artBandHtml(inv.items, billPrefs(), "top")}
+
     <div class="erp-table-wrap">
       <table class="erp-table">
         <thead><tr>${head}</tr></thead>
@@ -12315,10 +12474,14 @@ function renderInvoicePageContent(){
       </table>
     </div>
 
+    ${artBandHtml(inv.items, billPrefs(), "middle")}
+
     <div class="erp-bottom">
       ${bottomLeft}
       ${totalsBox}
     </div>
+
+    ${artBandHtml(inv.items, billPrefs(), "bottom")}
 
     <div class="erp-terms">${challan
       ? `<strong>PLYWOOD, BLACKBOARD, ARE MANUFACTURED FROM NATURAL WOOD WHICH IS BELOW BIO DEGRADEBLE, WE DONOT GUARANTEE AGAINST ANY NATURAL DECAY DEFICIENTY, DETORATION AND LIKE INCLUDING MANUFACTURING DEFACT AND/OR IMPERFACT QUALITY</strong>`
@@ -12634,6 +12797,8 @@ function fitBillToPage(colCount){
    ============================================================ */
 
 const BILL_PREF_DEFAULTS = {
+  /* See billPrefs() for why this one starts ON. */
+  artwork: { on:true, align:"center", vAlign:"bottom", width:40, height:0, keepRatio:true, rotate:0 },
   paper: "A4",
   showRate: true,
   /* The delivery address is office information, not something the customer
@@ -12674,6 +12839,152 @@ const BILL_PREF_COLUMNS = [
  *  While the panel is open its working copy wins, so ticking a box redraws the
  *  bill straight away. Close the panel without saving and the shop default
  *  comes back — the preview is never showing something nobody chose. */
+/* ============================================================
+   PARTICULAR BRANDING ARTWORK ON A PRINTED DOCUMENT
+
+   The images are not in the product list — they are a few hundred
+   kilobytes each and the list is fetched on almost every screen — so a
+   document fetches the ones it needs, once, and keeps them.
+
+   RENDERING STAYS SYNCHRONOUS. renderInvoicePageContent has ten callers
+   and making it async to await a fetch would ripple through all of them.
+   Instead a cold cache draws the bill without artwork and asks again when
+   the images land, which is one extra render and no new async edges.
+
+   Every id asked for is cached INCLUDING the ones with no artwork, stored
+   as "". Without that, a bill whose particulars have no artwork would ask
+   for them again on every single render, forever.
+   ============================================================ */
+const ART_CACHE = Object.create(null);
+
+/** Distinct particulars on a document that could carry artwork. */
+function artIdsOf(items){
+  return [...new Set((items || []).map(i => i && i.product_id).filter(Boolean))];
+}
+
+/**
+ * True when every particular's artwork is already known.
+ *
+ * When it is not, the fetch is started and `again` is called once it
+ * lands. Returns false so the caller draws what it can now.
+ */
+/**
+ * Loads any artwork this document's particulars have. ALWAYS settles —
+ * including when none of them has any, and including when the request
+ * fails — because a caller that awaits it must not be left waiting on a
+ * document that simply has no pictures in it.
+ */
+function artLoad(items){
+  const missing = artIdsOf(items).filter(id => !(id in ART_CACHE));
+  if(!missing.length) return Promise.resolve(false);
+  /* Marked before the request goes out, so a second render while it is in
+     flight does not fire the same fetch again. */
+  missing.forEach(id => { ART_CACHE[id] = ""; });
+  return api("POST", "/products/artwork/batch", { ids: missing })
+    .then(r => {
+      const got = (r && r.artwork) || {};
+      let any = false;
+      Object.keys(got).forEach(id => { ART_CACHE[id] = got[id]; any = true; });
+      return any;
+    })
+    .catch(()=> false);        /* print without them rather than not at all */
+}
+
+function artReady(items, again){
+  const missing = artIdsOf(items).filter(id => !(id in ART_CACHE));
+  if(!missing.length) return true;
+  /* Marked before the request goes out, so a second render while it is in
+     flight does not fire the same fetch again. */
+  missing.forEach(id => { ART_CACHE[id] = ""; });
+  api("POST", "/products/artwork/batch", { ids: missing })
+    .then(r => {
+      const got = (r && r.artwork) || {};
+      let any = false;
+      Object.keys(got).forEach(id => { ART_CACHE[id] = got[id]; any = true; });
+      if(any && typeof again === "function") again();
+    })
+    .catch(()=>{ /* the document prints without artwork rather than not at all */ });
+  return false;
+}
+
+/** Artwork for the particulars on this document, each with its own name,
+ *  in the order the lines appear. One entry per PARTICULAR, not per line:
+ *  the same board on three lines is one mark, not three. */
+function artOf(items){
+  const out = [];
+  const seen = new Set();
+  (items || []).forEach(it => {
+    const id = it && it.product_id;
+    if(!id || seen.has(id)) return;
+    const data = ART_CACHE[id];
+    if(!data) return;
+    seen.add(id);
+    out.push({ id, name: it.name || "", data });
+  });
+  return out;
+}
+
+/** Just the marks a document needs, keyed by particular — what docPrint
+ *  is handed, so that module never has to reach into this one's cache. */
+function artMapFor(items){
+  const out = {};
+  artIdsOf(items).forEach(id => { if(ART_CACHE[id]) out[id] = ART_CACHE[id]; });
+  return out;
+}
+
+/* Sanitised so a stored preference cannot put anything into the style
+   attribute but a number and one of six words. */
+const ART_H = ["left","center","right"];
+const ART_V = ["top","middle","bottom"];
+function artCfg(prefs){
+  const a = (prefs && prefs.artwork) || {};
+  const n = (v, dflt, max) => {
+    const x = Number(v);
+    return Number.isFinite(x) && x > 0 ? Math.min(x, max) : dflt;
+  };
+  return {
+    on: a.on !== false,
+    align:  ART_H.includes(a.align)  ? a.align  : "center",
+    vAlign: ART_V.includes(a.vAlign) ? a.vAlign : "bottom",
+    width:  n(a.width, 40, 190),          // mm; an A4 page is 210 wide
+    height: n(a.height, 0, 260),          // 0 = whatever the aspect ratio gives
+    keepRatio: a.keepRatio !== false,
+    rotate: [0,90,180,270].includes(Number(a.rotate)) ? Number(a.rotate) : 0
+  };
+}
+
+/**
+ * The artwork band, or "" when there is nothing to draw.
+ *
+ * `slot` is which of the three flow positions is being rendered; the band
+ * appears in exactly one of them, so this returns "" for the other two.
+ */
+function artBandHtml(items, prefs, slot){
+  const c = artCfg(prefs);
+  if(!c.on || c.vAlign !== slot) return "";
+  const marks = artOf(items);
+  if(!marks.length) return "";
+
+  /* A rotated quarter-turn occupies its own height across the page, so the
+     BOX swaps dimensions while the image inside is turned. Without this the
+     turned image runs out of its container and over whatever is below —
+     the overlap this whole layout approach exists to prevent. */
+  const turned = c.rotate === 90 || c.rotate === 270;
+  const boxW = turned ? (c.height || c.width) : c.width;
+  const boxH = turned ? c.width : c.height;
+
+  const justify = c.align === "left" ? "flex-start" : c.align === "right" ? "flex-end" : "center";
+
+  const imgs = marks.map(m => `
+    <span class="erp-art-item" style="width:${boxW}mm;${boxH ? `height:${boxH}mm;` : ""}">
+      <img src="${escapeHtml(m.data)}" alt="${escapeHtml(m.name)}"
+           style="${c.rotate ? `transform:rotate(${c.rotate}deg);` : ""}${
+             c.keepRatio ? "" : "object-fit:fill;"}">
+    </span>`).join("");
+
+  return `<div class="erp-art" style="justify-content:${justify};">${imgs}</div>`;
+}
+
 function billPrefs(){
   if(billPanelPrefs) return billPanelPrefs;
   let stored = {};
@@ -12685,6 +12996,13 @@ function billPrefs(){
     // Off unless explicitly saved on, so an older stored preference that
     // predates this setting keeps the address off the printed sheet.
     printDeliveryAddress: stored.printDeliveryAddress === true,
+    /* WHERE A PARTICULAR'S BRANDING ARTWORK PRINTS.
+       ON by default, unlike the setting above, and for the opposite
+       reason: no product in any existing shop has artwork, so nothing
+       changes on any bill printed today. The moment somebody uploads a
+       design they expect to see it, and making them find a switch first
+       would be a worse surprise than the one defaulting off avoids. */
+    artwork: { ...BILL_PREF_DEFAULTS.artwork, ...(stored.artwork || {}) },
     cols: { ...BILL_PREF_DEFAULTS.cols, ...(stored.cols || {}) }
   };
 }
@@ -12719,6 +13037,122 @@ let billPanelPrefs = null;
 function panelPrefs(){
   if(!billPanelPrefs) billPanelPrefs = JSON.parse(JSON.stringify(billPrefs()));
   return billPanelPrefs;
+}
+
+/* ============================================================
+   ARTWORK LAYOUT — where a particular's branding prints
+
+   Only drawn when this document actually has artwork on it. A panel that
+   offers to position a picture that is not there is a control with no
+   effect, and the shop is left wondering which of its settings is wrong.
+   ============================================================ */
+function artPanelHtml(p, inv){
+  const marks = artOf(inv.items);
+  const c = artCfg(p);
+
+  if(!marks.length){
+    /* Said once, plainly, rather than silently omitted — otherwise a shop
+       that uploaded artwork and cannot find the controls has nothing to go
+       on. */
+    return `<div class="bp-group">
+      <div class="bp-label">Particular Artwork</div>
+      <div class="bp-hint bp-hint-block">None of the particulars on this
+        document has branding artwork. Add one under
+        <b>Inventory &rsaquo; the particular &rsaquo; Particular Branding / Artwork</b>
+        and the position controls appear here.</div>
+    </div>`;
+  }
+
+  const pick = (group, value, label, on) => `
+    <label class="bp-radio">
+      <input type="radio" name="${group}" value="${value}"${on ? " checked" : ""}>
+      <span>${escapeHtml(label)}</span>
+    </label>`;
+
+  return `
+    <div class="bp-group">
+      <div class="bp-label">Particular Artwork</div>
+      <label class="bp-check">
+        <input type="checkbox" id="bp-art-on"${c.on ? " checked" : ""}>
+        <span>Print branding artwork${
+          marks.length > 1 ? `<span class="bp-hint">${marks.length} particulars on this document have one</span>` : ""}</span>
+      </label>
+
+      <div id="bp-art-controls" style="${c.on ? "" : "display:none;"}">
+        <div class="bp-label" style="margin-top:12px;">Across the page</div>
+        <div class="bp-row">
+          ${pick("bp-art-h","left","Left",   c.align==="left")}
+          ${pick("bp-art-h","center","Centre", c.align==="center")}
+          ${pick("bp-art-h","right","Right",  c.align==="right")}
+        </div>
+
+        <div class="bp-label" style="margin-top:12px;">Down the page</div>
+        <div class="bp-row">
+          ${pick("bp-art-v","top","Top",      c.vAlign==="top")}
+          ${pick("bp-art-v","middle","Middle", c.vAlign==="middle")}
+          ${pick("bp-art-v","bottom","Bottom", c.vAlign==="bottom")}
+        </div>
+        <div class="bp-hint bp-hint-block">Top is above the item table, Middle is
+          between the table and the totals, Bottom is under the totals. The artwork
+          takes its own space, so it can never land on top of the table, the totals
+          or the signature.</div>
+
+        <div class="bp-label" style="margin-top:12px;">Size</div>
+        <div class="bp-row">
+          <label class="bp-num">Width
+            <input type="number" id="bp-art-w" class="bp-input" min="5" max="190" step="1" value="${c.width}"> mm
+          </label>
+          <label class="bp-num">Height
+            <input type="number" id="bp-art-h" class="bp-input" min="0" max="260" step="1" value="${c.height}"> mm
+          </label>
+        </div>
+        <label class="bp-check" style="margin-top:6px;">
+          <input type="checkbox" id="bp-art-ratio"${c.keepRatio ? " checked" : ""}>
+          <span>Keep the original shape<span class="bp-hint">A height of 0 lets the width decide it</span></span>
+        </label>
+
+        <div class="bp-label" style="margin-top:12px;">Turn</div>
+        <div class="bp-row">
+          ${pick("bp-art-r","0","None",  c.rotate===0)}
+          ${pick("bp-art-r","90","90°",  c.rotate===90)}
+          ${pick("bp-art-r","180","180°", c.rotate===180)}
+          ${pick("bp-art-r","270","270°", c.rotate===270)}
+        </div>
+      </div>
+    </div>`;
+}
+
+/** Every control redraws the bill at once, so positioning is done by
+ *  looking at the page rather than by imagining it. */
+function bindArtPanel(el){
+  const draft = () => {
+    const p = panelPrefs();
+    if(!p.artwork) p.artwork = { ...BILL_PREF_DEFAULTS.artwork };
+    return p.artwork;
+  };
+  const redraw = () => renderInvoicePageContent();
+
+  const on = el.querySelector("#bp-art-on");
+  if(on) on.addEventListener("change", ()=>{
+    draft().on = on.checked;
+    const box = el.querySelector("#bp-art-controls");
+    if(box) box.style.display = on.checked ? "" : "none";
+    redraw();
+  });
+
+  el.querySelectorAll('[name="bp-art-h"]').forEach(r =>
+    r.addEventListener("change", ()=>{ draft().align = r.value; redraw(); }));
+  el.querySelectorAll('[name="bp-art-v"]').forEach(r =>
+    r.addEventListener("change", ()=>{ draft().vAlign = r.value; redraw(); }));
+  el.querySelectorAll('[name="bp-art-r"]').forEach(r =>
+    r.addEventListener("change", ()=>{ draft().rotate = Number(r.value); redraw(); }));
+
+  const w = el.querySelector("#bp-art-w");
+  if(w) w.addEventListener("input", ()=>{ draft().width = Number(w.value) || 0; redraw(); });
+  const h = el.querySelector("#bp-art-h");
+  if(h) h.addEventListener("input", ()=>{ draft().height = Number(h.value) || 0; redraw(); });
+  const ratio = el.querySelector("#bp-art-ratio");
+  if(ratio) ratio.addEventListener("change", ()=>{ draft().keepRatio = ratio.checked; redraw(); });
 }
 
 function renderBillPanel(){
@@ -12802,10 +13236,14 @@ function renderBillPanel(){
         computer. Whatever the template is saved with is what prints here.</div>
     </div>` : ""}
 
+    ${artPanelHtml(p, inv)}
+
     <div class="bp-group bp-actions">
       <button class="btn btn-gold" id="bp-save">Save as Default</button>
     </div>
   `;
+
+  bindArtPanel(el);
 
   el.querySelectorAll("[data-bp-col]").forEach(cb=>{
     cb.addEventListener("change", ()=>{

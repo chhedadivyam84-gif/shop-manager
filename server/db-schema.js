@@ -2399,6 +2399,31 @@ addColumn("suppliers", "pin_code", "TEXT NOT NULL DEFAULT ''");
    hand here, rather than the portal accepting a guess that is legally wrong. */
 addColumn("products", "uqc", "TEXT NOT NULL DEFAULT ''");
 
+/* ============================================================
+   PARTICULAR BRANDING ARTWORK
+
+   A shop selling branded board wants the brand's own artwork on the paper
+   that goes out with it — the mark that is printed on the board itself,
+   not a retyping of the words on it. So it is held as an IMAGE and never
+   converted to text.
+
+   A data: URI, not a file path, for the reason settings.logo_data gives a
+   few hundred lines up: this app runs on a host that wipes its filesystem
+   on every deploy, and artwork written to data/uploads would be gone the
+   next time anything shipped. In the database it rides along with the
+   ordinary backup instead of needing a restore path of its own.
+
+   Blank on every existing product and optional on every new one. A
+   particular with no artwork prints exactly as it printed yesterday —
+   that is the whole contract of this feature.
+
+   NOT SENT WITH THE PRODUCT LIST. serialize() in routes/products.js
+   strips it and reports has_artwork instead, because a catalogue of a few
+   hundred products would otherwise put tens of megabytes of images on a
+   screen that is drawing a list of names. The image itself is fetched
+   only by the master screen editing it and by a document printing it. */
+addColumn("products", "artwork_data", "TEXT NOT NULL DEFAULT ''");
+
 /* E-way bill details recorded against the invoice they cover.
 
    These are filled in whether the bill was generated on the government

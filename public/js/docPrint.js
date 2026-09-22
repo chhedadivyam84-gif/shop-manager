@@ -326,6 +326,10 @@
       var gstPct = num(it.gst_rate);
       return {
         sn: i + 1,
+        /* Which particular this line is, carried through so the branding
+           artwork can be looked up per line. Not a printable column — no
+           template offers it — purely the link back to the master. */
+        productId: it.product_id || "",
         name: it.name || "",
         code: it.code || ex.code || "",
         hsn: it.hsn_code || ex.hsn || "",
@@ -498,6 +502,74 @@
    *                 customer and supplier lists; passing it in keeps this
    *                 file free of app state.
    */
+  /* ============================================================
+     PARTICULAR BRANDING ARTWORK
+
+     Handed in by the caller: `artwork` maps a particular's id to its
+     image, and `artworkCfg` is where and how big. Both optional — a
+     document printed without them is exactly the document that printed
+     before this existed.
+     ============================================================ */
+  var ART_H = ["left", "center", "right"];
+  var ART_V = ["top", "middle", "bottom"];
+
+  function artLayout(cfg) {
+    var a = cfg || {};
+    var n = function (v, dflt, max) {
+      var x = Number(v);
+      return isFinite(x) && x > 0 ? Math.min(x, max) : dflt;
+    };
+    return {
+      on: a.on !== false,
+      align: ART_H.indexOf(a.align) >= 0 ? a.align : "center",
+      vAlign: ART_V.indexOf(a.vAlign) >= 0 ? a.vAlign : "bottom",
+      width: n(a.width, 40, 190),
+      height: n(a.height, 0, 260),
+      keepRatio: a.keepRatio !== false,
+      rotate: [0, 90, 180, 270].indexOf(Number(a.rotate)) >= 0 ? Number(a.rotate) : 0
+    };
+  }
+
+  /** One entry per PARTICULAR that has artwork, in line order — the same
+   *  board on three lines is one mark, not three. */
+  function artMarks(items, artwork) {
+    var out = [], seen = {};
+    if (!artwork) return out;
+    (items || []).forEach(function (it) {
+      var id = it && it.productId;
+      if (!id || seen[id] || !artwork[id]) return;
+      seen[id] = 1;
+      out.push({ data: artwork[id], name: it.name || "" });
+    });
+    return out;
+  }
+
+  function artBand(items, artwork, cfg, slot) {
+    var c = artLayout(cfg);
+    if (!c.on || c.vAlign !== slot) return "";
+    var marks = artMarks(items, artwork);
+    if (!marks.length) return "";
+
+    /* A quarter turn occupies its own height across the page, so the BOX
+       swaps dimensions while the image inside is turned — otherwise the
+       turned artwork runs out of its container and over what is below. */
+    var turned = c.rotate === 90 || c.rotate === 270;
+    var boxW = turned ? (c.height || c.width) : c.width;
+    var boxH = turned ? c.width : c.height;
+    var justify = c.align === "left" ? "flex-start" : c.align === "right" ? "flex-end" : "center";
+
+    var imgs = marks.map(function (m) {
+      return '<span class="dp-art-item" style="width:' + boxW + "mm;" +
+        (boxH ? "height:" + boxH + "mm;" : "") + '">' +
+        '<img src="' + esc(m.data) + '" alt="' + esc(m.name) + '"' +
+        ' style="' + (c.rotate ? "transform:rotate(" + c.rotate + "deg);" : "") +
+        (c.keepRatio ? "" : "object-fit:fill;") + '">' +
+        "</span>";
+    }).join("");
+
+    return '<div class="dp-art" style="justify-content:' + justify + ';">' + imgs + "</div>";
+  }
+
   function buildDocHtml(docKey, doc, opts) {
     opts = opts || {};
     var spec = SPECS[docKey];
@@ -584,9 +656,11 @@
         extras.map(function (e) { return kv(e[0], e[1]); }).join("") +
         "</div></div>") +
 
+      artBand(items, opts.artwork, opts.artworkCfg, "top") +
       '<div class="dp-table-wrap"><table class="dp-table"><thead><tr>' + head +
       "</tr></thead><tbody>" + (body || emptyRow(cols.length)) + "</tbody></table></div>" +
 
+      artBand(items, opts.artwork, opts.artworkCfg, "middle") +
       '<div class="dp-lower"><div class="dp-notes">' +
       notes.map(function (n) { return "<div>" + esc(n) + "</div>"; }).join("") +
       (bank.length && cfg.showTotals !== 0
@@ -601,6 +675,7 @@
       "</div>" +
 
       (cfg.showSignature === 0 ? "" :
+        artBand(items, opts.artwork, opts.artworkCfg, "bottom") +
         '<div class="dp-sign"><span>Receiver’s Signature</span><span>For ' +
         esc(s.business_name || "") + "<br>" + esc(cfg.signatureText || "Authorised Signature") +
         "</span></div>") +
@@ -797,7 +872,18 @@
     '  border-top:none;padding:22px 8px 6px;}',
     '.dp-sign span{flex:1;border-top:1px solid #000;padding-top:3px;font-size:9px;',
     '  text-align:center;color:#333;}',
-    '.dp-footline{text-align:center;font-style:italic;margin-top:6px;font-size:10px;}'
+    '.dp-footline{text-align:center;font-style:italic;margin-top:6px;font-size:10px;}',
+
+    /* PARTICULAR BRANDING ARTWORK. A band between the document's own
+       blocks, never over them — see artBand() above for why position is a
+       place in the flow rather than a pair of coordinates. The proportions
+       of a brand's design are the design, so it is fitted inside its box
+       and only stretched when the shop explicitly asks. */
+    '.dp-art{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:center;',
+    '  gap:4mm;margin:3mm 0;width:100%;break-inside:avoid;page-break-inside:avoid;}',
+    '.dp-art-item{display:flex;align-items:center;justify-content:center;',
+    '  max-width:100%;overflow:hidden;}',
+    '.dp-art-item img{max-width:100%;max-height:100%;object-fit:contain;display:block;}'
   ].join("\n");
 
   /* ---------------------------------------------------------------- */

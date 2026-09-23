@@ -302,7 +302,8 @@ const { todayStr } = require("./util");
 const LICENCE_EXEMPT = [
   "/api/auth",      // must be able to log in to see the renew screen
   "/api/license",   // entering the new key
-  "/api/backup"     // taking their data with them
+  "/api/backup",    // taking their data with them
+  "/api/sync"       // and the same for sending it to their own cloud copy
 ];
 app.use("/api", (req, res, next) => {
   if (!license.enabled()) return next();
@@ -402,6 +403,16 @@ app.use("/api", (req, res, next) => {
 });
 
 app.use("/api/auth", require("./routes/auth"));
+
+/* DATA & SYNC. Mounted here, without requireAuth, on purpose: /receive is
+   the other copy of this app talking rather than a person, and carries a
+   sync key instead of a session. Every route a person presses inside it
+   is owner-only on its own, so nothing is loosened by the mount.
+
+   Above fyLock and the feature gate deliberately — a sync replaces the
+   whole database rather than writing a dated record, so "is this year
+   closed" is not a question that applies to it. */
+app.use("/api/sync", require("./routes/sync"));
 
 /* A closed financial year stops accepting writes. Mounted after /api/auth so
    signing in is never blocked, and before every data route so a bill, payment

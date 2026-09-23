@@ -2400,6 +2400,46 @@ addColumn("suppliers", "pin_code", "TEXT NOT NULL DEFAULT ''");
 addColumn("products", "uqc", "TEXT NOT NULL DEFAULT ''");
 
 /* ============================================================
+   SENDING THIS SHOP UP TO THE CLOUD COPY
+
+   One direction only, and on purpose. The shop PC holds the books; the
+   hosted copy is somewhere to reach them from. Two-way record sync would
+   have to answer a question this app cannot answer safely — both copies
+   issue document numbers from their own counter into a UNIQUE column, so
+   two different bills can both be SP0000001, and neither can be renumbered
+   because one is in a customer's hand and the other is in a GST return.
+   A one-way push has no such question in it.
+
+   THE KEY IS NOT A PIN. The receiving copy generates a long random key,
+   shows it once, and keeps only its hash — the same shape as a staff PIN
+   and for the same reason. The sending copy holds the key itself, because
+   it has to present it. Blank on both sides by default: a copy that has
+   not been given a key accepts nothing.
+   ============================================================ */
+addColumn("settings", "sync_cloud_url", "TEXT NOT NULL DEFAULT ''");      // sender: where to push
+addColumn("settings", "sync_cloud_key", "TEXT NOT NULL DEFAULT ''");      // sender: the key it presents
+addColumn("settings", "sync_accept_hash", "TEXT NOT NULL DEFAULT ''");    // receiver: hash of the key it accepts
+addColumn("settings", "sync_last_at", "INTEGER NOT NULL DEFAULT 0");
+addColumn("settings", "sync_last_ok", "INTEGER NOT NULL DEFAULT 0");
+
+db.exec(`
+/* Every attempt, kept whether it worked or not — a sync that failed is
+   the one worth being able to look up afterwards. */
+CREATE TABLE IF NOT EXISTS sync_log (
+  id TEXT PRIMARY KEY,
+  at INTEGER NOT NULL,
+  direction TEXT NOT NULL,          -- 'push' (sent from here) | 'receive' (arrived here)
+  staff TEXT NOT NULL DEFAULT '',
+  target TEXT NOT NULL DEFAULT '',
+  ok INTEGER NOT NULL DEFAULT 0,
+  bytes INTEGER NOT NULL DEFAULT 0,
+  summary TEXT NOT NULL DEFAULT '',
+  error TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_sync_log_at ON sync_log(at DESC);
+`);
+
+/* ============================================================
    PARTICULAR BRANDING ARTWORK
 
    A shop selling branded board wants the brand's own artwork on the paper

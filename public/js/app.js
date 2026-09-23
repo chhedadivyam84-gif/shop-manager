@@ -2759,6 +2759,162 @@ async function renderExports(){
   }));
 }
 
+/* ============================================================
+   RESTORING A BACKUP FILE
+
+   The server never swaps anything while it is running — see
+   server/restoreFile.js. So this screen's job is to show what is in the
+   file beside what is here now, take a decision, and then wait out the
+   restart.
+   ============================================================ */
+async function previewRestore(input){
+  const f = input.files && input.files[0];
+  input.value = "";                       // so the same file can be picked again
+  if(!f) return;
+
+  /* A shop's database is a couple of megabytes; anything far larger is
+     not one, and the request body has a ceiling. */
+  if(f.size > 11 * 1024 * 1024){
+    toast(`That file is ${Math.round(f.size/1024/1024)} MB. A backup this large has to be put in by hand — tell me and I will walk you through it.`);
+    return;
+  }
+
+  toast("Reading the backup…");
+  let b64;
+  try{ b64 = await new Promise((res, rej)=>{
+    const r = new FileReader();
+    r.onload = ()=> res(String(r.result||"").split(",")[1] || "");
+    r.onerror = ()=> rej(new Error("Could not read that file."));
+    r.readAsDataURL(f);
+  }); }catch(e){ toast(e.message); return; }
+
+  let look;
+  try{ look = await api("POST", "/backup/restore/preview", { file: b64, filename: f.name }); }
+  catch(e){ toast(e.message); return; }
+
+  showRestoreConfirm(look, b64, f.name);
+}
+
+/** The two shops side by side, and one button that means it. */
+function showRestoreConfirm(look, b64, filename){
+  const sheet = document.getElementById("sheet-restore") || (()=>{
+    const d = document.createElement("div");
+    d.className = "sheet"; d.id = "sheet-restore";
+    document.body.appendChild(d);
+    return d;
+  })();
+
+  const rows = [
+    ["Invoices",   "invoices"],
+    ["Challans",   "challans"],
+    ["Purchases",  "purchases"],
+    ["Customers",  "customers"],
+    ["Suppliers",  "suppliers"],
+    ["Products",   "products"],
+    ["Cash entries","cash"],
+    ["Staff",      "staff"],
+  ];
+  const num = v => v === null || v === undefined ? "—" : Number(v).toLocaleString("en-IN");
+  /* Marked where the file has FEWER, because that is the case worth
+     stopping on: restoring it would put the shop back to less than it
+     has now. */
+  const line = ([label, key]) => {
+    const inc = look.incoming.counts[key], cur = look.current.counts[key];
+    const fewer = typeof inc === "number" && typeof cur === "number" && inc < cur;
+    return `<tr>
+      <td>${escapeHtml(label)}</td>
+      <td class="num">${num(cur)}</td>
+      <td class="num"${fewer ? ' style="color:var(--danger);font-weight:700;"' : ""}>${num(inc)}</td>
+    </tr>`;
+  };
+
+  const anyFewer = rows.some(([,k]) => {
+    const i = look.incoming.counts[k], c = look.current.counts[k];
+    return typeof i === "number" && typeof c === "number" && i < c;
+  });
+
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">Restore from a backup</div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px;">
+      ${escapeHtml(filename || "The file")} holds
+      <b>${escapeHtml(look.incoming.businessName || "an unnamed shop")}</b>${
+        look.incoming.lastInvoice ? `, last document <b>${escapeHtml(look.incoming.lastInvoice)}</b>` : ""}.
+    </div>
+
+    <div style="overflow-x:auto;">
+      <table class="perm-table">
+        <thead><tr><th></th><th class="num">Here now</th><th class="num">In the file</th></tr></thead>
+        <tbody>${rows.map(line).join("")}</tbody>
+      </table>
+    </div>
+
+    ${anyFewer ? `<div class="card" style="border-left:4px solid var(--danger);margin-top:12px;">
+      <div class="row-title">The backup has fewer of some things</div>
+      <div class="row-sub">Anything in red is smaller in the file than it is here. Restoring
+        would put this shop back to what the file holds. Check it is the right backup.</div>
+    </div>` : ""}
+
+    <div class="card" style="margin-top:10px;">
+      <div class="row-title">What happens</div>
+      <div class="row-sub">
+        The books here now are saved first, so this can be undone. Then Shop Manager
+        restarts and comes back with the backup in place. It takes a few seconds.
+      </div>
+    </div>
+
+    <div class="action-row" style="margin-top:14px;">
+      <button class="btn btn-gold" id="rs-go">Replace my data with this backup</button>
+      <button class="btn btn-outline" data-sheetclose>Cancel</button>
+    </div>`;
+
+  sheet.querySelectorAll("[data-sheetclose]").forEach(b=>b.addEventListener("click", closeAllSheets));
+  sheet.querySelector("#rs-go").addEventListener("click", async ()=>{
+    const btn = sheet.querySelector("#rs-go");
+    btn.disabled = true; btn.textContent = "Restoring…";
+    try{
+      const r = await api("POST", "/backup/restore/apply", { file: b64, filename });
+      closeAllSheets();
+      waitForRestart(r.message);
+    }catch(e){
+      toast(e.message);
+      btn.disabled = false; btn.textContent = "Replace my data with this backup";
+    }
+  });
+  showSheet("sheet-restore");
+}
+
+/** Holds the screen while the process goes down and comes back. */
+function waitForRestart(message){
+  const el = document.createElement("div");
+  el.id = "restart-wait";
+  el.style.cssText = "position:fixed;inset:0;z-index:9999;display:flex;align-items:center;" +
+    "justify-content:center;background:var(--navy);color:#fff;text-align:center;padding:24px;";
+  el.innerHTML = `<div>
+      <div style="font-size:16px;font-weight:800;margin-bottom:8px;">Restoring your data</div>
+      <div style="font-size:13px;opacity:.85;max-width:360px;">${escapeHtml(message || "Shop Manager is restarting.")}</div>
+      <div style="font-size:12px;opacity:.7;margin-top:14px;" id="restart-dots">Waiting for it to come back…</div>
+    </div>`;
+  document.body.appendChild(el);
+
+  /* Poll until the server answers again, then reload so every screen is
+     drawn from the restored database rather than the one in memory. */
+  let tries = 0;
+  const probe = async ()=>{
+    tries++;
+    try{
+      const r = await fetch("/api/auth/staff-list", { cache: "no-store" });
+      if(r.ok){ location.reload(); return; }
+    }catch(e){ /* still down, which is expected */ }
+    const dots = document.getElementById("restart-dots");
+    if(dots && tries > 20) dots.textContent = "Still starting… give it a moment.";
+    if(tries < 90) setTimeout(probe, 1000);
+    else if(dots) dots.innerHTML = "It is taking longer than expected. Refresh the page to check.";
+  };
+  setTimeout(probe, 2500);
+}
+
 async function renderBackups(){
   const body = document.getElementById("backups-body");
   body.innerHTML = `<p class="muted" style="font-size:13px;">Reading the backup store…</p>`;
@@ -9186,6 +9342,12 @@ function openSettings(){
       <div class="card" id="backup-status"><div class="empty-hint">Loading backup status…</div></div>
       <button class="btn btn-primary" id="st-download-backup" style="margin-top:10px;">⬇ Download Backup Now</button>
       <button class="btn btn-outline" id="st-run-backup" style="margin-top:8px;">Back Up Now</button>
+      <button class="btn btn-outline" id="st-restore-backup" style="margin-top:8px;">Restore From a Backup File</button>
+      <input type="file" id="st-restore-file" accept=".db,application/octet-stream" style="display:none;">
+      <div class="muted" style="font-size:11px;margin-top:6px;">
+        Puts a downloaded backup back in. You are shown what is in the file
+        before anything changes, and the books it replaces are kept.
+      </div>
       <p class="muted" style="font-size:11px;margin-top:8px;">Your whole shop lives in one file. Automatic snapshots are kept on this PC daily. Use <strong>Download Backup</strong> to keep a copy on your phone or a USB drive — that's your safety net if this PC is ever lost.</p>
 
       <div class="section-title">Locations / Areas</div>
@@ -9599,6 +9761,13 @@ function openSettings(){
       }
       frame.src = "/api/backup/download?t=" + Date.now();
     });
+    const restoreBtn = sheet.querySelector("#st-restore-backup");
+    const restoreInput = sheet.querySelector("#st-restore-file");
+    if(restoreBtn && restoreInput){
+      restoreBtn.addEventListener("click", ()=> restoreInput.click());
+      restoreInput.addEventListener("change", ()=> previewRestore(restoreInput));
+    }
+
     sheet.querySelector("#st-run-backup").addEventListener("click", async (e)=>{
       const btn = e.currentTarget; btn.disabled = true; btn.textContent = "Backing up…";
       try{

@@ -93,6 +93,19 @@ async function start() {
   // (Render free tier resets the filesystem on every redeploy) this is what
   // puts shop.db back in place from the last cloud snapshot, before the
   // database module opens (and would otherwise create empty) the file.
+  /* A backup somebody uploaded and confirmed. Swapped in HERE, in the same
+     pre-open window as the cloud restore below and for the same reason:
+     nothing has shop.db or its -wal open yet. See restoreFile.js. */
+  const swapped = require("./restoreFile").applyPendingRestore();
+  if (swapped.restored) {
+    const c = (swapped.info && swapped.info.counts) || {};
+    console.log(`[restore] Restored from an uploaded backup — ${c.invoices ?? "?"} invoices, ` +
+      `${c.customers ?? "?"} customers, ${c.cash ?? "?"} cash entries.` +
+      (swapped.kept ? ` The database it replaced was kept as ${swapped.kept}.` : ""));
+  } else if (swapped.failed) {
+    console.error(`[restore] An uploaded backup could NOT be swapped in: ${swapped.reason}`);
+  }
+
   const restore = await require("./restore").restoreIfNeeded();
   if (restore.restored) {
     const many = restore.businesses > 1 ? `, ${restore.businesses} businesses` : "";

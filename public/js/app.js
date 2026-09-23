@@ -2759,6 +2759,400 @@ async function renderExports(){
   }));
 }
 
+/* ============================================================
+   RESTORING A BACKUP FILE
+
+   The server never swaps anything while it is running — see
+   server/restoreFile.js. So this screen's job is to show what is in the
+   file beside what is here now, take a decision, and then wait out the
+   restart.
+   ============================================================ */
+async function previewRestore(input){
+  const f = input.files && input.files[0];
+  input.value = "";                       // so the same file can be picked again
+  if(!f) return;
+
+  /* A shop's database is a couple of megabytes; anything far larger is
+     not one, and the request body has a ceiling. */
+  if(f.size > 11 * 1024 * 1024){
+    toast(`That file is ${Math.round(f.size/1024/1024)} MB. A backup this large has to be put in by hand — tell me and I will walk you through it.`);
+    return;
+  }
+
+  toast("Reading the backup…");
+  let b64;
+  try{ b64 = await new Promise((res, rej)=>{
+    const r = new FileReader();
+    r.onload = ()=> res(String(r.result||"").split(",")[1] || "");
+    r.onerror = ()=> rej(new Error("Could not read that file."));
+    r.readAsDataURL(f);
+  }); }catch(e){ toast(e.message); return; }
+
+  let look;
+  try{ look = await api("POST", "/backup/restore/preview", { file: b64, filename: f.name }); }
+  catch(e){ toast(e.message); return; }
+
+  showRestoreConfirm(look, b64, f.name);
+}
+
+/** The two shops side by side, and one button that means it. */
+function showRestoreConfirm(look, b64, filename){
+  const sheet = document.getElementById("sheet-restore") || (()=>{
+    const d = document.createElement("div");
+    d.className = "sheet"; d.id = "sheet-restore";
+    document.body.appendChild(d);
+    return d;
+  })();
+
+  const rows = [
+    ["Invoices",   "invoices"],
+    ["Challans",   "challans"],
+    ["Purchases",  "purchases"],
+    ["Customers",  "customers"],
+    ["Suppliers",  "suppliers"],
+    ["Products",   "products"],
+    ["Cash entries","cash"],
+    ["Staff",      "staff"],
+  ];
+  const num = v => v === null || v === undefined ? "—" : Number(v).toLocaleString("en-IN");
+  /* Marked where the file has FEWER, because that is the case worth
+     stopping on: restoring it would put the shop back to less than it
+     has now. */
+  const line = ([label, key]) => {
+    const inc = look.incoming.counts[key], cur = look.current.counts[key];
+    const fewer = typeof inc === "number" && typeof cur === "number" && inc < cur;
+    return `<tr>
+      <td>${escapeHtml(label)}</td>
+      <td class="num">${num(cur)}</td>
+      <td class="num"${fewer ? ' style="color:var(--danger);font-weight:700;"' : ""}>${num(inc)}</td>
+    </tr>`;
+  };
+
+  const anyFewer = rows.some(([,k]) => {
+    const i = look.incoming.counts[k], c = look.current.counts[k];
+    return typeof i === "number" && typeof c === "number" && i < c;
+  });
+
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">Restore from a backup</div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px;">
+      ${escapeHtml(filename || "The file")} holds
+      <b>${escapeHtml(look.incoming.businessName || "an unnamed shop")}</b>${
+        look.incoming.lastInvoice ? `, last document <b>${escapeHtml(look.incoming.lastInvoice)}</b>` : ""}.
+    </div>
+
+    <div style="overflow-x:auto;">
+      <table class="perm-table">
+        <thead><tr><th></th><th class="num">Here now</th><th class="num">In the file</th></tr></thead>
+        <tbody>${rows.map(line).join("")}</tbody>
+      </table>
+    </div>
+
+    ${anyFewer ? `<div class="card" style="border-left:4px solid var(--danger);margin-top:12px;">
+      <div class="row-title">The backup has fewer of some things</div>
+      <div class="row-sub">Anything in red is smaller in the file than it is here. Restoring
+        would put this shop back to what the file holds. Check it is the right backup.</div>
+    </div>` : ""}
+
+    <div class="card" style="margin-top:10px;">
+      <div class="row-title">What happens</div>
+      <div class="row-sub">
+        The books here now are saved first, so this can be undone. Then Shop Manager
+        restarts and comes back with the backup in place. It takes a few seconds.
+      </div>
+    </div>
+
+    <div class="action-row" style="margin-top:14px;">
+      <button class="btn btn-gold" id="rs-go">Replace my data with this backup</button>
+      <button class="btn btn-outline" data-sheetclose>Cancel</button>
+    </div>`;
+
+  sheet.querySelectorAll("[data-sheetclose]").forEach(b=>b.addEventListener("click", closeAllSheets));
+  sheet.querySelector("#rs-go").addEventListener("click", async ()=>{
+    const btn = sheet.querySelector("#rs-go");
+    btn.disabled = true; btn.textContent = "Restoring…";
+    try{
+      const r = await api("POST", "/backup/restore/apply", { file: b64, filename });
+      closeAllSheets();
+      waitForRestart(r.message);
+    }catch(e){
+      toast(e.message);
+      btn.disabled = false; btn.textContent = "Replace my data with this backup";
+    }
+  });
+  showSheet("sheet-restore");
+}
+
+/** Holds the screen while the process goes down and comes back. */
+function waitForRestart(message){
+  const el = document.createElement("div");
+  el.id = "restart-wait";
+  el.style.cssText = "position:fixed;inset:0;z-index:9999;display:flex;align-items:center;" +
+    "justify-content:center;background:var(--navy);color:#fff;text-align:center;padding:24px;";
+  el.innerHTML = `<div>
+      <div style="font-size:16px;font-weight:800;margin-bottom:8px;">Restoring your data</div>
+      <div style="font-size:13px;opacity:.85;max-width:360px;">${escapeHtml(message || "Shop Manager is restarting.")}</div>
+      <div style="font-size:12px;opacity:.7;margin-top:14px;" id="restart-dots">Waiting for it to come back…</div>
+    </div>`;
+  document.body.appendChild(el);
+
+  /* Poll until the server answers again, then reload so every screen is
+     drawn from the restored database rather than the one in memory. */
+  let tries = 0;
+  const probe = async ()=>{
+    tries++;
+    try{
+      const r = await fetch("/api/auth/staff-list", { cache: "no-store" });
+      if(r.ok){ location.reload(); return; }
+    }catch(e){ /* still down, which is expected */ }
+    const dots = document.getElementById("restart-dots");
+    if(dots && tries > 20) dots.textContent = "Still starting… give it a moment.";
+    if(tries < 90) setTimeout(probe, 1000);
+    else if(dots) dots.innerHTML = "It is taking longer than expected. Refresh the page to check.";
+  };
+  setTimeout(probe, 2500);
+}
+
+/* ============================================================
+   DATA & SYNC
+
+   This shop is the master. The cloud copy is somewhere to reach the books
+   from, and it is written by pressing a button — never on a timer, never
+   on startup, never behind anybody's back. See server/sync.js for why it
+   only goes one way.
+   ============================================================ */
+const SYNC = { status: null };
+
+function syncWhen(ms){
+  if(!ms) return "never";
+  const d = new Date(Number(ms));
+  if(isNaN(d)) return "never";
+  return d.toLocaleDateString("en-IN", { day:"numeric", month:"short" }) +
+    " · " + d.toLocaleTimeString("en-IN", { hour:"2-digit", minute:"2-digit" });
+}
+
+async function renderSyncBox(){
+  const box = document.getElementById("sync-box");
+  if(!box) return;
+  try{ SYNC.status = await api("GET", "/sync/status"); }
+  catch(e){ box.innerHTML = `<div class="row-sub">${escapeHtml(e.message)}</div>`; return; }
+
+  const st = SYNC.status;
+  const dot = !st.configured ? ["⚪","Local only"]
+            : st.lastOk ? ["🟢","Last sync went through"]
+            : st.lastAt ? ["🔴","Last sync failed"]
+            : ["🟠","Set up, never sent"];
+
+  box.innerHTML = `
+    <div class="list-row" style="border-bottom:1px solid var(--border);">
+      <div>
+        <div class="row-title">${dot[0]} ${escapeHtml(dot[1])}</div>
+        <div class="row-sub">${st.configured ? escapeHtml(st.url) : "This shop is not sending anywhere."}
+          ${st.lastAt ? " · last tried " + escapeHtml(syncWhen(st.lastAt)) : ""}</div>
+      </div>
+    </div>
+
+    <div style="padding:10px 0;">
+      <div class="muted" style="font-size:12px;margin-bottom:8px;">
+        Your books live on this computer. Nothing is sent anywhere until you press
+        the button — not on a timer, not when the app starts.
+      </div>
+      <button class="btn btn-gold" id="sync-now"${st.configured ? "" : " disabled"}>Sync to Cloud</button>
+      <button class="btn btn-outline" id="sync-setup" style="margin-top:8px;">
+        ${st.configured ? "Change cloud address" : "Set up the cloud address"}</button>
+      <button class="btn btn-outline" id="sync-key" style="margin-top:8px;">
+        ${st.acceptsPushes ? "Replace this copy's sync key" : "Make this copy receive a sync"}</button>
+      ${st.history && st.history.length
+        ? `<a href="#" id="sync-history" style="display:inline-block;margin-top:10px;font-size:12px;font-weight:700;">Sync history (${st.history.length})</a>`
+        : ""}
+    </div>`;
+
+  box.querySelector("#sync-now").addEventListener("click", syncToCloud);
+  box.querySelector("#sync-setup").addEventListener("click", openSyncSetup);
+  box.querySelector("#sync-key").addEventListener("click", openSyncKey);
+  const hist = box.querySelector("#sync-history");
+  if(hist) hist.addEventListener("click", e => { e.preventDefault(); openSyncHistory(); });
+}
+
+function syncSheet(){
+  let el = document.getElementById("sheet-sync");
+  if(!el){ el = document.createElement("div"); el.className = "sheet"; el.id = "sheet-sync"; document.body.appendChild(el); }
+  return el;
+}
+
+function openSyncSetup(){
+  const st = SYNC.status || {};
+  const sheet = syncSheet();
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">Cloud address</div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px;">
+      Where this shop sends its books when you press Sync. Get the key from the
+      cloud copy: open it, go to Data &amp; Sync, and make it receive a sync.
+    </div>
+    <label class="field-label">Address</label>
+    <input type="url" id="sy-url" value="${escapeHtml(st.url||"")}" placeholder="https://your-shop.onrender.com">
+    <label class="field-label">Sync key</label>
+    <input type="password" id="sy-key" placeholder="${st.configured ? "unchanged — type a new one to replace it" : "paste the key from the cloud copy"}" autocomplete="off">
+    <div class="muted" style="font-size:11px;margin-top:6px;">
+      The address must start with https:// — the key and your books travel over it.
+    </div>
+    <div class="action-row" style="margin-top:14px;">
+      <button class="btn btn-gold" id="sy-save">Save</button>
+      <button class="btn btn-outline" data-sheetclose>Cancel</button>
+    </div>`;
+  sheet.querySelectorAll("[data-sheetclose]").forEach(b=>b.addEventListener("click", closeAllSheets));
+  sheet.querySelector("#sy-save").addEventListener("click", async ()=>{
+    const url = sheet.querySelector("#sy-url").value.trim();
+    const key = sheet.querySelector("#sy-key").value.trim();
+    if(!url){ toast("Enter the cloud address."); return; }
+    if(!key && !(SYNC.status||{}).configured){ toast("Paste the sync key from the cloud copy."); return; }
+    try{
+      await api("PUT", "/sync/target", { url, key: key || undefined });
+      toast("Saved.", "ok");
+      closeAllSheets();
+      renderSyncBox();
+    }catch(e){ toast(e.message); }
+  });
+  showSheet("sheet-sync");
+}
+
+/** Issued once and shown once — the server keeps only its hash. */
+function openSyncKey(){
+  const sheet = syncSheet();
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">Let this copy receive a sync</div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px;">
+      Do this on the copy that should RECEIVE — usually the cloud one. It makes a
+      key; paste that key into the shop computer's cloud address screen.
+      ${(SYNC.status||{}).acceptsPushes ? "<br><br><b>This copy already has a key.</b> Making a new one stops the old one working." : ""}
+    </div>
+    <div class="card" style="border-left:4px solid var(--danger);">
+      <div class="row-title">What receiving means</div>
+      <div class="row-sub">A sync REPLACES this copy's books with the sender's. The books
+        it replaces are kept, so it can be undone — but this copy stops being its own.</div>
+    </div>
+    <div class="action-row" style="margin-top:14px;">
+      <button class="btn btn-gold" id="sy-make">Make a key</button>
+      <button class="btn btn-outline" data-sheetclose>Cancel</button>
+    </div>
+    <div id="sy-key-out" style="margin-top:12px;"></div>`;
+  sheet.querySelectorAll("[data-sheetclose]").forEach(b=>b.addEventListener("click", closeAllSheets));
+  sheet.querySelector("#sy-make").addEventListener("click", async ()=>{
+    try{
+      const r = await api("POST", "/sync/key", {});
+      sheet.querySelector("#sy-key-out").innerHTML = `
+        <div class="card">
+          <div class="row-title">Copy this now</div>
+          <div class="row-sub">It is not shown again. If you lose it, make another.</div>
+          <textarea readonly rows="3" id="sy-key-text"
+            style="width:100%;margin-top:8px;font-family:ui-monospace,Consolas,monospace;font-size:11px;">${escapeHtml(r.key)}</textarea>
+          <button class="btn btn-outline" id="sy-copy" style="margin-top:8px;">Copy</button>
+        </div>`;
+      sheet.querySelector("#sy-copy").addEventListener("click", ()=>{
+        const t = sheet.querySelector("#sy-key-text");
+        t.select();
+        navigator.clipboard.writeText(t.value).then(()=>toast("Copied.", "ok"), ()=>toast("Select it and copy by hand."));
+      });
+      renderSyncBox();
+    }catch(e){ toast(e.message); }
+  });
+  showSheet("sheet-sync");
+}
+
+/** Look at the cloud, show both, then send. */
+async function syncToCloud(){
+  toast("Checking the cloud copy…");
+  let look;
+  try{ look = await api("GET", "/sync/peek-cloud"); }
+  catch(e){ toast(e.message); return; }
+
+  const rows = [["Invoices","invoices"],["Challans","challans"],["Purchases","purchases"],
+                ["Customers","customers"],["Suppliers","suppliers"],["Products","products"],
+                ["Cash entries","cash"],["Staff","staff"]];
+  const num = v => v === null || v === undefined ? "—" : Number(v).toLocaleString("en-IN");
+  const line = ([label,key]) => {
+    const here = look.local.counts[key], there = look.cloud.counts[key];
+    const losing = typeof here === "number" && typeof there === "number" && there > here;
+    return `<tr><td>${escapeHtml(label)}</td>
+      <td class="num">${num(here)}</td>
+      <td class="num"${losing ? ' style="color:var(--danger);font-weight:700;"' : ""}>${num(there)}</td></tr>`;
+  };
+  const losingAny = rows.some(([,k]) => {
+    const h = look.local.counts[k], t = look.cloud.counts[k];
+    return typeof h === "number" && typeof t === "number" && t > h;
+  });
+
+  const sheet = syncSheet();
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">Sync to Cloud</div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px;">
+      This shop's books will replace what is on
+      <b>${escapeHtml(look.cloud.businessName || "the cloud copy")}</b>.
+    </div>
+    <div style="overflow-x:auto;">
+      <table class="perm-table">
+        <thead><tr><th></th><th class="num">Here</th><th class="num">On the cloud</th></tr></thead>
+        <tbody>${rows.map(line).join("")}</tbody>
+      </table>
+    </div>
+    ${losingAny ? `<div class="card" style="border-left:4px solid var(--danger);margin-top:12px;">
+      <div class="row-title">The cloud has more of some things</div>
+      <div class="row-sub">Anything in red is larger on the cloud than it is here. Sending would
+        replace it. If somebody has been entering on the cloud copy, stop and tell me first.</div>
+    </div>` : ""}
+    <div class="card" style="margin-top:10px;">
+      <div class="row-title">What happens</div>
+      <div class="row-sub">The cloud keeps what it is about to lose, then restarts with your books.
+        Nothing on this computer changes either way.</div>
+    </div>
+    <div class="action-row" style="margin-top:14px;">
+      <button class="btn btn-gold" id="sy-go">Send my books to the cloud</button>
+      <button class="btn btn-outline" data-sheetclose>Cancel</button>
+    </div>`;
+  sheet.querySelectorAll("[data-sheetclose]").forEach(b=>b.addEventListener("click", closeAllSheets));
+  sheet.querySelector("#sy-go").addEventListener("click", async ()=>{
+    const btn = sheet.querySelector("#sy-go");
+    btn.disabled = true; btn.textContent = "Sending…";
+    try{
+      const r = await api("POST", "/sync/push", {});
+      closeAllSheets();
+      toast("Sent — " + r.summary + ". The cloud copy is restarting.", "ok");
+      renderSyncBox();
+    }catch(e){
+      toast(e.message);
+      btn.disabled = false; btn.textContent = "Send my books to the cloud";
+    }
+  });
+  showSheet("sheet-sync");
+}
+
+function openSyncHistory(){
+  const st = SYNC.status || { history: [] };
+  const sheet = syncSheet();
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>✕</button>
+    <div class="sheet-title">Sync history</div>
+    <div class="card">${(st.history||[]).length ? st.history.map(h=>`
+      <div class="list-row">
+        <div>
+          <div class="row-title">${h.ok ? "🟢" : "🔴"} ${escapeHtml(h.direction === "push" ? "Sent to cloud" : "Received here")}</div>
+          <div class="row-sub">${escapeHtml(h.summary || h.error || "")}${h.staff ? " · " + escapeHtml(h.staff) : ""}</div>
+        </div>
+        <div class="row-right muted" style="font-size:11px;">${escapeHtml(syncWhen(h.at))}</div>
+      </div>`).join("") : `<div class="empty-hint">Nothing sent yet.</div>`}</div>`;
+  sheet.querySelectorAll("[data-sheetclose]").forEach(b=>b.addEventListener("click", closeAllSheets));
+  showSheet("sheet-sync");
+}
+
 async function renderBackups(){
   const body = document.getElementById("backups-body");
   body.innerHTML = `<p class="muted" style="font-size:13px;">Reading the backup store…</p>`;
@@ -9182,10 +9576,19 @@ function openSettings(){
       <button class="btn btn-outline" id="st-manage-staff">Manage Staff &amp; PINs</button>
       <button class="btn btn-outline" id="st-audit-log" style="margin-top:8px;">Activity Log</button>
 
+      <div class="section-title">Data &amp; Sync</div>
+      <div class="card" id="sync-box"><div class="empty-hint">Loading…</div></div>
+
       <div class="section-title">Backup &amp; Restore</div>
       <div class="card" id="backup-status"><div class="empty-hint">Loading backup status…</div></div>
       <button class="btn btn-primary" id="st-download-backup" style="margin-top:10px;">⬇ Download Backup Now</button>
       <button class="btn btn-outline" id="st-run-backup" style="margin-top:8px;">Back Up Now</button>
+      <button class="btn btn-outline" id="st-restore-backup" style="margin-top:8px;">Restore From a Backup File</button>
+      <input type="file" id="st-restore-file" accept=".db,application/octet-stream" style="display:none;">
+      <div class="muted" style="font-size:11px;margin-top:6px;">
+        Puts a downloaded backup back in. You are shown what is in the file
+        before anything changes, and the books it replaces are kept.
+      </div>
       <p class="muted" style="font-size:11px;margin-top:8px;">Your whole shop lives in one file. Automatic snapshots are kept on this PC daily. Use <strong>Download Backup</strong> to keep a copy on your phone or a USB drive — that's your safety net if this PC is ever lost.</p>
 
       <div class="section-title">Locations / Areas</div>
@@ -9599,6 +10002,13 @@ function openSettings(){
       }
       frame.src = "/api/backup/download?t=" + Date.now();
     });
+    const restoreBtn = sheet.querySelector("#st-restore-backup");
+    const restoreInput = sheet.querySelector("#st-restore-file");
+    if(restoreBtn && restoreInput){
+      restoreBtn.addEventListener("click", ()=> restoreInput.click());
+      restoreInput.addEventListener("change", ()=> previewRestore(restoreInput));
+    }
+
     sheet.querySelector("#st-run-backup").addEventListener("click", async (e)=>{
       const btn = e.currentTarget; btn.disabled = true; btn.textContent = "Backing up…";
       try{
@@ -9610,6 +10020,7 @@ function openSettings(){
       }catch(err){ toast(err.message); }
       finally{ btn.disabled = false; btn.textContent = "Back Up Now"; }
     });
+    renderSyncBox();
     renderPrintServerStatus();
     sheet.querySelector("#st-recheck-print").addEventListener("click", renderPrintServerStatus);
     renderNumberingStatus();

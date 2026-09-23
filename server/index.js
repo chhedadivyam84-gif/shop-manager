@@ -93,6 +93,19 @@ async function start() {
   // (Render free tier resets the filesystem on every redeploy) this is what
   // puts shop.db back in place from the last cloud snapshot, before the
   // database module opens (and would otherwise create empty) the file.
+  /* A backup somebody uploaded and confirmed. Swapped in HERE, in the same
+     pre-open window as the cloud restore below and for the same reason:
+     nothing has shop.db or its -wal open yet. See restoreFile.js. */
+  const swapped = require("./restoreFile").applyPendingRestore();
+  if (swapped.restored) {
+    const c = (swapped.info && swapped.info.counts) || {};
+    console.log(`[restore] Restored from an uploaded backup — ${c.invoices ?? "?"} invoices, ` +
+      `${c.customers ?? "?"} customers, ${c.cash ?? "?"} cash entries.` +
+      (swapped.kept ? ` The database it replaced was kept as ${swapped.kept}.` : ""));
+  } else if (swapped.failed) {
+    console.error(`[restore] An uploaded backup could NOT be swapped in: ${swapped.reason}`);
+  }
+
   const restore = await require("./restore").restoreIfNeeded();
   if (restore.restored) {
     const many = restore.businesses > 1 ? `, ${restore.businesses} businesses` : "";
@@ -289,7 +302,8 @@ const { todayStr } = require("./util");
 const LICENCE_EXEMPT = [
   "/api/auth",      // must be able to log in to see the renew screen
   "/api/license",   // entering the new key
-  "/api/backup"     // taking their data with them
+  "/api/backup",    // taking their data with them
+  "/api/sync"       // and the same for sending it to their own cloud copy
 ];
 app.use("/api", (req, res, next) => {
   if (!license.enabled()) return next();
@@ -389,6 +403,16 @@ app.use("/api", (req, res, next) => {
 });
 
 app.use("/api/auth", require("./routes/auth"));
+
+/* DATA & SYNC. Mounted here, without requireAuth, on purpose: /receive is
+   the other copy of this app talking rather than a person, and carries a
+   sync key instead of a session. Every route a person presses inside it
+   is owner-only on its own, so nothing is loosened by the mount.
+
+   Above fyLock and the feature gate deliberately — a sync replaces the
+   whole database rather than writing a dated record, so "is this year
+   closed" is not a question that applies to it. */
+app.use("/api/sync", require("./routes/sync"));
 
 /* A closed financial year stops accepting writes. Mounted after /api/auth so
    signing in is never blocked, and before every data route so a bill, payment

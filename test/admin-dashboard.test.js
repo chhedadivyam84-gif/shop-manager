@@ -479,9 +479,13 @@ function seed() {
     .map(s => s.replace(/.*"([^"]+)"$/, "$1")))];
   ok("every API call it makes is under /admin or /auth",
      calls.every(c => c.startsWith("/admin") || c.startsWith("/auth")), calls);
-  ok("it never queries a business endpoint directly",
-     !/\/(invoices|customers|products|payments|reports|cashbook)\b/.test(
-       (ui.match(/fetch\([^)]*\)|api\([^)]*\)/g) || []).join(" ")), calls);
+  /* Anchored at the start of the path, because /admin/customers is the
+     admin API and /customers is the shop's own — the first is exactly
+     what this module is supposed to call and the second is the thing it
+     must not reach past the admin layer to touch. */
+  ok("it never calls a business endpoint directly, outside /admin",
+     calls.every(c => !/^\/(invoices|customers|products|payments|reports|cashbook)\b/.test(c)),
+     calls.filter(c => /^\/(invoices|customers|products|payments|reports|cashbook)\b/.test(c)));
 
   console.log("\n--- date handling follows the app's own convention ---");
   ok("the service uses util's localDate/todayStr, not its own",

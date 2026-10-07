@@ -407,7 +407,20 @@ router.post("/", (req, res) => {
   res.status(201).json(db.prepare("SELECT * FROM customers WHERE id = ?").get(id));
 });
 
-router.put("/:id", (req, res) => {
+/**
+ * Change a customer's details.
+ *
+ * Lifted out of the route body unchanged so the admin panel can offer an
+ * edit without a second copy of these rules — the `??` that lets a blank
+ * WhatsApp number CLEAR the value, the PIN code that an older screen
+ * must not be able to wipe, and the audit entry are all things that
+ * would quietly drift apart in two places.
+ *
+ * Still a route handler, so it reads req.params.id and answers res
+ * itself; mounting it under another path with the same :id works
+ * exactly as it does here.
+ */
+function updateCustomer(req, res) {
   const c = db.prepare("SELECT * FROM customers WHERE id = ?").get(req.params.id);
   if (!c) return res.status(404).json({ error: "Customer not found." });
   const { name, type, phone, address, gst, state, creditLimit, gstType, areaId, pinCode } = req.body;
@@ -431,7 +444,9 @@ router.put("/:id", (req, res) => {
   );
   logAction(req, "customer.update", c.name);
   res.json(db.prepare("SELECT * FROM customers WHERE id = ?").get(c.id));
-});
+}
+
+router.put("/:id", updateCustomer);
 
 /** Any Sales, Payment or Receipt record naming this customer — deleting would
  *  either orphan or (for payments, via ON DELETE CASCADE) silently destroy
@@ -449,14 +464,24 @@ router.get("/:id/usage", (req, res) => {
   res.json(customerUsage(c.id));
 });
 
-router.patch("/:id/active", requireRole("owner"), (req, res) => {
+/**
+ * Switch a customer off, or back on. Reversible by design — this is the
+ * app's answer to "stop using this record" and is why the admin panel
+ * does not need a delete.
+ *
+ * Shared with the admin panel for the same reason updateCustomer is:
+ * one place that writes the flag, one audit entry, one meaning.
+ */
+function setCustomerActive(req, res) {
   const c = db.prepare("SELECT * FROM customers WHERE id = ?").get(req.params.id);
   if (!c) return res.status(404).json({ error: "Customer not found." });
   const active = req.body.active ? 1 : 0;
   db.prepare("UPDATE customers SET active = ? WHERE id = ?").run(active, c.id);
   logAction(req, active ? "customer.activate" : "customer.deactivate", c.name);
   res.json(db.prepare("SELECT * FROM customers WHERE id = ?").get(c.id));
-});
+}
+
+router.patch("/:id/active", requireRole("owner"), setCustomerActive);
 
 router.delete("/:id", requireRole("owner"), (req, res) => {
   const c = db.prepare("SELECT * FROM customers WHERE id = ?").get(req.params.id);
@@ -470,3 +495,9 @@ router.delete("/:id", requireRole("owner"), (req, res) => {
 });
 
 module.exports = router;
+/* For the admin panel, so an edit made there goes through exactly these
+   rules rather than a second copy of them. Hung off the router because
+   that is what this file has always exported. */
+module.exports.updateCustomer = updateCustomer;
+module.exports.setCustomerActive = setCustomerActive;
+module.exports.customerUsage = customerUsage;

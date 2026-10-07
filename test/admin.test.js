@@ -440,8 +440,20 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
   /* The burnt-orange budget the brief set: an indicator, one action, a dot. */
   const accentUses = (css.match(/var\(--adm-accent\)/g) || []).length;
   const accentBg = (css.match(/background:\s*var\(--adm-accent\)/g) || []).length;
-  ok("the accent is a background in exactly three places",
-     accentBg === 3, accentBg);
+  /* A budget, not a ban. Each of these is a few pixels — an indicator, a
+     dot, or the one primary button on a page. The rule being enforced is
+     that the accent never becomes a FILL: no panel, tile, card, row,
+     header or sidebar may take it as a background. */
+  ok("the accent is a background in exactly four small places",
+     accentBg === 4, accentBg);
+  const accentBgSelectors = (cssCode.match(/([^{}]+)\{[^}]*background:\s*var\(--adm-accent\)[^}]*\}/g) || [])
+    .map(s => s.slice(0, s.indexOf("{")).trim());
+  ok("and every one of them is an indicator, a dot or the primary button",
+     accentBgSelectors.length === 4 &&
+     accentBgSelectors.every(s => /adm-nav-item\.is-active::before|adm-primary|adm-dot|adm-pip\.is-warn/.test(s)),
+     accentBgSelectors);
+  ok("the accent is never a background on a panel, tile, card or row",
+     !/\.adm-(panel|tile|card|row|topbar|sidebar|main)[^{]*\{[^}]*background:\s*var\(--adm-accent\)/.test(cssCode));
   ok("the accent is never a gradient", !/gradient/.test(cssCode));
   ok("the accent is used (indicator, action, dot, and focus rings)", accentUses >= 3, accentUses);
   ok("no oversized radius — the app's own card radius is reused",
@@ -495,8 +507,19 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
   ok("it does not test a role itself to decide what to show",
      !/role\s*===\s*["']owner["']/i.test(jsCode) && !/isOwner/.test(jsCode));
   ok("it holds no capability names", !/admin\.manage|security\.view|business\.view/.test(js));
-  ok("it ships no fabricated business figures",
-     !/₹|\brevenue\b|\bsample\b|\bdemo data\b/i.test(jsCode));
+  /* The original form of this banned the rupee sign outright, which was
+     the right proxy while every section was a placeholder and became the
+     wrong one the moment the dashboard had real money to format. What
+     actually matters is that no AMOUNT is written into the source: a
+     currency symbol in a formatter is how real data gets displayed; a
+     currency symbol followed by digits is a figure somebody invented. */
+  ok("it writes no money amount into the source",
+     !/[₹$]\s*[\d]/.test(jsCode), (jsCode.match(/[₹$]\s*[\d][\d,.]*/g) || []).slice(0, 5));
+  ok("it ships no sample or demo dataset",
+     !/\b(sample|demo|dummy|placeholder|mock|fake)\s*(data|rows|values|customers|invoices)\b/i.test(jsCode));
+  ok("every figure it draws comes from the server payload, not a literal",
+     /PAINT\[/.test(jsCode) && /loadDashboard/.test(jsCode) &&
+     !/const\s+(TOTALS|FIGURES|METRICS|SEED)\s*=/.test(jsCode));
 
   console.log("\n--- the page is honest about being a shell ---");
   ok("admin.js says sections are not built yet", /Not built yet/.test(js));
@@ -592,12 +615,30 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
   const introduced = git("log", "-1", "--format=%H", "--", "server/adminAccess.js");
   const BEFORE = introduced ? introduced + "^" : "HEAD";
 
-  const changed = git("diff", "--name-only", BEFORE)
-    .split("\n").map(s => s.trim()).filter(Boolean);
+  /* git diff lists tracked changes only, so a brand-new file that has not
+     been committed yet would be invisible here — and "the new file is
+     missing" would read as "nothing was added", which is the wrong way
+     round for a test whose job is to catch additions. The untracked list
+     is folded in so the set is the same before and after a commit. */
+  const changed = [...new Set([
+    ...git("diff", "--name-only", BEFORE).split("\n"),
+    ...git("ls-files", "--others", "--exclude-standard").split("\n"),
+  ].map(s => s.trim()).filter(Boolean))];
 
   const WANT_NEW = ["server/adminAccess.js", "server/routes/admin.js",
                     "public/admin.html", "public/css/admin.css",
-                    "public/js/admin.js", "test/admin.test.js"];
+                    "public/js/admin.js", "test/admin.test.js",
+                    "server/adminDashboard.js", "test/admin-dashboard.test.js"];
+
+  /* The two existing files the admin panel is allowed to have touched,
+     and the reason each one had to be:
+       index.js     — the page route and the /api/admin mount (PART 1)
+       alerts.js    — the reminder rules lifted out of the route body so
+                      the dashboard shows the same reminders rather than
+                      a second copy of them (PART 2)
+     Anything else appearing here is a scope breach, which is the whole
+     point of naming them. */
+  const MAY_TOUCH = ["server/index.js", "server/routes/alerts.js"];
 
   /* A file is new if it did not exist at the anchor. */
   const existedBefore = f => {
@@ -606,8 +647,9 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
   };
 
   const touchedExisting = changed.filter(f => !WANT_NEW.includes(f));
-  ok("server/index.js is the ONLY pre-existing file touched",
-     touchedExisting.length === 1 && touchedExisting[0] === "server/index.js",
+  ok("only the two named pre-existing files were touched",
+     touchedExisting.length === MAY_TOUCH.length &&
+     touchedExisting.every(f => MAY_TOUCH.includes(f)),
      touchedExisting);
 
   ["public/index.html", "public/js/app.js", "public/css/style.css",
@@ -626,7 +668,7 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
     ok(f + " is new", changed.includes(f) && !existedBefore(f),
        changed.includes(f) ? "existed before" : "not in the diff");
   });
-  ok("no file was added beyond those six",
+  ok("no file was added beyond the ones named above",
      changed.filter(f => !WANT_NEW.includes(f) && !existedBefore(f)).length === 0,
      changed.filter(f => !WANT_NEW.includes(f) && !existedBefore(f)));
 

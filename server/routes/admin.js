@@ -20,6 +20,7 @@
    ============================================================ */
 const express = require("express");
 const adminAccess = require("../adminAccess");
+const dashboard = require("../adminDashboard");
 
 const router = express.Router();
 
@@ -45,6 +46,64 @@ router.get("/me", (req, res) => {
     businessName: businessName(),
     staffName: (req.session && req.session.staffName) || "",
   });
+});
+
+/* ------------------------------------------------------------------
+   THE DASHBOARD
+
+   ONE REQUEST draws the whole screen. Eight separate calls would mean
+   eight sessions of round trips on a shop's broadband and eight chances
+   to half-load; `?only=` exists so a single panel can be retried on its
+   own after a failure without refetching the other seven.
+
+   EACH SECTION IS ISOLATED. A section that throws is reported as a
+   failed section and the other seven still render — the brief asks for
+   that explicitly, and it is also the difference between "Payments
+   could not be loaded" and a blank screen.
+
+   WHAT NEVER CROSSES THIS BOUNDARY: the error a section threw. A SQLite
+   message can name a file path on the shop's PC and a stack trace names
+   the whole tree, so the browser is told which section failed and
+   nothing else. The real error goes to the server log, where the person
+   fixing it can read it.
+
+   NO BUSINESS LOGIC LIVES HERE. Every figure is worked out in
+   adminDashboard.js; this route checks who is asking, walks the section
+   table and assembles the envelope.
+   ------------------------------------------------------------------ */
+router.get("/dashboard", (req, res) => {
+  const only = String((req.query && req.query.only) || "").trim();
+  const names = Object.keys(dashboard.SECTIONS);
+
+  if (only && !Object.prototype.hasOwnProperty.call(dashboard.SECTIONS, only)) {
+    return res.status(400).json({ error: "No such dashboard section." });
+  }
+  const wanted = only ? [only] : names;
+
+  const sections = {};
+  for (const name of wanted) {
+    const spec = dashboard.SECTIONS[name];
+
+    /* Server-side, per section, every time — never from a query
+       parameter and never from anything the browser claims. A section
+       this login may not read is reported as refused, not omitted, so
+       the panel can say so rather than silently showing less. */
+    if (!adminAccess.can(req, spec.cap)) {
+      sections[name] = { ok: false, refused: true,
+                         error: "You don't have permission to see this." };
+      continue;
+    }
+
+    try {
+      sections[name] = { ok: true, data: spec.build(req) };
+    } catch (err) {
+      console.error("[admin dashboard] section " + name + " failed:", err);
+      sections[name] = { ok: false, refused: false,
+                         error: "This section could not be loaded." };
+    }
+  }
+
+  res.json({ generatedAt: Date.now(), sections });
 });
 
 /* The roles the panel is structured for, and which capabilities each

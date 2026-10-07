@@ -502,6 +502,248 @@ body.adm-body{
 }
 .adm-meta b{ color: var(--text); font-weight: 600; }
 
+/* ============================================================
+   THE DASHBOARD
+
+   Dense and quiet. The figures carry the page, so there is one weight
+   of card, one hairline, and colour only where it means something: the
+   accent on today's bar, and the three status tones on a 6px pip.
+   No gradient, no shadow, no card larger than the figure inside it.
+   ============================================================ */
+
+/* MOBILE FIRST: one column. The panels are read top to bottom in the
+   order they matter, which is why this is a list and not a grid that
+   happens to collapse. */
+.adm-grid{
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  align-items: start;
+}
+
+.adm-panel{
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--card-radius);
+  min-width: 0;
+}
+.adm-panel-head{
+  padding: 11px var(--card-pad) 0;
+}
+.adm-panel-title{
+  margin: 0;
+  font-size: var(--fs-row-sub);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--muted);
+}
+.adm-panel-body{ padding: 10px var(--card-pad) var(--card-pad); }
+
+/* A panel still waiting for its figures. Dimmed rather than animated:
+   eight pulsing cards is a lot of movement for a screen somebody opens
+   to read a number. */
+.adm-panel.is-loading .adm-panel-title{ opacity: .6; }
+
+/* A panel whose data did not arrive. The border carries it, so a failed
+   panel is obvious in a grid of eight without shouting. */
+.adm-panel.is-failed{ border-color: var(--danger); }
+.adm-panel.is-failed .adm-panel-title{ color: var(--danger); }
+
+/* ---- the figures ---- */
+/* The hairline between tiles is each tile's own 1px box-shadow, sitting in
+   the 1px gap — adjacent shadows overlap there and read as one line.
+
+   The obvious version of this paints the CONTAINER in --border and lets
+   the gap show through, which is fine until a row is not full: seven
+   tiles in a four-column grid left an empty grey cell in the corner,
+   which reads as a tile that failed to load. A shadow belongs to a tile,
+   so where there is no tile there is no line. */
+.adm-tiles{
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 1px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.adm-tile{
+  background: var(--card);
+  box-shadow: 0 0 0 1px var(--border);
+  padding: 10px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.adm-tile-label{
+  font-size: var(--fs-row-sub);
+  color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.adm-tile-value{
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--text);
+  /* Digits line up down a column of tiles rather than jittering. */
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+}
+.adm-tile-sub{
+  font-size: var(--fs-row-sub);
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.adm-delta{ font-weight: 600; font-variant-numeric: tabular-nums; }
+.adm-delta.is-up{ color: var(--ok); }
+.adm-delta.is-down{ color: var(--danger); }
+.adm-delta.is-flat{ color: var(--muted); font-weight: 400; }
+
+/* Why a figure is missing. Deliberately plain: it is an explanation,
+   not a warning, and colouring it red would make an un-configured
+   feature look like a fault. */
+.adm-why{ display: block; color: var(--muted); line-height: 1.35; }
+
+/* ---- the chart ---- */
+.adm-chart{ margin-top: 12px; }
+.adm-chart svg{
+  display: block;
+  width: 100%;
+  height: 86px;
+  overflow: visible;
+}
+.adm-bar{ fill: var(--navy); opacity: .62; }
+.adm-bar:hover{ opacity: .85; }
+/* Today, so the eye lands on the figure that is still moving. The only
+   accent on the chart — fourteen orange bars would be exactly the
+   "overly orange" this design is asked to avoid. */
+.adm-bar.is-today{ fill: var(--adm-accent); opacity: 1; }
+
+.adm-ticks{
+  position: relative;
+  height: 14px;
+  margin-top: 4px;
+}
+.adm-tick{
+  position: absolute;
+  transform: translateX(-50%);
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* ---- lists ---- */
+.adm-sub{
+  margin: 14px 0 6px;
+  font-size: var(--fs-row-sub);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--muted);
+}
+.adm-list{ list-style: none; margin: 0; padding: 0; }
+.adm-row{
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: baseline;
+  column-gap: 8px;
+  padding: 7px 0;
+  border-top: 1px solid var(--border);
+  font-size: var(--fs-row-title);
+  min-width: 0;
+}
+.adm-row:first-child{ border-top: 0; }
+.adm-row-main{
+  grid-column: 2;
+  color: var(--text);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.adm-row-sub{
+  grid-column: 2;
+  font-size: var(--fs-row-sub);
+  color: var(--muted);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.adm-row-fig{
+  grid-column: 3;
+  grid-row: 1;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+/* The status pip. Six pixels is enough to carry a state when it sits
+   beside a word that already says the same thing. */
+.adm-pip{
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.adm-pip.is-bad{ background: var(--danger); }
+.adm-pip.is-warn{ background: var(--adm-accent); }
+.adm-pip.is-info{ background: var(--muted); }
+.adm-pip.is-ok{ background: var(--ok); }
+
+.adm-foot{
+  margin: 10px 0 0;
+  font-size: var(--fs-row-sub);
+  color: var(--muted);
+  line-height: 1.45;
+}
+.adm-empty{
+  margin: 2px 0;
+  font-size: var(--fs-row-title);
+  color: var(--muted);
+}
+
+/* ---- loading, failure ---- */
+.adm-skel{ display: grid; gap: 7px; }
+.adm-skel span{
+  display: block;
+  height: 11px;
+  border-radius: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+.adm-skel span:nth-child(1){ width: 58%; }
+.adm-skel span:nth-child(2){ width: 86%; }
+.adm-skel span:nth-child(3){ width: 40%; }
+
+/* Visible to a screen reader, not on screen — the skeleton above is
+   aria-hidden, so without this a loading panel announces nothing. */
+.adm-sr{
+  position: absolute;
+  width: 1px; height: 1px;
+  overflow: hidden; clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.adm-fail{
+  margin: 0 0 8px;
+  font-size: var(--fs-row-title);
+  color: var(--danger);
+}
+.adm-retry{
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--btn-radius);
+  background: var(--card);
+  color: var(--text);
+  font-size: var(--fs-btn-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+.adm-retry:hover{ background: var(--bg); }
+.adm-retry:focus-visible{ outline: 2px solid var(--adm-accent); outline-offset: 1px; }
+
 /* ---------------------------------------------------------- TABLET
    768–1023. Still a drawer — there is no room for a 248px sidebar and a
    usable workspace side by side — but the top bar gains the real search
@@ -514,6 +756,13 @@ body.adm-body{
   .adm-profile-text{ display: flex; }
   .adm-main{ padding: 18px var(--gutter) 32px; }
   .adm-page-title{ font-size: 21px; }
+
+  /* Two columns, with the two panels that carry the most across both.
+     Not a desktop grid shrunk: on a phone these were a reading order,
+     here they become a layout. */
+  .adm-grid{ grid-template-columns: 1fr 1fr; }
+  .adm-grid > [data-panel="overview"],
+  .adm-grid > [data-panel="sales"]{ grid-column: 1 / -1; }
 }
 
 /* ---------------------------------------------------------- LAPTOP
@@ -596,6 +845,14 @@ body.adm-body{
   .adm-main{ padding: 24px 28px 44px; }
   .adm-main > .adm-page{ max-width: 1320px; }
   .adm-page-title{ font-size: 23px; }
+
+  /* Three columns on a real monitor. Overview still spans the width —
+     it is the headline row — and Sales takes two so the chart has room
+     to be read rather than squinted at. */
+  .adm-grid{ grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .adm-grid > [data-panel="overview"]{ grid-column: 1 / -1; }
+  .adm-grid > [data-panel="sales"]{ grid-column: span 2; }
+  .adm-chart svg{ height: 104px; }
 }
 
 /* ---------------------------------------------------------- TOUCH

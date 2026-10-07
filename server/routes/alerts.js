@@ -31,7 +31,17 @@ function daysOverdue(iso) {
   return Math.floor((Date.parse(todayISO() + "T00:00:00") - then) / 86400000);
 }
 
-router.get("/", (req, res) => {
+/**
+ * Work out the reminder groups for whoever is asking.
+ *
+ * Lifted out of the route body unchanged so the admin dashboard can show
+ * the same reminders without a second copy of these rules. One engine:
+ * add a reminder here and both screens get it, and neither can drift
+ * into disagreeing with the other about what the shop owes.
+ *
+ * Reads only, as it always has. The route below is now one line.
+ */
+function buildAlerts(req) {
   const today = todayISO();
   const groups = [];
   const add = (key, title, tone, items) => {
@@ -174,11 +184,15 @@ router.get("/", (req, res) => {
   }
   const visibleGroups = groups.filter(g => g.count);
 
-  res.json({
+  return {
     generatedAt: Date.now(),
     total: visibleGroups.reduce((t, g) => t + g.count, 0),
     groups: visibleGroups
-  });
+  };
+}
+
+router.get("/", (req, res) => {
+  res.json(buildAlerts(req));
 });
 
 router.post("/dismiss", (req, res) => {
@@ -197,3 +211,7 @@ router.post("/dismiss", (req, res) => {
 });
 
 module.exports = router;
+/* For the admin dashboard, which shows a count per group rather than the
+   lists. Hung off the router because that is what this file has always
+   exported and changing that would mean editing index.js. */
+module.exports.buildAlerts = buildAlerts;

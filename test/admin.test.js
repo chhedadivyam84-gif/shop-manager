@@ -222,7 +222,7 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
      r.j && r.j.active.length === 1 && r.j.active[0] === "OWNER", r.j && r.j.active);
 
   console.log("\n--- /api/admin: nothing else is mounted in PART 1 ---");
-  for (const p of ["/api/admin/", "/api/admin/customers", "/api/admin/users",
+  for (const p of ["/api/admin/", "/api/admin/users",
                    "/api/admin/settings", "/api/admin/health"]) {
     r = await call("GET", p, null, OWNER);
     ok("GET " + p + " is not a route yet", r.status === 404, r.status);
@@ -628,7 +628,8 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
   const WANT_NEW = ["server/adminAccess.js", "server/routes/admin.js",
                     "public/admin.html", "public/css/admin.css",
                     "public/js/admin.js", "test/admin.test.js",
-                    "server/adminDashboard.js", "test/admin-dashboard.test.js"];
+                    "server/adminDashboard.js", "test/admin-dashboard.test.js",
+                    "server/adminCustomers.js", "test/admin-customers.test.js"];
 
   /* The two existing files the admin panel is allowed to have touched,
      and the reason each one had to be:
@@ -636,9 +637,12 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
        alerts.js    — the reminder rules lifted out of the route body so
                       the dashboard shows the same reminders rather than
                       a second copy of them (PART 2)
+       customers.js — the edit and switch-off handlers lifted out the same
+                      way, so an admin edit IS the shop's edit (PART 3)
      Anything else appearing here is a scope breach, which is the whole
      point of naming them. */
-  const MAY_TOUCH = ["server/index.js", "server/routes/alerts.js"];
+  const MAY_TOUCH = ["server/index.js", "server/routes/alerts.js",
+                     "server/routes/customers.js"];
 
   /* A file is new if it did not exist at the anchor. */
   const existedBefore = f => {

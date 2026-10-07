@@ -73,6 +73,12 @@ const GROUPS = ["Overview", "Business", "AI", "Administration", "Security"];
 const CAPS = {
   "overview.view": ["OWNER", "ADMIN", "SUPPORT"],
   "business.view": ["OWNER", "ADMIN", "SUPPORT"],
+  /* Reading the customer book is a support job; CHANGING a customer is
+     not. Split so that when SUPPORT gets a carrier it can answer "what
+     does this customer owe" without being able to rename them or switch
+     them off. */
+  "customers.view": ["OWNER", "ADMIN", "SUPPORT"],
+  "customers.edit": ["OWNER", "ADMIN"],
   "ai.view":       ["OWNER", "ADMIN"],
   "admin.manage":  ["OWNER"],
   "security.view": ["OWNER", "ADMIN"],

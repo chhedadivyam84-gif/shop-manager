@@ -21,6 +21,7 @@
 const express = require("express");
 const adminAccess = require("../adminAccess");
 const dashboard = require("../adminDashboard");
+const customers = require("../adminCustomers");
 
 const router = express.Router();
 
@@ -105,6 +106,72 @@ router.get("/dashboard", (req, res) => {
 
   res.json({ generatedAt: Date.now(), sections });
 });
+
+/* ==================================================================
+   CUSTOMERS
+
+   A reading room over the shop's own customer book, plus the two
+   changes the shop already supports safely.
+
+   THERE IS NO DELETE HERE, on purpose. The shop app has one, and it
+   already refuses any customer linked to an invoice or a payment — but
+   it still permanently removes an unused record, and nothing on an
+   admin screen needs that. Switching a customer off is reversible,
+   leaves the history intact and is what "stop using this record"
+   actually means. A customer who genuinely must go can still be
+   removed from the customer's own page in Shop Manager, by the owner,
+   with that route's existing guard in front of it.
+
+   NOTHING HERE TOUCHES A FINANCIAL RECORD. No invoice, payment, cash
+   entry or opening balance is written, voided or removed by any route
+   below, whatever happens to the customer attached to it.
+
+   CHANGING A CUSTOMER GOES THROUGH THE SHOP'S OWN HANDLER, not a copy
+   of it — see routes/customers.js. Same validation, same audit entry.
+   ================================================================== */
+const mayReadCustomers = adminAccess.require("customers.view");
+const mayEditCustomers = adminAccess.require("customers.edit");
+
+/* Literal route, declared above the /:id ones below. */
+router.get("/customers", mayReadCustomers, (req, res) => {
+  const q = req.query || {};
+  res.json(customers.list({
+    q: q.q, filter: q.filter, sort: q.sort,
+    page: q.page, pageSize: q.pageSize,
+  }));
+});
+
+/**
+ * One customer.
+ *
+ * THE IDOR ANSWER IS THE COMPANY BINDER, not a check written here.
+ * `db` resolves to the database of the company this session is in
+ * (index.js, the /api-scoped binder), and each shop is a physically
+ * separate SQLite file with no company_id column to forget. An id
+ * belonging to another shop is not "hidden" — it is not in the file
+ * being read, so it comes back 404 exactly as a typo would.
+ *
+ * That is also why this router must stay mounted under /api. Outside
+ * it there is no binder and `db` falls back to the default company,
+ * which would turn this route into precisely the cross-tenant read it
+ * is supposed to be immune to.
+ */
+router.get("/customers/:id", mayReadCustomers, (req, res) => {
+  const detail = customers.profile(String(req.params.id || ""));
+  if (!detail) return res.status(404).json({ error: "Customer not found." });
+  res.json(detail);
+});
+
+/* Edit. The handler is the shop's own, so this is one line by design:
+   anything more would be a second set of rules. */
+router.put("/customers/:id", mayEditCustomers, (req, res) =>
+  require("./customers").updateCustomer(req, res));
+
+/* Switch off / switch back on. Reversible, and the only status this
+   app has — there is no BLOCKED state in the schema and inventing one
+   is not something an admin shell should do on its own. */
+router.patch("/customers/:id/active", mayEditCustomers, (req, res) =>
+  require("./customers").setCustomerActive(req, res));
 
 /* The roles the panel is structured for, and which capabilities each
    holds. Read-only, and owner-only: it describes the shape of the

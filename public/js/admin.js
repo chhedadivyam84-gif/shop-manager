@@ -299,12 +299,18 @@
      uses hash, pushState or popstate, and /admin is a full page load
      that shares no state with the shop app.
      ------------------------------------------------------------------ */
-  function currentKey() {
+  /* "#/customers/C0a1b2" -> { key: "customers", sub: "C0a1b2" }.
+     A section never has to know the hash format, and an unknown section
+     falls back to the first one the SERVER said this login may see. */
+  function currentRoute() {
     const raw = String(location.hash || "").replace(/^#\/?/, "");
-    const found = me.sections.filter(function (s) { return s.key === raw; })[0];
-    if (found) return found.key;
-    return me.sections.length ? me.sections[0].key : null;
+    const parts = raw.split("/").filter(Boolean);
+    const found = me.sections.filter(function (s) { return s.key === parts[0]; })[0];
+    if (found) return { key: found.key, sub: parts[1] ? decodeURIComponent(parts[1]) : null };
+    return { key: me.sections.length ? me.sections[0].key : null, sub: null };
   }
+
+  function currentKey() { return currentRoute().key; }
 
   function render() {
     const key = currentKey();
@@ -318,9 +324,10 @@
     el.crumbHere.textContent = section.label;
     document.title = section.label + " — Admin Control Centre";
 
-    /* PART 2 built the Dashboard. Every other section is still the
-       placeholder PART 1 put there, deliberately. */
+    /* PART 2 built the Dashboard, PART 3 Customers. Every other section
+       is still the placeholder PART 1 put there, deliberately. */
     if (key === "dashboard") renderDashboard();
+    else if (key === "customers") renderCustomers(currentRoute().sub);
     else el.page.innerHTML = placeholderPage(section);
     el.main.scrollTop = 0;
     window.scrollTo(0, 0);
@@ -458,10 +465,15 @@
       (f.needs ? " Needs " + esc(f.needs) + "." : "") + "</span>";
   }
 
-  function tile(label, body, sub) {
+  /* `text` marks a value that is words rather than a figure — a date,
+     mostly. At the figure size "23 Sept 2026" wraps to three lines in a
+     narrow tile and gets clipped; at the smaller size it fits and still
+     reads as the tile's answer. */
+  function tile(label, body, sub, opts) {
+    const text = opts && opts.text;
     return '<div class="adm-tile">' +
       '<span class="adm-tile-label">' + esc(label) + "</span>" +
-      '<span class="adm-tile-value">' + body + "</span>" +
+      '<span class="adm-tile-value' + (text ? " is-text" : "") + '">' + body + "</span>" +
       (sub ? '<span class="adm-tile-sub">' + sub + "</span>" : "") +
       "</div>";
   }
@@ -795,16 +807,469 @@
          nothing and reads like a bug in the app. A message the server
          wrote is meant for a person and is kept; anything else becomes
          a sentence somebody can act on. */
-      const fromServer = err && err.message && !/^(Failed to fetch|NetworkError|Load failed)/i.test(err.message);
-      const message = fromServer
-        ? err.message
-        : "Could not reach the server. Check the connection and try again.";
-      wanted.forEach(p => paintPanel(p, { ok: false, error: message }));
+      wanted.forEach(p => paintPanel(p, { ok: false, error: humanError(err) }));
       return;
     }
 
     const sections = (payload && payload.sections) || {};
     wanted.forEach(p => paintPanel(p, sections[p.key]));
+  }
+
+  /* ==================================================================
+     CUSTOMERS
+
+     A list and a profile over the shop's own customer book. Nothing is
+     held here: the browser keeps the page it is looking at and the
+     search box it typed, and asks the server for everything else.
+
+     THE SERVER DOES THE SEARCHING. The whole book is never pulled down
+     to be filtered in the browser — that is the shop app's approach on
+     its own customers screen and it is the thing section 11 of the
+     brief rules out for this one.
+     ================================================================== */
+
+  /* Only what the reader chose. Deliberately not a cache of rows: a
+     cached customer list is a second copy of the customer book, and the
+     first time it disagrees with the shop it is worse than no list. */
+  let custView = { q: "", filter: "all", sort: "name", page: 1 };
+  let custOptions = null;
+  let custSeq = 0;             /* so a slow reply cannot overwrite a fast one */
+
+  const STATUS = {
+    on:  { label: "Active", cls: "is-ok" },
+    off: { label: "Switched off", cls: "is-info" },
+  };
+
+  function custHref(id) { return id ? "#/customers/" + encodeURIComponent(id) : "#/customers"; }
+
+  /* ---- the list ---------------------------------------------------- */
+
+  function renderCustomers(id) {
+    if (id) return renderCustomerProfile(id);
+
+    el.page.innerHTML =
+      '<div class="adm-page-head">' +
+        '<div class="adm-page-head-text">' +
+          '<h1 class="adm-page-title">Customers</h1>' +
+          '<p class="adm-page-sub">The shop&rsquo;s own customer book. Searching and ' +
+          'filtering happen on the server, so this stays quick as the book grows.</p>' +
+        "</div>" +
+      "</div>" +
+      '<div class="adm-toolbar">' +
+        '<div class="adm-field adm-field-grow">' +
+          '<label class="adm-sr" for="cust-q">Search customers</label>' +
+          '<input type="search" id="cust-q" class="adm-input" autocomplete="off" ' +
+          'placeholder="Name, phone, GSTIN or customer ID">' +
+        "</div>" +
+        '<div class="adm-field">' +
+          '<label class="adm-field-label" for="cust-filter">Show</label>' +
+          '<select id="cust-filter" class="adm-input"></select>' +
+        "</div>" +
+        '<div class="adm-field">' +
+          '<label class="adm-field-label" for="cust-sort">Sort by</label>' +
+          '<select id="cust-sort" class="adm-input"></select>' +
+        "</div>" +
+      "</div>" +
+      '<div class="adm-panel"><div class="adm-panel-body" id="cust-body">' +
+        skeleton() + "</div></div>";
+
+    const q = document.getElementById("cust-q");
+    q.value = custView.q;
+
+    /* Debounced, so typing a name is one request rather than one per
+       keystroke — and the sequence guard below means an early reply
+       that arrives late cannot paint over a later one. */
+    let timer = null;
+    q.addEventListener("input", function () {
+      clearTimeout(timer);
+      timer = setTimeout(function () {
+        custView.q = q.value.trim();
+        custView.page = 1;
+        loadCustomers();
+      }, 250);
+    });
+    q.addEventListener("keydown", function (e) {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      clearTimeout(timer);
+      custView.q = q.value.trim();
+      custView.page = 1;
+      loadCustomers();
+    });
+
+    document.getElementById("cust-filter").addEventListener("change", function (e) {
+      custView.filter = e.target.value; custView.page = 1; loadCustomers();
+    });
+    document.getElementById("cust-sort").addEventListener("change", function (e) {
+      custView.sort = e.target.value; custView.page = 1; loadCustomers();
+    });
+
+    /* One listener for the whole body: rows, paging and retry all come
+       and go with every repaint. */
+    document.getElementById("cust-body").addEventListener("click", function (e) {
+      const page = e.target.closest("[data-page]");
+      if (page) { custView.page = Number(page.dataset.page); loadCustomers(); return; }
+      if (e.target.closest("[data-retry-customers]")) { loadCustomers(); return; }
+      const clear = e.target.closest("[data-clear-search]");
+      if (clear) {
+        custView = { q: "", filter: "all", sort: custView.sort, page: 1 };
+        renderCustomers(null);
+        loadCustomers();
+      }
+    });
+
+    loadCustomers();
+  }
+
+  function fillSelect(el2, options, chosen) {
+    if (!el2 || !options) return;
+    el2.innerHTML = options.map(o =>
+      '<option value="' + esc(o.key) + '"' + (o.key === chosen ? " selected" : "") + ">" +
+      esc(o.label) + "</option>").join("");
+  }
+
+  async function loadCustomers() {
+    const body = document.getElementById("cust-body");
+    if (!body) return;
+    body.innerHTML = skeleton();
+
+    const mine = ++custSeq;
+    let data;
+    try {
+      const qs = "?q=" + encodeURIComponent(custView.q) +
+        "&filter=" + encodeURIComponent(custView.filter) +
+        "&sort=" + encodeURIComponent(custView.sort) +
+        "&page=" + encodeURIComponent(custView.page);
+      data = await api("GET", "/admin/customers" + qs);
+    } catch (err) {
+      if (mine !== custSeq) return;
+      body.innerHTML = '<p class="adm-fail">' + esc(humanError(err)) + "</p>" +
+        '<button type="button" class="adm-retry" data-retry-customers="1">Try again</button>';
+      return;
+    }
+    if (mine !== custSeq) return;          /* a newer search already won */
+
+    custOptions = data.options;
+    custView.page = data.page;
+    fillSelect(document.getElementById("cust-filter"), data.options.filters, data.filter);
+    fillSelect(document.getElementById("cust-sort"), data.options.sorts, data.sort);
+
+    body.innerHTML = customerListHtml(data);
+  }
+
+  function customerListHtml(d) {
+    if (!d.total) {
+      /* Two different nothings, and telling them apart is the whole
+         point: a shop with no customers needs different words from a
+         search that found none. */
+      return d.q || d.filter !== "all"
+        ? emptyLine("No customer matches that search.") +
+          '<button type="button" class="adm-retry" data-clear-search="1">Clear search and filters</button>'
+        : emptyLine("No customers on the books yet. They are added from Shop Manager.");
+    }
+
+    const from = (d.page - 1) * d.pageSize + 1;
+    const to = from + d.rows.length - 1;
+
+    const head =
+      '<div class="adm-tbl-head" aria-hidden="true">' +
+        '<span>Customer</span><span>Phone</span><span>Status</span>' +
+        '<span class="adm-num">Bills</span><span class="adm-num">Purchases</span>' +
+        '<span class="adm-num">Outstanding</span><span>Last sale</span>' +
+      "</div>";
+
+    const rows = d.rows.map(c => {
+      const st = c.active ? STATUS.on : STATUS.off;
+      return '<a class="adm-tbl-row" href="' + custHref(c.id) + '">' +
+        '<span class="adm-cell adm-cell-name">' +
+          '<span class="adm-strong">' + esc(c.name) + "</span>" +
+          (c.type ? '<span class="adm-row-sub">' + esc(c.type) +
+            (c.gst ? " · " + esc(c.gst) : "") + "</span>" : "") +
+        "</span>" +
+        '<span class="adm-cell" data-h="Phone">' + (c.phone ? esc(c.phone) : "—") + "</span>" +
+        '<span class="adm-cell" data-h="Status">' +
+          '<span class="adm-pip ' + st.cls + '" aria-hidden="true"></span>' + esc(st.label) +
+        "</span>" +
+        '<span class="adm-cell adm-num" data-h="Bills">' + num(c.bills) + "</span>" +
+        '<span class="adm-cell adm-num" data-h="Purchases">' + money(c.sales) + "</span>" +
+        '<span class="adm-cell adm-num" data-h="Outstanding">' +
+          (c.due > 0 ? '<span class="' + (c.overLimit ? "adm-over" : "") + '">' + money(c.due) + "</span>"
+                     : '<span class="adm-muted">—</span>') +
+        "</span>" +
+        '<span class="adm-cell" data-h="Last sale">' +
+          (c.lastSale ? esc(showDate(c.lastSale)) : '<span class="adm-muted">never</span>') +
+        "</span>" +
+      "</a>";
+    }).join("");
+
+    const pager = d.pages > 1
+      ? '<div class="adm-pager">' +
+          '<button type="button" class="adm-retry" data-page="' + (d.page - 1) + '"' +
+            (d.page <= 1 ? " disabled" : "") + ">Previous</button>" +
+          '<span class="adm-pager-at">' + num(from) + "–" + num(to) +
+            " of " + num(d.total) + "</span>" +
+          '<button type="button" class="adm-retry" data-page="' + (d.page + 1) + '"' +
+            (d.page >= d.pages ? " disabled" : "") + ">Next</button>" +
+        "</div>"
+      : '<p class="adm-foot">' + num(d.total) +
+        (d.total === 1 ? " customer." : " customers.") + "</p>";
+
+    return '<div class="adm-tbl">' + head + rows + "</div>" + pager;
+  }
+
+  /* ---- the profile ------------------------------------------------- */
+
+  async function renderCustomerProfile(id) {
+    el.page.innerHTML =
+      '<div class="adm-page-head">' +
+        '<div class="adm-page-head-text">' +
+          '<a class="adm-back" href="#/customers">&larr; All customers</a>' +
+          '<h1 class="adm-page-title" id="cust-title">Customer</h1>' +
+        "</div>" +
+      "</div>" +
+      '<div id="cust-profile"><div class="adm-panel"><div class="adm-panel-body">' +
+        skeleton() + "</div></div></div>";
+
+    const host = document.getElementById("cust-profile");
+    let d;
+    try {
+      d = await api("GET", "/admin/customers/" + encodeURIComponent(id));
+    } catch (err) {
+      /* A 404 here is the ordinary case of a stale link or a mistyped
+         id — and it is also what another shop's customer looks like,
+         because that record is not in this shop's database at all. */
+      host.innerHTML = '<div class="adm-panel is-failed"><div class="adm-panel-body">' +
+        '<p class="adm-fail">' + esc(humanError(err)) + "</p>" +
+        '<a class="adm-retry" href="#/customers">Back to all customers</a>' +
+        "</div></div>";
+      return;
+    }
+
+    paintCustomerProfile(host, d);
+  }
+
+  function paintCustomerProfile(host, d) {
+    const c = d.customer, s = d.summary;
+    const st = c.active ? STATUS.on : STATUS.off;
+
+    const title = document.getElementById("cust-title");
+    if (title) title.textContent = c.name;
+    el.crumbHere.textContent = c.name;
+
+    /* Only the fields this shop actually stores. There is no email
+       column anywhere in the schema, so there is no email row — an
+       always-blank field reads as broken rather than absent. */
+    const info = [
+      ["Name", esc(c.name)],
+      ["Type", c.type ? esc(c.type) : "—"],
+      ["Phone", c.phone ? esc(c.phone) : "—"],
+      ["WhatsApp", c.whatsapp ? esc(c.whatsapp) : '<span class="adm-muted">same as phone</span>'],
+      ["Address", c.address ? esc(c.address) : "—"],
+      ["State", c.state ? esc(c.state) : "—"],
+      ["PIN code", c.pinCode ? esc(c.pinCode) : "—"],
+      ["GSTIN", c.gst ? esc(c.gst) : "—"],
+      ["Tax", c.gstType === "IGST" ? "IGST" : "CGST + SGST"],
+      ["Credit limit", c.creditLimit > 0 ? money(c.creditLimit)
+        : '<span class="adm-muted">none agreed</span>'],
+      ["Customer ID", '<code class="adm-code">' + esc(c.id) + "</code>"],
+      ["Added", esc(showDate(c.created))],
+    ].map(r => '<div class="adm-kv"><span class="adm-kv-k">' + r[0] +
+      '</span><span class="adm-kv-v">' + r[1] + "</span></div>").join("");
+
+    const docs = d.recentInvoices.map(i =>
+      '<li class="adm-row">' +
+        '<span class="adm-row-main">' + esc(i.no) +
+          (i.docType === "challan" ? ' <span class="adm-muted">(challan)</span>' : "") + "</span>" +
+        '<span class="adm-row-sub">' + esc(showDate(i.date)) + "</span>" +
+        '<span class="adm-row-fig">' +
+          (i.docType === "challan" ? '<span class="adm-muted">no charge</span>' : money(i.total)) +
+        "</span>" +
+      "</li>").join("");
+
+    const pays = d.recentPayments.map(p =>
+      '<li class="adm-row">' +
+        '<span class="adm-row-main">' + esc(p.method || "Payment") + "</span>" +
+        '<span class="adm-row-sub">' + esc(showDate(p.date)) +
+          (p.reference ? " · " + esc(p.reference) : "") + "</span>" +
+        '<span class="adm-row-fig">' + money(p.amount) + "</span>" +
+      "</li>").join("");
+
+    const events = d.activity.events.map(e =>
+      '<li class="adm-row">' +
+        '<span class="adm-row-main">' + esc(e.label) + "</span>" +
+        '<span class="adm-row-sub">' + esc(showDate(e.date)) +
+          (e.detail ? " · " + esc(e.detail) : "") + "</span>" +
+        (e.amount !== null && e.amount !== undefined
+          ? '<span class="adm-row-fig">' + money(e.amount) + "</span>" : "") +
+      "</li>").join("");
+
+    host.innerHTML =
+      '<div class="adm-profile-head">' +
+        '<span class="adm-status"><span class="adm-pip ' + st.cls +
+          '" aria-hidden="true"></span>' + esc(st.label) + "</span>" +
+        '<div class="adm-profile-actions">' +
+          '<button type="button" class="adm-retry" data-edit="1">Edit details</button>' +
+          '<button type="button" class="adm-retry" data-active="' +
+            (c.active ? "0" : "1") + '">' +
+            (c.active ? "Switch off" : "Switch back on") + "</button>" +
+        "</div>" +
+      "</div>" +
+
+      '<div class="adm-grid">' +
+
+        '<section class="adm-panel" data-panel="info"><header class="adm-panel-head">' +
+          '<h2 class="adm-panel-title">Customer information</h2></header>' +
+          '<div class="adm-panel-body" id="cust-info">' + info + "</div></section>" +
+
+        '<section class="adm-panel" data-panel="summary"><header class="adm-panel-head">' +
+          '<h2 class="adm-panel-title">Business summary</h2></header>' +
+          '<div class="adm-panel-body">' +
+            '<div class="adm-tiles">' +
+              tile("Purchases", money(s.sales), num(s.bills) + " bill(s)") +
+              tile("Outstanding", s.outstanding > 0 ? money(s.outstanding) : "—",
+                   s.overLimit ? '<span class="adm-over">over the agreed limit</span>' : "") +
+              tile("Paid", money(s.paid), num(s.payments) + " payment(s)") +
+              tile("Average bill", s.averageBill === null ? "—" : money(s.averageBill)) +
+              tile("First sale", s.firstSale ? esc(showDate(s.firstSale)) : "—", "", { text: true }) +
+              tile("Last sale", s.lastSale ? esc(showDate(s.lastSale)) : "—", "", { text: true }) +
+            "</div>" +
+            (s.openingBalance
+              ? '<p class="adm-foot">Includes an opening balance of ' +
+                money(s.openingBalance) + ".</p>" : "") +
+            (s.challans
+              ? '<p class="adm-foot">' + num(s.challans) +
+                " delivery challan(s), which carry goods but no money and are not counted above.</p>" : "") +
+          "</div></section>" +
+
+        '<section class="adm-panel" data-panel="docs"><header class="adm-panel-head">' +
+          '<h2 class="adm-panel-title">Recent invoices</h2></header>' +
+          '<div class="adm-panel-body">' +
+            (docs ? '<ul class="adm-list">' + docs + "</ul>" +
+              '<p class="adm-foot">The complete ledger is on this customer&rsquo;s page in Shop Manager.</p>'
+                  : emptyLine("No invoices for this customer yet.")) +
+          "</div></section>" +
+
+        '<section class="adm-panel" data-panel="pays"><header class="adm-panel-head">' +
+          '<h2 class="adm-panel-title">Recent payments</h2></header>' +
+          '<div class="adm-panel-body">' +
+            (pays ? '<ul class="adm-list">' + pays + "</ul>"
+                  : emptyLine("No payments recorded for this customer yet.")) +
+          "</div></section>" +
+
+        '<section class="adm-panel" data-panel="activity"><header class="adm-panel-head">' +
+          '<h2 class="adm-panel-title">Activity</h2></header>' +
+          '<div class="adm-panel-body">' +
+            (events ? '<ul class="adm-list">' + events + "</ul>" : emptyLine("Nothing recorded yet.")) +
+            '<p class="adm-foot">Built from this customer&rsquo;s own records — every line ' +
+            'above is linked to them by the record itself. Edits to a customer&rsquo;s ' +
+            'details are not shown here: the audit log stores them against a name rather ' +
+            'than an id, and matching on a name would attribute one customer&rsquo;s ' +
+            'changes to another. That needs a per-customer event log.</p>' +
+          "</div></section>" +
+
+      "</div>";
+
+    host.addEventListener("click", function (e) {
+      if (e.target.closest("[data-edit]")) { openCustomerEdit(host, d); return; }
+      const act = e.target.closest("[data-active]");
+      if (act) setCustomerActive(host, d, act.dataset.active === "1");
+    });
+  }
+
+  /* ---- editing ------------------------------------------------------
+     Writes through the shop's own handler on the server, so an admin
+     edit is the same edit the counter makes. Only fields that exist. */
+  const EDIT_FIELDS = [
+    { key: "name", label: "Name", required: true },
+    { key: "type", label: "Type" },
+    { key: "phone", label: "Phone", required: true },
+    { key: "whatsapp", label: "WhatsApp", hint: "Leave blank to use the phone number" },
+    { key: "address", label: "Address" },
+    { key: "state", label: "State" },
+    { key: "pinCode", label: "PIN code" },
+    { key: "gst", label: "GSTIN" },
+    { key: "creditLimit", label: "Credit limit", type: "number" },
+  ];
+
+  function openCustomerEdit(host, d) {
+    const c = d.customer;
+    const fields = EDIT_FIELDS.map(f =>
+      '<div class="adm-field adm-field-block">' +
+        '<label class="adm-field-label" for="ce-' + f.key + '">' + esc(f.label) +
+          (f.required ? " *" : "") + "</label>" +
+        '<input class="adm-input" id="ce-' + f.key + '" type="' + (f.type || "text") +
+          '" value="' + esc(c[f.key] === null || c[f.key] === undefined ? "" : c[f.key]) + '">' +
+        (f.hint ? '<span class="adm-why">' + esc(f.hint) + "</span>" : "") +
+      "</div>").join("");
+
+    const info = document.getElementById("cust-info");
+    info.innerHTML =
+      '<form class="adm-form" id="cust-edit">' + fields +
+        '<div class="adm-form-actions">' +
+          '<button type="submit" class="adm-primary">Save changes</button>' +
+          '<button type="button" class="adm-retry" data-cancel="1">Cancel</button>' +
+        "</div>" +
+        '<p class="adm-why" id="cust-edit-msg"></p>' +
+      "</form>";
+
+    info.querySelector("[data-cancel]").addEventListener("click", function () {
+      renderCustomerProfile(c.id);
+    });
+
+    document.getElementById("cust-edit").addEventListener("submit", async function (e) {
+      e.preventDefault();
+      const msg = document.getElementById("cust-edit-msg");
+      const body = {};
+      EDIT_FIELDS.forEach(f => {
+        const v = document.getElementById("ce-" + f.key).value;
+        body[f.key] = f.type === "number" ? Number(v || 0) : v.trim();
+      });
+      if (!body.name || !body.phone) {
+        msg.textContent = "A name and a phone number are both required.";
+        return;
+      }
+      msg.textContent = "Saving…";
+      try {
+        await api("PUT", "/admin/customers/" + encodeURIComponent(c.id), body);
+      } catch (err) {
+        msg.textContent = humanError(err);
+        return;
+      }
+      toast("Customer updated.", "ok");
+      renderCustomerProfile(c.id);
+    });
+  }
+
+  async function setCustomerActive(host, d, active) {
+    const c = d.customer;
+    /* Reversible either way, so this asks rather than warns — and says
+       plainly that nothing financial moves, because "switch off" on a
+       customer with money owing is exactly where somebody would worry. */
+    const ask = active
+      ? "Switch " + c.name + " back on?"
+      : "Switch " + c.name + " off? They stay on the books and every invoice, " +
+        "payment and balance is untouched — this only takes them out of " +
+        "everyday use, and it can be undone.";
+    if (!window.confirm(ask)) return;
+
+    try {
+      await api("PATCH", "/admin/customers/" + encodeURIComponent(c.id) + "/active", { active });
+    } catch (err) {
+      toast(humanError(err));
+      return;
+    }
+    toast(active ? "Customer switched back on." : "Customer switched off.", "ok");
+    renderCustomerProfile(c.id);
+  }
+
+  /* A message a shop owner can act on. The browser's own "Failed to
+     fetch" is not one; a message the server wrote is. */
+  function humanError(err) {
+    const m = err && err.message;
+    if (!m || /^(Failed to fetch|NetworkError|Load failed)/i.test(m)) {
+      return "Could not reach the server. Check the connection and try again.";
+    }
+    return m;
   }
 
   /* ------------------------------------------------------------------

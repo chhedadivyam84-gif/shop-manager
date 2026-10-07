@@ -1,0 +1,610 @@
+/* ============================================================
+   ADMIN CONTROL CENTRE — the shell
+
+   Loaded AFTER style.css and on one page only (admin.html). It is
+   additive: every colour, size and radius below reads a token style.css
+   already declares, so the admin panel follows the shop's theme for
+   free and there is no second design system to keep in step.
+
+   WHY IT HAS TO LOAD SECOND. style.css styles a few bare elements for
+   the app's centred-column layout, and three of them would wreck a
+   sidebar page:
+       main      flex:1, padding 14px 16px 90px, overflow-y:auto
+                 — the 90px is a reserve for a bottom nav this page does
+                   not have, and the overflow-y would nest a second
+                   scroll container inside the first.
+       .screen   display:none, claimed globally by the app's router.
+       body      background:var(--bg-outer) — the ground OUTSIDE a 460px
+                 column, wrong under a full-bleed workspace.
+   So this page uses no <main> and no .screen, and resets body's
+   background below. It also never uses #shell, nav.bottom, .fullscreen
+   or .wa-fab-wrap, all of which style.css caps at var(--app-max).
+
+   NO html[data-theme=...] SELECTOR APPEARS IN THIS FILE, and none may
+   be added. Navy-gold is the default theme and has no CSS block at all
+   — the app REMOVES the attribute for it — so a [data-theme] rule would
+   silently miss every shop that never opened the theme picker. Style
+   against tokens only.
+   ============================================================ */
+
+/* ---------------------------------------------------------- TOKENS
+   Declared on .adm-shell, not :root, so nothing here can leak into the
+   shop app if this stylesheet is ever linked somewhere else.
+
+   The sidebar and the accent are deliberately THEME-INVARIANT, the same
+   decision style.css already makes for --ok / --warn / --danger. The
+   brief asks for dark charcoal and burnt orange in all cases, and the
+   theme tokens move hue (maroon, forest, teal), which would turn the
+   sidebar green in one shop and red in another.
+
+   Lightness is pinned where the theme contract pins it — style.css
+   guarantees themes change hue and chroma but never OKLCH lightness —
+   so the sidebar sits at exactly --navy-2's 0.24 with the chroma
+   dropped from 0.06 to 0.012: charcoal, at navy's contrast.
+   ---------------------------------------------------------- */
+.adm-shell{
+  --adm-sidebar-w:            248px;
+  --adm-sidebar-w-collapsed:   64px;
+  --adm-topbar-h:              56px;
+
+  --adm-sidebar-bg:      oklch(0.24 0.012 258);
+  --adm-sidebar-bg-2:    oklch(0.20 0.012 258);
+  --adm-sidebar-text:    oklch(0.93 0.004 258);
+  --adm-sidebar-muted:   oklch(0.70 0.008 258);
+  --adm-sidebar-line:    oklch(0.32 0.010 258);
+
+  /* Burnt orange. Appears in exactly three places in this file: the
+     active-nav indicator, one primary action per page, and one state
+     dot. Never as a fill, never as a gradient. */
+  --adm-accent:          oklch(0.62 0.15 48);
+  --adm-accent-soft:     oklch(0.95 0.035 48);
+}
+
+/* The app's canvas, not the ground outside its column. */
+body.adm-body{
+  background: var(--bg);
+  margin: 0;
+  min-height: 100vh;
+}
+
+/* ---------------------------------------------------------- SHELL
+   MOBILE FIRST, and genuinely a different layout rather than a shrunk
+   desktop: one column, the sidebar off-canvas, the top bar carrying the
+   menu button and the search collapsed away entirely.
+   ---------------------------------------------------------- */
+.adm-shell{
+  display: grid;
+  grid-template-columns: 1fr;
+  min-height: 100vh;
+  color: var(--text);
+}
+
+.adm-col{
+  display: flex;
+  flex-direction: column;
+  min-width: 0;                 /* lets wide content scroll instead of pushing the page */
+  min-height: 100vh;
+}
+
+/* ---------------------------------------------------------- SIDEBAR */
+.adm-sidebar{
+  position: fixed;
+  inset: 0 auto 0 0;
+  width: min(84vw, 300px);
+  z-index: 41;                  /* above .scrim, which style.css puts at 40 */
+  transform: translateX(-100%);
+  transition: transform .22s ease;
+  background: var(--adm-sidebar-bg);
+  color: var(--adm-sidebar-text);
+  display: flex;
+  flex-direction: column;
+  overscroll-behavior: contain;
+}
+.adm-shell.is-drawer-open .adm-sidebar{ transform: translateX(0); }
+
+@media (prefers-reduced-motion: reduce){
+  .adm-sidebar{ transition: none; }
+}
+
+/* The sidebar's own controls opt out of the shared typed-input and
+   button sizing in style.css, which forces width:100% on nine input
+   types plus select and textarea. */
+.adm-sidebar button,
+.adm-sidebar input{ width: auto; }
+
+.adm-brand{
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 14px 12px;
+  border-bottom: 1px solid var(--adm-sidebar-line);
+  min-height: var(--adm-topbar-h);
+  box-sizing: border-box;
+}
+.adm-brand-mark{
+  flex: 0 0 auto;
+  width: 32px; height: 32px;
+  display: grid; place-items: center;
+  border-radius: 8px;
+  background: var(--adm-sidebar-bg-2);
+  border: 1px solid var(--adm-sidebar-line);
+  font-size: 12px; font-weight: 700; letter-spacing: .04em;
+  color: var(--adm-sidebar-text);
+}
+.adm-brand-text{ display: flex; flex-direction: column; min-width: 0; }
+.adm-brand-name{
+  font-size: var(--fs-row-title);
+  font-weight: 700;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.adm-brand-sub{
+  font-size: var(--fs-row-sub);
+  color: var(--adm-sidebar-muted);
+  white-space: nowrap;
+}
+
+/* The NAV scrolls, not the whole sidebar: sixteen sections plus the brand
+   and the footer are taller than a 1366×768 laptop, and when the sidebar
+   itself was the scroller the Collapse button sat below the fold on exactly
+   the machines that most want it. */
+.adm-nav{
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  padding: 8px 8px 4px;
+}
+
+.adm-section-label{
+  font-size: var(--fs-row-sub);
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--adm-sidebar-muted);
+  padding: 12px 8px 6px;
+}
+.adm-nav-group:first-child .adm-section-label{ padding-top: 4px; }
+
+.adm-nav-item{
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  color: var(--adm-sidebar-muted);
+  text-decoration: none;
+  font-size: var(--fs-row-title);
+  line-height: 1.2;
+  min-height: 38px;
+  box-sizing: border-box;
+}
+.adm-nav-item:hover{
+  background: var(--adm-sidebar-bg-2);
+  color: var(--adm-sidebar-text);
+}
+.adm-nav-item:focus-visible{
+  outline: 2px solid var(--adm-accent);
+  outline-offset: 1px;
+}
+.adm-nav-item.is-active{
+  background: var(--adm-sidebar-bg-2);
+  color: var(--adm-sidebar-text);
+  font-weight: 600;
+}
+/* ACCENT 1 of 3 — the active indicator, and the only accent in the sidebar. */
+.adm-nav-item.is-active::before{
+  content: "";
+  position: absolute;
+  left: 0; top: 7px; bottom: 7px;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: var(--adm-accent);
+}
+.adm-nav-ic{
+  flex: 0 0 18px;
+  width: 18px; height: 18px;
+  display: grid; place-items: center;
+}
+.adm-nav-ic svg{
+  width: 17px; height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.adm-nav-label{
+  min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.adm-sidebar-foot{
+  flex: 0 0 auto;
+  padding: 8px;
+  border-top: 1px solid var(--adm-sidebar-line);
+}
+.adm-collapse-btn{
+  display: none;                /* laptop and up only — see the 1024 block */
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--adm-sidebar-line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--adm-sidebar-muted);
+  font-size: var(--fs-btn-sm);
+  cursor: pointer;
+}
+.adm-collapse-btn:hover{ background: var(--adm-sidebar-bg-2); color: var(--adm-sidebar-text); }
+.adm-collapse-btn:focus-visible{ outline: 2px solid var(--adm-accent); outline-offset: 1px; }
+.adm-collapse-ic{
+  flex: 0 0 18px; height: 18px;
+  display: grid; place-items: center;
+}
+.adm-collapse-ic::before{
+  content: "";
+  width: 9px; height: 9px;
+  border-left: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+  margin-left: 3px;
+}
+.adm-shell.is-collapsed .adm-collapse-ic::before{
+  transform: rotate(-135deg);
+  margin-left: 0; margin-right: 3px;
+}
+
+/* ---------------------------------------------------------- TOP BAR */
+.adm-topbar{
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--adm-topbar-h);
+  padding: 0 12px;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  box-sizing: border-box;
+}
+
+.adm-drawer-btn{
+  flex: 0 0 auto;
+  width: 36px; height: 36px;
+  display: grid; place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--card);
+  color: var(--text);
+  cursor: pointer;
+  padding: 0;
+}
+.adm-drawer-btn span{
+  display: block;
+  width: 15px; height: 1.5px;
+  background: currentColor;
+  position: relative;
+}
+.adm-drawer-btn span::before,
+.adm-drawer-btn span::after{
+  content: "";
+  position: absolute; left: 0;
+  width: 15px; height: 1.5px;
+  background: currentColor;
+}
+.adm-drawer-btn span::before{ top: -5px; }
+.adm-drawer-btn span::after{ top: 5px; }
+.adm-drawer-btn:focus-visible{ outline: 2px solid var(--adm-accent); outline-offset: 1px; }
+
+.adm-crumb{
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--fs-row-title);
+}
+.adm-crumb-root,
+.adm-crumb-sep{ color: var(--muted); display: none; }   /* no room on a phone */
+.adm-crumb-here{
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.adm-search{ flex: 1 1 auto; min-width: 0; display: none; }
+.adm-search-lbl{
+  position: absolute;
+  width: 1px; height: 1px;
+  overflow: hidden; clip-path: inset(50%);
+  white-space: nowrap;
+}
+.adm-search-input{
+  width: 100%;
+  max-width: 420px;
+  font-size: var(--fs-input);
+  padding: var(--input-pad-y) var(--input-pad-x);
+  border: 1px solid var(--border);
+  border-radius: var(--input-radius);
+  background: var(--bg);
+  color: var(--text);
+  box-sizing: border-box;
+}
+.adm-search-input:focus-visible{ outline: 2px solid var(--adm-accent); outline-offset: -1px; }
+
+.adm-topbar-actions{
+  flex: 0 0 auto;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.adm-icon-btn{
+  width: 36px; height: 36px;
+  display: grid; place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--card);
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+}
+.adm-icon-btn:hover{ color: var(--text); }
+.adm-icon-btn:focus-visible{ outline: 2px solid var(--adm-accent); outline-offset: 1px; }
+.adm-icon-btn svg{
+  width: 18px; height: 18px;
+  fill: none; stroke: currentColor;
+  stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round;
+}
+
+/* ---------------------------------------------------------- PROFILE */
+.adm-profile{ position: relative; }
+.adm-profile-btn{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--card);
+  color: var(--text);
+  cursor: pointer;
+  max-width: 190px;
+}
+.adm-profile-btn:focus-visible{ outline: 2px solid var(--adm-accent); outline-offset: 1px; }
+.adm-avatar{
+  flex: 0 0 auto;
+  width: 26px; height: 26px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  background: var(--navy);
+  color: #fff;
+  font-size: 11px; font-weight: 700;
+}
+.adm-profile-text{ display: none; flex-direction: column; min-width: 0; text-align: left; }
+.adm-profile-name{
+  font-size: var(--fs-row-sub);
+  font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.adm-profile-role{
+  font-size: 10px;
+  letter-spacing: .06em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.adm-profile-menu{
+  position: absolute;
+  right: 0; top: calc(100% + 6px);
+  min-width: 190px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(15,20,30,.14);
+  padding: 4px;
+  z-index: 30;
+}
+.adm-profile-menu[hidden]{ display: none; }
+.adm-profile-item{
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--fs-row-title);
+  text-decoration: none;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+.adm-profile-item:hover{ background: var(--bg); }
+.adm-profile-item:focus-visible{ outline: 2px solid var(--adm-accent); outline-offset: -2px; }
+
+/* ---------------------------------------------------------- WORKSPACE */
+.adm-main{
+  flex: 1 1 auto;
+  padding: 14px var(--gutter) 28px;
+  min-width: 0;
+}
+
+.adm-page-head{
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.adm-page-head-text{ min-width: 0; flex: 1 1 240px; }
+.adm-page-title{
+  margin: 0;
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--text);
+  text-wrap: balance;
+}
+.adm-page-sub{
+  margin: 4px 0 0;
+  font-size: var(--fs-hint);
+  color: var(--muted);
+  max-width: 62ch;
+}
+
+/* ACCENT 2 of 3 — one primary action per page, and nothing else. */
+.adm-primary{
+  flex: 0 0 auto;
+  padding: var(--btn-pad-y) 14px;
+  border: 1px solid var(--adm-accent);
+  border-radius: var(--btn-radius);
+  background: var(--adm-accent);
+  color: #fff;
+  font-size: var(--fs-btn);
+  font-weight: 600;
+  cursor: pointer;
+}
+.adm-primary:focus-visible{ outline: 2px solid var(--text); outline-offset: 2px; }
+
+.adm-card{
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--card-radius);
+  padding: var(--card-pad);
+}
+
+.adm-placeholder{ display: grid; gap: 10px; }
+.adm-placeholder-row{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--fs-row-title);
+  color: var(--muted);
+}
+/* ACCENT 3 of 3 — the state dot that says a section is not built yet. */
+.adm-dot{
+  flex: 0 0 auto;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--adm-accent);
+}
+.adm-meta{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: var(--fs-row-sub);
+  color: var(--muted);
+}
+.adm-meta b{ color: var(--text); font-weight: 600; }
+
+/* ---------------------------------------------------------- TABLET
+   768–1023. Still a drawer — there is no room for a 248px sidebar and a
+   usable workspace side by side — but the top bar gains the real search
+   field, the breadcrumb root and the profile name. */
+@media (min-width: 768px){
+  .adm-topbar{ padding: 0 16px; gap: 12px; }
+  .adm-search{ display: block; position: relative; }
+  .adm-crumb-root,
+  .adm-crumb-sep{ display: inline; }
+  .adm-profile-text{ display: flex; }
+  .adm-main{ padding: 18px var(--gutter) 32px; }
+  .adm-page-title{ font-size: 21px; }
+}
+
+/* ---------------------------------------------------------- LAPTOP
+   1024–1439. The sidebar becomes part of the page: in the grid, always
+   visible, no scrim, and collapsible to icons. */
+@media (min-width: 1024px){
+  .adm-shell{ grid-template-columns: var(--adm-sidebar-w) 1fr; }
+  .adm-shell.is-collapsed{ grid-template-columns: var(--adm-sidebar-w-collapsed) 1fr; }
+
+  .adm-sidebar{
+    position: sticky;
+    top: 0;
+    inset: auto;
+    width: auto;
+    height: 100vh;
+    transform: none;
+    transition: none;
+  }
+  .adm-drawer-btn{ display: none; }
+  .adm-collapse-btn{ display: flex; }
+  .adm-main{ padding: 20px 22px 36px; }
+
+  /* COLLAPSED: icons only, with the label kept in the accessible name. */
+  .adm-shell.is-collapsed .adm-brand-text,
+  .adm-shell.is-collapsed .adm-nav-label,
+  .adm-shell.is-collapsed .adm-section-label,
+  .adm-shell.is-collapsed .adm-collapse-label{ display: none; }
+  .adm-shell.is-collapsed .adm-brand{ justify-content: center; padding-left: 0; padding-right: 0; }
+  .adm-shell.is-collapsed .adm-nav-item,
+  .adm-shell.is-collapsed .adm-collapse-btn{ justify-content: center; padding-left: 0; padding-right: 0; }
+  .adm-shell.is-collapsed .adm-nav-group + .adm-nav-group{
+    margin-top: 6px; padding-top: 6px;
+    border-top: 1px solid var(--adm-sidebar-line);
+  }
+
+}
+
+/* ---------------------------------------------------------- TOOLTIP
+   The label, for collapsed icon mode.
+
+   It was a ::after on the nav item to begin with, which is tidier, and
+   it was wrong: the nav has to scroll (sixteen sections are taller than
+   a laptop screen), and a scroll container clips an absolutely
+   positioned child, so the tooltip was cut off at the sidebar edge.
+   overflow-y cannot be scrollable while overflow-x stays visible, so
+   there is no CSS-only way out.
+
+   So it is ONE fixed-position element, outside the sidebar, moved by
+   admin.js. The nav item still carries title and aria-label, which is
+   what a screen reader and a keyboard user actually read — this is the
+   sighted-mouse affordance only.
+   ---------------------------------------------------------- */
+.adm-tip{
+  position: fixed;
+  z-index: 60;
+  padding: 5px 9px;
+  border-radius: 6px;
+  background: var(--adm-sidebar-bg-2, oklch(0.20 0.012 258));
+  border: 1px solid var(--adm-sidebar-line, oklch(0.32 0.010 258));
+  color: var(--adm-sidebar-text, oklch(0.93 0.004 258));
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .12s ease;
+}
+.adm-tip.show{ opacity: 1; }
+.adm-tip[hidden]{ display: none; }
+
+@media (prefers-reduced-motion: reduce){
+  .adm-tip{ transition: none; }
+}
+
+/* ---------------------------------------------------------- DESKTOP
+   1440 and up. Uses the extra width rather than stretching one column
+   of text across a monitor. */
+@media (min-width: 1440px){
+  .adm-shell{ --adm-sidebar-w: 264px; --adm-topbar-h: 60px; }
+  .adm-main{ padding: 24px 28px 44px; }
+  .adm-main > .adm-page{ max-width: 1320px; }
+  .adm-page-title{ font-size: 23px; }
+}
+
+/* ---------------------------------------------------------- TOUCH
+   Follows the INPUT DEVICE, not the screen width, exactly as style.css
+   does — a touchscreen laptop still gets proper targets. */
+@media (pointer: coarse){
+  .adm-nav-item{ min-height: 44px; }
+  .adm-icon-btn,
+  .adm-drawer-btn{ width: 42px; height: 42px; }
+  .adm-profile-item{ padding: 12px 10px; }
+  .adm-search-input{ font-size: 16px; }   /* below 16px, iOS zooms on focus */
+}

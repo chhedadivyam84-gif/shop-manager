@@ -578,13 +578,37 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
      6.  WHAT WAS PRESERVED — asserted against git, not by eye
      ================================================================ */
   console.log("\n--- nothing in the shop app was changed ---");
-  const changed = execFileSync("git", ["diff", "--name-only", "HEAD"], { cwd: ROOT })
-    .toString().split("\n").map(s => s.trim()).filter(Boolean);
-  const untracked = execFileSync("git", ["ls-files", "--others", "--exclude-standard"], { cwd: ROOT })
-    .toString().split("\n").map(s => s.trim()).filter(Boolean);
+  /* Anchored to the shop as it stood BEFORE the admin panel, not to the
+     working tree — the first version of this compared against HEAD, which
+     meant it quietly stopped checking anything the moment the work was
+     committed. The anchor is the commit that introduced adminAccess.js,
+     minus one; while the work is still uncommitted there is no such
+     commit and HEAD is already the right answer. */
+  /* stderr is piped, not inherited: the existence probe below is EXPECTED
+     to fail for every new file, and inheriting would print a wall of
+     "fatal:" lines in the middle of a passing run. */
+  const git = (...a) => execFileSync("git", a,
+    { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] }).toString().trim();
+  const introduced = git("log", "-1", "--format=%H", "--", "server/adminAccess.js");
+  const BEFORE = introduced ? introduced + "^" : "HEAD";
 
-  ok("server/index.js is the ONLY tracked file modified",
-     changed.length === 1 && changed[0] === "server/index.js", changed);
+  const changed = git("diff", "--name-only", BEFORE)
+    .split("\n").map(s => s.trim()).filter(Boolean);
+
+  const WANT_NEW = ["server/adminAccess.js", "server/routes/admin.js",
+                    "public/admin.html", "public/css/admin.css",
+                    "public/js/admin.js", "test/admin.test.js"];
+
+  /* A file is new if it did not exist at the anchor. */
+  const existedBefore = f => {
+    try { git("cat-file", "-e", BEFORE + ":" + f); return true; }
+    catch (e) { return false; }
+  };
+
+  const touchedExisting = changed.filter(f => !WANT_NEW.includes(f));
+  ok("server/index.js is the ONLY pre-existing file touched",
+     touchedExisting.length === 1 && touchedExisting[0] === "server/index.js",
+     touchedExisting);
 
   ["public/index.html", "public/js/app.js", "public/css/style.css",
    "public/js/boot.js", "public/css/document.css",
@@ -594,18 +618,17 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
     ok(f + " is untouched", !changed.includes(f));
   });
 
-  const stat = execFileSync("git", ["diff", "--numstat", "HEAD", "--", "server/index.js"],
-    { cwd: ROOT }).toString().trim().split(/\s+/);
+  const stat = git("diff", "--numstat", BEFORE, "--", "server/index.js").split(/\s+/);
   ok("the change to index.js is purely additive — 0 lines removed",
      stat[1] === "0", stat.join(" "));
 
-  const WANT_NEW = ["server/adminAccess.js", "server/routes/admin.js",
-                    "public/admin.html", "public/css/admin.css",
-                    "public/js/admin.js", "test/admin.test.js"];
-  WANT_NEW.forEach(f => ok(f + " is new", untracked.includes(f), untracked));
+  WANT_NEW.forEach(f => {
+    ok(f + " is new", changed.includes(f) && !existedBefore(f),
+       changed.includes(f) ? "existed before" : "not in the diff");
+  });
   ok("no file was added beyond those six",
-     untracked.filter(f => !WANT_NEW.includes(f)).length === 0,
-     untracked.filter(f => !WANT_NEW.includes(f)));
+     changed.filter(f => !WANT_NEW.includes(f) && !existedBefore(f)).length === 0,
+     changed.filter(f => !WANT_NEW.includes(f) && !existedBefore(f)));
 
   console.log("\n--- no schema change, and no data touched ---");
   const schema = read("server/db-schema.js");

@@ -612,7 +612,15 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
      "fatal:" lines in the middle of a passing run. */
   const git = (...a) => execFileSync("git", a,
     { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] }).toString().trim();
-  const introduced = git("log", "-1", "--format=%H", "--", "server/adminAccess.js");
+  /* --diff-filter=A, so this is the commit that ADDED adminAccess.js and
+     not merely the last one to touch it. The first version left the
+     filter off, which was fine for exactly as long as that file was
+     never edited again: PART 3 added two capabilities to it, the anchor
+     slid forward to that commit, and the whole block started comparing
+     the panel against itself — reporting its own files as pre-existing.
+     The add-commit never moves, so this holds however many parts land. */
+  const introduced = git("log", "--diff-filter=A", "-1", "--format=%H",
+                         "--", "server/adminAccess.js");
   const BEFORE = introduced ? introduced + "^" : "HEAD";
 
   /* git diff lists tracked changes only, so a brand-new file that has not
@@ -629,7 +637,8 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
                     "public/admin.html", "public/css/admin.css",
                     "public/js/admin.js", "test/admin.test.js",
                     "server/adminDashboard.js", "test/admin-dashboard.test.js",
-                    "server/adminCustomers.js", "test/admin-customers.test.js"];
+                    "server/adminCustomers.js", "test/admin-customers.test.js",
+                    "server/adminProducts.js", "test/admin-products.test.js"];
 
   /* The two existing files the admin panel is allowed to have touched,
      and the reason each one had to be:
@@ -639,10 +648,13 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
                       a second copy of them (PART 2)
        customers.js — the edit and switch-off handlers lifted out the same
                       way, so an admin edit IS the shop's edit (PART 3)
+       products.js  — the product edit and the stock correction lifted out
+                      likewise, so an admin adjustment runs the shop's own
+                      transaction, clamp and ledger write (PART 4)
      Anything else appearing here is a scope breach, which is the whole
      point of naming them. */
   const MAY_TOUCH = ["server/index.js", "server/routes/alerts.js",
-                     "server/routes/customers.js"];
+                     "server/routes/customers.js", "server/routes/products.js"];
 
   /* A file is new if it did not exist at the anchor. */
   const existedBefore = f => {

@@ -67,7 +67,9 @@ const SECTIONS = [
   { key: "settings",  label: "Settings",         group: "Administration", cap: "admin.manage" },
 
   { key: "security",  label: "Security Center",  group: "Security",       cap: "security.view" },
-  { key: "audit",     label: "Audit Logs",       group: "Security",       cap: "security.view" },
+  /* Its own capability rather than sharing security.view — see the note
+     beside it in CAPS. */
+  { key: "audit",     label: "Audit Logs",       group: "Security",       cap: "audit.view" },
   { key: "health",    label: "System Health",    group: "Security",       cap: "security.view" },
 ];
 
@@ -101,6 +103,21 @@ const CAPS = {
   "ai.view":       ["OWNER", "ADMIN"],
   "admin.manage":  ["OWNER"],
   "security.view": ["OWNER", "ADMIN"],
+  /* READING THE AUDIT LOG IS ITS OWN PERMISSION, separate from the rest
+     of the Security group, because it is a different kind of access.
+     The Security Center describes how the app is configured; the audit
+     log is a record of what every named person in the shop actually
+     did, going back years. A shop may well want an ADMIN who can check
+     the security posture without being able to read the owner's own
+     history, or the reverse — and sharing one capability made that
+     choice impossible to express.
+
+     Same two roles as before by default, so no existing login gains or
+     loses anything the day this ships. SUPPORT is not among them: a
+     support login exists to answer "what does this customer owe", and
+     the staff's own activity history is not part of that job unless the
+     owner explicitly grants it on the Roles screen. */
+  "audit.view":    ["OWNER", "ADMIN"],
 };
 
 /* ------------------------------------------------------------------

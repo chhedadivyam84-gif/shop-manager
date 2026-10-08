@@ -25,8 +25,12 @@ const customers = require("../adminCustomers");
 const products = require("../adminProducts");
 const sales = require("../adminSales");
 const users = require("../adminUsers");
+const auditView = require("../adminAudit");
 const db = require("../db");
 const { logAction } = require("../util");
+/* The writer, for the three actions in this file that must not be
+   allowed to happen without being recorded. See the note on each. */
+const auditLog = require("../auditLog");
 
 const router = express.Router();
 
@@ -448,10 +452,41 @@ router.patch("/users/:id/role", mayManageUsers, (req, res) => {
         : "That is not a role this panel can assign." });
   }
 
-  db.prepare("UPDATE staff SET admin_role = ? WHERE id = ?").run(wanted, target.id);
+  /* THE CHANGE AND ITS RECORD, OR NEITHER.
+     ------------------------------------------------------------
+     One transaction, and the audit write is the version that THROWS
+     rather than the version that shrugs. Granting somebody admin
+     access to this shop without leaving a record of who granted it is
+     not a smaller problem than refusing the grant — it is the exact
+     state an audit log exists to make impossible. So if the event
+     cannot be written, the role change rolls back with it and the
+     operator is told to try again.
 
-  logAction(req, "admin.user.role",
-    `${target.name}: ${target.admin_role || "no admin access"} -> ${wanted || "no admin access"}`);
+     The ordinary business actions deliberately do NOT work this way.
+     A shopkeeper at the counter with a customer waiting must be able
+     to raise a bill even if the log is somehow unwritable; losing the
+     audit line there is bad, losing the sale is worse. That asymmetry
+     is the whole decision, and it is only defensible because it is
+     written down: three actions here are atomic, every other action in
+     the app records best-effort. */
+  db.transaction(() => {
+    db.prepare("UPDATE staff SET admin_role = ? WHERE id = ?").run(wanted, target.id);
+
+    auditLog.recordOrThrow(req, "admin.user.role",
+      `${target.name}: ${target.admin_role || "no admin access"} -> ${wanted || "no admin access"}`,
+      {
+        resourceType: "staff", resourceId: target.id,
+        /* Named fields only — the staff row carries a PIN hash, and
+           handing the whole row to before/after is how a credential
+           reaches an audit log. adminRole is the only thing that
+           moved. */
+        before: { adminRole: target.admin_role || null },
+        after: { adminRole: wanted },
+        fields: ["adminRole"],
+        meta: { targetName: target.name },
+      });
+  })();
+
   res.json(users.profile(target.id));
 });
 
@@ -476,9 +511,24 @@ router.patch("/users/:id/active", mayManageUsers, (req, res) => {
   }
 
   const active = req.body && req.body.active ? 1 : 0;
-  db.prepare("UPDATE staff SET active = ? WHERE id = ?").run(active, target.id);
 
-  logAction(req, active ? "admin.user.enable" : "admin.user.disable", target.name);
+  /* Atomic, for the reason given on the role change above: switching
+     somebody's access off is a security act, and an unrecorded one is
+     worse than a refused one. */
+  db.transaction(() => {
+    db.prepare("UPDATE staff SET active = ? WHERE id = ?").run(active, target.id);
+
+    auditLog.recordOrThrow(req, active ? "admin.user.enable" : "admin.user.disable",
+      target.name,
+      {
+        resourceType: "staff", resourceId: target.id,
+        before: { active: target.active ? 1 : 0 },
+        after: { active },
+        fields: ["active"],
+        meta: { targetName: target.name },
+      });
+  })();
+
   res.json(users.profile(target.id));
 });
 
@@ -519,6 +569,14 @@ router.put("/users/roles/:role", mayManageUsers, (req, res) => {
   const now = Date.now();
   const by = (req.session && req.session.staffName) || "";
 
+  /* WHAT THIS ROLE COULD DO BEFORE, read before anything is written.
+     The screen sends every capability it drew, most of them unchanged,
+     so "47 permissions reviewed" was all the log could say about a
+     change that may have granted exactly one. Comparing the effective
+     set before and after turns that into the two or three that
+     actually moved. */
+  const capsBefore = users.effectiveCaps(role);
+
   db.transaction(() => {
     Object.keys(wanted).forEach(cap => {
       const allow = !!wanted[cap];
@@ -537,10 +595,36 @@ router.put("/users/roles/:role", mayManageUsers, (req, res) => {
           .run(role, cap, allow ? 1 : 0, now, by);
       }
     });
+
+    /* INSIDE the transaction, and the throwing version — the same
+       reasoning as the role change above. Rewriting what a role may do
+       across the whole shop without a record of who did it is the
+       change least acceptable to lose. The effective set is re-read
+       here, inside the transaction, so "after" is what was actually
+       stored rather than what was asked for. */
+    const capsAfter = users.effectiveCaps(role);
+
+    const granted = capsAfter.filter(c => capsBefore.indexOf(c) === -1);
+    const revoked = capsBefore.filter(c => capsAfter.indexOf(c) === -1);
+
+    auditLog.recordOrThrow(req, "admin.role.permissions",
+      granted.length || revoked.length
+        ? `${role}: ` +
+          [granted.length ? "granted " + granted.join(", ") : "",
+           revoked.length ? "revoked " + revoked.join(", ") : ""]
+            .filter(Boolean).join("; ")
+        /* Said plainly. An operator who presses Save having changed
+           nothing should not find a log line implying they did. */
+        : `${role}: reviewed, nothing changed`,
+      {
+        resourceType: "role", resourceId: role,
+        before: { permissions: capsBefore.join(" ") },
+        after: { permissions: capsAfter.join(" ") },
+        fields: ["permissions"],
+        meta: { role, granted, revoked, reviewed: Object.keys(wanted).length },
+      });
   })();
 
-  logAction(req, "admin.role.permissions",
-    `${role}: ${Object.keys(wanted).length} permission(s) reviewed`);
   res.json(users.roleMatrix());
 });
 
@@ -555,6 +639,76 @@ router.get("/roles", mayManage, (req, res) => {
        why the other two have no carrier yet. */
     active: ["OWNER"],
   });
+});
+
+/* ==================================================================
+   AUDIT LOGS — PART 10
+
+   READ-ONLY, and here that is not a judgement call but the definition
+   of the thing. There is no POST, PUT, PATCH or DELETE below, there is
+   no capability that would admit one, and there is deliberately no
+   endpoint anywhere in this app that accepts an event from a client:
+   an audit entry the browser could choose, reword or withhold is not a
+   record of anything. The timestamp is the server's clock, the actor
+   comes from the session, and the action is a literal in the source of
+   whichever route did the work. See server/auditLog.js.
+
+   NOR IS THERE A DELETE. The audit log is append-only — a database
+   trigger refuses every UPDATE outright, and the only code path in the
+   whole app that deletes a row is the owner's Factory Reset, behind a
+   PIN, a typed confirmation phrase and a mandatory backup. PART 10 did
+   not add a way to remove an event and must not.
+
+   WHY ITS OWN CAPABILITY. audit.view, not security.view: reading what
+   every named person in the shop did for the last two years is a
+   different grant from reading how the app is configured. Defaults to
+   the same two roles, so nothing changes for an existing login.
+
+   ANOTHER SHOP'S EVENTS ARE UNREACHABLE, not merely refused. Companies
+   are separate SQLite files and the binder above /api picks the file
+   from the SESSION, so an id pasted in from elsewhere is looked up in
+   the caller's own log and is simply not there.
+   ================================================================== */
+const mayReadAudit = adminAccess.require("audit.view");
+
+/* The filter dropdowns. Their own call rather than part of every list
+   response: measured at a million events, the GROUP BY behind each one
+   costs about 240ms even on a covering index, so folding them into the
+   list would have put a second onto every keystroke. The screen asks
+   once when it opens. */
+router.get("/audit/options", mayReadAudit, (req, res) => {
+  res.json(auditView.options());
+});
+
+/* Literal routes above the /:id one, as everywhere else in this file. */
+router.get("/audit", mayReadAudit, (req, res) => {
+  const q = req.query || {};
+  res.json(auditView.events({
+    q: q.q, sort: q.sort, page: q.page, pageSize: q.pageSize,
+    from: q.from, to: q.to,
+    actor: q.actor, actorType: q.actorType, action: q.action,
+    resource: q.resource, resourceId: q.resourceId,
+    result: q.result, severity: q.severity,
+  }));
+});
+
+router.get("/audit/:id", mayReadAudit, (req, res) => {
+  const ev = auditView.event(String(req.params.id || ""));
+  /* The same answer for "no such event" and "an event in another
+     shop's log": both are genuinely not found here, and a distinct
+     message for the second would confirm that the id exists
+     somewhere. */
+  if (!ev) return res.status(404).json({ error: "No such audit event." });
+
+  /* Everything else recorded against the same record, so the reader can
+     see one change in the context of the rest. Only when the event
+     names a record — most do; a login does not. */
+  const history = ev.resourceType && ev.resourceId
+    ? auditView.forResource(ev.resourceType, ev.resourceId, 50)
+      .filter(r => r.id !== ev.id)
+    : [];
+
+  res.json(Object.assign({}, ev, { history }));
 });
 
 function businessName() {

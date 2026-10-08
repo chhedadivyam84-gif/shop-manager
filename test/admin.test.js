@@ -666,7 +666,14 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
                     "server/rateLimit.js", "test/security.test.js", ".env.example",
                     "server/adminSales.js", "test/admin-sales.test.js",
                     "test/invoice-create.test.js",
-                    "server/adminUsers.js", "test/admin-users.test.js"];
+                    "server/adminUsers.js", "test/admin-users.test.js",
+                    /* PART 10: the audit log. auditLog.js is the writer —
+                       the INSERT that util.logAction used to do inline,
+                       moved so that the rule about what never reaches
+                       the log is enforced in one place. adminAudit.js is
+                       the read side, like the other admin* modules. */
+                    "server/auditLog.js", "server/adminAudit.js",
+                    "test/audit.test.js"];
 
   /* The two existing files the admin panel is allowed to have touched,
      and the reason each one had to be:
@@ -697,6 +704,12 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
                      /* app.js: the billing screen sends the submission key.
                         Backend idempotency that no client uses is theatre. */
                      "public/js/app.js",
+                     /* util.js: logAction's three-argument signature is
+                        unchanged and all ~250 call sites still work, but
+                        the INSERT it did inline now lives in
+                        auditLog.js. One writer, so a credential cannot
+                        reach the log through a caller that forgot. */
+                     "server/util.js",
                      "package-lock.json"];
 
   /* A file is new if it did not exist at the anchor. */

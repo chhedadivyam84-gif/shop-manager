@@ -7,14 +7,23 @@ function uid(prefix) {
 
 // Records who did what for accountability once multiple staff share the app.
 // `req` may be omitted (e.g. during first-run seeding) — logs as System then.
-function logAction(req, action, details) {
-  const staffId = req && req.session ? req.session.staffId : null;
-  const staffName = req && req.session ? req.session.staffName : "System";
-  const role = req && req.session ? req.session.role : "system";
-  db.prepare(`
-    INSERT INTO audit_log (at, staff_id, staff_name, role, action, details)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(Date.now(), staffId || null, staffName || "System", role || "system", action, details || "");
+//
+// THE SIGNATURE IS FIXED. 217 call sites across 53 files call this with
+// exactly three arguments, and PART 10 widened what gets WRITTEN without
+// asking a single one of them to change: the
+// actor type, the resource, the result, the address and the device are all
+// worked out from `req` and `action`, which this function already had.
+//
+// The fourth argument is optional and new — see server/auditLog.js for what
+// it accepts. A caller that wants to record a before/after change, or name
+// the exact record it touched, passes it; everyone else carries on.
+//
+// The INSERT itself moved to auditLog.js deliberately: one writer, so the
+// rule about what never reaches the log (credentials) is enforced in one
+// place rather than trusted to each caller. This is not a second logging
+// system beside the old one — it IS the old one, widened.
+function logAction(req, action, details, opts) {
+  require("./auditLog").record(req, action, details, opts);
 }
 
 /**

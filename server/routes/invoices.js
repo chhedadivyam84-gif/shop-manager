@@ -715,8 +715,14 @@ router.post("/", (req, res) => {
     });
   }
 
+  /* The document's own id and number on the record, so "everything
+     that touched SP0000042" is a question the audit screen can answer
+     from a column rather than by reading prose. */
   logAction(req, isChallan ? "challan.create" : "invoice.create",
-    isChallan ? challanNo : `${challanNo} — ${totals.total}`);
+    isChallan ? challanNo : `${challanNo} — ${totals.total}`,
+    { resourceType: "invoice", resourceId: id,
+      meta: { number: challanNo, docType: isChallan ? "challan" : "invoice",
+              total: totals.total } });
   const invoice = db.prepare("SELECT * FROM invoices WHERE id = ?").get(id);
   const savedItems = db.prepare("SELECT * FROM invoice_items WHERE invoice_id = ?").all(id);
 
@@ -924,8 +930,17 @@ router.put("/:id", (req, res) => {
     throw err;
   }
 
-  logAction(req, isChallan ? "challan.edit" : "invoice.edit", `${inv.challan_no}`);
   const updated = db.prepare("SELECT * FROM invoices WHERE id = ?").get(inv.id);
+  logAction(req, isChallan ? "challan.edit" : "invoice.edit", `${inv.challan_no}`,
+    { resourceType: "invoice", resourceId: inv.id,
+      before: inv, after: updated,
+      /* The money and the dates — the figures somebody would come back
+         and query. NOT the line items: a bill's lines are rewritten
+         wholesale on an edit, and keeping both versions would put a copy
+         of the document itself into the audit log. */
+      fields: ["challan_no", "date", "due_date", "customer_id", "subtotal",
+               "discount_amount", "cgst", "sgst", "igst", "total",
+               "advance", "balance_due", "payment_method"] });
   const savedItems = db.prepare("SELECT * FROM invoice_items WHERE invoice_id = ?").all(inv.id);
   res.json({ ...withStatus(updated), items: savedItems });
 });
@@ -1089,7 +1104,10 @@ router.post("/:id/void", requireRole("owner"), (req, res) => {
     voidInvoice.run(inv.id);
   })();
 
-  logAction(req, "invoice.void", `${inv.challan_no}`);
+  logAction(req, "invoice.void", `${inv.challan_no}`,
+    { resourceType: "invoice", resourceId: inv.id,
+      before: { voided: 0 }, after: { voided: 1 }, fields: ["voided"],
+      meta: { number: inv.challan_no, total: inv.total } });
   /* The Tally voucher is cancelled in place, never deleted — a hole in a
      numbered voucher book is a question an auditor will ask. */
   offerCancelToTally(req, "sales_invoice", inv);

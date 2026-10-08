@@ -442,8 +442,22 @@ function updateCustomer(req, res) {
     pinCode === undefined ? (c.pin_code || "") : cleanPin(pinCode, c.pin_code || ""),
     c.id
   );
-  logAction(req, "customer.update", c.name);
-  res.json(db.prepare("SELECT * FROM customers WHERE id = ?").get(c.id));
+  const after = db.prepare("SELECT * FROM customers WHERE id = ?").get(c.id);
+
+  /* The named fields only, and only the ones that moved. A customer row
+     carries a phone number and an address; naming the fields keeps the
+     record to what a reader needs to understand the edit, and `due` is
+     excluded deliberately — a balance moves because bills and payments
+     moved, each of which is its own audit entry. */
+  logAction(req, "customer.update", c.name, {
+    resourceType: "customer", resourceId: c.id,
+    before: c, after,
+    fields: ["name", "type", "phone", "address", "gst", "gst_type", "state",
+             "credit_limit", "area_id", "pin_code", "salesman", "whatsapp",
+             "wa_contact_type"],
+  });
+
+  res.json(after);
 }
 
 router.put("/:id", updateCustomer);
@@ -477,7 +491,11 @@ function setCustomerActive(req, res) {
   if (!c) return res.status(404).json({ error: "Customer not found." });
   const active = req.body.active ? 1 : 0;
   db.prepare("UPDATE customers SET active = ? WHERE id = ?").run(active, c.id);
-  logAction(req, active ? "customer.activate" : "customer.deactivate", c.name);
+  logAction(req, active ? "customer.activate" : "customer.deactivate", c.name, {
+    resourceType: "customer", resourceId: c.id,
+    before: { active: c.active ? 1 : 0 }, after: { active },
+    fields: ["active"],
+  });
   res.json(db.prepare("SELECT * FROM customers WHERE id = ?").get(c.id));
 }
 
@@ -490,7 +508,11 @@ router.delete("/:id", requireRole("owner"), (req, res) => {
     return res.status(400).json({ error: "This Customer cannot be deleted because it is linked to existing transactions. You may deactivate or edit the record instead." });
   }
   db.prepare("DELETE FROM customers WHERE id = ?").run(c.id);
-  logAction(req, "customer.delete", c.name);
+  /* The id goes on the record even though the row is gone — it is the
+     only way a later reader can tie this deletion to whatever else in
+     the log mentioned that customer. */
+  logAction(req, "customer.delete", c.name,
+            { resourceType: "customer", resourceId: c.id });
   res.json({ ok: true });
 });
 

@@ -3838,6 +3838,149 @@ db.prepare(`
      AND EXISTS (SELECT 1 FROM products p WHERE p.id = product_sizes.product_id AND COALESCE(p.sku,'') != '')
 `).run();
 
+/* ============================================================
+   THE AUDIT LOG, WIDENED — PART 10
+
+   audit_log is one of the oldest tables in this schema and it already
+   holds this shop's real history: who, when, which action, and a line
+   of prose. 187 different actions write to it. Nothing here replaces
+   any of that — the six original columns keep their meaning and every
+   existing row keeps every value it had.
+
+   What the seven new columns add is the ability to ASK. "Everything
+   that touched this invoice", "every role change last month", "every
+   action by an automated agent" were all unanswerable when the only
+   structured fields were a timestamp and a free-text action, because
+   the rest of the answer was buried in a sentence meant for a human.
+
+   ALL ADDITIVE AND ALL NULLABLE. Every one of the 239 rows this shop
+   has already written stays exactly as it is, reads correctly on the
+   new screen, and is never rewritten or backfilled — a migration that
+   invented an actor type for a row written two years ago would be
+   putting a guess into an audit log, which is the one place a guess
+   must never go. Old rows show their actor type as derived from the
+   `role` they did record; see adminAudit.js.
+   ============================================================ */
+
+/* OWNER / ADMIN / SUPPORT / STAFF / SYSTEM / AI.
+ *
+ * The CHECK is the protection, in the same spirit as staff.admin_role
+ * above: the vocabulary cannot be widened by a bug, a request or an
+ * injected value, only by a schema change somebody had to write. An
+ * automated action being recorded as a human — the thing section 3 of
+ * the brief singles out — would have to get past this.
+ *
+ * NULL is permitted because every pre-PART-10 row has one, and a CHECK
+ * in SQLite passes on NULL. */
+addColumn("audit_log", "actor_type",
+          "TEXT CHECK (actor_type IN ('OWNER','ADMIN','SUPPORT','STAFF','SYSTEM','AI'))");
+
+/* WHAT was acted on, and WHICH one. Inferred from the action name for
+ * the actions that already existed — 'invoice.create' is an invoice —
+ * and passed explicitly by the handlers that know the id. */
+addColumn("audit_log", "resource_type", "TEXT");
+addColumn("audit_log", "resource_id", "TEXT");
+
+/* Whether it worked. Constrained for the same reason as actor_type: a
+ * free-text result column collects 'ok', 'OK', 'success' and 'done'
+ * within a year and then cannot be filtered on. */
+addColumn("audit_log", "result",
+          "TEXT CHECK (result IN ('SUCCESS','FAILURE','DENIED'))");
+
+/* Before/after and other structured detail, as JSON.
+ *
+ * NOT a copy of the row that changed — only the fields that actually
+ * moved, bounded in depth and size, with anything whose name looks like
+ * a credential replaced by a marker before it is ever serialised. The
+ * redaction lives in auditLog.js so it cannot be skipped by a caller. */
+addColumn("audit_log", "meta", "TEXT");
+
+/* The caller's address and device, when the app can resolve them.
+ * Honest about the dependency: behind a proxy, `req.ip` is only the
+ * caller's address if TRUST_PROXY is set to match the hosting. */
+addColumn("audit_log", "ip", "TEXT");
+addColumn("audit_log", "user_agent", "TEXT");
+
+/* ------------------------------------------------------------------
+   APPEND-ONLY, ENFORCED BY THE DATABASE
+
+   An audit log that the application merely declines to edit is an
+   audit log protected by everyone remembering not to. This trigger
+   makes an UPDATE impossible: a timestamp cannot be moved, an actor
+   cannot be swapped, an action cannot be reworded, and a before/after
+   cannot be rewritten — not by a route, not by a bug, not by anybody
+   who reaches the database file with a SQL prompt.
+
+   Verified safe before it was added: nothing in this app updates
+   audit_log. Backup copies the file, restore and sync replace the file
+   wholesale, and the import-undo whitelist in importRun.js does not
+   include this table.
+
+   DELETE IS DELIBERATELY NOT BLOCKED, and this is the one place to
+   explain why. Exactly one code path deletes from audit_log: the
+   owner's Factory Reset in routes/reset.js, which wipes the whole shop
+   and already sits behind the owner's PIN, an exact typed confirmation
+   phrase, a mandatory pre-reset backup that must succeed before
+   anything is touched, and a plain-text reset log outside the database
+   that survives the wipe. That is the "controlled backend process" the
+   brief asks deletion to be restricted to, so blocking it here would
+   break a working, carefully-built feature in order to satisfy the
+   letter of a rule it already satisfies. There is no delete-audit-log
+   feature anywhere in the admin panel and PART 10 did not add one.
+
+   GUARDED, like the idempotency index above: this runs at boot, and a
+   throw here would stop the shop opening. An older SQLite without
+   trigger support, or a database where the name is already taken by
+   something else, must not cost the shop its till. Losing the trigger
+   loses the database-level guarantee, not the application one — no
+   route in this app can update an audit row either way.
+   ------------------------------------------------------------------ */
+try {
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS audit_log_is_append_only
+    BEFORE UPDATE ON audit_log
+    BEGIN
+      SELECT RAISE(ABORT, 'audit_log is append-only: an event cannot be altered once recorded');
+    END`);
+} catch (e) {
+  console.error("[schema] could not create the audit_log append-only trigger: " + e.message +
+                " — the application still has no code path that updates an audit row.");
+}
+
+/* ------------------------------------------------------------------
+   THE INDEXES, SIZED BY MEASUREMENT
+
+   An audit log only grows, so the screen that reads it has to stay
+   usable at a size the shop will not reach for years. Measured on this
+   machine against a synthetic log of 1,000,000 events:
+
+                                    before      after
+     newest page                    2,307ms     0.7ms
+     deepest page (OFFSET 500,000)  9,402ms      57ms
+     total count                      340ms       44ms
+     one action, counted              554ms      15ms
+     one actor, counted               583ms      12ms
+     everything touching one record   669ms     0.2ms
+
+   That is what makes ordinary OFFSET pagination the right choice here
+   rather than a keyset cursor: 57ms at the deepest page of a million
+   events is well inside what a person experiences as instant, and a
+   cursor would have cost the ability to jump to a page.
+
+   idx_audit_log_at already existed and is left exactly as it was; it is
+   what the date range and the default ordering use.
+   ------------------------------------------------------------------ */
+try {
+  db.exec("CREATE INDEX IF NOT EXISTS idx_audit_log_action_at ON audit_log(action, at)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_audit_log_staff_at ON audit_log(staff_id, at)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_audit_log_actor_at ON audit_log(actor_type, at)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_audit_log_resource ON audit_log(resource_type, resource_id)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_audit_log_result_at ON audit_log(result, at)");
+} catch (e) {
+  console.error("[schema] could not create an audit_log index: " + e.message +
+                " — the Audit Logs screen will be slower on a large log but correct.");
+}
+
 // Where the data lives — the backup module needs the on-disk paths, and this
 // is the single place that knows them.
 db.dataDir = DATA_DIR;

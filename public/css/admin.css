@@ -816,6 +816,18 @@ body.adm-body{
 
 .adm-cell{ font-size: var(--fs-row-title); min-width: 0; overflow-wrap: anywhere; }
 .adm-cell-name{ grid-column: 1 / -1; display: flex; flex-direction: column; gap: 1px; }
+/* THE AUDIT TABLE'S ACTION CELL — the action on one line, its description
+   on the next. Without this the cell is a plain block and the muted
+   description starts immediately after the action name with nothing
+   between them: "staff.permissions.backfillCash Book View restored for 3
+   staff", which is how it read until the page was opened.
+
+   Here with the base rules rather than inside a breakpoint, because the
+   first version lived in the 768 block and so fixed the laptop while
+   leaving the phone exactly as broken. On a phone the description is a
+   sentence, so the cell takes the full width of the two-column stack;
+   from 768 up it is an ordinary column again. */
+.adm-tbl-audit .adm-cell-act{ grid-column: 1 / -1; display: flex; flex-direction: column; gap: 1px; }
 .adm-strong{ font-weight: 600; }
 .adm-num{ font-variant-numeric: tabular-nums; }
 .adm-muted{ color: var(--muted); }
@@ -1041,6 +1053,7 @@ body.adm-body{
   }
   .adm-tbl-row{ padding: 10px 0; }
   .adm-cell-name{ grid-column: auto; }
+  .adm-tbl-audit .adm-cell-act{ grid-column: auto; }
   .adm-cell[data-h]::before{ content: none; }
   .adm-num{ text-align: right; }
 
@@ -1069,6 +1082,34 @@ body.adm-body{
       minmax(84px, .9fr) minmax(62px, .6fr) minmax(90px, 1fr) minmax(86px, .9fr);
   }
 
+  /* The audit table. The action column is the widest because it carries
+     the description underneath it, and the event reference is narrowest
+     and last — it is what somebody reads out over a phone, not what
+     they scan the table by.
+
+     SEVEN COLUMNS DO NOT FIT ON A TABLET. Measured at 768: the content
+     area is 687px wide and seven columns at their comfortable minimums
+     need 800, so the page scrolled sideways and the Event column sat
+     off the right-hand edge. Between 768 and 1023 the table therefore
+     shows six and drops the event reference, which is the one column
+     nobody scans by — it is on the event's own page, in full, and
+     searchable. From 1024 up there is room for all seven. */
+  .adm-tbl-head.adm-tbl-audit,
+  .adm-tbl-row.adm-tbl-audit{
+    grid-template-columns:
+      minmax(80px, .9fr) minmax(88px, 1fr) minmax(84px, .9fr)
+      minmax(150px, 2.2fr) minmax(88px, 1fr) minmax(76px, .8fr);
+  }
+  .adm-tbl-head.adm-tbl-audit > :nth-child(7),
+  .adm-tbl-row.adm-tbl-audit > :nth-child(7){ display: none; }
+
+  /* Field / before / after, on the event detail. */
+  .adm-tbl-head.adm-tbl-chg,
+  .adm-tbl-row.adm-tbl-chg{
+    grid-template-columns: minmax(120px, 1fr) minmax(120px, 1.4fr) minmax(120px, 1.4fr);
+  }
+
+
   .adm-kv{ grid-template-columns: 140px 1fr; }
   .adm-form{ grid-template-columns: 1fr 1fr; }
   .adm-form-actions{ grid-column: 1 / -1; }
@@ -1078,6 +1119,19 @@ body.adm-body{
    1024–1439. The sidebar becomes part of the page: in the grid, always
    visible, no scrim, and collapsible to icons. */
 @media (min-width: 1024px){
+  /* The event reference comes back, and every column is sized against
+     the laptop content area — from here the sidebar is IN the grid
+     rather than over it, so there is less room than the raw viewport
+     suggests. Measured rather than guessed. */
+  .adm-tbl-head.adm-tbl-audit > :nth-child(7),
+  .adm-tbl-row.adm-tbl-audit > :nth-child(7){ display: block; }
+  .adm-tbl-head.adm-tbl-audit,
+  .adm-tbl-row.adm-tbl-audit{
+    grid-template-columns:
+      minmax(76px, .9fr) minmax(88px, 1fr) minmax(82px, .9fr)
+      minmax(150px, 2.4fr) minmax(90px, 1fr) minmax(80px, .9fr) minmax(74px, .8fr);
+  }
+
   .adm-shell{ grid-template-columns: var(--adm-sidebar-w) 1fr; }
   .adm-shell.is-collapsed{ grid-template-columns: var(--adm-sidebar-w-collapsed) 1fr; }
 
@@ -1310,4 +1364,84 @@ body.adm-body{
   border-right: 2px solid var(--ok);
   border-bottom: 2px solid var(--ok);
   transform: rotate(40deg);
+}
+
+/* ---------------------------------------------------------- AUDIT LOGS
+   PART 10. Only what the audit table needs that nothing else already
+   provides. */
+
+/* THE SEVERITY DOT, MADE VISIBLE.
+   .adm-pip is sized for .adm-row, which is a grid — it carries
+   grid-column/grid-row and no display, so as a plain inline span inside
+   a table .adm-cell it renders at zero width and the dot simply is not
+   there. Measured on the page: display inline, width 0.
+   Given its own class rather than fixed on .adm-pip itself, because
+   the same span sits in the Invoices, Customers and Products tables and
+   making it appear there is a change to screens PART 10 was not asked
+   to touch. The class is added only where PART 10 renders a dot — the
+   audit table and the event detail. It is noted in the report. */
+.adm-pip-i{
+  display: inline-block;
+  vertical-align: middle;
+  margin-right: 6px;
+  position: relative;
+  top: -1px;
+}
+
+/* THE ACTION AND ITS DESCRIPTION ARE TWO LINES, NOT ONE RUN-ON STRING.
+   Without this the cell is a plain block and the muted description
+   starts immediately after the action name with nothing between them —
+   "staff.permissions.backfillCash Book View restored for 3 staff",
+   which is how it read until the page was opened.
+
+   MOBILE FIRST, because the first version of this rule lived inside the
+   768px block and so fixed the laptop while leaving the phone exactly
+   as broken as before. On a phone the description is a sentence, so the
+   cell takes the full width of the two-column stack; from 768 up it is
+   a column of the table like any other. */
+/* A record id is one token. .adm-cell sets overflow-wrap: anywhere so
+   that a long customer name folds rather than stretching the table, and
+   that same rule was snapping "prd_7781" into "prd_778" and "1" on the
+   line below — which reads as a different id. Ids truncate instead, and
+   the whole value is on the event detail. */
+.adm-tbl-audit .adm-cell .adm-code{
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+/* A badge never breaks across lines, and never pushes into the column
+   beside it. */
+.adm-tbl-audit .adm-badge{
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* An actor type that was DERIVED from the old `role` column rather than
+   recorded. This began as a literal "~" after the name, which on the
+   page read as debris rather than as a mark meaning anything. A dotted
+   underline says "there is something to know here" without putting a
+   character in the middle of somebody's name. */
+.adm-derived{
+  border-bottom: 1px dotted var(--muted);
+  cursor: help;
+}
+
+/* The search-scope notice, when the log is too large to read every
+   description. Set apart from the ordinary footer because it is the one
+   line that says the answer is incomplete. */
+.adm-scope{
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--adm-accent);
+  border-radius: 6px;
+  background: var(--bg);
+  font-size: var(--fs-row-sub);
+  color: var(--text);
+  line-height: 1.5;
 }

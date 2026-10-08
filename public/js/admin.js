@@ -335,6 +335,7 @@
     else if (key === "sales") renderSales();
     else if (key === "users") renderUsers(currentRoute().sub);
     else if (key === "roles") renderRoles();
+    else if (key === "audit") renderAudit(currentRoute().sub);
     else el.page.innerHTML = placeholderPage(section);
     el.main.scrollTop = 0;
     window.scrollTo(0, 0);
@@ -2969,6 +2970,489 @@
       toast("Permissions saved.", "ok");
       renderRoles();
     });
+  }
+
+  /* ==================================================================
+     AUDIT LOGS — PART 10
+
+     The one screen in this panel that can only read. There is no edit
+     control, no delete control and no bulk action, because an audit log
+     that this page could change would not be evidence of anything —
+     and the server would refuse anyway: the routes are GET only and a
+     database trigger makes an UPDATE impossible.
+
+     WHAT IS FILTERED WHERE. Everything, on the server. Nine filters, a
+     search, a sort and the paging all go into the query string and come
+     back as a page of 25. Nothing is narrowed in the browser, because a
+     page filtered here would disagree with its own count and quietly
+     hide the matches that were never fetched.
+
+     THE DROPDOWNS ARE FETCHED ONCE, when the screen opens, and kept —
+     building them costs a GROUP BY over the whole log, which is about
+     240ms per list at a million events. Paying that on every keystroke
+     is the difference between a screen that responds and one that
+     thinks.
+     ================================================================== */
+  const SEV_TONE = {
+    critical: "is-bad",
+    warning:  "is-warn",
+    notice:   "is-info",
+    info:     "is-info",
+  };
+
+  const RESULT_TONE = { SUCCESS: "is-ok", FAILURE: "is-bad", DENIED: "is-warn" };
+
+  const BLANK_AUDIT = {
+    q: "", sort: "recent", from: "", to: "", actor: "", actorType: "",
+    action: "", resource: "", resourceId: "", result: "", severity: "", page: 1,
+  };
+
+  let audView = Object.assign({}, BLANK_AUDIT);
+  let audSeq = 0;
+  /* Fetched once per screen open; null until then. */
+  let audOptions = null;
+
+  function audHref(id) {
+    return id ? "#/audit/" + encodeURIComponent(id) : "#/audit";
+  }
+
+  function renderAudit(id) {
+    if (id) return renderAuditEvent(id);
+
+    el.page.innerHTML =
+      '<div class="adm-page-head">' +
+        '<div class="adm-page-head-text">' +
+          '<h1 class="adm-page-title">Audit Logs</h1>' +
+          '<p class="adm-page-sub">Every recorded action, by whom and when. ' +
+          'Read-only and append-only &mdash; an event cannot be edited or ' +
+          'deleted here, and the shop app records them whether or not this ' +
+          'screen is open.</p>' +
+        "</div>" +
+      "</div>" +
+      '<div class="adm-toolbar">' +
+        '<div class="adm-field adm-field-grow">' +
+          '<label class="adm-sr" for="aud-q">Search the audit log</label>' +
+          '<input type="search" id="aud-q" class="adm-input" autocomplete="off" ' +
+          'placeholder="Person, action, record, or event id">' +
+        "</div>" +
+        '<div class="adm-field">' +
+          '<label class="adm-field-label" for="aud-from">From</label>' +
+          '<input type="date" id="aud-from" class="adm-input">' +
+        "</div>" +
+        '<div class="adm-field">' +
+          '<label class="adm-field-label" for="aud-to">To</label>' +
+          '<input type="date" id="aud-to" class="adm-input">' +
+        "</div>" +
+        '<div class="adm-field">' +
+          '<label class="adm-field-label" for="aud-actor">Person</label>' +
+          '<select id="aud-actor" class="adm-input"></select>' +
+        "</div>" +
+        '<div class="adm-field">' +
+          '<label class="adm-field-label" for="aud-actorType">Kind of actor</label>' +
+          '<select id="aud-actorType" class="adm-input"></select>' +
+        "</div>" +
+        '<div class="adm-field">' +
+          '<label class="adm-field-label" for="aud-action">Action</label>' +
+          '<select id="aud-action" class="adm-input"></select>' +
+        "</div>" +
+        '<div class="adm-field">' +
+          '<label class="adm-field-label" for="aud-resource">Record type</label>' +
+          '<select id="aud-resource" class="adm-input"></select>' +
+        "</div>" +
+        '<div class="adm-field">' +
+          '<label class="adm-field-label" for="aud-severity">Importance</label>' +
+          '<select id="aud-severity" class="adm-input"></select>' +
+        "</div>" +
+        '<div class="adm-field">' +
+          '<label class="adm-field-label" for="aud-result">Outcome</label>' +
+          '<select id="aud-result" class="adm-input"></select>' +
+        "</div>" +
+        '<div class="adm-field">' +
+          '<label class="adm-field-label" for="aud-sort">Sort by</label>' +
+          '<select id="aud-sort" class="adm-input"></select>' +
+        "</div>" +
+        '<div class="adm-field">' +
+          '<label class="adm-field-label" for="aud-clear">&nbsp;</label>' +
+          '<button type="button" class="adm-retry" id="aud-clear">Clear filters</button>' +
+        "</div>" +
+      "</div>" +
+      '<div class="adm-panel"><div class="adm-panel-body" id="aud-list">' +
+        skeleton() + "</div></div>";
+
+    const q = document.getElementById("aud-q");
+    q.value = audView.q;
+    let timer = null;
+    q.addEventListener("input", function () {
+      clearTimeout(timer);
+      timer = setTimeout(function () {
+        audView.q = q.value.trim(); audView.page = 1; loadAudit();
+      }, 250);
+    });
+    q.addEventListener("keydown", function (e) {
+      if (e.key !== "Enter") return;
+      e.preventDefault(); clearTimeout(timer);
+      audView.q = q.value.trim(); audView.page = 1; loadAudit();
+    });
+
+    [["aud-from", "from"], ["aud-to", "to"], ["aud-actor", "actor"],
+     ["aud-actorType", "actorType"], ["aud-action", "action"],
+     ["aud-resource", "resource"], ["aud-severity", "severity"],
+     ["aud-result", "result"], ["aud-sort", "sort"]].forEach(function (pair) {
+      document.getElementById(pair[0]).addEventListener("change", function (e) {
+        audView[pair[1]] = e.target.value; audView.page = 1; loadAudit();
+      });
+    });
+
+    document.getElementById("aud-clear").addEventListener("click", function () {
+      audView = Object.assign({}, BLANK_AUDIT);
+      renderAudit(null);
+    });
+
+    document.getElementById("aud-list").addEventListener("click", function (e) {
+      const page = e.target.closest("[data-page]");
+      if (page) { audView.page = Number(page.dataset.page); loadAudit(); return; }
+      if (e.target.closest("[data-retry-audit]")) { loadAudit(); return; }
+      if (e.target.closest("[data-clear-audit]")) {
+        audView = Object.assign({}, BLANK_AUDIT);
+        renderAudit(null);
+      }
+    });
+
+    loadAudit();
+  }
+
+  async function loadAudit() {
+    const body = document.getElementById("aud-list");
+    if (!body) return;
+    body.innerHTML = skeleton();
+
+    const mine = ++audSeq;
+
+    /* Once per screen, not once per page. A failure here leaves the
+       dropdowns empty but must not stop the list loading — the filters
+       are a convenience and the events are the point. */
+    if (!audOptions) {
+      try { audOptions = await api("GET", "/admin/audit/options"); }
+      catch (err) { audOptions = null; }
+      if (mine !== audSeq) return;
+    }
+
+    let d;
+    try {
+      const qs = "?q=" + encodeURIComponent(audView.q) +
+        "&sort=" + encodeURIComponent(audView.sort) +
+        "&page=" + encodeURIComponent(audView.page) +
+        (audView.from ? "&from=" + encodeURIComponent(audView.from) : "") +
+        (audView.to ? "&to=" + encodeURIComponent(audView.to) : "") +
+        (audView.actor ? "&actor=" + encodeURIComponent(audView.actor) : "") +
+        (audView.actorType ? "&actorType=" + encodeURIComponent(audView.actorType) : "") +
+        (audView.action ? "&action=" + encodeURIComponent(audView.action) : "") +
+        (audView.resource ? "&resource=" + encodeURIComponent(audView.resource) : "") +
+        (audView.resourceId ? "&resourceId=" + encodeURIComponent(audView.resourceId) : "") +
+        (audView.severity ? "&severity=" + encodeURIComponent(audView.severity) : "") +
+        (audView.result ? "&result=" + encodeURIComponent(audView.result) : "");
+      d = await api("GET", "/admin/audit" + qs);
+    } catch (err) {
+      if (mine !== audSeq) return;
+      body.innerHTML = '<p class="adm-fail">' + esc(humanError(err)) + "</p>" +
+        '<button type="button" class="adm-retry" data-retry-audit="1">Try again</button>';
+      return;
+    }
+    if (mine !== audSeq) return;
+
+    if (!d.available) {
+      body.innerHTML = emptyLine(d.reason || "No audit log is available in this copy.");
+      return;
+    }
+
+    audView.page = d.page;
+
+    if (audOptions) {
+      const all = function (label, list) {
+        return [{ key: "", label: label }].concat(list || []);
+      };
+      fillSelect(document.getElementById("aud-actor"),
+        all("Everyone", (audOptions.actors || []).map(function (a) {
+          return { key: a.key, label: a.label + " (" + num(a.n) + ")" };
+        })), d.actor);
+      fillSelect(document.getElementById("aud-actorType"),
+        all("Any kind", audOptions.actorTypes), d.actorType);
+      fillSelect(document.getElementById("aud-action"),
+        all("Any action", (audOptions.actions || []).map(function (a) {
+          return { key: a.key, label: a.label + " (" + num(a.n) + ")" };
+        })), d.action);
+      fillSelect(document.getElementById("aud-resource"),
+        all("Any record type", audOptions.resources), d.resource);
+      fillSelect(document.getElementById("aud-severity"),
+        all("Any importance", audOptions.severities), d.severity);
+      fillSelect(document.getElementById("aud-result"),
+        all("Any outcome", audOptions.results), d.result);
+      fillSelect(document.getElementById("aud-sort"), audOptions.sorts, d.sort);
+    }
+
+    const dFrom = document.getElementById("aud-from");
+    const dTo = document.getElementById("aud-to");
+    if (dFrom) dFrom.value = d.from || "";
+    if (dTo) dTo.value = d.to || "";
+
+    body.innerHTML = auditListHtml(d);
+  }
+
+  function auditFiltered(d) {
+    return !!(d.q || d.from || d.to || d.actor || d.actorType || d.action ||
+              d.resource || d.resourceId || d.result || d.severity);
+  }
+
+  function auditListHtml(d) {
+    if (!d.total) {
+      return auditFiltered(d)
+        ? emptyLine("No recorded action matches those filters.") +
+          '<button type="button" class="adm-retry" data-clear-audit="1">' +
+          "Clear search and filters</button>"
+        : emptyLine("Nothing has been recorded in the audit log yet.");
+    }
+
+    const from = (d.page - 1) * d.pageSize + 1;
+    const to = from + d.rows.length - 1;
+
+    const head =
+      '<div class="adm-tbl-head adm-tbl-audit" aria-hidden="true">' +
+        "<span>When</span><span>Person</span><span>Kind</span><span>Action</span>" +
+        "<span>Record</span><span>Outcome</span><span>Event</span>" +
+      "</div>";
+
+    const rows = d.rows.map(function (r) {
+      const sev = SEV_TONE[r.severity] || "is-info";
+
+      /* The description under the action, where the eye already is,
+         rather than as an eighth column nobody could read. */
+      const detail = r.details
+        ? '<span class="adm-row-sub">' + esc(r.details) + "</span>"
+        : "";
+
+      const record = r.resourceType
+        ? '<span class="adm-strong">' + esc(r.resourceType) + "</span>" +
+          (r.resourceId
+            ? '<span class="adm-row-sub"><span class="adm-code">' +
+              esc(r.resourceId) + "</span></span>"
+            : "")
+        : '<span class="adm-muted">&mdash;</span>';
+
+      return '<a class="adm-tbl-row adm-tbl-audit" href="' + audHref(r.id) + '">' +
+        '<span class="adm-cell adm-cell-name">' +
+          '<span class="adm-strong">' + esc(r.when) + "</span>" +
+          '<span class="adm-row-sub">' + esc(r.time) + "</span>" +
+        "</span>" +
+        '<span class="adm-cell" data-h="Person">' + esc(r.who) +
+          (r.whoId ? "" : "") + "</span>" +
+        '<span class="adm-cell" data-h="Kind">' +
+          /* An automated actor is marked, because telling it apart from
+             a person at a glance is the whole reason the column exists. */
+          /* A derived type gets a dotted underline and an explanation
+             on hover. It used to get a literal "~" after the name,
+             which on the page read as debris rather than as a mark that
+             meant anything. */
+          (r.actorDerived
+            ? '<span class="adm-derived" title="Derived from the role recorded at the ' +
+              'time &mdash; this event predates the actor-type column">' +
+              esc(r.actorLabel) + "</span>"
+            : (r.automated ? '<span class="adm-badge">' + esc(r.actorLabel) + "</span>"
+                           : esc(r.actorLabel))) +
+        "</span>" +
+        /* adm-cell-act, not a plain cell: the action and its
+           description are two lines. As a plain block the muted
+           description ran straight on from the action name with nothing
+           between them. */
+        '<span class="adm-cell adm-cell-act" data-h="Action">' +
+          '<span><span class="adm-pip adm-pip-i ' + sev + '" aria-hidden="true"></span>' +
+          '<span class="adm-strong">' + esc(r.action) + "</span></span>" +
+          detail +
+        "</span>" +
+        '<span class="adm-cell" data-h="Record">' + record + "</span>" +
+        '<span class="adm-cell" data-h="Outcome">' +
+          (r.result
+            ? '<span class="adm-pip adm-pip-i ' + (RESULT_TONE[r.result] || "is-info") +
+              '" aria-hidden="true"></span>' + esc(r.resultLabel)
+            : '<span class="adm-muted">&mdash;</span>') +
+          (r.hasChange ? ' <span class="adm-flag">changed</span>' : "") +
+        "</span>" +
+        '<span class="adm-cell" data-h="Event"><span class="adm-code">' +
+          esc(r.ref) + "</span></span>" +
+      "</a>";
+    }).join("");
+
+    const pager = d.pages > 1
+      ? '<div class="adm-pager">' +
+          '<button type="button" class="adm-retry" data-page="' + (d.page - 1) + '"' +
+            (d.page <= 1 ? " disabled" : "") + ">Previous</button>" +
+          '<span class="adm-pager-at">' + num(from) + "&ndash;" + num(to) +
+            " of " + num(d.total) + "</span>" +
+          '<button type="button" class="adm-retry" data-page="' + (d.page + 1) + '"' +
+            (d.page >= d.pages ? " disabled" : "") + ">Next</button>" +
+        "</div>"
+      : "";
+
+    /* SAID OUT LOUD. When the log is too large to scan the descriptions
+       for a search term, the reader is told which fields WERE searched
+       and how to make the rest of it run. A search that silently leaves
+       matches out is worse than one that refuses. */
+    const scope = d.search && !d.search.descriptionsSearched
+      ? '<p class="adm-scope"><strong>Descriptions were not searched.</strong> ' +
+        num(d.search.candidates) + " events are in range, which is above the " +
+        num(d.search.ceiling) + " this can read line by line. " +
+        "Person, action, record and event id were searched. " +
+        "Narrow the date range to search the descriptions too.</p>"
+      : "";
+
+    const totals = '<p class="adm-foot">' + num(d.total) + " recorded action(s) matched." +
+      " Events are append-only: nothing here can be edited or removed.</p>";
+
+    return '<div class="adm-tbl">' + head + rows + "</div>" + pager + scope + totals;
+  }
+
+  /* ---- one event ----------------------------------------------------- */
+
+  async function renderAuditEvent(id) {
+    el.page.innerHTML =
+      '<div class="adm-page-head">' +
+        '<div class="adm-page-head-text">' +
+          '<a class="adm-back" href="#/audit">&larr; All audit logs</a>' +
+          '<h1 class="adm-page-title" id="aud-title">Audit event</h1>' +
+        "</div>" +
+      "</div>" +
+      '<div id="aud-body"><div class="adm-panel"><div class="adm-panel-body">' +
+        skeleton() + "</div></div></div>";
+
+    const host = document.getElementById("aud-body");
+    let d;
+    try {
+      d = await api("GET", "/admin/audit/" + encodeURIComponent(id));
+    } catch (err) {
+      host.innerHTML = '<div class="adm-panel is-failed"><div class="adm-panel-body">' +
+        '<p class="adm-fail">' + esc(humanError(err)) + "</p>" +
+        '<a class="adm-retry" href="#/audit">Back to all audit logs</a>' +
+        "</div></div>";
+      return;
+    }
+    paintAuditEvent(host, d);
+  }
+
+  function paintAuditEvent(host, d) {
+    const title = document.getElementById("aud-title");
+    if (title) title.textContent = d.action || "Audit event";
+    document.title = d.ref + " — Admin Control Centre";
+
+    const sev = SEV_TONE[d.severity] || "is-info";
+
+    const kv = function (k, v) {
+      return '<div class="adm-kv-k">' + esc(k) + "</div>" +
+             '<div class="adm-kv-v">' + v + "</div>";
+    };
+
+    const facts =
+      '<div class="adm-kv">' +
+        kv("Event", '<span class="adm-code">' + esc(d.ref) + "</span>") +
+        kv("When", esc(showStamp(d.at))) +
+        kv("Person", esc(d.who) +
+          (d.whoId ? ' <span class="adm-code">' + esc(d.whoId) + "</span>" : "")) +
+        kv("Kind of actor",
+          (d.automated ? '<span class="adm-badge">' + esc(d.actorLabel) + "</span>"
+                       : esc(d.actorLabel))) +
+        kv("Action", '<span class="adm-pip adm-pip-i ' + sev + '" aria-hidden="true"></span>' +
+          esc(d.action) + ' <span class="adm-muted">(' + esc(d.severityLabel) + ")</span>") +
+        kv("Record", d.resourceType
+          ? esc(d.resourceType) +
+            (d.resourceId ? ' <span class="adm-code">' + esc(d.resourceId) + "</span>" : "")
+          : '<span class="adm-muted">&mdash;</span>') +
+        kv("Outcome", d.result
+          ? '<span class="adm-pip adm-pip-i ' + (RESULT_TONE[d.result] || "is-info") +
+            '" aria-hidden="true"></span>' + esc(d.resultLabel)
+          : '<span class="adm-muted">not recorded</span>') +
+        kv("Description", d.details
+          ? esc(d.details) : '<span class="adm-muted">&mdash;</span>') +
+        /* Only when there is one. A blank row for an address the app
+           could not resolve says nothing and invites the reader to
+           think something was withheld. */
+        (d.ip ? kv("Address", '<span class="adm-code">' + esc(d.ip) + "</span>") : "") +
+        (d.userAgent ? kv("Device", '<span class="adm-row-sub">' +
+          esc(d.userAgent) + "</span>") : "") +
+      "</div>" +
+      (d.actorNote ? '<p class="adm-foot">' + esc(d.actorNote) + "</p>" : "");
+
+    /* ---- what changed ---- */
+    const change = (d.change && d.change.length)
+      ? '<div class="adm-panel"><div class="adm-panel-head">' +
+          '<h2 class="adm-panel-title">What changed</h2></div>' +
+          '<div class="adm-panel-body">' +
+          '<div class="adm-tbl">' +
+            '<div class="adm-tbl-head adm-tbl-chg" aria-hidden="true">' +
+              "<span>Field</span><span>Before</span><span>After</span></div>" +
+            d.change.map(function (c) {
+              return '<div class="adm-tbl-row adm-tbl-chg">' +
+                '<span class="adm-cell adm-cell-name"><span class="adm-strong">' +
+                  esc(c.field) + "</span></span>" +
+                '<span class="adm-cell" data-h="Before">' + auditValue(c.before) + "</span>" +
+                '<span class="adm-cell" data-h="After">' + auditValue(c.after) + "</span>" +
+              "</div>";
+            }).join("") +
+          "</div>" +
+          '<p class="adm-foot">Only the fields that actually moved are recorded, and ' +
+          "never a credential &mdash; anything whose name looks like a password, PIN, " +
+          "token or key is replaced before the event is written.</p>" +
+          "</div></div>"
+      : "";
+
+    /* ---- anything else recorded ---- */
+    const extra = d.extra
+      ? '<div class="adm-panel"><div class="adm-panel-head">' +
+          '<h2 class="adm-panel-title">Also recorded</h2></div>' +
+          '<div class="adm-panel-body"><div class="adm-kv">' +
+          Object.keys(d.extra).map(function (k) {
+            return kv(k, auditValue(d.extra[k]));
+          }).join("") +
+          "</div></div></div>"
+      : "";
+
+    /* ---- the rest of this record's history ---- */
+    const history = (d.history && d.history.length)
+      ? '<div class="adm-panel"><div class="adm-panel-head">' +
+          '<h2 class="adm-panel-title">Everything else on this record</h2></div>' +
+          '<div class="adm-panel-body"><div class="adm-list">' +
+          d.history.map(function (h) {
+            return '<a class="adm-row" href="' + audHref(h.id) + '">' +
+              '<span class="adm-pip adm-pip-i ' + (SEV_TONE[h.severity] || "is-info") +
+                '" aria-hidden="true"></span>' +
+              /* Siblings, not nested. .adm-row-sub is placed by the
+                 .adm-row grid, so inside .adm-row-main it is a plain
+                 inline span and the two lines run together \u2014 which is
+                 exactly how it rendered until the page was opened. */
+              '<span class="adm-row-main adm-strong">' + esc(h.action) + "</span>" +
+              '<span class="adm-row-sub">' + esc(h.who) + " \u00b7 " +
+                esc(h.when) + " " + esc(h.time) +
+                (h.details ? " \u00b7 " + esc(h.details) : "") + "</span>" +
+            "</a>";
+          }).join("") +
+          "</div></div></div>"
+      : "";
+
+    host.innerHTML =
+      '<div class="adm-panel"><div class="adm-panel-head">' +
+        '<h2 class="adm-panel-title">The event</h2></div>' +
+        '<div class="adm-panel-body">' + facts + "</div></div>" +
+      change + extra + history;
+  }
+
+  /* A recorded value, rendered. Objects and arrays are shown as JSON
+     rather than as "[object Object]" — meta can hold a list of granted
+     capabilities, and that is worth reading. */
+  function auditValue(v) {
+    if (v === null || v === undefined || v === "") {
+      return '<span class="adm-muted">&mdash; blank</span>';
+    }
+    if (typeof v === "object") {
+      return '<span class="adm-code">' + esc(JSON.stringify(v)) + "</span>";
+    }
+    return '<span class="adm-code">' + esc(String(v)) + "</span>";
   }
 
   /* ------------------------------------------------------------------

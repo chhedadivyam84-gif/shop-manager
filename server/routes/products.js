@@ -361,6 +361,17 @@ router.post("/", (req, res) => {
 function updateProduct(req, res) {
   const p = db.prepare("SELECT * FROM products WHERE id = ?").get(req.params.id);
   if (!p) return res.status(404).json({ error: "Product not found." });
+
+  /* The prices as they stand, read BEFORE the size rows are rewritten
+     below — afterwards the old figures are gone and "what was it
+     before" has no answer. Used for the audit record at the end. */
+  const pricesBefore = (() => {
+    try {
+      return db.prepare(
+        "SELECT label, price FROM product_sizes WHERE product_id = ? ORDER BY sort_order, id")
+        .all(p.id).map(s => `${s.label} @ ${s.price}`).join(", ");
+    } catch (e) { return ""; }
+  })();
   const { name, brand, category, unit, gst, godown, rack, sizes,
           defaultMode, lengthFt, widthVal, thicknessIn, hsnCode, code, openingStockDate,
           barcode, subCategory } = req.body;
@@ -429,8 +440,43 @@ function updateProduct(req, res) {
     }
   })();
 
-  logAction(req, "product.update", p.name);
   const updated = db.prepare("SELECT * FROM products WHERE id = ?").get(p.id);
+
+  /* WHAT ACTUALLY CHANGED, not the whole row.
+     ------------------------------------------------------------
+     The log already said "product.update — Marine Ply 18mm", which
+     answers who and when but never what, so a disputed price had to be
+     settled from memory. These are the product's own describable
+     fields; a field whose value did not move is dropped by
+     auditLog.changes(), so the record reads "gst_rate 18 -> 12" rather
+     than twenty columns of which one differs.
+     `stock` is deliberately not among them — it is a denormalised sum
+     maintained by the size rows, and a stock movement has its own
+     action and its own ledger. */
+  const DESCRIBED = ["name", "brand", "category", "sub_category", "unit", "uqc",
+                     "hsn_code", "code", "barcode", "gst_rate", "godown", "rack",
+                     "default_mode", "length_ft", "width_val", "thickness_in",
+                     "active"];
+
+  /* A price lives on the size rows rather than on the product, so the
+     one change a shopkeeper is most likely to come back asking about
+     would otherwise not appear at all. Summarised as "label @ price"
+     per size — the figures, not the rows. */
+  const priceLine = id => {
+    try {
+      return db.prepare(
+        "SELECT label, price FROM product_sizes WHERE product_id = ? ORDER BY sort_order, id")
+        .all(id).map(s => `${s.label} @ ${s.price}`).join(", ");
+    } catch (e) { return ""; }
+  };
+
+  logAction(req, "product.update", p.name, {
+    resourceType: "product", resourceId: p.id,
+    before: Object.assign({}, p, { prices: pricesBefore }),
+    after: Object.assign({}, updated, { prices: priceLine(p.id) }),
+    fields: DESCRIBED.concat(["prices"]),
+  });
+
   res.json(serialize(updated));
 }
 
@@ -468,7 +514,17 @@ function adjustSizeStock(req, res) {
     syncProductStock(p.id);
   })();
 
-  logAction(req, "product.stock_adjust", `${p.name} (${size.label}) @ ${targetLocation ? targetLocation.name : "Shop"}: ${before} → ${newStock}`);
+  /* The prose line already read "18mm (8x4) @ Shop: 40 → 36", which is
+     the clearest thing a person can read. The structured before/after
+     beside it is what lets the screen filter and compare — same two
+     figures, said twice on purpose, because one form is for a human and
+     the other is for a query. */
+  logAction(req, "product.stock_adjust",
+    `${p.name} (${size.label}) @ ${targetLocation ? targetLocation.name : "Shop"}: ${before} → ${newStock}`,
+    { resourceType: "product", resourceId: p.id,
+      before: { stock: before }, after: { stock: newStock }, fields: ["stock"],
+      meta: { size: size.label, sizeId: size.id,
+              location: targetLocation ? targetLocation.name : "Shop" } });
   res.json(serialize(db.prepare("SELECT * FROM products WHERE id = ?").get(p.id)));
 }
 

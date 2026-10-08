@@ -400,6 +400,11 @@ function seed() {
 
   ok("the sync receiver has its own, much stricter limit",
      /bucket: "sync", max: 10/.test(idx));
+  /* The per-caller limit falls back to the address for anonymous
+     traffic, and behind an unresolvable proxy that is not a caller. The
+     global ceiling is the one that bites there, so it is tight. */
+  ok("and a global ceiling that applies whatever the address looks like",
+     /globalMax: 30/.test(idx));
   ok("and it is applied to the sync mount",
      /app\.use\("\/api\/sync", rateLimit\.limit\(/.test(idx));
 

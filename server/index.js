@@ -506,6 +506,16 @@ app.use("/api/auth", require("./routes/auth"));
    presses the button) and far below what makes this worth attacking. */
 app.use("/api/sync", rateLimit.limit({
   bucket: "sync", max: 10, windowMs: 60 * 60 * 1000,
+  /* THE CEILING THAT ACTUALLY APPLIES HERE.
+     This is the one route a stranger reaches without signing in, so the
+     per-caller limit above falls back to the address — which behind a
+     proxy the app cannot resolve is not a caller at all. The global
+     ceiling does not care: thirty requests an hour to this endpoint from
+     anyone, full stop. A real shop pushes when somebody presses the
+     button, perhaps a few times a day, so thirty is generous for the
+     legitimate case and ends the "no refusal after fourteen tries" that
+     was measured against production. */
+  globalMax: 30,
   /* EVERY method, not just the writing ones. The general limiter below
      leaves reads alone because the app's own screens fire several per
      navigation — but nothing here is one of those screens. /peek is a

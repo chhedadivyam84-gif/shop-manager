@@ -419,8 +419,12 @@ function seed() {
   }
 
   const routeSrc = fs.readFileSync(path.join(ROOT, "server/routes/admin.js"), "utf8");
+  /* The slice must END at the next block, not at the end of the file —
+     PART 8 added user management between these two markers and this
+     started reading its PATCH and PUT routes as if they were sales
+     ones. The boundary is the next section header. */
   const sect = routeSrc.slice(routeSrc.indexOf("SALES AND INVOICES"),
-                              routeSrc.indexOf("The roles the panel is structured for"));
+                              routeSrc.indexOf("USERS, ROLES & PERMISSIONS"));
   ok("the sales block declares only GET routes",
      !/router\.(put|patch|post|delete)\(/.test(sect), (sect.match(/router\.\w+\(/g) || []));
   ok("there is no sales.edit capability at all",

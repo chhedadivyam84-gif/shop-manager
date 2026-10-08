@@ -453,6 +453,25 @@ router.post("/login", (req, res) => {
     req.session.staffName = staff.name;
     req.session.role = staff.role;
 
+    /* Whether this person may open the admin panel, and as what.
+     *
+     * Carried in the session because adminAccess.roleOf() has to answer
+     * on the /admin page route, which runs outside /api where there is
+     * no company binder — a query there would read the default shop's
+     * staff table. Read HERE instead, inside the company they actually
+     * signed in to.
+     *
+     * Only the two words the column can hold. OWNER is deliberately not
+     * among them: being the owner is staff.role, decided a few lines
+     * above, so nothing about the admin panel can make anybody one.
+     *
+     * The /api/admin gate checks the staff row again on every request,
+     * so taking the role away takes effect at once rather than at their
+     * next login. */
+    req.session.adminRole =
+      (staff.admin_role === "ADMIN" || staff.admin_role === "SUPPORT")
+        ? staff.admin_role : null;
+
     /* Written before the reply so a crash between the two cannot leave a
        signed-in browser whose session the store never heard about. */
     req.session.save(saveErr => {

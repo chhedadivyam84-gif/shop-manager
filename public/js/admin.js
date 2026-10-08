@@ -1972,11 +1972,24 @@
      the kind of wrong number an owner stops trusting the screen for.
      ================================================================== */
 
-  let docView = { q: "", type: "all", status: "all", sort: "recent", page: 1 };
+  let docView = { q: "", type: "all", status: "all", sort: "recent",
+                  customerId: "", from: "", to: "", page: 1 };
   let docSeq = 0;
   let salesWindow = { from: "", to: "" };
 
   function docHref(id) { return id ? "#/invoices/" + encodeURIComponent(id) : "#/invoices"; }
+
+  /* How each of the shop's five document states is drawn. The words are
+     the app's, not this file's — see deriveDocStatus in
+     server/routes/invoices.js. Anything unrecognised falls back to the
+     neutral tone rather than being hidden. */
+  const DOC_STATE_TONE = {
+    "Completed": "is-ok",
+    "Billed": "is-ok",
+    "Partially Completed": "is-warn",
+    "Pending": "is-warn",
+    "Cancelled": "is-info",
+  };
 
   /* ---- the document list -------------------------------------------- */
 
@@ -2007,8 +2020,24 @@
           '<select id="doc-status" class="adm-input"></select>' +
         "</div>" +
         '<div class="adm-field">' +
+          '<label class="adm-field-label" for="doc-customer">Customer</label>' +
+          '<select id="doc-customer" class="adm-input"></select>' +
+        "</div>" +
+        '<div class="adm-field">' +
+          '<label class="adm-field-label" for="doc-from">From</label>' +
+          '<input type="date" id="doc-from" class="adm-input">' +
+        "</div>" +
+        '<div class="adm-field">' +
+          '<label class="adm-field-label" for="doc-to">To</label>' +
+          '<input type="date" id="doc-to" class="adm-input">' +
+        "</div>" +
+        '<div class="adm-field">' +
           '<label class="adm-field-label" for="doc-sort">Sort by</label>' +
           '<select id="doc-sort" class="adm-input"></select>' +
+        "</div>" +
+        '<div class="adm-field">' +
+          '<label class="adm-field-label" for="doc-clear">&nbsp;</label>' +
+          '<button type="button" class="adm-retry" id="doc-clear">Clear filters</button>' +
         "</div>" +
       "</div>" +
       '<div class="adm-panel"><div class="adm-panel-body" id="doc-list">' +
@@ -2029,10 +2058,17 @@
       docView.q = q.value.trim(); docView.page = 1; loadDocuments();
     });
 
-    [["doc-type", "type"], ["doc-status", "status"], ["doc-sort", "sort"]].forEach(pair => {
+    [["doc-type", "type"], ["doc-status", "status"], ["doc-sort", "sort"],
+     ["doc-customer", "customerId"], ["doc-from", "from"], ["doc-to", "to"]].forEach(pair => {
       document.getElementById(pair[0]).addEventListener("change", function (e) {
         docView[pair[1]] = e.target.value; docView.page = 1; loadDocuments();
       });
+    });
+
+    document.getElementById("doc-clear").addEventListener("click", function () {
+      docView = { q: "", type: "all", status: "all", sort: "recent",
+                  customerId: "", from: "", to: "", page: 1 };
+      renderInvoices(null);
     });
 
     document.getElementById("doc-list").addEventListener("click", function (e) {
@@ -2040,7 +2076,8 @@
       if (page) { docView.page = Number(page.dataset.page); loadDocuments(); return; }
       if (e.target.closest("[data-retry-documents]")) { loadDocuments(); return; }
       if (e.target.closest("[data-clear-documents]")) {
-        docView = { q: "", type: "all", status: "all", sort: docView.sort, page: 1 };
+        docView = { q: "", type: "all", status: "all", sort: docView.sort,
+                    customerId: "", from: "", to: "", page: 1 };
         renderInvoices(null);
       }
     });
@@ -2060,6 +2097,9 @@
         "&type=" + encodeURIComponent(docView.type) +
         "&status=" + encodeURIComponent(docView.status) +
         "&sort=" + encodeURIComponent(docView.sort) +
+        "&customerId=" + encodeURIComponent(docView.customerId) +
+        (docView.from ? "&from=" + encodeURIComponent(docView.from) : "") +
+        (docView.to ? "&to=" + encodeURIComponent(docView.to) : "") +
         "&page=" + encodeURIComponent(docView.page);
       d = await api("GET", "/admin/invoices" + qs);
     } catch (err) {
@@ -2074,14 +2114,23 @@
     fillSelect(document.getElementById("doc-type"), d.options.types, d.type);
     fillSelect(document.getElementById("doc-status"), d.options.statuses, d.status);
     fillSelect(document.getElementById("doc-sort"), d.options.sorts, d.sort);
+    fillSelect(document.getElementById("doc-customer"),
+      [{ key: "", label: "All customers" }].concat(
+        (d.options.customers || []).map(c => ({ key: c.id, label: c.name + " (" + c.n + ")" }))),
+      d.customerId);
+    const dFrom = document.getElementById("doc-from"), dTo = document.getElementById("doc-to");
+    if (dFrom) dFrom.value = d.from || "";
+    if (dTo) dTo.value = d.to || "";
 
     body.innerHTML = invoiceListHtml(d);
   }
 
   function invoiceListHtml(d) {
     if (!d.total) {
-      return d.q || d.type !== "all" || d.status !== "all"
-        ? emptyLine("No document matches that search.") +
+      const filtered = d.q || d.type !== "all" || d.status !== "all" ||
+                       d.customerId || d.from || d.to;
+      return filtered
+        ? emptyLine("No document matches those filters.") +
           '<button type="button" class="adm-retry" data-clear-documents="1">Clear search and filters</button>'
         : emptyLine("No invoices or challans have been raised yet.");
     }
@@ -2091,7 +2140,7 @@
 
     const head =
       '<div class="adm-tbl-head adm-tbl-doc" aria-hidden="true">' +
-        '<span>Document</span><span>Customer</span><span>Date</span>' +
+        '<span>Document</span><span>Customer</span><span>Date</span><span>Due</span>' +
         '<span class="adm-num">Amount</span><span class="adm-num">Outstanding</span>' +
         '<span>Status</span>' +
       "</div>";
@@ -2103,13 +2152,16 @@
         ? '<span class="adm-muted">' + money(r.goodsValue) + " goods</span>"
         : money(r.total);
 
-      let state, cls;
-      if (r.voided)            { state = "Cancelled";  cls = "is-info"; }
-      else if (r.isChallan)    { state = r.billed ? "Billed" : "Not yet billed";
-                                 cls = r.billed ? "is-ok" : "is-warn"; }
-      else if (r.overdue)      { state = "Overdue";    cls = "is-bad"; }
-      else if (r.balanceDue>0) { state = "Outstanding"; cls = "is-warn"; }
-      else                     { state = "Settled";    cls = "is-ok"; }
+      /* THE SHOP'S OWN WORD for the state, sent by the server from the
+         same deriveDocStatus() the billing screen uses. This used to be
+         five labels invented here — "Settled", "Outstanding", "Not yet
+         billed" — which meant one bill could be described two different
+         ways depending on which screen you were looking at.
+         Overdue is not a status in that vocabulary; it is a fact about a
+         Pending one, so it is shown beside the status rather than
+         replacing it. */
+      const state = r.status || "";
+      const cls = DOC_STATE_TONE[state] || "is-info";
 
       return '<a class="adm-tbl-row adm-tbl-doc' + (r.voided ? " is-voided" : "") +
              '" href="' + docHref(r.id) + '">' +
@@ -2122,12 +2174,31 @@
         '<span class="adm-cell" data-h="Customer">' +
           (r.customer ? esc(r.customer) : '<span class="adm-muted">—</span>') + "</span>" +
         '<span class="adm-cell" data-h="Date">' + esc(showDate(r.date)) + "</span>" +
-        '<span class="adm-cell adm-num" data-h="Amount">' + amount + "</span>" +
+        '<span class="adm-cell" data-h="Due">' +
+          (r.dueDate
+            ? (r.overdue ? '<span class="adm-over">' + esc(showDate(r.dueDate)) + "</span>"
+                         : esc(showDate(r.dueDate)))
+            : '<span class="adm-muted">—</span>') + "</span>" +
+        '<span class="adm-cell adm-num" data-h="Amount">' + amount +
+          /* Subtotal, discount and tax under the total rather than as
+             three more columns. Eleven columns is not a table anybody
+             reads; this is the same information where the eye already
+             is, and it folds away on a phone with everything else. */
+          /* Only when it says something the total does not. With no
+             discount and no tax the breakdown is the total written
+             twice, which reads as a mistake rather than as detail. */
+          (r.subtotal !== null && r.subtotal !== undefined && (r.discount || r.tax)
+            ? '<span class="adm-breakdown">' + money(r.subtotal) +
+              (r.discount ? " − " + money(r.discount) : "") +
+              (r.tax ? " + " + money(r.tax) + " tax" : "") + "</span>"
+            : "") +
+        "</span>" +
         '<span class="adm-cell adm-num" data-h="Outstanding">' +
           (r.balanceDue > 0 ? '<span class="adm-over">' + money(r.balanceDue) + "</span>"
                             : '<span class="adm-muted">—</span>') + "</span>" +
         '<span class="adm-cell" data-h="Status">' +
-          '<span class="adm-pip ' + cls + '" aria-hidden="true"></span>' + esc(state) + "</span>" +
+          '<span class="adm-pip ' + cls + '" aria-hidden="true"></span>' + esc(state) +
+          (r.overdue ? ' <span class="adm-over">overdue</span>' : "") + "</span>" +
       "</a>";
     }).join("");
 

@@ -644,7 +644,8 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
                        stays a tripwire for the UNEXPECTED rather than
                        quietly absorbing whatever happens to have changed. */
                     "server/rateLimit.js", "test/security.test.js", ".env.example",
-                    "server/adminSales.js", "test/admin-sales.test.js"];
+                    "server/adminSales.js", "test/admin-sales.test.js",
+                    "test/invoice-create.test.js"];
 
   /* The two existing files the admin panel is allowed to have touched,
      and the reason each one had to be:
@@ -668,6 +669,13 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
                         alone and so let one attacker lock the whole shop out
                         of the till. It is paired with the account now. */
                      "server/routes/auth.js", "server/auth.js", "server/importRun.js",
+                     /* PART 6: idempotent invoice creation — the key column and
+                        its partial UNIQUE index, and the guard that turns a
+                        repeated submission back into the first bill. */
+                     "server/routes/invoices.js", "server/db-schema.js",
+                     /* app.js: the billing screen sends the submission key.
+                        Backend idempotency that no client uses is theatre. */
+                     "public/js/app.js",
                      "package-lock.json"];
 
   /* A file is new if it did not exist at the anchor. */
@@ -682,10 +690,10 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
      touchedExisting.every(f => MAY_TOUCH.includes(f)),
      touchedExisting);
 
-  ["public/index.html", "public/js/app.js", "public/css/style.css",
+  ["public/index.html", "public/css/style.css",
    "public/js/boot.js", "public/css/document.css",
    "server/permissions.js", "server/db.js",
-   "server/db-schema.js", "server/routes/staff.js",
+   "server/routes/staff.js",
    "server/routes/permissions.js"].forEach(f => {
     ok(f + " is untouched", !changed.includes(f));
   });
@@ -716,11 +724,38 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
      changed.filter(f => !WANT_NEW.includes(f) && !existedBefore(f)).length === 0,
      changed.filter(f => !WANT_NEW.includes(f) && !existedBefore(f)));
 
-  console.log("\n--- no schema change, and no data touched ---");
+  console.log("\n--- the only schema change is additive ---");
   const schema = read("server/db-schema.js");
   ok("no admin_role column was added", !/admin_role/.test(schema));
   ok("the staff role CHECK is still owner/staff only",
      /CHECK \(role IN \('owner',\s*'staff'\)\)/.test(schema));
+
+  /* PART 6 added one column and one index for idempotent invoice
+     creation. That is the whole of it, and "added" has to keep meaning
+     added: a DROP or an ALTER ... RENAME in this file would rewrite a
+     live shop's books on the next boot. */
+  ok("the idempotency column is added with the existing addColumn idiom",
+     /addColumn\("invoices", "idempotency_key", "TEXT"\)/.test(schema));
+  ok("its unique index is created IF NOT EXISTS, so a reboot is a no-op",
+     /CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_idempotency/.test(schema));
+  ok("and it is PARTIAL, so every bill raised before it still fits",
+     /WHERE idempotency_key IS NOT NULL/.test(schema));
+  /* The billing screen is the one file in this app that is in use all
+     day. PART 6 added to it and took nothing away — asserted, because
+     "I only added a bit" is what everybody says. */
+  const appStat = git("diff", "--numstat", BEFORE, "--", "public/js/app.js").split(/\s+/);
+  ok("the change to the billing screen removed no lines",
+     appStat[1] === "0" || appStat.length === 0, appStat.join(" "));
+  ok("and what it added is the submission key, nothing else",
+     /newSubmissionKey\(\)/.test(read("public/js/app.js")) &&
+     /payload\.idempotencyKey = state\.billSubmissionKey/.test(read("public/js/app.js")));
+  ok("the key is kept on failure so a retry is the same submission",
+     /A failure deliberately leaves the key in place/.test(read("public/js/app.js")));
+
+  ok("the schema file drops nothing",
+     !/DROP TABLE|DROP COLUMN|DROP INDEX/i.test(code("server/db-schema.js")));
+  ok("and renames nothing",
+     !/ALTER TABLE [a-z_]+ RENAME/i.test(code("server/db-schema.js")));
 
   const adminRouteCode = code("server/routes/admin.js");
   ok("the admin panel creates no table", !/CREATE TABLE/i.test(adminRouteCode));

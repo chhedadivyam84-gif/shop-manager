@@ -183,9 +183,39 @@ if (!sessionSecret) {
 
 const isProduction = process.env.NODE_ENV === "production";
 
-// Behind Fly.io's proxy, TLS is terminated upstream and requests reach us
-// over plain HTTP with X-Forwarded-Proto set — trust it so secure cookies work.
-app.set("trust proxy", 1);
+/* Behind a hosting proxy, TLS is terminated upstream and requests reach
+   us over plain HTTP with X-Forwarded-Proto set — trust it so secure
+   cookies work.
+ *
+ * THE NUMBER IS THE NUMBER OF PROXIES IN FRONT, and getting it wrong is
+ * not cosmetic: it decides what req.ip is. Measured, with
+ * X-Forwarded-For: "203.0.113.55, 172.16.0.9" —
+ *
+ *     trust proxy 1  ->  req.ip = 172.16.0.9    (the intermediate hop)
+ *     trust proxy 2  ->  req.ip = 203.0.113.55  (the caller)
+ *
+ * One is right for a single proxy and wrong for this app's hosted chain,
+ * which is Cloudflare in front of Render in front of us — two hops. With
+ * it set to one, every hosted request looks like it came from the same
+ * place, or from a different place each time, and neither is the caller.
+ *
+ * It stays at one by default because that is what a shop PC and the
+ * existing deployment have always used, and raising it blindly would
+ * make a FORGED X-Forwarded-For one hop more believable. Set
+ * TRUST_PROXY=2 on a Cloudflare-fronted host, where the proxy overwrites
+ * the header and the extra hop is real.
+ *
+ * Nothing security-critical depends on this being right any more — the
+ * rate limiter keys on the session and the login lockout keys on the
+ * account — but an accurate address still makes both sharper. */
+const TRUST_PROXY = (() => {
+  const raw = String(process.env.TRUST_PROXY || "").trim();
+  if (!raw) return 1;
+  if (/^\d+$/.test(raw)) return Number(raw);
+  console.error('[proxy] TRUST_PROXY must be a whole number of hops; ignoring "' + raw + '".');
+  return 1;
+})();
+app.set("trust proxy", TRUST_PROXY);
 
 /* Express announces itself in an X-Powered-By header on every response.
    It is not a vulnerability on its own — nobody breaks in through a
@@ -281,19 +311,6 @@ app.use((req, res, next) => {
 // attachment (up to 8MB decoded, see attachments.js) fits in one JSON request.
 app.use(express.json({ limit: "12mb" }));
 
-/* A ceiling on how fast anything can CHANGE this shop's records.
- *
- * Reads are deliberately untouched: every screen in this app fires
- * several at once on each navigation, and limiting those would break
- * the counter long before it troubled anybody attacking it.
- *
- * 240 writes a minute is roughly four a second sustained — far above a
- * person billing flat out, and far below what makes a stolen session
- * useful for emptying the customer book or hammering the box. The login
- * route keeps its own, much stricter lockout (auth.js); this sits
- * underneath as the general case. */
-const rateLimit = require("./rateLimit");
-app.use("/api", rateLimit.limit({ bucket: "api-write", max: 240, windowMs: 60 * 1000 }));
 /* Sessions in a file, not in memory.
 
    The thirty days below was never the reason staff got thrown back to the
@@ -307,6 +324,7 @@ app.use("/api", rateLimit.limit({ bucket: "api-write", max: 240, windowMs: 60 * 
    a multi-company copy the shop database changes underneath you when the
    company is switched. */
 const { SqliteSessionStore } = require("./sessionStore");
+const rateLimit = require("./rateLimit");
 app.use(session({
   store: new SqliteSessionStore({
     dir: process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR)
@@ -325,6 +343,27 @@ app.use(session({
     secure: isProduction
   }
 }));
+
+/* A ceiling on how fast anything can CHANGE this shop's records.
+ *
+ * MOUNTED AFTER THE SESSION MIDDLEWARE, and that position is the
+ * whole fix. The limiter keys on the session when there is one, and
+ * req.sessionID does not exist until express-session has run — above
+ * it, every request would fall back to the address, which behind this
+ * app's Cloudflare -> Render chain is the proxy and not the caller.
+ *
+ * Reads are deliberately untouched: every screen in this app fires
+ * several at once on each navigation, and limiting those would break
+ * the counter long before it troubled anybody attacking it.
+ *
+ * 240 writes a minute is roughly four a second sustained — far above a
+ * person billing flat out, and far below what makes a stolen session
+ * useful for emptying the customer book. It is now PER SESSION, so one
+ * person hammering the app can no longer queue the whole counter
+ * behind a single shared limit. The login route keeps its own, much
+ * stricter lockout (auth.js); this sits underneath as the general
+ * case. */
+app.use("/api", rateLimit.limit({ bucket: "api-write", max: 240, windowMs: 60 * 1000 }));
 
 /* ------------------------------------------------------------
    SUBSCRIPTION GATE

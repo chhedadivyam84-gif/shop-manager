@@ -23,8 +23,62 @@
    a script, not to police a shopkeeper. Reads are not limited at all.
    ============================================================ */
 
-/* bucket -> Map(ip -> { count, resetAt }) */
+/* ------------------------------------------------------------------
+   WHAT A "CALLER" IS, and why it is not simply the IP address
+
+   The first version keyed on req.ip alone. Behind this app's actual
+   deployment — Cloudflare in front of Render in front of the app —
+   `trust proxy` is 1, and Express then reports the INTERMEDIATE PROXY
+   rather than the client. Measured, not assumed: with
+   X-Forwarded-For: "203.0.113.55, 172.16.0.9", trust proxy 1 yields
+   172.16.0.9 and trust proxy 2 yields 203.0.113.55.
+
+   That single mistake fails in two opposite directions and both are
+   bad:
+
+     If the proxy address varies between requests, every request looks
+     like a new caller and the limit never applies to anybody. This is
+     what was actually observed in production — thirteen hits on the
+     sync endpoint, no refusal.
+
+     If it is stable, every caller shares ONE bucket. The whole shop
+     then queues behind a single limit, and one person hammering the
+     app locks out the counter.
+
+   So the key is the SESSION where there is one. A session id is issued
+   by this app, is unforgeable (signed), and identifies the actual
+   caller no matter how many proxies the request crossed. Only
+   unauthenticated traffic — a login, a sync push — falls back to the
+   address, and the global backstop below bounds that case even when
+   the address is useless.
+   ------------------------------------------------------------------ */
+function callerKey(req) {
+  /* ONLY an established, signed-in session. express-session hands out a
+     fresh req.sessionID to every request that arrives without a cookie,
+     so keying on its mere presence would give an anonymous flood a new
+     identity per request and limit nobody — which a test caught doing
+     exactly that on the sync endpoint.
+     Signed in is the condition that makes the id mean a person: it
+     cannot be reached without a cookie the app itself issued. */
+  if (req && req.sessionID && req.session && req.session.loggedIn) {
+    return "s:" + req.sessionID;
+  }
+  /* Everything before a login — the login itself, a sync push — falls
+     back to the address, with the global backstop below as the floor
+     under a proxy that makes addresses meaningless. */
+  return "i:" + String((req && req.ip) || "unknown");
+}
+
+/* bucket -> Map(key -> { count, resetAt }) */
 const buckets = new Map();
+
+/* A per-bucket total, independent of who is asking.
+   The per-caller limit above is only as good as its key, and for
+   unauthenticated traffic behind a proxy the key may be worthless. This
+   is the floor under that: however many distinct callers a flood
+   appears to come from, a bucket still has a ceiling. Sized well above
+   any real shop so it is a backstop and not a second limit. */
+const globals = new Map();
 
 /* A cap on how many distinct IPs we will remember, so the limiter
    cannot itself become the memory leak that takes the shop down. Past
@@ -53,12 +107,12 @@ function sweep(w, now) {
  * Exported so a route can consult it without being middleware — the
  * sync receiver does, because it has to answer in its own shape.
  */
-function hit(bucket, ip, limit, windowMs) {
+function hit(bucket, who, limit, windowMs, globalMax) {
   const now = Date.now();
   const w = windowFor(bucket);
   if (w.size > 64) sweep(w, now);
 
-  const key = String(ip || "unknown");
+  const key = String(who || "unknown");
   let rec = w.get(key);
   if (!rec || rec.resetAt <= now) {
     rec = { count: 0, resetAt: now + windowMs };
@@ -66,8 +120,18 @@ function hit(bucket, ip, limit, windowMs) {
   }
   rec.count++;
 
+  /* The backstop, counted whether or not the per-caller limit trips. */
+  let g = globals.get(bucket);
+  if (!g || g.resetAt <= now) { g = { count: 0, resetAt: now + windowMs }; globals.set(bucket, g); }
+  g.count++;
+
+  const retryAfterSec = at => Math.max(1, Math.ceil((at - now) / 1000));
+
   if (rec.count > limit) {
-    return { ok: false, retryAfterSec: Math.max(1, Math.ceil((rec.resetAt - now) / 1000)) };
+    return { ok: false, scope: "caller", retryAfterSec: retryAfterSec(rec.resetAt) };
+  }
+  if (globalMax && g.count > globalMax) {
+    return { ok: false, scope: "global", retryAfterSec: retryAfterSec(g.resetAt) };
   }
   return { ok: true };
 }
@@ -88,10 +152,13 @@ function limit(opts) {
   const methods = o.methods || ["POST", "PUT", "PATCH", "DELETE"];
   const message = o.message || "Too many requests. Please slow down and try again shortly.";
 
+  /* Well above any real shop, so it only ever catches a flood. */
+  const globalMax = o.globalMax || max * 20;
+
   return function (req, res, next) {
     if (methods !== "all" && !methods.includes(req.method)) return next();
 
-    const r = hit(bucket, req.ip, max, windowMs);
+    const r = hit(bucket, callerKey(req), max, windowMs, globalMax);
     if (r.ok) return next();
 
     res.setHeader("Retry-After", String(r.retryAfterSec));
@@ -104,8 +171,8 @@ function limit(opts) {
 
 /** For tests, and for anything that needs a clean slate. */
 function reset(bucket) {
-  if (bucket) buckets.delete(bucket);
-  else buckets.clear();
+  if (bucket) { buckets.delete(bucket); globals.delete(bucket); }
+  else { buckets.clear(); globals.clear(); }
 }
 
-module.exports = { limit, hit, reset, MAX_TRACKED };
+module.exports = { limit, hit, reset, callerKey, MAX_TRACKED };

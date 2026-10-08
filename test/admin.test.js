@@ -664,7 +664,10 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
                      /* Security pass: session regeneration, the rate limiter,
                         the import-undo whitelist, and two patched transitive
                         dependencies. */
-                     "server/routes/auth.js", "server/importRun.js",
+                     /* auth.js: the login lockout, which keyed on the address
+                        alone and so let one attacker lock the whole shop out
+                        of the till. It is paired with the account now. */
+                     "server/routes/auth.js", "server/auth.js", "server/importRun.js",
                      "package-lock.json"];
 
   /* A file is new if it did not exist at the anchor. */
@@ -681,7 +684,7 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
 
   ["public/index.html", "public/js/app.js", "public/css/style.css",
    "public/js/boot.js", "public/css/document.css",
-   "server/permissions.js", "server/auth.js", "server/db.js",
+   "server/permissions.js", "server/db.js",
    "server/db-schema.js", "server/routes/staff.js",
    "server/routes/permissions.js"].forEach(f => {
     ok(f + " is untouched", !changed.includes(f));

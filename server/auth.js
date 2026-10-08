@@ -36,32 +36,66 @@ function requireRole(...roles) {
   };
 }
 
-// Login brute-force protection. Keyed by IP, kept in memory only — a small
-// local/single-instance app doesn't need this to survive a restart, and an
-// attacker who can restart the process has bigger problems than this lock.
+/* Login brute-force protection. In memory only — a small single-instance
+   app does not need this to survive a restart, and an attacker who can
+   restart the process has bigger problems than this lock.
+ *
+ * KEYED ON THE ADDRESS AND THE STAFF MEMBER TOGETHER, not the address
+ * alone, and that pairing matters more than it looks.
+ *
+ * On a shop PC an address is one person. Hosted, it is not: behind this
+ * app's Cloudflare -> Render chain, req.ip resolves to the proxy rather
+ * than the caller (measured: trust proxy 1 on a two-hop
+ * X-Forwarded-For yields the intermediate hop). Keyed on the address
+ * alone, every member of staff shares one counter — so five wrong PINs
+ * from ANYBODY would lock the entire shop out of the till for fifteen
+ * minutes. A stranger could close the counter from a phone.
+ *
+ * Pairing it keeps the protection where it belongs — five guesses at
+ * ONE person's PIN from one source — and takes away the shop-wide
+ * lockout. The arithmetic still holds: a four-digit PIN is ten thousand
+ * combinations at five tries per quarter-hour, which is years per
+ * account even before anybody notices.
+ */
 const MAX_ATTEMPTS = 5;
 const LOCKOUT_MS = 15 * 60 * 1000;
 const attempts = new Map();
 
-function loginLockStatus(ip) {
-  const rec = attempts.get(ip);
+/** One counter per (source, account). Either part missing is still a key. */
+function lockKey(ip, staffId) {
+  return String(ip || "unknown") + "|" + String(staffId || "");
+}
+
+function loginLockStatus(ip, staffId) {
+  const key = lockKey(ip, staffId);
+  const rec = attempts.get(key);
   if (!rec || !rec.lockedUntil) return { locked: false };
-  if (Date.now() >= rec.lockedUntil) { attempts.delete(ip); return { locked: false }; }
+  if (Date.now() >= rec.lockedUntil) { attempts.delete(key); return { locked: false }; }
   return { locked: true, retryAfterSec: Math.ceil((rec.lockedUntil - Date.now()) / 1000) };
 }
 
-function recordLoginFailure(ip) {
-  const rec = attempts.get(ip) || { count: 0, lockedUntil: 0 };
+function recordLoginFailure(ip, staffId) {
+  const key = lockKey(ip, staffId);
+  const rec = attempts.get(key) || { count: 0, lockedUntil: 0 };
   rec.count += 1;
   if (rec.count >= MAX_ATTEMPTS) {
     rec.lockedUntil = Date.now() + LOCKOUT_MS;
     rec.count = 0;
   }
-  attempts.set(ip, rec);
+  attempts.set(key, rec);
 }
 
-function clearLoginFailures(ip) {
-  attempts.delete(ip);
+/**
+ * Forget the failures for one account from one source.
+ *
+ * Called with no staffId it clears every counter for that source, which
+ * is what a test wants and what a successful login by any member of
+ * staff on a shop PC may as well do.
+ */
+function clearLoginFailures(ip, staffId) {
+  if (staffId !== undefined) { attempts.delete(lockKey(ip, staffId)); return; }
+  const prefix = String(ip || "unknown") + "|";
+  for (const key of attempts.keys()) if (key.startsWith(prefix)) attempts.delete(key);
 }
 
 module.exports = {

@@ -223,8 +223,12 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
   ok("/roles says only OWNER is live today",
      r.j && r.j.active.length === 1 && r.j.active[0] === "OWNER", r.j && r.j.active);
 
-  console.log("\n--- /api/admin: nothing else is mounted in PART 1 ---");
-  for (const p of ["/api/admin/", "/api/admin/settings", "/api/admin/health"]) {
+  /* PART 11 BUILT System Health, so /api/admin/health is a route now and
+     this block asks the question that is still worth asking: that the
+     sections nobody has built yet are still not mounted. The health
+     route gets its own check below rather than being quietly dropped. */
+  console.log("\n--- /api/admin: the unbuilt sections are still not mounted ---");
+  for (const p of ["/api/admin/", "/api/admin/settings", "/api/admin/plans"]) {
     r = await call("GET", p, null, OWNER);
     ok("GET " + p + " is not a route yet", r.status === 404, r.status);
   }
@@ -445,13 +449,17 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
      dot, or the one primary button on a page. The rule being enforced is
      that the accent never becomes a FILL: no panel, tile, card, row,
      header or sidebar may take it as a background. */
-  ok("the accent is a background in exactly four small places",
-     accentBg === 4, accentBg);
+  /* Five since PART 11, which added the System Health headline dot —
+     14 pixels, the same kind of indicator as the four before it. The
+     NUMBER is a budget that moves when a real indicator is added; the
+     RULE is the assertion below, which has not moved at all. */
+  ok("the accent is a background in exactly five small places",
+     accentBg === 5, accentBg);
   const accentBgSelectors = (cssCode.match(/([^{}]+)\{[^}]*background:\s*var\(--adm-accent\)[^}]*\}/g) || [])
     .map(s => s.slice(0, s.indexOf("{")).trim());
   ok("and every one of them is an indicator, a dot or the primary button",
-     accentBgSelectors.length === 4 &&
-     accentBgSelectors.every(s => /adm-nav-item\.is-active::before|adm-primary|adm-dot|adm-pip\.is-warn/.test(s)),
+     accentBgSelectors.length === 5 &&
+     accentBgSelectors.every(s => /adm-nav-item\.is-active::before|adm-primary|adm-dot|adm-pip\.is-warn|adm-hl-dot\.is-warn/.test(s)),
      accentBgSelectors);
   ok("the accent is never a background on a panel, tile, card or row",
      !/\.adm-(panel|tile|card|row|topbar|sidebar|main)[^{]*\{[^}]*background:\s*var\(--adm-accent\)/.test(cssCode));
@@ -501,8 +509,14 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
   ok("every class admin.js sets has a rule", missingJsClasses.length === 0, missingJsClasses);
 
   console.log("\n--- admin.js holds no permission rules of its own ---");
-  ok("it does not hard-code the section list",
-     !/Plans & Features|Security Center|System Health/.test(js));
+  /* The rule is that a section nobody has BUILT must not have its label
+     written into the page — the nav comes from the server, so a
+     hard-coded label would be a second source of truth for what exists.
+     PART 11 built System Health, so its own page carries its own title,
+     exactly as Audit Logs has since PART 10. The two sections still
+     unbuilt stay on the list. */
+  ok("it does not hard-code the label of a section nobody has built",
+     !/Plans & Features|Security Center/.test(js));
   ok("it builds the nav from the server's answer",
      /\/admin\/me/.test(js) && /me\.sections/.test(js));
   ok("it holds no permission table of its own",
@@ -673,7 +687,11 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
                        the log is enforced in one place. adminAudit.js is
                        the read side, like the other admin* modules. */
                     "server/auditLog.js", "server/adminAudit.js",
-                    "test/audit.test.js"];
+                    "test/audit.test.js",
+                    /* PART 11: the health engine, read-only, and its
+                       tests. The dashboard's System panel now reads the
+                       same check rather than running a second one. */
+                    "server/adminHealth.js", "test/health.test.js"];
 
   /* The two existing files the admin panel is allowed to have touched,
      and the reason each one had to be:

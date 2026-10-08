@@ -513,11 +513,29 @@ function activity() {
    about what must never cross this boundary.
    ================================================================== */
 function system() {
-  let database = { ok: false, detail: "Not reachable." };
+  /* ONE ENGINE, TWO SCREENS.
+     ------------------------------------------------------------
+     This panel used to run its own SELECT 1 and its own PRAGMA, which
+     was fine while it was the only thing asking. PART 11 built a System
+     Health page that asks the same question in more detail, and two
+     independent answers to "is the database reachable" is exactly how a
+     dashboard ends up showing a green tick beside a health page showing
+     a red one. The check now lives in adminHealth.js and both screens
+     read it.
+
+     THE SHAPE HERE IS UNCHANGED. The dashboard's contract with its own
+     screen is { ok, detail }, so the health engine's richer answer is
+     narrowed back to that rather than leaking a new shape into a panel
+     PART 2 built. */
+  let database;
   try {
-    db.prepare("SELECT 1 AS v").get();
-    const mode = one("PRAGMA journal_mode", [], "journal_mode");
-    database = { ok: true, detail: mode ? "Connected (" + mode + ")" : "Connected" };
+    const d = require("./adminHealth").database();
+    database = {
+      ok: d.state === "ok",
+      detail: d.journalMode && d.journalMode !== "unknown"
+        ? "Connected (" + d.journalMode + ")"
+        : d.detail,
+    };
   } catch (e) {
     /* The reason is deliberately NOT passed through: a SQLite error can
        name a file path. The panel says it is down; the log says why. */

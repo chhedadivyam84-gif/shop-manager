@@ -121,7 +121,6 @@ async function start() {
   const db = require("./db");
   const backup = require("./backup");
   const { requireAuth, requireRole } = require("./auth");
-  const adminAccess = require("./adminAccess");
 
   /* Keeps the shop's delivery rounds identical on every machine it runs on.
      Insert-only, and limited to this shop by name — see seed-areas.js. */
@@ -685,18 +684,6 @@ app.use("/api/bill-scan", requireAuth, require("./routes/billScan"));
    non-owner can read. Everything else inside is behind requireRole. */
 app.use("/api/permissions", requireAuth, require("./routes/permissions"));
 app.use("/api/staff", requireAuth, requireRole("owner"), require("./routes/staff"));
-/* The admin panel's API. Position matters more than usual: sitting here
-   inside the /api block puts it below the company binder, the licence
-   gate, the financial-year lock, the owner-only DELETE gate and the
-   feature gate, and it gets all five for free. Moved anywhere outside
-   /api it gets none of them, and `db` would quietly answer from the
-   default company — the exact cross-company bug already fixed once above.
-
-   adminAccess.gate() rather than requireRole("owner") so that admitting
-   an ADMIN or SUPPORT login later is one line in adminAccess.js instead
-   of an edit to this file. See that module for why those two roles have
-   no carrier yet. */
-app.use("/api/admin", requireAuth, adminAccess.gate(), require("./routes/admin"));
 app.use("/api/audit", requireAuth, requireRole("owner"), require("./routes/audit"));
 app.use("/api/backup", requireAuth, requireRole("owner"), require("./routes/backup"));
 app.use("/api/print", requireAuth, require("./routes/print"));
@@ -736,59 +723,6 @@ app.get("/", (req, res) => {
   res.type("html").send(getVersionedIndexHtml());
 });
 
-/* ============================================================
-   THE ADMIN PANEL PAGE
-
-   A page of its own, not a screen inside the shop app. The app's
-   #shell is a centred column capped at var(--app-max) with a sticky
-   bottom nav and its own scroll container; a sidebar layout would have
-   to fight all three, and doing it inside index.html / app.js / style.css
-   would mean editing the three files the counter runs on all day.
-   This touches none of them.
-
-   It needs a route rather than being left to express.static because
-   express.static is mounted without the `extensions` option, so /admin
-   would 404 — and because a route is the only way the page gets the
-   ?v=<boot> rewrite and Cache-Control: no-store that the note above says
-   is what actually fixed phones serving weeks-old HTML.
-
-   ITS OWN CACHE, deliberately. Reusing versionedIndexHtml for a second
-   path would serve whichever page was requested first to both for the
-   life of the process, and index.html is the only HTML the till has.
-   ============================================================ */
-const versionedHtmlCache = new Map();
-function getVersionedHtml(absPath) {
-  if (!versionedHtmlCache.has(absPath)) {
-    versionedHtmlCache.set(absPath, fs.readFileSync(absPath, "utf8").replace(
-      /(src|href)="(\/(?:js|css)\/[^"]+)"/g,
-      (match, attr, url) => `${attr}="${url}?v=${BOOT_VERSION}"`
-    ));
-  }
-  return versionedHtmlCache.get(absPath);
-}
-
-const ADMIN_PATH = path.join(__dirname, "..", "public", "admin.html");
-
-/* requireAuth / requireRole are NOT used here on purpose: both answer
-   JSON, so a logged-out browser would be shown a raw {"error":...} body
-   instead of the login screen it knows. A redirect is the right answer
-   to a person asking for a page.
-
-   This route is OUTSIDE /api, which means there is no company binder,
-   which means it must touch NO database — adminAccess.roleOf() reads the
-   session and nothing else, which is why it is safe to call here.
-
-   Hiding the panel is not the security; see the /api/admin mount above,
-   where every admin request is authorised again on the server. */
-app.get("/admin", (req, res) => {
-  if (!req.session || !req.session.loggedIn) return res.redirect("/");
-  if (!adminAccess.roleOf(req)) return res.redirect("/");
-  res.setHeader("Cache-Control", "no-store");
-  res.type("html").send(getVersionedHtml(ADMIN_PATH));
-});
-
-/* So the only reachable path is the versioned one. */
-app.get("/admin.html", (req, res) => res.redirect("/admin"));
 
 
 // Cache-Control: no-cache (not no-store) forces a revalidation round-trip on

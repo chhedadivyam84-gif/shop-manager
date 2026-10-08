@@ -700,8 +700,15 @@ function seed() {
         { method: m || "GET", redirect: "manual" });
       return { status: r.status, text: await r.text() };
     };
+    /* /api/admin/customers was on this list while the per-shop admin
+       panel existed. That panel has been removed from this app — the
+       vendor's console belongs on the licence panel, not inside each
+       shopkeeper's till — so the route is gone and answers 404, which is
+       not "refused" and should not be asserted as if it were. The
+       endpoints below are the ones that still exist and must still
+       refuse a stranger. */
     for (const p of ["/api/customers", "/api/backup/download", "/api/staff", "/api/audit",
-                     "/api/reports/dashboard", "/api/export/catalogue", "/api/admin/customers",
+                     "/api/reports/dashboard", "/api/export/catalogue",
                      "/api/position", "/api/cashbook"]) {
       const g = await hit(p);
       ok("anonymous " + p + " is refused", g.status === 401 || g.status === 403, g.status);

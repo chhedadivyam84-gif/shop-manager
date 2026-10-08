@@ -1533,3 +1533,98 @@ body.adm-body{
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
+
+/* ------------------------------------------------------------- SETTINGS
+   PART 12. A category list beside a form. On a phone the list becomes a
+   row of chips above the form, because a sidebar inside a sidebar-less
+   layout is two columns neither of which is usable. */
+.adm-set{ display: grid; gap: 12px; }
+
+.adm-set-nav{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.adm-set-tab{
+  padding: 7px 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--muted);
+  text-decoration: none;
+  font-size: var(--fs-row-title);
+  white-space: nowrap;
+}
+.adm-set-tab:hover{ color: var(--text); }
+.adm-set-tab.is-on{
+  color: var(--text);
+  font-weight: 600;
+  border-color: var(--text);
+}
+.adm-set-tab:focus-visible{ outline: 2px solid var(--adm-accent); outline-offset: 2px; }
+
+.adm-set-form{ display: grid; gap: 14px; margin-top: 12px; }
+.adm-set-field{ display: grid; gap: 4px; min-width: 0; }
+
+/* A setting whose change carries a warning. A rule down the side rather
+   than a coloured panel: it marks the field without shouting over the
+   eleven beside it. */
+.adm-set-field.is-sensitive{
+  padding-left: 10px;
+  border-left: 2px solid var(--adm-accent);
+}
+
+.adm-set-help{
+  margin: 0;
+  font-size: var(--fs-row-sub);
+  color: var(--muted);
+  line-height: 1.45;
+}
+.adm-set-err{
+  margin: 0;
+  font-size: var(--fs-row-sub);
+  color: var(--danger);
+  font-weight: 600;
+}
+.adm-input.is-bad{ border-color: var(--danger); }
+
+.adm-set-toggle{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-row-title);
+  cursor: pointer;
+}
+.adm-set-toggle input{ width: 16px; height: 16px; flex: none; }
+
+/* The required marker. A character, not a colour, so it survives a
+   greyscale print and a colour-blind reader. */
+.adm-req{ color: var(--danger); font-weight: 700; }
+
+/* The read-only System facts. */
+.adm-facts{ display: grid; gap: 12px; margin-top: 10px; }
+.adm-fact{
+  display: grid;
+  gap: 2px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.adm-fact:last-child{ border-bottom: 0; padding-bottom: 0; }
+.adm-fact-k{ font-size: var(--fs-row-sub); color: var(--muted); }
+.adm-fact-v{ font-weight: 600; }
+.adm-fact-n{ font-size: var(--fs-row-sub); color: var(--muted); line-height: 1.45; }
+
+@media (min-width: 768px){
+  /* From here the categories are a column beside the form, which is what
+     a settings page looks like once there is room for one. */
+  .adm-set{ grid-template-columns: 190px minmax(0, 1fr); align-items: start; }
+  .adm-set-nav{ flex-direction: column; gap: 2px; position: sticky; top: 12px; }
+  .adm-set-tab{ border-radius: 8px; border-color: transparent; background: transparent; }
+  .adm-set-tab.is-on{ background: var(--card); border-color: var(--border); }
+
+  /* Two columns of fields once a form is wide enough that a single
+     column of short inputs looks like a questionnaire. */
+  .adm-set-form{ grid-template-columns: 1fr 1fr; gap: 14px 16px; }
+  .adm-set-field.is-wide{ grid-column: 1 / -1; }
+  .adm-facts{ grid-template-columns: 1fr 1fr; gap: 14px 18px; }
+}

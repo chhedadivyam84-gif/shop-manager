@@ -228,7 +228,7 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
      sections nobody has built yet are still not mounted. The health
      route gets its own check below rather than being quietly dropped. */
   console.log("\n--- /api/admin: the unbuilt sections are still not mounted ---");
-  for (const p of ["/api/admin/", "/api/admin/settings", "/api/admin/plans"]) {
+  for (const p of ["/api/admin/", "/api/admin/plans", "/api/admin/subscriptions"]) {
     r = await call("GET", p, null, OWNER);
     ok("GET " + p + " is not a route yet", r.status === 404, r.status);
   }
@@ -436,9 +436,20 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
   ok("body gets an explicit background", /body\.adm-body\{[^}]*background:/.test(css));
   ok("admin-only tokens sit on .adm-shell, never :root",
      !/^\s*:root\s*\{/m.test(css) && /\.adm-shell\{[^}]*--adm-sidebar-bg:/.test(css));
-  ok("the three device breakpoints are the app's own",
-     (css.match(/@media \(min-width: (768|1024|1440)px\)/g) || []).length === 3,
+  /* THE RULE IS "no breakpoint the app does not already use", which the
+     assertion below enforces and which has not moved. This one counts
+     BLOCKS, and PART 12 added a second block at 768 rather than a second
+     breakpoint: the Settings category list becomes a column there, and
+     its rules have to sit after the base rules they override, which the
+     existing 768 block (far earlier in the file) cannot do. Four blocks,
+     still three breakpoints. */
+  ok("every breakpoint block is at one of the app's three widths",
+     (css.match(/@media \(min-width: (768|1024|1440)px\)/g) || []).length ===
+     (css.match(/@media \(min-width: \d+px\)/g) || []).length,
      (css.match(/@media \(min-width: \d+px\)/g) || []));
+  ok("and there are still exactly three distinct widths",
+     new Set((css.match(/@media \(min-width: (\d+)px\)/g) || [])).size === 3,
+     [...new Set((css.match(/@media \(min-width: \d+px\)/g) || []))]);
   ok("no breakpoint the app does not already use",
      !/@media \(min-width: (?!768px|1024px|1440px)\d+px\)/.test(css));
 
@@ -691,7 +702,11 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
                     /* PART 11: the health engine, read-only, and its
                        tests. The dashboard's System panel now reads the
                        same check rather than running a second one. */
-                    "server/adminHealth.js", "test/health.test.js"];
+                    "server/adminHealth.js", "test/health.test.js",
+                    /* PART 12: the settings catalogue and its validation.
+                       It saves nothing itself — every write goes through
+                       the shop's own handlers. */
+                    "server/adminSettings.js", "test/settings.test.js"];
 
   /* The two existing files the admin panel is allowed to have touched,
      and the reason each one had to be:
@@ -728,6 +743,12 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
                         auditLog.js. One writer, so a credential cannot
                         reach the log through a caller that forgot. */
                      "server/util.js",
+                     /* settings.js: the three handlers the admin panel now
+                        calls, exported the same way customers.js exports
+                        updateCustomer — and the denylist that stopped
+                        publicSettings() handing the cloud sync key to any
+                        signed-in person. */
+                     "server/routes/settings.js",
                      "package-lock.json"];
 
   /* A file is new if it did not exist at the anchor. */

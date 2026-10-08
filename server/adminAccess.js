@@ -64,7 +64,9 @@ const SECTIONS = [
   { key: "plans",     label: "Plans & Features", group: "Administration", cap: "admin.manage" },
   { key: "users",     label: "Users",            group: "Administration", cap: "admin.manage" },
   { key: "roles",     label: "Roles & Permissions", group: "Administration", cap: "admin.manage" },
-  { key: "settings",  label: "Settings",         group: "Administration", cap: "admin.manage" },
+  /* Reading the shop's configuration and CHANGING it are separate
+     capabilities — see the note beside them in CAPS. */
+  { key: "settings",  label: "Settings",         group: "Administration", cap: "settings.view" },
 
   { key: "security",  label: "Security Center",  group: "Security",       cap: "security.view" },
   /* Its own capability rather than sharing security.view — see the note
@@ -131,6 +133,23 @@ const CAPS = {
      describes the infrastructure, and section 17 of the brief asks
      specifically that unauthorised users not learn about it. */
   "health.view":   ["OWNER", "ADMIN"],
+  /* SEEING THE SHOP'S CONFIGURATION AND CHANGING IT ARE TWO GRANTS.
+     ------------------------------------------------------------
+     Reading it is close to harmless: the business name, address and
+     GSTIN on that screen are printed on every invoice an ADMIN can
+     already open, so withholding them would be a lock on a door with no
+     wall. Being able to CHANGE them is not: the GSTIN decides whether a
+     bill carries CGST + SGST or IGST, the document headings and the
+     numbering series decide what is legally issued, and "allow billing
+     below zero stock" changes what the counter will accept for
+     everybody.
+
+     So view is OWNER and ADMIN, and edit is the OWNER alone — which is
+     also what every settings route in the shop app has always required,
+     so nothing is loosened by the admin panel offering a second way in.
+     SUPPORT holds neither. */
+  "settings.view": ["OWNER", "ADMIN"],
+  "settings.edit": ["OWNER"],
 };
 
 /* ------------------------------------------------------------------

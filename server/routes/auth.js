@@ -424,14 +424,45 @@ router.post("/login", (req, res) => {
   }
 
   clearLoginFailures(ip);
-  req.session.loggedIn = true;
-  req.session.staffId = staff.id;
-  req.session.staffName = staff.name;
-  req.session.role = staff.role;
 
-  const settings = db.prepare("SELECT business_name FROM settings WHERE id = 1").get();
-  logAction(req, "login", "");
-  res.json({ ok: true, businessName: settings.business_name, staffName: staff.name, role: staff.role });
+  /* A NEW SESSION ID, before anything is written into it.
+   *
+   * Without this the id the browser arrived holding is the id it keeps
+   * once it is signed in — which is session fixation. On a shop counter
+   * it is a real path: anyone who can get a cookie into the till's
+   * browser, or who sits down at it for a moment before the owner logs
+   * in, is holding a session id that becomes the owner's session the
+   * moment the owner types their PIN.
+   *
+   * regenerate() issues a fresh id and drops the old record from the
+   * store, so the id an attacker planted is worth nothing afterwards.
+   * The fields are set INSIDE the callback because regenerate replaces
+   * req.session wholesale — setting them before would write them into
+   * the session that is about to be thrown away. */
+  req.session.regenerate(err => {
+    if (err) {
+      console.error("[auth] could not start a new session:", err.message);
+      return res.status(500).json({ error: "Could not sign you in. Please try again." });
+    }
+
+    req.session.loggedIn = true;
+    req.session.staffId = staff.id;
+    req.session.staffName = staff.name;
+    req.session.role = staff.role;
+
+    /* Written before the reply so a crash between the two cannot leave a
+       signed-in browser whose session the store never heard about. */
+    req.session.save(saveErr => {
+      if (saveErr) {
+        console.error("[auth] could not save the session:", saveErr.message);
+        return res.status(500).json({ error: "Could not sign you in. Please try again." });
+      }
+      const settings = db.prepare("SELECT business_name FROM settings WHERE id = 1").get();
+      logAction(req, "login", "");
+      res.json({ ok: true, businessName: settings.business_name,
+                 staffName: staff.name, role: staff.role });
+    });
+  });
 });
 
 router.post("/logout", (req, res) => {

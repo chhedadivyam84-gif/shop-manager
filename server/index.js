@@ -148,12 +148,28 @@ async function start() {
 const SECRET_PATH = path.join(
   process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(__dirname, "..", "data"),
   "session-secret.txt");
-let sessionSecret;
-if (fs.existsSync(SECRET_PATH)) {
-  sessionSecret = fs.readFileSync(SECRET_PATH, "utf8").trim();
-} else {
-  sessionSecret = crypto.randomBytes(32).toString("hex");
-  fs.writeFileSync(SECRET_PATH, sessionSecret);
+/* SESSION_SECRET wins when it is set, so a hosted copy can keep the
+   secret in the platform's own secret store rather than on a disk — and
+   so two instances of the same shop agree about a cookie. The file stays
+   as the fallback, which is what a shop PC with no environment to
+   configure actually needs. A secret that is set but obviously too short
+   to be one is refused rather than quietly accepted: a four-character
+   SESSION_SECRET is worse than none, because it looks configured. */
+let sessionSecret = String(process.env.SESSION_SECRET || "").trim();
+if (sessionSecret && sessionSecret.length < 32) {
+  throw new Error("SESSION_SECRET is set but too short — use at least 32 characters, or leave it unset.");
+}
+if (!sessionSecret) {
+  if (fs.existsSync(SECRET_PATH)) {
+    sessionSecret = fs.readFileSync(SECRET_PATH, "utf8").trim();
+  } else {
+    sessionSecret = crypto.randomBytes(32).toString("hex");
+    /* 0600: readable by the account running the app and nobody else.
+       Windows ignores the mode, which is why this is one layer and not
+       the answer — see the note on local data in SECURITY.md. */
+    fs.writeFileSync(SECRET_PATH, sessionSecret, { mode: 0o600 });
+  }
+  try { fs.chmodSync(SECRET_PATH, 0o600); } catch (e) { /* Windows, or a filesystem without modes */ }
 }
 
 const isProduction = process.env.NODE_ENV === "production";
@@ -161,6 +177,12 @@ const isProduction = process.env.NODE_ENV === "production";
 // Behind Fly.io's proxy, TLS is terminated upstream and requests reach us
 // over plain HTTP with X-Forwarded-Proto set — trust it so secure cookies work.
 app.set("trust proxy", 1);
+
+/* Express announces itself in an X-Powered-By header on every response.
+   It is not a vulnerability on its own — nobody breaks in through a
+   header — but it hands an attacker the framework and therefore the
+   advisory list to try, for nothing in return. Off. */
+app.disable("x-powered-by");
 
 /* ------------------------------------------------------------
    SECURITY HEADERS
@@ -249,6 +271,20 @@ app.use((req, res, next) => {
 // Raised from Express's 100kb default so a payment's base64-encoded receipt
 // attachment (up to 8MB decoded, see attachments.js) fits in one JSON request.
 app.use(express.json({ limit: "12mb" }));
+
+/* A ceiling on how fast anything can CHANGE this shop's records.
+ *
+ * Reads are deliberately untouched: every screen in this app fires
+ * several at once on each navigation, and limiting those would break
+ * the counter long before it troubled anybody attacking it.
+ *
+ * 240 writes a minute is roughly four a second sustained — far above a
+ * person billing flat out, and far below what makes a stolen session
+ * useful for emptying the customer book or hammering the box. The login
+ * route keeps its own, much stricter lockout (auth.js); this sits
+ * underneath as the general case. */
+const rateLimit = require("./rateLimit");
+app.use("/api", rateLimit.limit({ bucket: "api-write", max: 240, windowMs: 60 * 1000 }));
 /* Sessions in a file, not in memory.
 
    The thirty days below was never the reason staff got thrown back to the
@@ -413,7 +449,25 @@ app.use("/api/auth", require("./routes/auth"));
    Above fyLock and the feature gate deliberately — a sync replaces the
    whole database rather than writing a dated record, so "is this year
    closed" is not a question that applies to it. */
-app.use("/api/sync", require("./routes/sync"));
+/* The ONE route in this app that a stranger can reach without a session,
+   and the one that accepts an entire database. The sync key is 32 random
+   bytes compared in constant time, so guessing it is not a strategy —
+   but nothing stopped somebody posting at it all day, and each attempt
+   costs a scrypt hash and up to 12MB of body. Ten an hour per address is
+   far above what a real shop's push needs (it pushes when somebody
+   presses the button) and far below what makes this worth attacking. */
+app.use("/api/sync", rateLimit.limit({
+  bucket: "sync", max: 10, windowMs: 60 * 60 * 1000,
+  /* EVERY method, not just the writing ones. The general limiter below
+     leaves reads alone because the app's own screens fire several per
+     navigation — but nothing here is one of those screens. /peek is a
+     GET that answers a stranger holding the key with the shop's name
+     and its record counts, so leaving it unlimited would have left the
+     one unauthenticated read in the app the only unthrottled thing in
+     it. A test caught exactly that. */
+  methods: "all",
+  message: "Too many sync attempts. Try again later."
+}), require("./routes/sync"));
 
 /* A closed financial year stops accepting writes. Mounted after /api/auth so
    signing in is never blocked, and before every data route so a bill, payment

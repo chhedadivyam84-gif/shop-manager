@@ -638,7 +638,13 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
                     "public/js/admin.js", "test/admin.test.js",
                     "server/adminDashboard.js", "test/admin-dashboard.test.js",
                     "server/adminCustomers.js", "test/admin-customers.test.js",
-                    "server/adminProducts.js", "test/admin-products.test.js"];
+                    "server/adminProducts.js", "test/admin-products.test.js",
+                    /* The security pass is a separate, deliberate piece of
+                       work in the same repo. It is listed so this block
+                       stays a tripwire for the UNEXPECTED rather than
+                       quietly absorbing whatever happens to have changed. */
+                    "server/rateLimit.js", "test/security.test.js", ".env.example",
+                    "server/adminSales.js", "test/admin-sales.test.js"];
 
   /* The two existing files the admin panel is allowed to have touched,
      and the reason each one had to be:
@@ -654,7 +660,12 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
      Anything else appearing here is a scope breach, which is the whole
      point of naming them. */
   const MAY_TOUCH = ["server/index.js", "server/routes/alerts.js",
-                     "server/routes/customers.js", "server/routes/products.js"];
+                     "server/routes/customers.js", "server/routes/products.js",
+                     /* Security pass: session regeneration, the rate limiter,
+                        the import-undo whitelist, and two patched transitive
+                        dependencies. */
+                     "server/routes/auth.js", "server/importRun.js",
+                     "package-lock.json"];
 
   /* A file is new if it did not exist at the anchor. */
   const existedBefore = f => {
@@ -676,9 +687,23 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
     ok(f + " is untouched", !changed.includes(f));
   });
 
-  const stat = git("diff", "--numstat", BEFORE, "--", "server/index.js").split(/\s+/);
-  ok("the change to index.js is purely additive — 0 lines removed",
-     stat[1] === "0", stat.join(" "));
+  /* This began as "index.js lost no lines", which was true of the admin
+     panel's change to it and stopped being the right question once the
+     security pass rewrote the session-secret block in the same file. A
+     line count across two workstreams measures neither. What the admin
+     panel actually promised is that it ADDED its three pieces and took
+     nothing of the shop's away — so check exactly that. */
+  const indexSrc = read("server/index.js");
+  ok("the admin page route is still mounted",
+     /app\.get\("\/admin",/.test(indexSrc));
+  ok("the admin API is still mounted inside /api",
+     /app\.use\("\/api\/admin", requireAuth, adminAccess\.gate\(\)/.test(indexSrc));
+  ok("the admin page still has its own versioned-HTML cache",
+     /const versionedHtmlCache = new Map\(\)/.test(indexSrc));
+  ok("and the shop app's own route and cache are untouched beside it",
+     /function getVersionedIndexHtml\(\)/.test(indexSrc) &&
+     /let versionedIndexHtml = null/.test(indexSrc) &&
+     /app\.get\("\/", \(req, res\) => \{[\s\S]{0,200}?getVersionedIndexHtml\(\)/.test(indexSrc));
 
   WANT_NEW.forEach(f => {
     ok(f + " is new", changed.includes(f) && !existedBefore(f),

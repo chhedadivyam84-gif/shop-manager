@@ -25,6 +25,13 @@
    rows and the records all commit together or not at all.
    ============================================================ */
 const db = require("./db");
+
+/* The six tables an import writes rows into, taken from the specs in
+   importMap.js. Undo may delete from these and nothing else. */
+const UNDOABLE_TABLES = new Set([
+  "hist_sales", "hist_purchases", "hist_cash_entries",
+  "hist_gst_records", "customers", "suppliers",
+]);
 const { uid } = require("./util");
 const M = require("./importMap");
 
@@ -260,6 +267,19 @@ function reverse(batchId, staff) {
                          reason: `used by ${used} record(s) since the import` });
           continue;
         }
+      }
+
+      /* The ONLY place in this app where a table name reaches SQL from a
+         database column rather than from a literal. target_table is
+         written by this same module from its own spec, so it is not
+         attacker-controlled today — but "not today" is a property of
+         code nobody has changed yet, and a DELETE is not where to find
+         out. Anything not on this list is skipped and reported. */
+      if (!UNDOABLE_TABLES.has(r.target_table)) {
+        kept++;
+        blocked.push({ table: r.target_table, id: r.target_id,
+                       reason: "not a table an import may undo" });
+        continue;
       }
 
       db.prepare(`DELETE FROM ${r.target_table} WHERE id = ?`).run(r.target_id);

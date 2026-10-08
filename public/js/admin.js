@@ -42,7 +42,13 @@
     let data = null;
     const ct = res.headers.get("content-type") || "";
     if (ct.includes("application/json")) data = await res.json();
-    if (!res.ok) throw new Error((data && data.error) || "Request failed.");
+    if (!res.ok) {
+      const err = new Error((data && data.error) || "Request failed.");
+      /* Per-field complaints, when the server sent them, so a form can
+         mark the box that is wrong. */
+      if (data && data.fields) err.fields = data.fields;
+      throw err;
+    }
     return data;
   }
 
@@ -318,6 +324,10 @@
        this, navigating away from System Health leaves its timer running
        for the rest of the session, polling a page nobody is looking at. */
     stopHealthTimer();
+    /* Whatever screen is being drawn now, the previous one no longer
+       has unsaved edits to defend — the guard that would have stopped
+       this navigation already ran and was answered. */
+    settingsDirty = null;
     const key = currentKey();
     if (!key) {
       el.page.innerHTML = placeholderUnavailable();
@@ -341,6 +351,7 @@
     else if (key === "roles") renderRoles();
     else if (key === "audit") renderAudit(currentRoute().sub);
     else if (key === "health") renderHealth(currentRoute().sub);
+    else if (key === "settings") renderSettings(currentRoute().sub);
     else el.page.innerHTML = placeholderPage(section);
     el.main.scrollTop = 0;
     window.scrollTo(0, 0);
@@ -3797,6 +3808,421 @@
       "</div></div>" + childList;
   }
 
+  /* ==================================================================
+     SETTINGS — PART 12
+
+     THE SHOP'S OWN SETTINGS. Nothing on this screen is stored in the
+     browser: every value comes from the server and every save goes back
+     to it, through the handlers the shop app has always used. The page
+     holds a copy only so it can tell whether anything has been edited.
+
+     ONE REQUEST draws the whole screen — the sections, what each field
+     means, the valid options and the current values. Six requests for
+     six tabs would be six chances to half-load a form somebody is about
+     to save.
+
+     A SECTION SAVES ONLY ITS OWN FIELDS. The server ignores a key the
+     section does not own, and this sends only what it drew, so saving
+     Business cannot disturb a document heading.
+     ================================================================== */
+
+  /* Set by the settings screen while it has unsaved edits; read by the
+     navigation guard and by beforeunload. Null the rest of the time. */
+  let settingsDirty = null;
+  let suppressHashGuard = false;
+  let lastGoodHash = location.hash;
+
+  function guardedHashChange() {
+    /* Our own correction of the address bar, not a real navigation. */
+    if (suppressHashGuard) {
+      suppressHashGuard = false;
+      lastGoodHash = location.hash;
+      return;
+    }
+
+    if (settingsDirty && settingsDirty()) {
+      const go = window.confirm(
+        "You have changes that have not been saved.\n\n" +
+        "Leave this page and lose them?");
+      if (!go) {
+        /* Put the address back without redrawing: the screen, and the
+           edits on it, stay exactly as they were. */
+        suppressHashGuard = true;
+        location.hash = lastGoodHash;
+        return;
+      }
+      settingsDirty = null;
+    }
+
+    lastGoodHash = location.hash;
+    render();
+  }
+
+  /* The loaded copy, and the edits made on top of it. */
+  let setData = null;
+  let setEdits = {};
+  let setSeq = 0;
+  /* Which section is on screen. The form's event handlers are attached
+     ONCE to a container that outlives the form, so they must resolve the
+     current section when the event happens rather than close over the
+     one that was showing when they were attached. */
+  let setCurrentKey = null;
+  let setSaving = false;
+
+  /* The request in flight, if there is one. render() can run twice
+     before the first answer arrives — once on load and once for the
+     hash — and without this both would see an empty cache and both
+     would ask the server. Measured: two GETs for one page. */
+  let setLoading = null;
+
+  function setHref(key) {
+    return key ? "#/settings/" + encodeURIComponent(key) : "#/settings";
+  }
+
+  function setSection(key) {
+    if (!setData) return null;
+    return setData.sections.filter(function (x) { return x.key === key; })[0] || null;
+  }
+
+  /* Which fields differ from what was loaded. The whole of the
+     unsaved-changes machinery rests on this one comparison. */
+  function setChangedKeys(section) {
+    if (!section || section.readOnly) return [];
+    return section.fields.filter(function (f) {
+      if (!Object.prototype.hasOwnProperty.call(setEdits, f.key)) return false;
+      const was = section.values[f.key];
+      const now = setEdits[f.key];
+      if (f.type === "toggle") return !!was !== !!now;
+      return String(was === undefined || was === null ? "" : was) !==
+             String(now === undefined || now === null ? "" : now);
+    }).map(function (f) { return f.key; });
+  }
+
+  async function renderSettings(sub) {
+    el.page.innerHTML =
+      '<div class="adm-page-head">' +
+        '<div class="adm-page-head-text">' +
+          '<h1 class="adm-page-title">Settings</h1>' +
+          '<p class="adm-page-sub">How this shop is set up. These are the shop\u2019s own ' +
+          'settings &mdash; the same ones the Settings screen in the app saves, not a ' +
+          'second copy.</p>' +
+        "</div>" +
+      "</div>" +
+      '<div id="set-body">' + skeleton() + "</div>";
+
+    const host = document.getElementById("set-body");
+    const mine = ++setSeq;
+
+    /* Loaded once per visit to the screen; switching category does not
+       ask again. */
+    if (!setData) {
+      try {
+        if (!setLoading) setLoading = api("GET", "/admin/settings");
+        setData = await setLoading;
+        setLoading = null;
+      } catch (err) {
+        setLoading = null;
+        if (mine !== setSeq) return;
+        host.innerHTML = '<div class="adm-panel is-failed"><div class="adm-panel-body">' +
+          '<p class="adm-fail">' + esc(humanError(err)) + "</p>" +
+          '<button type="button" class="adm-retry" data-set-retry="1">Try again</button>' +
+          "</div></div>";
+        host.addEventListener("click", function (e) {
+          if (e.target.closest("[data-set-retry]")) { setData = null; renderSettings(sub); }
+        });
+        return;
+      }
+      if (mine !== setSeq) return;
+      setEdits = {};
+    }
+
+    const chosen = setSection(sub) || setData.sections[0];
+    if (!chosen) {
+      host.innerHTML = emptyLine("There are no settings to show.");
+      return;
+    }
+
+    /* The guard reads this. It must describe the CHOSEN section only —
+       changing category is itself a navigation, and is guarded. */
+    settingsDirty = function () { return setChangedKeys(setSection(chosen.key)).length > 0; };
+
+    host.innerHTML =
+      '<div class="adm-set">' +
+        '<nav class="adm-set-nav" aria-label="Settings sections">' +
+          setData.sections.map(function (x) {
+            return '<a class="adm-set-tab' + (x.key === chosen.key ? " is-on" : "") +
+              '" href="' + setHref(x.key) + '">' + esc(x.label) + "</a>";
+          }).join("") +
+        "</nav>" +
+        '<div class="adm-set-main" id="set-main"></div>' +
+      "</div>";
+
+    wireSettingsForm();
+    paintSettingsSection(chosen.key);
+  }
+
+  /* ATTACHED ONCE PER VISIT, to #set-main, which survives every repaint
+     because only its innerHTML is replaced.
+
+     This used to run from paintSettingsSection, which meant every
+     repaint added another copy of these handlers to the same element.
+     The effect was invisible until somebody pressed Cancel and then
+     edited and saved: the click reached two save handlers, the first
+     saved and cleared the pending edit, and the second — running on the
+     now-empty edit — wrote undefined over the value in the loaded copy
+     and repainted the field blank. The database had the right value and
+     the screen showed an empty box. Found by doing it, not by a test. */
+  function wireSettingsForm() {
+    const main = document.getElementById("set-main");
+    if (!main) return;
+
+    const onEdit = function (e) {
+      const t = e.target.closest("[data-set-field]");
+      if (!t) return;
+      const sec = setSection(setCurrentKey);
+      if (sec) takeSettingEdit(sec, t);
+    };
+    main.addEventListener("input", onEdit);
+    main.addEventListener("change", onEdit);
+
+    main.addEventListener("click", function (e) {
+      if (e.target.closest("[data-set-save]")) { saveSettingsSection(setCurrentKey); return; }
+      if (e.target.closest("[data-set-cancel]")) { cancelSettingsSection(setCurrentKey); return; }
+    });
+  }
+
+  function paintSettingsSection(key) {
+    const main = document.getElementById("set-main");
+    const sec = setSection(key);
+    if (!main || !sec) return;
+    setCurrentKey = key;
+
+    if (sec.readOnly) {
+      main.innerHTML =
+        '<div class="adm-panel"><div class="adm-panel-head">' +
+          '<h2 class="adm-panel-title">' + esc(sec.label) + "</h2></div>" +
+          '<div class="adm-panel-body">' +
+          '<p class="adm-why">' + esc(sec.blurb) + "</p>" +
+          '<div class="adm-facts">' +
+          (sec.facts || []).map(function (f) {
+            return '<div class="adm-fact">' +
+              '<div class="adm-fact-k">' + esc(f.label) + "</div>" +
+              '<div class="adm-fact-v">' + esc(f.value) + "</div>" +
+              '<div class="adm-fact-n">' + esc(f.note || "") + "</div>" +
+            "</div>";
+          }).join("") +
+          "</div></div></div>";
+      return;
+    }
+
+    const readOnly = !setData.mayEdit;
+
+    main.innerHTML =
+      '<div class="adm-panel"><div class="adm-panel-head">' +
+        '<h2 class="adm-panel-title">' + esc(sec.label) + "</h2></div>" +
+        '<div class="adm-panel-body">' +
+        '<p class="adm-why">' + esc(sec.blurb) + "</p>" +
+        (readOnly
+          ? '<p class="adm-foot"><strong>You can see these settings but not change ' +
+            "them.</strong> Changing the shop\u2019s configuration is the owner\u2019s.</p>"
+          : "") +
+        '<div class="adm-set-form">' +
+          sec.fields.map(function (f) { return settingsField(sec, f, readOnly); }).join("") +
+        "</div>" +
+        '<div id="set-msg"></div>' +
+        (readOnly ? "" :
+          '<div class="adm-save-bar" id="set-bar" hidden>' +
+            '<p class="adm-why" id="set-dirty"></p>' +
+            '<button type="button" class="adm-retry" data-set-cancel="1">Cancel</button>' +
+            '<button type="button" class="adm-primary" data-set-save="1">Save changes</button>' +
+          "</div>") +
+      "</div></div>";
+
+    refreshSettingsBar(sec);
+  }
+
+  function settingsField(sec, f, readOnly) {
+    const cur = Object.prototype.hasOwnProperty.call(setEdits, f.key)
+      ? setEdits[f.key] : sec.values[f.key];
+    const id = "setf-" + f.key;
+    const dis = readOnly ? " disabled" : "";
+
+    let control;
+    if (f.type === "toggle") {
+      control = '<label class="adm-set-toggle"><input type="checkbox" id="' + id +
+        '" data-set-field="' + esc(f.key) + '"' + (cur ? " checked" : "") + dis +
+        "> <span>" + esc(f.label) + "</span></label>";
+    } else if (f.type === "select") {
+      control = '<select class="adm-input" id="' + id + '" data-set-field="' + esc(f.key) + '"' + dis + ">" +
+        '<option value="">Not set</option>' +
+        (f.options || []).map(function (o) {
+          return '<option value="' + esc(o) + '"' +
+            (String(cur) === String(o) ? " selected" : "") + ">" + esc(o) + "</option>";
+        }).join("") + "</select>";
+    } else if (f.type === "textarea") {
+      control = '<textarea class="adm-input" id="' + id + '" rows="3" data-set-field="' +
+        esc(f.key) + '"' + dis + ">" + esc(cur === undefined || cur === null ? "" : cur) + "</textarea>";
+    } else {
+      const t = f.type === "email" ? "email" : (f.type === "number" ? "number" : "text");
+      control = '<input class="adm-input" type="' + t + '" id="' + id +
+        '" data-set-field="' + esc(f.key) + '" value="' +
+        esc(cur === undefined || cur === null ? "" : String(cur)) + '"' +
+        (f.placeholder ? ' placeholder="' + esc(f.placeholder) + '"' : "") +
+        (f.type === "number" ? ' min="1" step="1"' : "") + dis + ">";
+    }
+
+    /* A paragraph-sized field takes the full width of the form rather
+       than half of it — an address squeezed into one column of two wraps
+       into a tower. */
+    const wide = f.type === "textarea" ? " is-wide" : "";
+
+    return '<div class="adm-set-field' + wide + (f.sensitive ? " is-sensitive" : "") + '">' +
+      (f.type === "toggle" ? "" :
+        '<label class="adm-field-label" for="' + id + '">' + esc(f.label) +
+        (f.required ? ' <span class="adm-req" title="Required">*</span>' : "") + "</label>") +
+      control +
+      (f.help ? '<p class="adm-set-help">' + esc(f.help) + "</p>" : "") +
+      '<p class="adm-set-err" data-set-err="' + esc(f.key) + '" hidden></p>' +
+    "</div>";
+  }
+
+  function takeSettingEdit(sec, input) {
+    const key = input.dataset.setField;
+    const f = sec.fields.filter(function (x) { return x.key === key; })[0];
+    if (!f) return;
+
+    setEdits[key] = f.type === "toggle" ? input.checked : input.value;
+
+    /* Checked as the person types, for the reason section 16 gives —
+       so they are told early. The server checks again, and the server
+       is the one that decides. */
+    const problem = settingsFieldProblem(f, setEdits[key]);
+    const box = document.querySelector('[data-set-err="' + CSS.escape(key) + '"]');
+    if (box) {
+      box.textContent = problem || "";
+      box.hidden = !problem;
+    }
+    input.classList.toggle("is-bad", !!problem);
+
+    refreshSettingsBar(sec);
+  }
+
+  /* A deliberately small echo of the server's rules: enough to catch a
+     typo without the round trip, and never the authority. Anything this
+     misses the server refuses. */
+  function settingsFieldProblem(f, val) {
+    const s = f.type === "toggle" ? "" : String(val === undefined || val === null ? "" : val).trim();
+    if (f.required && !s) return f.label + " cannot be blank.";
+    if (f.type === "email" && s && !/^[^@\s]+@[^@.\s]+\.[^@\s]+$/.test(s)) {
+      return "That does not look like an email address.";
+    }
+    if (f.type === "number" && s) {
+      const n = Number(s);
+      if (!Number.isInteger(n) || n < 1) return f.label + " must be a whole number of 1 or more.";
+    }
+    return null;
+  }
+
+  function refreshSettingsBar(sec) {
+    const bar = document.getElementById("set-bar");
+    if (!bar) return;
+    const changed = setChangedKeys(setSection(sec.key));
+    bar.hidden = changed.length === 0;
+    const note = document.getElementById("set-dirty");
+    if (note) {
+      note.textContent = changed.length === 1
+        ? "1 setting has been changed and not saved."
+        : changed.length + " settings have been changed and not saved.";
+    }
+  }
+
+  function cancelSettingsSection(key) {
+    const sec = setSection(key);
+    if (!sec) return;
+    const changed = setChangedKeys(sec);
+    if (changed.length && !window.confirm(
+      "Discard " + (changed.length === 1 ? "the change" : "these " + changed.length + " changes") +
+      " and go back to what is saved?")) return;
+
+    /* ONLY THIS SECTION'S fields are forgotten. Section 15 rules out a
+       reset-everything button, and this is the same principle: Cancel on
+       Business must not throw away an edit waiting on Documents. */
+    sec.fields.forEach(function (f) { delete setEdits[f.key]; });
+    paintSettingsSection(key);
+  }
+
+  async function saveSettingsSection(key) {
+    /* Belt and braces beside the single-wiring fix above: a double click,
+       or an Enter that lands as a second activation, must not save twice
+       — the second pass would have no pending edits left and would write
+       nothing useful over what the first one stored. */
+    if (setSaving) return;
+    const sec = setSection(key);
+    if (!sec) return;
+    const changed = setChangedKeys(sec);
+    if (!changed.length) return;
+
+    /* Anything the person is about to change that carries a warning gets
+       that warning read back to them before it is saved. */
+    const risky = sec.fields.filter(function (f) {
+      return f.sensitive && changed.indexOf(f.key) !== -1;
+    });
+    if (risky.length) {
+      const ask = risky.map(function (f) {
+        return f.label + "\n" + (f.impact || "");
+      }).join("\n\n");
+      if (!window.confirm("Please confirm this change.\n\n" + ask + "\n\nSave it?")) return;
+    }
+
+    /* THE GUARD IS RAISED HERE, after every early return above.
+       It was raised before the confirmation at first, and declining that
+       confirmation returned without lowering it again — which left the
+       Save button dead for the rest of the session, on every section,
+       with no message. Nothing below this line returns without passing
+       through one of the two places that lower it. */
+    setSaving = true;
+
+    const msg = document.getElementById("set-msg");
+    const btn = document.querySelector("[data-set-save]");
+    if (btn) { btn.disabled = true; btn.textContent = "Saving\u2026"; }
+    if (msg) msg.innerHTML = "";
+
+    /* Only the fields that moved. Sending the whole section would make
+       an audit entry out of every field a person looked at. */
+    const body = {};
+    changed.forEach(function (k) { body[k] = setEdits[k]; });
+
+    try {
+      await api("PUT", "/admin/settings/" + encodeURIComponent(key), body);
+    } catch (err) {
+      setSaving = false;
+      if (btn) { btn.disabled = false; btn.textContent = "Save changes"; }
+      /* The server may have refused individual fields; show each one
+         against its own box rather than as a single line above twelve. */
+      const fields = err && err.fields;
+      if (fields) {
+        Object.keys(fields).forEach(function (k) {
+          const box = document.querySelector('[data-set-err="' + CSS.escape(k) + '"]');
+          if (box) { box.textContent = fields[k]; box.hidden = false; }
+        });
+      }
+      if (msg) {
+        msg.innerHTML = '<p class="adm-fail">' + esc(humanError(err)) + "</p>";
+      }
+      return;
+    }
+
+    /* SAVED ONLY WHEN THE SERVER SAID SO — section 20. The loaded copy
+       is advanced to what was sent, so the screen now agrees with the
+       database and the unsaved-changes guard falls silent. */
+    changed.forEach(function (k) { sec.values[k] = setEdits[k]; delete setEdits[k]; });
+
+    setSaving = false;
+    if (btn) { btn.disabled = false; btn.textContent = "Save changes"; }
+    paintSettingsSection(key);
+    toast("Settings saved.", "ok");
+  }
+
   /* ------------------------------------------------------------------
      THE PROFILE MENU
      ------------------------------------------------------------------ */
@@ -3864,7 +4290,19 @@
       toast("Admin search is not set up yet.");
     });
 
-    window.addEventListener("hashchange", render);
+    /* UNSAVED CHANGES. render() is no longer wired straight to
+       hashchange: a screen may refuse the navigation. See
+       guardedHashChange. */
+    window.addEventListener("hashchange", guardedHashChange);
+
+    /* And the same for closing the tab or pressing reload, which no
+       amount of in-page routing can intercept. The browser shows its
+       own wording; all a page may do is ask for the prompt. */
+    window.addEventListener("beforeunload", function (e) {
+      if (!settingsDirty || !settingsDirty()) return;
+      e.preventDefault();
+      e.returnValue = "";
+    });
 
     /* A phone rotated into landscape past 1024px would otherwise keep a
        stale drawer-open class and a visible scrim. */

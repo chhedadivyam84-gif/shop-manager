@@ -789,6 +789,83 @@ router.get("/health/:service", mayReadHealth, (req, res) => {
   res.json(one);
 });
 
+/* ==================================================================
+   SETTINGS — PART 12
+
+   THE SHOP'S OWN SETTINGS, NOT A SECOND SET. Every write below ends in
+   a handler that routes/settings.js has had for years and now exports:
+   updateSettings, updateNumbering, updateAppTheme. That is the same
+   arrangement Customers and Products use — an admin edit IS the shop's
+   edit, running the theme whitelist, the http-only portal check, the
+   header-scale clamp and the six-digit PIN code rule rather than a
+   second copy of them that would drift.
+
+   WHAT THIS LAYER ADDS is the validation the brief asks for in section
+   8 and 16 — email, web address, phone, GSTIN, PIN code, state, lengths
+   — checked against the catalogue in adminSettings.js before anything
+   is delegated. The shop's own Settings screen is deliberately left
+   exactly as it was: tightening what IT accepts is a change to a screen
+   a shopkeeper uses mid-sale, and was not asked for here.
+
+   READ AND WRITE ARE DIFFERENT GRANTS. settings.view admits an OWNER or
+   an ADMIN; settings.edit is the OWNER alone. Hiding the Save button
+   from an ADMIN would not be the protection — the PUT below is.
+
+   ANOTHER SHOP'S SETTINGS ARE UNREACHABLE, not merely refused: every
+   business is its own SQLite file and the binder above /api picks the
+   file from the SESSION. There is no settings id in any of these
+   routes to manipulate, and there could not be.
+   ================================================================== */
+const adminSettings = require("../adminSettings");
+const mayReadSettings = adminAccess.require("settings.view");
+const mayEditSettings = adminAccess.require("settings.edit");
+
+/* The whole screen in one call: the sections, what each field means,
+   the valid options, and the current values. Section 21 asks for a
+   lightweight page, and one request that draws all of it beats six that
+   each draw a tab. */
+router.get("/settings", mayReadSettings, (req, res) => {
+  res.json(Object.assign({}, adminSettings.describe(), {
+    /* So the screen can render itself read-only rather than offering a
+       Save button that the server would refuse. The server refuses it
+       either way — this is courtesy, not security. */
+    mayEdit: adminAccess.can(req, "settings.edit"),
+  }));
+});
+
+router.put("/settings/:section", mayEditSettings, (req, res) => {
+  const checked = adminSettings.validate(req.params.section, req.body);
+  if (!checked.ok) {
+    return res.status(checked.status || 400).json({
+      error: checked.error,
+      /* Per-field, so the screen can mark the box that is wrong instead
+         of showing one message above a form of twelve. */
+      fields: checked.fields || undefined,
+    });
+  }
+
+  /* DELEGATED. The body is reshaped into what the shop's handler has
+     always taken, and that handler writes, validates again in its own
+     terms, and records the audit entry — which PART 12 widened to carry
+     the before and after of the fields that actually moved. */
+  const body = checked.payload;
+
+  if (checked.section.via === "numbering") {
+    req.body = body;
+    return require("./settings").updateNumbering(req, res);
+  }
+  if (checked.section.via === "appTheme") {
+    req.body = { theme: body.theme };
+    return require("./settings").updateAppTheme(req, res);
+  }
+
+  /* The ordinary case. Only the keys this section owns are forwarded;
+     the shop's handler keeps every column its body does not mention, so
+     saving Business cannot disturb a document heading. */
+  req.body = body;
+  return require("./settings").updateSettings(req, res);
+});
+
 function businessName() {
   try {
     const db = require("../db");

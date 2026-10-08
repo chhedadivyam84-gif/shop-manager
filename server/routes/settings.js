@@ -18,10 +18,43 @@ const router = express.Router();
  * displays "sk_live_abc…" also teaches people it is normal for a key to be
  * on screen, which is how keys end up in screenshots and WhatsApp messages.
  */
+/* EVERY SECRET, BY NAME. This stripped two columns and returned the
+   other fifty, which was correct when the table had a handful of
+   columns and stopped being correct as it grew to fifty-two. Measured
+   against a configured shop: the cloud sync key came back in plain
+   text, along with the licence key, the activation code, the sync
+   accept hash and the sealed scan credential — to ANY signed-in person,
+   because this endpoint is behind requireAuth and nothing more.
+
+   None of them is read by any screen in this app: app.js and the admin
+   panel were both checked for all five and reference none. So removing
+   them costs nothing and closes a real leak.
+
+   A DENYLIST, not an allowlist, deliberately. An allowlist here would
+   silently drop the next ordinary column somebody adds, and a setting
+   that vanishes from the Settings screen is a bug that takes a week to
+   notice. A denylist fails the other way: a new SECRET column must be
+   added here, and the test in test/settings.test.js fails loudly for
+   any column whose name looks like a credential and is not on it. */
+const NEVER_SENT = [
+  "pin_hash",          // the legacy single-PIN hash
+  "gst_credentials",   // the GSP's API secret
+  "scan_credentials",  // the bill-reading API key, sealed
+  "sync_cloud_key",    // the key this copy presents to its cloud copy
+  "sync_accept_hash",  // the hash of the key it accepts
+  "license_key",       // the licence
+  "activation_code",   // and the code that activated it
+  "last_verdict",      // signed licence verdicts — not secrets, but
+  "last_good_verdict", // nothing reads them and they are noise on a page
+];
+
 function publicSettings() {
   const s = db.prepare("SELECT * FROM settings WHERE id = 1").get();
-  const { pin_hash, gst_credentials, ...rest } = s;
-  return rest;
+  const out = {};
+  for (const k of Object.keys(s)) {
+    if (!NEVER_SENT.includes(k)) out[k] = s[k];
+  }
+  return out;
 }
 
 router.get("/", (req, res) => {
@@ -34,8 +67,8 @@ router.get("/", (req, res) => {
 const PRINT_THEMES = ["classic", "tally", "navy", "minimal", "tallyfull"];
 const cleanTheme = (v, fallback) => (PRINT_THEMES.includes(v) ? v : fallback);
 
-router.put("/", requireRole("owner"), (req, res) => {
-  const { businessName, tagline, address, phones, gstin, state, upiId, email, website,
+function updateSettings(req, res) {
+  const { businessName, legalName, tagline, address, phones, gstin, state, upiId, email, website,
           invoiceTheme, challanTheme, allowNegativeStock,
           bankName, bankAccountNo, bankIfsc, bankBranch,
           invoiceTitle, challanTitle, footerMessage, showCopyLabel, pinCode,
@@ -43,13 +76,21 @@ router.put("/", requireRole("owner"), (req, res) => {
   const current = db.prepare("SELECT * FROM settings WHERE id = 1").get();
 
   db.prepare(`
-    UPDATE settings SET business_name=?, tagline=?, address=?, phones=?, gstin=?, state=?, upi_id=?, email=?, website=?,
+    UPDATE settings SET business_name=?, legal_name=?, tagline=?, address=?, phones=?, gstin=?, state=?, upi_id=?, email=?, website=?,
       invoice_theme=?, challan_theme=?, allow_negative_stock=?,
       bank_name=?, bank_account_no=?, bank_ifsc=?, bank_branch=?,
       invoice_title=?, challan_title=?, footer_message=?, show_copy_label=?, pin_code=?,
       header_scales=?, portal_url=? WHERE id=1
   `).run(
-    (businessName || current.business_name).trim(), (tagline ?? current.tagline),
+    (businessName || current.business_name).trim(),
+    /* THE REGISTERED NAME, when it differs from the trading one.
+       ewb/service.js has always READ this column for the e-way bill’s
+       From name, but no handler ever wrote it and no screen offered a
+       field — so it was blank on every shop and every e-way bill went
+       out under the trading name instead. The column existed; only the
+       way to fill it was missing. Same ⁠?? current⁠ rule as every other
+       field here, so a caller that does not mention it changes nothing. */
+    (legalName ?? current.legal_name ?? ""), (tagline ?? current.tagline),
     (address ?? current.address), (phones ?? current.phones), (gstin ?? current.gstin),
     (state ?? current.state), (upiId ?? current.upi_id),
     (email ?? current.email), (website ?? current.website),
@@ -106,9 +147,42 @@ router.put("/", requireRole("owner"), (req, res) => {
     })()
   );
 
-  logAction(req, "settings.update", "");
-  res.json(publicSettings());
-});
+  /* THE DETAIL USED TO BE AN EMPTY STRING, so the log recorded that
+     settings changed and never what changed — "settings.update" and
+     nothing else, for a screen that edits twenty-three columns. The
+     before/after now goes on the record through the mechanism PART 10
+     built, which names only the fields that actually moved and redacts
+     anything whose name looks like a credential. */
+  const after = publicSettings();
+  logAction(req, "settings.update", changedSummary(current, after), {
+    resourceType: "settings", resourceId: "1",
+    before: current, after,
+    fields: AUDITED_FIELDS,
+  });
+  res.json(after);
+}
+router.put("/", requireRole("owner"), updateSettings);
+
+/* The columns worth a before/after line. Deliberately a named list and
+   not "every column": the settings row carries secrets, two JSON blobs
+   and a base64 logo, none of which belongs in an audit entry. */
+const AUDITED_FIELDS = [
+  "business_name", "legal_name", "tagline", "address", "phones", "gstin",
+  "state", "pin_code", "upi_id", "email", "website", "portal_url",
+  "invoice_theme", "challan_theme", "invoice_title", "challan_title",
+  "footer_message", "show_copy_label", "allow_negative_stock",
+  "bank_name", "bank_account_no", "bank_ifsc", "bank_branch",
+];
+
+/* One readable line for the audit list, so the log is useful without
+   opening every entry. */
+function changedSummary(before, after) {
+  const moved = AUDITED_FIELDS.filter(f =>
+    String(before[f] === undefined || before[f] === null ? "" : before[f]) !==
+    String(after[f] === undefined || after[f] === null ? "" : after[f]));
+  if (!moved.length) return "Saved with no change";
+  return moved.slice(0, 6).join(", ") + (moved.length > 6 ? " and " + (moved.length - 6) + " more" : "");
+}
 
 /**
  * Numbering: read/set where the Estimate and Delivery Challan series
@@ -145,7 +219,7 @@ router.get("/numbering", requireRole("owner"), (req, res) => {
   });
 });
 
-router.put("/numbering", requireRole("owner"), (req, res) => {
+function updateNumbering(req, res) {
   const { nextEstimateNumber, nextChallanNumber } = req.body;
   const result = {};
 
@@ -163,9 +237,11 @@ router.put("/numbering", requireRole("owner"), (req, res) => {
   }
 
   logAction(req, "settings.numbering",
-    `Next Estimate: ${result.nextEstimateNo || "(unchanged)"}, Next Challan: ${result.nextChallanNo || "(unchanged)"}`);
+    `Next Estimate: ${result.nextEstimateNo || "(unchanged)"}, Next Challan: ${result.nextChallanNo || "(unchanged)"}`,
+    { resourceType: "settings", resourceId: "numbering", meta: result });
   res.json(result);
-});
+}
+router.put("/numbering", requireRole("owner"), updateNumbering);
 
 /**
  * Bill Print Settings — paper, which columns print, whether rates show.
@@ -239,15 +315,19 @@ router.put("/po-wa-template", requireRole("owner"), (req, res) => {
 const APP_THEMES = ["navy-gold", "forest-brass", "maroon-gold", "teal-copper",
                     "indigo-amber", "charcoal-gold", "plum-rose"];
 
-router.put("/app-theme", requireRole("owner"), (req, res) => {
+function updateAppTheme(req, res) {
   const t = String(req.body.theme || "").trim();
   if (t && !APP_THEMES.includes(t)) {
     return res.status(400).json({ error: "That colour scheme is not one this app knows." });
   }
+  const was = (db.prepare("SELECT app_theme FROM settings WHERE id = 1").get() || {}).app_theme || "";
   db.prepare("UPDATE settings SET app_theme = ? WHERE id = 1").run(t);
-  logAction(req, "settings.appTheme", t || "default");
+  logAction(req, "settings.appTheme", t || "default",
+    { resourceType: "settings", resourceId: "appTheme",
+      before: { appTheme: was }, after: { appTheme: t }, fields: ["appTheme"] });
   res.json({ ok: true, theme: t, themes: APP_THEMES });
-});
+}
+router.put("/app-theme", requireRole("owner"), updateAppTheme);
 
 /**
  * Which Home tiles this shop has put away.
@@ -300,3 +380,21 @@ router.put("/logo", requireRole("owner"), (req, res) => {
 });
 
 module.exports = router;
+/* For the admin panel, so a change made there goes through exactly
+   these rules — the theme whitelist, the http-only portal check, the
+   header-scale clamp, the six-digit PIN code — rather than a second
+   copy of them that will drift. Hung off the router because that is
+   what this file has always exported, the same as routes/customers.js.
+
+   publicSettings is exported for the same reason: it is the one place
+   that decides what a settings row may leave the server as, and the
+   admin panel must not have an opinion of its own about that. */
+module.exports.updateSettings = updateSettings;
+module.exports.updateNumbering = updateNumbering;
+module.exports.updateAppTheme = updateAppTheme;
+module.exports.publicSettings = publicSettings;
+module.exports.readCounter = readCounter;
+module.exports.formatDocNo = formatDocNo;
+module.exports.PRINT_THEMES = PRINT_THEMES;
+module.exports.APP_THEMES = APP_THEMES;
+module.exports.NEVER_SENT = NEVER_SENT;

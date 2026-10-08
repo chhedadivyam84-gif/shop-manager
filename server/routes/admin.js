@@ -22,6 +22,7 @@ const express = require("express");
 const adminAccess = require("../adminAccess");
 const dashboard = require("../adminDashboard");
 const customers = require("../adminCustomers");
+const products = require("../adminProducts");
 
 const router = express.Router();
 
@@ -172,6 +173,151 @@ router.put("/customers/:id", mayEditCustomers, (req, res) =>
    is not something an admin shell should do on its own. */
 router.patch("/customers/:id/active", mayEditCustomers, (req, res) =>
   require("./customers").setCustomerActive(req, res));
+
+/* ==================================================================
+   PRODUCTS AND INVENTORY
+
+   Reading the catalogue and the shelves, plus the two changes the shop
+   already supports: editing a product, and correcting one size's count
+   at one location.
+
+   BOTH WRITES ARE THE SHOP'S OWN HANDLERS, not copies. That matters
+   more here than anywhere else in this panel, because the stock path
+   carries rules that are easy to get subtly wrong and expensive to get
+   wrong at all:
+
+     - it runs inside db.transaction, so the count and the
+       product-level total cannot end up disagreeing
+     - it writes through inventory.addStock, whose UPDATE is
+       `quantity = quantity + ?` — arithmetic in SQLite, not
+       read-then-overwrite in JavaScript, so two people correcting the
+       same size at the same moment cannot lose one another's change
+     - it clamps at zero, so an adjustment cannot drive a shelf negative
+     - it records a stock_ledger row with the count BEFORE and AFTER
+
+   WHAT THIS ADDS is the one thing the shop's own screen does not: a
+   REASON. The ledger has always had a remarks column and a movement
+   called "adjustment"; nothing was filling them for a manual
+   correction, so a corrected count said "stock_in" with no note. One
+   line of ledger context before delegating fixes that, for this path
+   only, and changes no stock logic whatsoever.
+   ================================================================== */
+const mayReadProducts = adminAccess.require("products.view");
+const mayEditProducts = adminAccess.require("products.edit");
+const mayAdjustStock  = adminAccess.require("inventory.adjust");
+
+router.get("/products", mayReadProducts, (req, res) => {
+  const q = req.query || {};
+  res.json(products.list({
+    q: q.q, filter: q.filter, sort: q.sort, category: q.category,
+    page: q.page, pageSize: q.pageSize,
+  }));
+});
+
+/* Literal routes first, so /products/meta is never read as an id. */
+router.get("/inventory", mayReadProducts, (req, res) => {
+  res.json(products.overview());
+});
+
+router.get("/inventory/history", mayReadProducts, (req, res) => {
+  const q = req.query || {};
+  res.json(products.historyFor({
+    productId: q.productId, sizeId: q.sizeId, movement: q.movement,
+    from: q.from, to: q.to, page: q.page, limit: q.limit,
+    }));
+});
+
+router.get("/inventory/movements", mayReadProducts, (req, res) => {
+  res.json({ movements: products.movementTypes() });
+});
+
+router.get("/products/:id", mayReadProducts, (req, res) => {
+  const detail = products.profile(String(req.params.id || ""));
+  if (!detail) return res.status(404).json({ error: "Product not found." });
+
+  /* What THIS login may do with it, decided here and sent as two
+     booleans. The alternative is the browser holding a list of
+     capability names and reasoning about them, which puts a copy of
+     the permission model in the one place it cannot be trusted. The
+     server refuses the write regardless; this only stops the page
+     offering a button that would be refused. */
+  detail.abilities = {
+    mayEdit: adminAccess.can(req, "products.edit"),
+    mayAdjust: adminAccess.can(req, "inventory.adjust"),
+  };
+  res.json(detail);
+});
+
+/* Edit. The handler is the shop's own. */
+router.put("/products/:id", mayEditProducts, (req, res) =>
+  require("./products").updateProduct(req, res));
+
+/**
+ * Correct one size's count at one location.
+ *
+ * Owner-only, and deliberately narrower than editing a product: this
+ * moves a number the shop bills against.
+ *
+ * A REASON IS REQUIRED. The shop's own screen does not ask for one and
+ * that is its business; an admin reaching past the counter to change a
+ * count should have to say why, and the ledger has always had somewhere
+ * to put it. The reason, the movement type and a reference are set on
+ * the request's ledger context — which AsyncLocalStorage gave to this
+ * request alone — and the shop's handler then records them without
+ * knowing anything changed.
+ *
+ * Nothing about HOW the stock moves is reimplemented here. The handler
+ * below does the transaction, the clamp and the ledger write exactly as
+ * it does for the counter.
+ */
+router.patch("/products/:id/sizes/:sizeId/stock", mayAdjustStock, (req, res) => {
+  const reason = String((req.body && req.body.reason) || "").trim();
+  if (!reason) {
+    return res.status(400).json({ error: "Give a reason for the correction." });
+  }
+  if (reason.length > 200) {
+    return res.status(400).json({ error: "Keep the reason under 200 characters." });
+  }
+
+  /* Validated here rather than left to the handler's Number(), which
+     would turn "abc" into NaN and a blank body into a silent no-op. */
+  const hasStock = req.body.stock !== undefined;
+  const hasDelta = req.body.delta !== undefined;
+  if (hasStock === hasDelta) {
+    return res.status(400).json({ error: "Give either a new count or a change, not both." });
+  }
+
+  const raw = hasStock ? req.body.stock : req.body.delta;
+  /* Number(null) is 0, Number("") is 0, Number(true) is 1 and Number([])
+     is 0 — so a bare Number() check accepts all four and quietly sets a
+     shelf to zero. A test sent {"stock": null} and wiped a count of 40
+     without a word, which is exactly the silent stock change the brief
+     rules out. Only a real number, or a string that is entirely one,
+     gets through. */
+  const numeric = typeof raw === "number" ||
+    (typeof raw === "string" && raw.trim() !== "" && !isNaN(Number(raw)));
+  if (!numeric) {
+    return res.status(400).json({ error: "That is not a number." });
+  }
+  const figure = Number(raw);
+  if (!Number.isFinite(figure)) {
+    return res.status(400).json({ error: "That is not a number." });
+  }
+  if (hasStock && figure < 0) {
+    return res.status(400).json({ error: "A stock count cannot be negative." });
+  }
+  if (Math.abs(figure) > 10000000) {
+    return res.status(400).json({ error: "That quantity is out of range." });
+  }
+
+  require("../stockLedger").setContext({
+    movement: "adjustment",
+    refType: "Admin correction",
+    remarks: reason,
+  });
+
+  return require("./products").adjustSizeStock(req, res);
+});
 
 /* The roles the panel is structured for, and which capabilities each
    holds. Read-only, and owner-only: it describes the shape of the

@@ -348,7 +348,17 @@ router.post("/", (req, res) => {
   res.status(201).json(serialize(p));
 });
 
-router.put("/:id", (req, res) => {
+/**
+ * Change a product.
+ *
+ * Lifted out of the route body unchanged so the admin panel can offer an
+ * edit without a second copy of these rules — the sizes array that is only
+ * touched when it is actually supplied, the in-place size update that keeps
+ * a sold invoice_items link alive, and the malformed-date rule that keeps a
+ * good value rather than clearing it. Those would drift apart in two places
+ * within a month.
+ */
+function updateProduct(req, res) {
   const p = db.prepare("SELECT * FROM products WHERE id = ?").get(req.params.id);
   if (!p) return res.status(404).json({ error: "Product not found." });
   const { name, brand, category, unit, gst, godown, rack, sizes,
@@ -422,7 +432,9 @@ router.put("/:id", (req, res) => {
   logAction(req, "product.update", p.name);
   const updated = db.prepare("SELECT * FROM products WHERE id = ?").get(p.id);
   res.json(serialize(updated));
-});
+}
+
+router.put("/:id", updateProduct);
 
 /**
  * Correct ONE size's stock directly — every size carries its own count now,
@@ -436,7 +448,7 @@ router.put("/:id", (req, res) => {
  * the safer default for any older caller (matches what a sale can actually
  * draw from) rather than silently landing in Warehouse.
  */
-router.patch("/:id/sizes/:sizeId/stock", (req, res) => {
+function adjustSizeStock(req, res) {
   const p = db.prepare("SELECT * FROM products WHERE id = ?").get(req.params.id);
   if (!p) return res.status(404).json({ error: "Product not found." });
   const size = db.prepare("SELECT * FROM product_sizes WHERE id = ? AND product_id = ?").get(req.params.sizeId, p.id);
@@ -458,7 +470,9 @@ router.patch("/:id/sizes/:sizeId/stock", (req, res) => {
 
   logAction(req, "product.stock_adjust", `${p.name} (${size.label}) @ ${targetLocation ? targetLocation.name : "Shop"}: ${before} → ${newStock}`);
   res.json(serialize(db.prepare("SELECT * FROM products WHERE id = ?").get(p.id)));
-});
+}
+
+router.patch("/:id/sizes/:sizeId/stock", adjustSizeStock);
 
 /**
  * Full Purchase Entry for one product: date, supplier, invoice number, size/
@@ -989,3 +1003,9 @@ router.delete("/:id", requireRole("owner"), (req, res) => {
 });
 
 module.exports = router;
+/* For the admin panel, so an edit or an adjustment made there goes through
+   exactly these rules rather than a second copy of them. Hung off the
+   router because that is what this file has always exported. */
+module.exports.updateProduct = updateProduct;
+module.exports.adjustSizeStock = adjustSizeStock;
+module.exports.serialize = serialize;

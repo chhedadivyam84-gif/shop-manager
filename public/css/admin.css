@@ -898,6 +898,107 @@ body.adm-body{
 .adm-form{ display: grid; gap: 10px; }
 .adm-form-actions{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
 
+/* ============================================================
+   PRODUCTS AND INVENTORY
+
+   A size is the unit of stock in this shop, so it gets its own block
+   rather than a table row: a size carries a count, a minimum, a price,
+   a cost, where it is kept and a control to correct it, and none of
+   that fits a cell.
+   ============================================================ */
+
+.adm-size{
+  padding: 11px 0;
+  border-top: 1px solid var(--border);
+}
+.adm-size:first-child{ border-top: 0; padding-top: 2px; }
+
+.adm-size-head{
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+.adm-size-label{
+  font-size: var(--fs-row-title);
+  font-weight: 700;
+  color: var(--text);
+}
+.adm-size-state{
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-row-sub);
+  color: var(--muted);
+}
+.adm-size-state .adm-pip{ grid-column: auto; grid-row: auto; }
+.adm-size-qty{
+  margin-left: auto;
+  font-size: var(--fs-row-title);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.adm-size-meta{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 14px;
+  margin-top: 4px;
+  font-size: var(--fs-row-sub);
+  color: var(--muted);
+}
+
+.adm-chips{ display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.adm-chip{
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  font-size: var(--fs-row-sub);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.adm-size-actions{ margin-top: 8px; }
+
+/* The correction form. Laid out like the toolbar so it reads as a strip
+   of controls rather than a dialog dropped into the page. */
+.adm-adjust{
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+}
+.adm-adjust .adm-field{ flex: 0 1 auto; min-width: 120px; }
+.adm-adjust .adm-field-grow{ flex: 1 1 180px; }
+.adm-adjust .adm-form-actions{ margin-top: 0; }
+.adm-adjust .adm-why{ flex: 1 0 100%; margin: 0; }
+
+/* ---- a movement line ----
+   The three figures that make it auditable: how much, and what the
+   count was either side. */
+.adm-hist .adm-row-fig{
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+}
+.adm-up{ color: var(--ok); font-weight: 600; }
+.adm-down{ color: var(--danger); font-weight: 600; }
+.adm-hist-ba{
+  font-size: var(--fs-row-sub);
+  font-weight: 400;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 /* ---------------------------------------------------------- TABLET
    768–1023. Still a drawer — there is no room for a 248px sidebar and a
    usable workspace side by side — but the top bar gains the real search
@@ -942,6 +1043,15 @@ body.adm-body{
   .adm-cell-name{ grid-column: auto; }
   .adm-cell[data-h]::before{ content: none; }
   .adm-num{ text-align: right; }
+
+  /* The products table has its own column rhythm — a category and a
+     price need less room than a phone number and an address. */
+  .adm-tbl-head.adm-tbl-prod,
+  .adm-tbl-row.adm-tbl-prod{
+    grid-template-columns:
+      minmax(160px, 2.4fr) minmax(90px, 1fr) minmax(104px, 1.1fr)
+      minmax(84px, .9fr) minmax(62px, .6fr) minmax(90px, 1fr) minmax(86px, .9fr);
+  }
 
   .adm-kv{ grid-template-columns: 140px 1fr; }
   .adm-form{ grid-template-columns: 1fr 1fr; }
@@ -1041,6 +1151,9 @@ body.adm-body{
      record panels sit beneath them. */
   .adm-grid > [data-panel="info"]{ grid-column: span 2; }
   .adm-grid > [data-panel="summary"]{ grid-column: span 1; }
+  /* Sizes carry the most detail on a product page, so they get the width. */
+  .adm-grid > [data-panel="sizes"]{ grid-column: span 2; }
+  .adm-grid > [data-panel="overview"]{ grid-column: 1 / -1; }
   .adm-form{ grid-template-columns: repeat(3, 1fr); }
 }
 
@@ -1053,4 +1166,14 @@ body.adm-body{
   .adm-drawer-btn{ width: 42px; height: 42px; }
   .adm-profile-item{ padding: 12px 10px; }
   .adm-search-input{ font-size: 16px; }   /* below 16px, iOS zooms on focus */
+}
+
+/* A per-size flag beside the size count — "2  1 out" rather than the two
+   numbers running together, which is how "1 1 low" first read. */
+.adm-flag{
+  display: inline-block;
+  margin-left: 6px;
+  font-size: var(--fs-row-sub);
+  font-weight: 600;
+  white-space: nowrap;
 }

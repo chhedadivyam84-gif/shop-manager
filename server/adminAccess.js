@@ -79,6 +79,13 @@ const CAPS = {
      them off. */
   "customers.view": ["OWNER", "ADMIN", "SUPPORT"],
   "customers.edit": ["OWNER", "ADMIN"],
+  /* Three, not two. Reading the catalogue, changing a product's details
+     and CHANGING A STOCK COUNT are different levels of trust: the last
+     one moves a figure the shop bills against, so it is owner-only
+     until there is a reason to widen it. */
+  "products.view":    ["OWNER", "ADMIN", "SUPPORT"],
+  "products.edit":    ["OWNER", "ADMIN"],
+  "inventory.adjust": ["OWNER"],
   "ai.view":       ["OWNER", "ADMIN"],
   "admin.manage":  ["OWNER"],
   "security.view": ["OWNER", "ADMIN"],

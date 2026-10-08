@@ -328,6 +328,8 @@
        is still the placeholder PART 1 put there, deliberately. */
     if (key === "dashboard") renderDashboard();
     else if (key === "customers") renderCustomers(currentRoute().sub);
+    else if (key === "products") renderProducts(currentRoute().sub);
+    else if (key === "inventory") renderInventory();
     else el.page.innerHTML = placeholderPage(section);
     el.main.scrollTop = 0;
     window.scrollTo(0, 0);
@@ -1270,6 +1272,676 @@
       return "Could not reach the server. Check the connection and try again.";
     }
     return m;
+  }
+
+  /* ==================================================================
+     PRODUCTS AND INVENTORY
+
+     Two sidebar sections over one service: the catalogue, and the
+     shelves. The thing to keep straight throughout is that stock lives
+     on a SIZE at a LOCATION, so a count is never shown without saying
+     which size it belongs to.
+     ================================================================== */
+
+  let prodView = { q: "", category: "", filter: "all", sort: "name", page: 1 };
+  let prodSeq = 0;
+
+  /* How a stock state is drawn. "unset" is not a warning — most shops
+     never set a minimum for most lines, and colouring it amber would
+     turn an un-configured feature into a fault. */
+  const STOCK_STATE = {
+    out:   { label: "Out of stock",   cls: "is-bad" },
+    low:   { label: "Low stock",      cls: "is-warn" },
+    in:    { label: "In stock",       cls: "is-ok" },
+    unset: { label: "No minimum set", cls: "is-info" },
+  };
+
+  function stateHtml(key) {
+    const s = STOCK_STATE[key] || STOCK_STATE.unset;
+    return '<span class="adm-pip ' + s.cls + '" aria-hidden="true"></span>' + esc(s.label);
+  }
+
+  /* A quantity always carries its unit: 43 means nothing across a
+     catalogue that mixes square feet and pieces. */
+  function qtyHtml(qty, unit) {
+    return '<span class="adm-num">' + num(qty) + "</span>" +
+      (unit ? ' <span class="adm-muted">' + esc(unit) + "</span>" : "");
+  }
+
+  function prodHref(id) { return id ? "#/products/" + encodeURIComponent(id) : "#/products"; }
+
+  /* ---- the product list -------------------------------------------- */
+
+  function renderProducts(id) {
+    if (id) return renderProductProfile(id);
+
+    el.page.innerHTML =
+      '<div class="adm-page-head">' +
+        '<div class="adm-page-head-text">' +
+          '<h1 class="adm-page-title">Products</h1>' +
+          '<p class="adm-page-sub">The shop&rsquo;s catalogue. Stock is counted per size ' +
+          'and per location, so a product&rsquo;s figure here is the sum of its sizes.</p>' +
+        "</div>" +
+      "</div>" +
+      '<div class="adm-toolbar">' +
+        '<div class="adm-field adm-field-grow">' +
+          '<label class="adm-sr" for="prod-q">Search products</label>' +
+          '<input type="search" id="prod-q" class="adm-input" autocomplete="off" ' +
+          'placeholder="Name, SKU, code, brand or barcode">' +
+        "</div>" +
+        '<div class="adm-field">' +
+          '<label class="adm-field-label" for="prod-cat">Category</label>' +
+          '<select id="prod-cat" class="adm-input"></select>' +
+        "</div>" +
+        '<div class="adm-field">' +
+          '<label class="adm-field-label" for="prod-filter">Show</label>' +
+          '<select id="prod-filter" class="adm-input"></select>' +
+        "</div>" +
+        '<div class="adm-field">' +
+          '<label class="adm-field-label" for="prod-sort">Sort by</label>' +
+          '<select id="prod-sort" class="adm-input"></select>' +
+        "</div>" +
+      "</div>" +
+      '<div class="adm-panel"><div class="adm-panel-body" id="prod-body">' +
+        skeleton() + "</div></div>";
+
+    const q = document.getElementById("prod-q");
+    q.value = prodView.q;
+
+    let timer = null;
+    q.addEventListener("input", function () {
+      clearTimeout(timer);
+      timer = setTimeout(function () {
+        prodView.q = q.value.trim(); prodView.page = 1; loadProducts();
+      }, 250);
+    });
+    q.addEventListener("keydown", function (e) {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      clearTimeout(timer);
+      prodView.q = q.value.trim(); prodView.page = 1; loadProducts();
+    });
+
+    document.getElementById("prod-cat").addEventListener("change", function (e) {
+      prodView.category = e.target.value; prodView.page = 1; loadProducts();
+    });
+    document.getElementById("prod-filter").addEventListener("change", function (e) {
+      prodView.filter = e.target.value; prodView.page = 1; loadProducts();
+    });
+    document.getElementById("prod-sort").addEventListener("change", function (e) {
+      prodView.sort = e.target.value; prodView.page = 1; loadProducts();
+    });
+
+    document.getElementById("prod-body").addEventListener("click", function (e) {
+      const page = e.target.closest("[data-page]");
+      if (page) { prodView.page = Number(page.dataset.page); loadProducts(); return; }
+      if (e.target.closest("[data-retry-products]")) { loadProducts(); return; }
+      if (e.target.closest("[data-clear-products]")) {
+        prodView = { q: "", category: "", filter: "all", sort: prodView.sort, page: 1 };
+        renderProducts(null);
+      }
+    });
+
+    loadProducts();
+  }
+
+  async function loadProducts() {
+    const body = document.getElementById("prod-body");
+    if (!body) return;
+    body.innerHTML = skeleton();
+
+    const mine = ++prodSeq;
+    let data;
+    try {
+      const qs = "?q=" + encodeURIComponent(prodView.q) +
+        "&category=" + encodeURIComponent(prodView.category) +
+        "&filter=" + encodeURIComponent(prodView.filter) +
+        "&sort=" + encodeURIComponent(prodView.sort) +
+        "&page=" + encodeURIComponent(prodView.page);
+      data = await api("GET", "/admin/products" + qs);
+    } catch (err) {
+      if (mine !== prodSeq) return;
+      body.innerHTML = '<p class="adm-fail">' + esc(humanError(err)) + "</p>" +
+        '<button type="button" class="adm-retry" data-retry-products="1">Try again</button>';
+      return;
+    }
+    if (mine !== prodSeq) return;
+
+    prodView.page = data.page;
+    fillSelect(document.getElementById("prod-filter"), data.options.filters, data.filter);
+    fillSelect(document.getElementById("prod-sort"), data.options.sorts, data.sort);
+    fillSelect(document.getElementById("prod-cat"),
+      [{ key: "", label: "All categories" }].concat(
+        data.options.categories.map(c => ({ key: c.name, label: c.name + " (" + c.n + ")" }))),
+      data.category);
+
+    body.innerHTML = productListHtml(data);
+  }
+
+  function productListHtml(d) {
+    if (!d.total) {
+      return d.q || d.filter !== "all" || d.category
+        ? emptyLine("No product matches that search.") +
+          '<button type="button" class="adm-retry" data-clear-products="1">Clear search and filters</button>'
+        : emptyLine("No products in the catalogue yet. They are added from Shop Manager.");
+    }
+
+    const from = (d.page - 1) * d.pageSize + 1;
+    const to = from + d.rows.length - 1;
+
+    const head =
+      '<div class="adm-tbl-head adm-tbl-prod" aria-hidden="true">' +
+        '<span>Product</span><span>Category</span><span>Status</span>' +
+        '<span class="adm-num">Stock</span><span class="adm-num">Sizes</span>' +
+        '<span class="adm-num">Price</span><span>Last moved</span>' +
+      "</div>";
+
+    const rows = d.rows.map(p => {
+      const price = p.priceFrom === null ? "—"
+        : (p.priceFrom === p.priceTo ? money(p.priceFrom)
+                                     : money(p.priceFrom) + "–" + money(p.priceTo));
+      return '<a class="adm-tbl-row adm-tbl-prod" href="' + prodHref(p.id) + '">' +
+        '<span class="adm-cell adm-cell-name">' +
+          '<span class="adm-strong">' + esc(p.name) + "</span>" +
+          '<span class="adm-row-sub">' +
+            [p.brand, p.sku || p.code].filter(Boolean).map(esc).join(" · ") +
+            (p.active ? "" : ' · <span class="adm-muted">switched off</span>') +
+          "</span>" +
+        "</span>" +
+        '<span class="adm-cell" data-h="Category">' +
+          (p.category ? esc(p.category) : '<span class="adm-muted">—</span>') + "</span>" +
+        '<span class="adm-cell" data-h="Status">' + stateHtml(p.status) + "</span>" +
+        '<span class="adm-cell adm-num" data-h="Stock">' + qtyHtml(p.qty, p.unitLabel) + "</span>" +
+        '<span class="adm-cell adm-num" data-h="Sizes">' + num(p.sizes) +
+          /* Which of them need attention, named rather than folded into
+             the product's single status word. */
+          (p.outSizes ? '<span class="adm-flag adm-down">' + num(p.outSizes) + " out</span>" : "") +
+          (p.lowSizes ? '<span class="adm-flag adm-over">' + num(p.lowSizes) + " low</span>" : "") +
+        "</span>" +
+        '<span class="adm-cell adm-num" data-h="Price">' + price + "</span>" +
+        '<span class="adm-cell" data-h="Last moved">' +
+          (p.lastMoved ? esc(showDate(p.lastMoved)) : '<span class="adm-muted">never</span>') +
+        "</span>" +
+      "</a>";
+    }).join("");
+
+    const pager = d.pages > 1
+      ? '<div class="adm-pager">' +
+          '<button type="button" class="adm-retry" data-page="' + (d.page - 1) + '"' +
+            (d.page <= 1 ? " disabled" : "") + ">Previous</button>" +
+          '<span class="adm-pager-at">' + num(from) + "–" + num(to) +
+            " of " + num(d.total) + "</span>" +
+          '<button type="button" class="adm-retry" data-page="' + (d.page + 1) + '"' +
+            (d.page >= d.pages ? " disabled" : "") + ">Next</button>" +
+        "</div>"
+      : '<p class="adm-foot">' + num(d.total) +
+        (d.total === 1 ? " product." : " products.") + "</p>";
+
+    return '<div class="adm-tbl">' + head + rows + "</div>" + pager;
+  }
+
+  /* ---- one product -------------------------------------------------- */
+
+  async function renderProductProfile(id) {
+    el.page.innerHTML =
+      '<div class="adm-page-head">' +
+        '<div class="adm-page-head-text">' +
+          '<a class="adm-back" href="#/products">&larr; All products</a>' +
+          '<h1 class="adm-page-title" id="prod-title">Product</h1>' +
+        "</div>" +
+      "</div>" +
+      '<div id="prod-profile"><div class="adm-panel"><div class="adm-panel-body">' +
+        skeleton() + "</div></div></div>";
+
+    const host = document.getElementById("prod-profile");
+    let d;
+    try {
+      /* Labels first when they are not loaded yet, so a movement reads
+         "Stock Adjustment" rather than "adjustment". A product page can
+         be opened without visiting Inventory first. */
+      if (!Object.keys(MOVEMENT_LABELS).length) await loadMovements();
+      d = await api("GET", "/admin/products/" + encodeURIComponent(id));
+    } catch (err) {
+      host.innerHTML = '<div class="adm-panel is-failed"><div class="adm-panel-body">' +
+        '<p class="adm-fail">' + esc(humanError(err)) + "</p>" +
+        '<a class="adm-retry" href="#/products">Back to all products</a>' +
+        "</div></div>";
+      return;
+    }
+    paintProductProfile(host, d);
+  }
+
+  function paintProductProfile(host, d) {
+    const p = d.product, s = d.summary;
+
+    const title = document.getElementById("prod-title");
+    if (title) title.textContent = p.name;
+    el.crumbHere.textContent = p.name;
+
+    /* Only fields this shop stores. Nothing invented to fill a row —
+       there is no description column on products, so there is no
+       Description row. */
+    const info = [
+      ["Name", esc(p.name)],
+      ["Brand", p.brand ? esc(p.brand) : "—"],
+      ["Category", p.category ? esc(p.category) +
+        (p.subCategory ? " · " + esc(p.subCategory) : "") : "—"],
+      ["SKU", p.sku ? '<code class="adm-code">' + esc(p.sku) + "</code>" : "—"],
+      ["Code", p.code ? esc(p.code) : "—"],
+      ["Barcode", p.barcode ? esc(p.barcode) : "—"],
+      ["Unit", p.unit ? esc(p.unit) : "—"],
+      ["HSN", p.hsnCode ? esc(p.hsnCode) : "—"],
+      ["GST", p.gstRate + "%"],
+      ["Kept at", [p.godown, p.rack].filter(Boolean).map(esc).join(" · ") || "—"],
+      ["Status", p.active ? "Active" : "Switched off"],
+      ["Product ID", '<code class="adm-code">' + esc(p.id) + "</code>"],
+      ["Added", esc(showDate(p.created))],
+    ].map(r => '<div class="adm-kv"><span class="adm-kv-k">' + r[0] +
+      '</span><span class="adm-kv-v">' + r[1] + "</span></div>").join("");
+
+    const sizeRows = d.sizes.map(z => {
+      const locs = z.locations.map(l =>
+        '<span class="adm-chip">' + esc(l.location) + " " + num(l.quantity) +
+        (l.minStock > 0 ? ' <span class="adm-muted">min ' + num(l.minStock) + "</span>" : "") +
+        "</span>").join(" ");
+      return '<div class="adm-size" data-size="' + z.id + '">' +
+        '<div class="adm-size-head">' +
+          '<span class="adm-size-label">' + esc(z.label) + "</span>" +
+          '<span class="adm-size-state">' + stateHtml(z.status) + "</span>" +
+          '<span class="adm-size-qty">' + qtyHtml(z.qty, p.unit) + "</span>" +
+        "</div>" +
+        '<div class="adm-size-meta">' +
+          '<span>Price ' + money(z.price) + "</span>" +
+          (z.cost !== null && z.cost > 0 ? "<span>Cost " + money(z.cost) + "</span>" : "") +
+          (z.minStock > 0 ? "<span>Minimum " + num(z.minStock) + "</span>"
+                          : '<span class="adm-muted">no minimum set</span>') +
+          (z.lastMoved ? "<span>Last moved " + esc(showDate(z.lastMoved)) + "</span>" : "") +
+        "</div>" +
+        (locs ? '<div class="adm-chips">' + locs + "</div>" : "") +
+        '<div class="adm-size-actions" data-adjust-host="' + z.id + '"></div>' +
+      "</div>";
+    }).join("");
+
+    const hist = (d.history || []).map(h => historyRowHtml(h, { hideProduct: true })).join("");
+
+    host.innerHTML =
+      '<div class="adm-profile-head">' +
+        '<span class="adm-status">' + stateHtml(
+          s.out ? "out" : (s.low ? "low" : (s.minimumsSet ? "in" : "unset"))) + "</span>" +
+        '<div class="adm-profile-actions">' +
+          (d.abilities && d.abilities.mayEdit
+            ? '<button type="button" class="adm-retry" data-edit-product="1">Edit details</button>'
+            : "") +
+        "</div>" +
+      "</div>" +
+
+      '<div class="adm-grid">' +
+        '<section class="adm-panel" data-panel="info"><header class="adm-panel-head">' +
+          '<h2 class="adm-panel-title">Product information</h2></header>' +
+          '<div class="adm-panel-body" id="prod-info">' + info + "</div></section>" +
+
+        '<section class="adm-panel" data-panel="summary"><header class="adm-panel-head">' +
+          '<h2 class="adm-panel-title">Inventory</h2></header>' +
+          '<div class="adm-panel-body">' +
+            '<div class="adm-tiles">' +
+              tile("In stock", qtyHtml(s.qty, s.unit), num(s.sizes) + " size(s)") +
+              tile("Out of stock", num(s.out), "size(s) with nothing left") +
+              tile("Low", num(s.low), s.minimumsSet
+                ? "against " + num(s.minimumsSet) + " minimum(s)"
+                : '<span class="adm-why">No minimum set for any size, so none can be called low.</span>') +
+              tile("Costed", num(s.costed), "size(s) with a cost recorded") +
+            "</div>" +
+            (p.denormalisedStock !== s.qty
+              ? '<p class="adm-foot adm-over">The product total (' + num(p.denormalisedStock) +
+                ") does not match the sum of its sizes (" + num(s.qty) +
+                "). That is a drift worth looking at in Shop Manager.</p>"
+              : "") +
+          "</div></section>" +
+
+        '<section class="adm-panel" data-panel="sizes"><header class="adm-panel-head">' +
+          '<h2 class="adm-panel-title">Sizes and stock</h2></header>' +
+          '<div class="adm-panel-body" id="prod-sizes">' +
+            (sizeRows || emptyLine("This product has no sizes, so nothing can be stocked against it.")) +
+          "</div></section>" +
+
+        '<section class="adm-panel" data-panel="history"><header class="adm-panel-head">' +
+          '<h2 class="adm-panel-title">Stock movements</h2></header>' +
+          '<div class="adm-panel-body">' +
+            (hist ? '<ul class="adm-list">' + hist + "</ul>" +
+              '<p class="adm-foot">The most recent movements for this product. ' +
+              'Every line records the count before and after.</p>'
+                  : emptyLine("No stock movements recorded for this product yet.")) +
+          "</div></section>" +
+      "</div>";
+
+    host.addEventListener("click", function (e) {
+      if (e.target.closest("[data-edit-product]")) { openProductEdit(host, d); return; }
+      const adj = e.target.closest("[data-adjust]");
+      if (adj) { openAdjust(d, Number(adj.dataset.adjust)); return; }
+      const cancel = e.target.closest("[data-adjust-cancel]");
+      if (cancel) { closeAdjust(Number(cancel.dataset.adjustCancel)); }
+    });
+
+    /* Only an owner sees the correction control; the server refuses it
+       for anybody else regardless, which is where the actual rule is. */
+    if (d.abilities && d.abilities.mayAdjust) {
+      d.sizes.forEach(z => {
+        const slot = host.querySelector('[data-adjust-host="' + z.id + '"]');
+        if (slot) slot.innerHTML =
+          '<button type="button" class="adm-retry" data-adjust="' + z.id + '">Correct stock</button>';
+      });
+    }
+  }
+
+  function historyRowHtml(h, opts) {
+    const up = h.qty > 0;
+    return '<li class="adm-row adm-hist">' +
+      '<span class="adm-pip ' + (up ? "is-ok" : "is-bad") + '" aria-hidden="true"></span>' +
+      '<span class="adm-row-main">' +
+        esc(movementLabel(h.movement)) +
+        ((opts && opts.hideProduct) ? "" : " · " + esc(h.product || "—")) +
+        (h.size ? ' <span class="adm-muted">' + esc(h.size) + "</span>" : "") +
+      "</span>" +
+      '<span class="adm-row-sub">' +
+        esc(showDate(h.date)) + (h.time ? " " + esc(h.time) : "") +
+        (h.location ? " · " + esc(h.location) : "") +
+        (h.ref ? " · " + esc(h.ref) : "") +
+        (h.staff ? " · " + esc(h.staff) : "") +
+        (h.remarks ? " · " + esc(h.remarks) : "") +
+      "</span>" +
+      '<span class="adm-row-fig">' +
+        '<span class="' + (up ? "adm-up" : "adm-down") + '">' +
+          (up ? "+" : "") + num(h.qty) + "</span>" +
+        '<span class="adm-hist-ba">' + num(h.before) + " → " + num(h.after) + "</span>" +
+      "</span>" +
+    "</li>";
+  }
+
+  let MOVEMENT_LABELS = {};
+  function movementLabel(key) { return MOVEMENT_LABELS[key] || key || "Movement"; }
+
+  /* ---- correcting a count ------------------------------------------- */
+
+  function closeAdjust(sizeId) {
+    const slot = document.querySelector('[data-adjust-host="' + sizeId + '"]');
+    if (slot) slot.innerHTML =
+      '<button type="button" class="adm-retry" data-adjust="' + sizeId + '">Correct stock</button>';
+  }
+
+  function openAdjust(d, sizeId) {
+    const z = d.sizes.filter(x => x.id === sizeId)[0];
+    const slot = document.querySelector('[data-adjust-host="' + sizeId + '"]');
+    if (!z || !slot) return;
+
+    const locs = z.locations.length ? z.locations : [{ locationId: "", location: "Shop", quantity: z.qty }];
+
+    slot.innerHTML =
+      '<form class="adm-adjust" id="adj-' + sizeId + '">' +
+        '<div class="adm-field">' +
+          '<label class="adm-field-label" for="adj-loc-' + sizeId + '">Location</label>' +
+          '<select class="adm-input" id="adj-loc-' + sizeId + '">' +
+            locs.map(l => '<option value="' + esc(l.locationId) + '">' + esc(l.location) +
+              " — now " + num(l.quantity) + "</option>").join("") +
+          "</select>" +
+        "</div>" +
+        '<div class="adm-field">' +
+          '<label class="adm-field-label" for="adj-count-' + sizeId + '">New count</label>' +
+          '<input class="adm-input" id="adj-count-' + sizeId + '" type="number" step="any" min="0">' +
+        "</div>" +
+        '<div class="adm-field adm-field-grow">' +
+          '<label class="adm-field-label" for="adj-reason-' + sizeId + '">Reason</label>' +
+          '<input class="adm-input" id="adj-reason-' + sizeId + '" type="text" maxlength="200" ' +
+          'placeholder="Stock count, damage, correction…">' +
+        "</div>" +
+        '<div class="adm-form-actions">' +
+          '<button type="submit" class="adm-primary">Save correction</button>' +
+          '<button type="button" class="adm-retry" data-adjust-cancel="' + sizeId + '">Cancel</button>' +
+        "</div>" +
+        '<p class="adm-why" id="adj-msg-' + sizeId + '">The count before and after, your name, ' +
+        'the time and this reason are all written to the stock ledger.</p>' +
+      "</form>";
+
+    document.getElementById("adj-" + sizeId).addEventListener("submit", async function (e) {
+      e.preventDefault();
+      const msg = document.getElementById("adj-msg-" + sizeId);
+      const locationId = document.getElementById("adj-loc-" + sizeId).value;
+      const raw = document.getElementById("adj-count-" + sizeId).value;
+      const reason = document.getElementById("adj-reason-" + sizeId).value.trim();
+
+      if (raw === "") { msg.textContent = "Enter the new count."; return; }
+      const count = Number(raw);
+      if (!Number.isFinite(count) || count < 0) {
+        msg.textContent = "A stock count cannot be negative.";
+        return;
+      }
+      if (!reason) { msg.textContent = "Give a reason for the correction."; return; }
+
+      msg.textContent = "Saving…";
+      try {
+        await api("PATCH", "/admin/products/" + encodeURIComponent(d.product.id) +
+          "/sizes/" + encodeURIComponent(sizeId) + "/stock",
+          { stock: count, locationId: locationId || undefined, reason });
+      } catch (err) {
+        msg.textContent = humanError(err);
+        return;
+      }
+      toast("Stock corrected.", "ok");
+      renderProductProfile(d.product.id);
+    });
+  }
+
+  /* ---- editing a product -------------------------------------------- */
+
+  const PRODUCT_FIELDS = [
+    { key: "name", label: "Name", required: true },
+    { key: "brand", label: "Brand" },
+    { key: "category", label: "Category" },
+    { key: "subCategory", label: "Sub-category" },
+    { key: "unit", label: "Unit" },
+    { key: "hsnCode", label: "HSN code" },
+    { key: "gstRate", label: "GST %", type: "number", send: "gst" },
+    { key: "code", label: "Code" },
+    { key: "barcode", label: "Barcode" },
+    { key: "godown", label: "Godown" },
+    { key: "rack", label: "Rack" },
+  ];
+
+  function openProductEdit(host, d) {
+    const p = d.product;
+    const fields = PRODUCT_FIELDS.map(f =>
+      '<div class="adm-field adm-field-block">' +
+        '<label class="adm-field-label" for="pe-' + f.key + '">' + esc(f.label) +
+          (f.required ? " *" : "") + "</label>" +
+        '<input class="adm-input" id="pe-' + f.key + '" type="' + (f.type || "text") +
+          '" value="' + esc(p[f.key] === null || p[f.key] === undefined ? "" : p[f.key]) + '">' +
+      "</div>").join("");
+
+    const info = document.getElementById("prod-info");
+    info.innerHTML =
+      '<form class="adm-form" id="prod-edit">' + fields +
+        '<div class="adm-form-actions">' +
+          '<button type="submit" class="adm-primary">Save changes</button>' +
+          '<button type="button" class="adm-retry" data-cancel-product="1">Cancel</button>' +
+        "</div>" +
+        '<p class="adm-why" id="prod-edit-msg">Sizes, prices and stock are not changed here ' +
+        '— a price belongs to a size, and a count is corrected under Sizes and stock.</p>' +
+      "</form>";
+
+    info.querySelector("[data-cancel-product]").addEventListener("click", function () {
+      renderProductProfile(p.id);
+    });
+
+    document.getElementById("prod-edit").addEventListener("submit", async function (e) {
+      e.preventDefault();
+      const msg = document.getElementById("prod-edit-msg");
+      const body = {};
+      PRODUCT_FIELDS.forEach(f => {
+        const v = document.getElementById("pe-" + f.key).value;
+        body[f.send || f.key] = f.type === "number" ? Number(v || 0) : v.trim();
+      });
+      if (!body.name) { msg.textContent = "A name is required."; return; }
+      /* `sizes` is deliberately NOT sent: the shop's handler only touches
+         sizes when it is given an array, and this form does not edit them. */
+      msg.textContent = "Saving…";
+      try {
+        await api("PUT", "/admin/products/" + encodeURIComponent(p.id), body);
+      } catch (err) {
+        msg.textContent = humanError(err);
+        return;
+      }
+      toast("Product updated.", "ok");
+      renderProductProfile(p.id);
+    });
+  }
+
+  /* ==================================================================
+     INVENTORY
+     ================================================================== */
+
+  let invView = { movement: "", page: 1 };
+
+  function renderInventory() {
+    el.page.innerHTML =
+      '<div class="adm-page-head">' +
+        '<div class="adm-page-head-text">' +
+          '<h1 class="adm-page-title">Inventory</h1>' +
+          '<p class="adm-page-sub">What is on the shelves, and everything that has moved ' +
+          'it. Counts are shown per unit — board is measured in square feet and ' +
+          'hardware in pieces, so there is no single total.</p>' +
+        "</div>" +
+        '<button type="button" class="adm-primary" id="inv-refresh">Refresh</button>' +
+      "</div>" +
+      '<div class="adm-grid">' +
+        '<section class="adm-panel" data-panel="overview"><header class="adm-panel-head">' +
+          '<h2 class="adm-panel-title">Overview</h2></header>' +
+          '<div class="adm-panel-body" id="inv-overview">' + skeleton() + "</div></section>" +
+        '<section class="adm-panel" data-panel="history"><header class="adm-panel-head">' +
+          '<h2 class="adm-panel-title">Stock movements</h2></header>' +
+          '<div class="adm-panel-body">' +
+            '<div class="adm-toolbar">' +
+              '<div class="adm-field">' +
+                '<label class="adm-field-label" for="inv-move">Movement</label>' +
+                '<select id="inv-move" class="adm-input"></select>' +
+              "</div>" +
+            "</div>" +
+            '<div id="inv-history">' + skeleton() + "</div>" +
+          "</div></section>" +
+      "</div>";
+
+    document.getElementById("inv-refresh").addEventListener("click", function () {
+      loadInventory(); loadHistory();
+    });
+    document.getElementById("inv-move").addEventListener("change", function (e) {
+      invView.movement = e.target.value; invView.page = 1; loadHistory();
+    });
+    document.getElementById("inv-history").addEventListener("click", function (e) {
+      const page = e.target.closest("[data-page]");
+      if (page) { invView.page = Number(page.dataset.page); loadHistory(); return; }
+      if (e.target.closest("[data-retry-history]")) loadHistory();
+    });
+    document.getElementById("inv-overview").addEventListener("click", function (e) {
+      if (e.target.closest("[data-retry-overview]")) loadInventory();
+    });
+
+    loadInventory();
+    loadMovements().then(loadHistory);
+  }
+
+  async function loadMovements() {
+    try {
+      const d = await api("GET", "/admin/inventory/movements");
+      MOVEMENT_LABELS = {};
+      (d.movements || []).forEach(m => { MOVEMENT_LABELS[m.key] = m.label; });
+      fillSelect(document.getElementById("inv-move"),
+        [{ key: "", label: "All movements" }].concat(
+          (d.movements || []).map(m => ({ key: m.key, label: m.label }))),
+        invView.movement);
+    } catch (err) { /* the list still draws; only the filter is missing */ }
+  }
+
+  async function loadInventory() {
+    const host = document.getElementById("inv-overview");
+    if (!host) return;
+    host.innerHTML = skeleton();
+    let d;
+    try {
+      d = await api("GET", "/admin/inventory");
+    } catch (err) {
+      host.innerHTML = '<p class="adm-fail">' + esc(humanError(err)) + "</p>" +
+        '<button type="button" class="adm-retry" data-retry-overview="1">Try again</button>';
+      return;
+    }
+
+    const units = (d.byUnit || []).map(u =>
+      '<li class="adm-row"><span class="adm-row-main">' + esc(u.unit) + "</span>" +
+      '<span class="adm-row-sub">' + num(u.products) + " product(s)</span>" +
+      '<span class="adm-row-fig">' + num(u.qty) + "</span></li>").join("");
+
+    /* Counts of sizes, not a quantity: a location holds square feet AND
+       pieces, and one figure for both would be the cross-unit total the
+       footer below explicitly rules out. */
+    const locs = (d.byLocation || []).map(l =>
+      '<li class="adm-row"><span class="adm-row-main">' + esc(l.name) + "</span>" +
+      '<span class="adm-row-sub">' + num(l.sizes) + " size(s) tracked here</span>" +
+      '<span class="adm-row-fig">' + num(l.stocked) + " in stock</span></li>").join("");
+
+    host.innerHTML =
+      '<div class="adm-tiles">' +
+        tile("Products", num(d.products)) +
+        tile("Sizes tracked", num(d.sizes)) +
+        tile("Out of stock", num(d.outSizes), "size(s) with nothing left") +
+        tile("Low stock", d.lowAvailable ? num(d.lowSizes) : "—",
+             d.lowAvailable
+               ? "against " + num(d.minimumsSet) + " minimum(s) set"
+               : '<span class="adm-why">No minimum stock level has been set on any size yet, ' +
+                 'so nothing can be called low. Set one under Inventory in Shop Manager.</span>') +
+        tile("Moved recently", num(d.movedRecently),
+             "movement(s) in the last " + num(d.recentDays) + " days") +
+        tile("Categories", num(d.categories)) +
+      "</div>" +
+      (units ? '<h3 class="adm-sub">Quantity by unit</h3><ul class="adm-list">' + units + "</ul>" : "") +
+      (locs ? '<h3 class="adm-sub">By location</h3><ul class="adm-list">' + locs + "</ul>" : "") +
+      '<p class="adm-foot">Quantities are never added across units — square feet and ' +
+      "pieces do not sum to anything meaningful.</p>";
+  }
+
+  async function loadHistory() {
+    const host = document.getElementById("inv-history");
+    if (!host) return;
+    host.innerHTML = skeleton();
+    let d;
+    try {
+      d = await api("GET", "/admin/inventory/history?page=" + encodeURIComponent(invView.page) +
+        (invView.movement ? "&movement=" + encodeURIComponent(invView.movement) : ""));
+    } catch (err) {
+      host.innerHTML = '<p class="adm-fail">' + esc(humanError(err)) + "</p>" +
+        '<button type="button" class="adm-retry" data-retry-history="1">Try again</button>';
+      return;
+    }
+
+    if (!d.available) { host.innerHTML = emptyLine(d.reason || "No movement log on this copy."); return; }
+    if (!d.total) {
+      host.innerHTML = emptyLine(invView.movement
+        ? "No movements of that kind yet."
+        : "No stock movements recorded yet.");
+      return;
+    }
+
+    const from = (d.page - 1) * d.pageSize + 1;
+    const to = from + d.rows.length - 1;
+
+    host.innerHTML =
+      '<ul class="adm-list">' + d.rows.map(h => historyRowHtml(h, {})).join("") + "</ul>" +
+      (d.pages > 1
+        ? '<div class="adm-pager">' +
+            '<button type="button" class="adm-retry" data-page="' + (d.page - 1) + '"' +
+              (d.page <= 1 ? " disabled" : "") + ">Previous</button>" +
+            '<span class="adm-pager-at">' + num(from) + "–" + num(to) +
+              " of " + num(d.total) + "</span>" +
+            '<button type="button" class="adm-retry" data-page="' + (d.page + 1) + '"' +
+              (d.page >= d.pages ? " disabled" : "") + ">Next</button>" +
+          "</div>"
+        : '<p class="adm-foot">' + num(d.total) + " movement(s).</p>");
   }
 
   /* ------------------------------------------------------------------

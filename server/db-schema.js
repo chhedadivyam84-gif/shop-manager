@@ -2808,7 +2808,9 @@ addColumn("invoices", "updated_at", "INTEGER");
    new back to 'staff'.
 
    So the admin panel's extra roles live in their own column, exactly as
-   the note in adminAccess.js said they eventually would.
+   the admin-panel work said they eventually would. That panel has
+   since been removed from this app; the column is additive and left in
+   place rather than dropped.
 
    OWNER IS NOT ONE OF THE VALUES, and that is the point. Being the
    owner is staff.role = 'owner' — the app's existing truth, decided at
@@ -3859,7 +3861,7 @@ db.prepare(`
    invented an actor type for a row written two years ago would be
    putting a guess into an audit log, which is the one place a guess
    must never go. Old rows show their actor type as derived from the
-   `role` they did record; see adminAudit.js.
+   `role` they did record.
    ============================================================ */
 
 /* OWNER / ADMIN / SUPPORT / STAFF / SYSTEM / AI.

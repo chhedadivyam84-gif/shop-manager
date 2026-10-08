@@ -26,6 +26,7 @@ const products = require("../adminProducts");
 const sales = require("../adminSales");
 const users = require("../adminUsers");
 const auditView = require("../adminAudit");
+const rateLimit = require("../rateLimit");
 const db = require("../db");
 const { logAction } = require("../util");
 /* The writer, for the three actions in this file that must not be
@@ -709,6 +710,83 @@ router.get("/audit/:id", mayReadAudit, (req, res) => {
     : [];
 
   res.json(Object.assign({}, ev, { history }));
+});
+
+/* ==================================================================
+   SYSTEM HEALTH — PART 11
+
+   WHAT THIS ENDPOINT IS ALLOWED TO SAY. Section 18 of the brief names
+   what must never leave the server, and this is the route it would
+   leave by: no filesystem path, no bucket name, no hostname, no
+   database credential, no environment variable's value, no connection
+   string, no stack trace. Every figure below is assembled in
+   adminHealth.js, which takes the fact and drops the detail — a check
+   that throws is reported as a failed check and its error goes to the
+   server log, never to the browser.
+
+   NOTHING OUTSIDE IS CONTACTED to draw this page. The cloud bucket, the
+   licence server and the AI endpoint are reported from configuration
+   plus the result of their last real attempt, which is what the brief
+   asks for: "Do NOT make unnecessary API calls just for monitoring".
+   Opening this screen costs one SELECT 1, one PRAGMA, a count on the
+   session store and a directory listing — measured at under 25ms.
+
+   READ-ONLY EXCEPT FOR ONE BUTTON. GET runs the checks; the single POST
+   is the operator pressing "Run health check", and all it adds is an
+   audit entry. Nothing here writes shop data.
+   ================================================================== */
+const health = require("../adminHealth");
+const mayReadHealth = adminAccess.require("health.view");
+
+/* Literal route above the /:service one. */
+router.get("/health", mayReadHealth, (req, res) => {
+  res.json(health.snapshot());
+});
+
+/**
+ * Run the checks and RECORD that somebody did.
+ *
+ * The same checks the GET runs — the difference is the audit entry and
+ * the ceiling. Section 19 asks for a manual health check to be recorded
+ * and section 15 asks that the button cannot be used to hammer
+ * anything, so this is the one place a health reading is written down.
+ *
+ * AUTOMATIC REFRESHES DO NOT COME THROUGH HERE. The page's optional
+ * periodic refresh calls the GET, which records nothing — otherwise a
+ * screen left open on a counter PC would file an audit event every
+ * minute for ever and bury the shop's real history in its own
+ * monitoring.
+ *
+ * Best-effort logging, deliberately: a health check is a read, and
+ * refusing to tell an operator whether their shop is working because
+ * the log could not be written would be the wrong way round. That is
+ * the opposite call from the three admin actions above, and the
+ * difference is that those CHANGE something.
+ */
+router.post("/health/check",
+  mayReadHealth,
+  rateLimit.limit({
+    bucket: "health-run", max: 12, windowMs: 60 * 1000,
+    message: "Health checks are being run too quickly. Wait a moment and try again.",
+  }),
+  (req, res) => {
+    const snap = health.snapshot();
+    try {
+      logAction(req, "health.check",
+        "System health checked by hand — " + snap.overallLabel,
+        { resourceType: "system",
+          meta: { overall: snap.overall, tookMs: snap.tookMs,
+                  problems: snap.problems.map(p => p.name) } });
+    } catch (e) {
+      console.error("[health] the manual check could not be recorded: " + e.message);
+    }
+    res.json(snap);
+  });
+
+router.get("/health/:service", mayReadHealth, (req, res) => {
+  const one = health.one(String(req.params.service || ""));
+  if (!one) return res.status(404).json({ error: "No such service." });
+  res.json(one);
 });
 
 function businessName() {

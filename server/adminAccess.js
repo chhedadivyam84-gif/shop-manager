@@ -70,7 +70,8 @@ const SECTIONS = [
   /* Its own capability rather than sharing security.view — see the note
      beside it in CAPS. */
   { key: "audit",     label: "Audit Logs",       group: "Security",       cap: "audit.view" },
-  { key: "health",    label: "System Health",    group: "Security",       cap: "security.view" },
+  /* Its own capability, for the reason given beside it in CAPS. */
+  { key: "health",    label: "System Health",    group: "Security",       cap: "health.view" },
 ];
 
 /* The order groups appear in the sidebar. Driven from here rather than
@@ -118,6 +119,18 @@ const CAPS = {
      the staff's own activity history is not part of that job unless the
      owner explicitly grants it on the Roles screen. */
   "audit.view":    ["OWNER", "ADMIN"],
+  /* WHETHER THE MACHINE IS WORKING is a different question from either
+     of the two above, and a shop may well want different people
+     answering it. The person who needs to know the backup stopped
+     running is whoever keeps the shop open on a Sunday; that is not
+     necessarily the person trusted to read two years of everybody's
+     actions, and it is certainly not the same as changing settings.
+
+     Same two roles by default, so nothing changes for an existing
+     login the day this ships. SUPPORT is excluded because a health page
+     describes the infrastructure, and section 17 of the brief asks
+     specifically that unauthorised users not learn about it. */
+  "health.view":   ["OWNER", "ADMIN"],
 };
 
 /* ------------------------------------------------------------------

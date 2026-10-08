@@ -314,6 +314,10 @@
   function currentKey() { return currentRoute().key; }
 
   function render() {
+    /* A periodic refresh belongs to the screen that started it. Without
+       this, navigating away from System Health leaves its timer running
+       for the rest of the session, polling a page nobody is looking at. */
+    stopHealthTimer();
     const key = currentKey();
     if (!key) {
       el.page.innerHTML = placeholderUnavailable();
@@ -336,6 +340,7 @@
     else if (key === "users") renderUsers(currentRoute().sub);
     else if (key === "roles") renderRoles();
     else if (key === "audit") renderAudit(currentRoute().sub);
+    else if (key === "health") renderHealth(currentRoute().sub);
     else el.page.innerHTML = placeholderPage(section);
     el.main.scrollTop = 0;
     window.scrollTo(0, 0);
@@ -3453,6 +3458,343 @@
       return '<span class="adm-code">' + esc(JSON.stringify(v)) + "</span>";
     }
     return '<span class="adm-code">' + esc(String(v)) + "</span>";
+  }
+
+  /* ==================================================================
+     SYSTEM HEALTH — PART 11
+
+     WHAT THIS SCREEN WILL NOT DO. It will not show a percentage, it
+     will not show a green tick for a service it has not checked, and it
+     will not draw a graph of a number nobody measured. Every card below
+     is a real check with a real duration beside it, and a service that
+     is merely SET UP rather than verified says so in those words.
+
+     "Not set up" is its own state and is never coloured as a fault. A
+     shop with no cloud bucket has not broken anything — showing that in
+     red teaches people to ignore the page, which is how the one real
+     fault goes unnoticed.
+
+     THE REFRESH IS OPT-IN and runs once a minute, not once a second.
+     It stops when you leave the page, and it stops when the tab is
+     hidden — a screen left open on a counter PC overnight should not
+     spend the night asking.
+     ================================================================== */
+  const HEALTH_TONE = {
+    ok:             "is-ok",
+    warn:           "is-warn",
+    critical:       "is-bad",
+    not_configured: "is-info",
+  };
+
+  /* Once a minute. Short enough that somebody watching a problem sees it
+     clear, long enough that it is not a load. */
+  const HEALTH_REFRESH_MS = 60000;
+  const HEALTH_AUTO_KEY = "sm.admin.healthAuto";
+
+  let healthTimer = null;
+  let healthSeq = 0;
+  let healthBusy = false;
+
+  function stopHealthTimer() {
+    if (healthTimer) { clearInterval(healthTimer); healthTimer = null; }
+  }
+
+  function healthAutoOn() {
+    try { return localStorage.getItem(HEALTH_AUTO_KEY) === "1"; }
+    catch (e) { return false; }
+  }
+  function setHealthAuto(on) {
+    try { localStorage.setItem(HEALTH_AUTO_KEY, on ? "1" : "0"); } catch (e) { /* private window */ }
+  }
+
+  function healthHref(key) {
+    return key ? "#/health/" + encodeURIComponent(key) : "#/health";
+  }
+
+  function renderHealth(sub) {
+    if (sub) return renderHealthService(sub);
+
+    el.page.innerHTML =
+      '<div class="adm-page-head">' +
+        '<div class="adm-page-head-text">' +
+          '<h1 class="adm-page-title">System Health</h1>' +
+          '<p class="adm-page-sub">Whether this copy of Shop Manager is working. ' +
+          'Every figure here is checked when the page loads &mdash; nothing outside ' +
+          'is contacted, so services that live elsewhere report when they last ' +
+          'actually worked rather than being pinged.</p>' +
+        "</div>" +
+      "</div>" +
+      '<div id="hl-body">' + skeleton() + "</div>";
+
+    const body = document.getElementById("hl-body");
+
+    body.addEventListener("click", function (e) {
+      if (e.target.closest("[data-hl-run]")) { runHealthCheck(); return; }
+      if (e.target.closest("[data-hl-retry]")) { loadHealth(); return; }
+    });
+    body.addEventListener("change", function (e) {
+      const t = e.target.closest("[data-hl-auto]");
+      if (!t) return;
+      setHealthAuto(t.checked);
+      armHealthTimer();
+    });
+
+    loadHealth();
+    armHealthTimer();
+  }
+
+  function armHealthTimer() {
+    stopHealthTimer();
+    if (!healthAutoOn()) return;
+    healthTimer = setInterval(function () {
+      /* Nothing while the tab is in the background, and nothing while a
+         check is already in flight. */
+      if (document.hidden) return;
+      if (healthBusy) return;
+      if (currentKey() !== "health" || currentRoute().sub) { stopHealthTimer(); return; }
+      loadHealth(true);
+    }, HEALTH_REFRESH_MS);
+  }
+
+  async function loadHealth(quiet) {
+    const body = document.getElementById("hl-body");
+    if (!body) return;
+    if (!quiet) body.innerHTML = skeleton();
+
+    const mine = ++healthSeq;
+    healthBusy = true;
+    let d;
+    try {
+      d = await api("GET", "/admin/health");
+    } catch (err) {
+      healthBusy = false;
+      if (mine !== healthSeq) return;
+      /* NEVER A FAKE HEALTHY STATE. If the check itself could not run,
+         the page says that and offers to try again — it does not fall
+         back to the last reading and present it as current. */
+      body.innerHTML =
+        '<div class="adm-panel is-failed"><div class="adm-panel-body">' +
+          '<p class="adm-fail">' + esc(humanError(err)) + "</p>" +
+          '<p class="adm-foot">The health check could not be run, so nothing on this ' +
+          "page can be trusted as current.</p>" +
+          '<button type="button" class="adm-retry" data-hl-retry="1">Try again</button>' +
+        "</div></div>";
+      return;
+    }
+    healthBusy = false;
+    if (mine !== healthSeq) return;
+    body.innerHTML = healthHtml(d);
+  }
+
+  async function runHealthCheck() {
+    const btn = document.querySelector("[data-hl-run]");
+    if (btn) { btn.disabled = true; btn.textContent = "Checking\u2026"; }
+    healthBusy = true;
+    let d;
+    try {
+      d = await api("POST", "/admin/health/check", {});
+    } catch (err) {
+      healthBusy = false;
+      if (btn) { btn.disabled = false; btn.textContent = "Run health check"; }
+      toast(humanError(err), "");
+      return;
+    }
+    healthBusy = false;
+    const body = document.getElementById("hl-body");
+    if (body) body.innerHTML = healthHtml(d);
+    toast("Health check complete \u2014 " + d.overallLabel, d.overall === "ok" ? "ok" : "");
+  }
+
+  function healthHtml(d) {
+    const tone = HEALTH_TONE[d.overall] || "is-info";
+
+    /* ---- the headline ---- */
+    const head =
+      '<div class="adm-panel adm-hl-head"><div class="adm-panel-body">' +
+        '<div class="adm-hl-top">' +
+          '<div class="adm-hl-state">' +
+            '<span class="adm-hl-dot ' + tone + '" aria-hidden="true"></span>' +
+            "<div>" +
+              '<div class="adm-hl-label">' + esc(d.overallLabel) + "</div>" +
+              '<div class="adm-hl-sub">' +
+                (d.problems.length
+                  ? num(d.problems.length) + " thing(s) need attention"
+                  : "Every check passed") +
+                " \u00b7 checked " + esc(d.ago || "just now") +
+                " \u00b7 took " + esc(String(d.tookMs)) + "ms" +
+              "</div>" +
+            "</div>" +
+          "</div>" +
+          '<div class="adm-hl-actions">' +
+            '<label class="adm-hl-auto"><input type="checkbox" data-hl-auto="1"' +
+              (healthAutoOn() ? " checked" : "") + "> Refresh every minute</label>" +
+            '<button type="button" class="adm-primary" data-hl-run="1">Run health check</button>' +
+          "</div>" +
+        "</div>" +
+      "</div></div>";
+
+    /* ---- what is wrong, if anything ---- */
+    const alerts = d.problems.length
+      ? '<div class="adm-panel"><div class="adm-panel-head">' +
+          '<h2 class="adm-panel-title">Needs attention</h2></div>' +
+          '<div class="adm-panel-body"><ul class="adm-list">' +
+          d.problems.map(function (p) {
+            return '<li class="adm-row">' +
+              '<span class="adm-pip adm-pip-i ' + (HEALTH_TONE[p.state] || "is-info") +
+                '" aria-hidden="true"></span>' +
+              '<span class="adm-row-main adm-strong">' + esc(p.name) + "</span>" +
+              '<span class="adm-row-sub">' + esc(p.detail) + "</span>" +
+            "</li>";
+          }).join("") +
+          "</ul></div></div>"
+      : "";
+
+    /* ---- the services, by group ---- */
+    const groups = d.groups.map(function (g) {
+      const keys = Object.keys(d.checks).filter(function (k) {
+        return d.checks[k].group === g;
+      });
+      if (!keys.length) return "";
+
+      return '<div class="adm-panel"><div class="adm-panel-head">' +
+        '<h2 class="adm-panel-title">' + esc(g) + "</h2></div>" +
+        '<div class="adm-panel-body"><div class="adm-svcs">' +
+        keys.map(function (k) { return serviceCard(d.checks[k]); }).join("") +
+        "</div></div></div>";
+    }).join("");
+
+    /* ---- version, last of all ---- */
+    const v = d.version || {};
+    const foot =
+      '<div class="adm-panel"><div class="adm-panel-head">' +
+        '<h2 class="adm-panel-title">This copy</h2></div>' +
+        '<div class="adm-panel-body"><div class="adm-kv">' +
+          '<div class="adm-kv-k">Version</div><div class="adm-kv-v">' +
+            '<span class="adm-code">' + esc(v.app || "unknown") + "</span></div>" +
+          (v.commit
+            ? '<div class="adm-kv-k">Build</div><div class="adm-kv-v">' +
+              '<span class="adm-code">' + esc(v.commit) + "</span></div>"
+            : "") +
+          '<div class="adm-kv-k">Node</div><div class="adm-kv-v">' +
+            '<span class="adm-code">' + esc(v.node || "") + "</span></div>" +
+          '<div class="adm-kv-k">Started</div><div class="adm-kv-v">' +
+            esc(showStamp(v.startedAt)) +
+            ' <span class="adm-muted">(' + esc(v.startedAgo || "") + ")</span></div>" +
+        "</div></div></div>";
+
+    return head + alerts + groups + foot;
+  }
+
+  function serviceCard(c) {
+    const tone = HEALTH_TONE[c.state] || "is-info";
+    return '<a class="adm-svc" href="' + healthHref(c.key) + '">' +
+      '<span class="adm-svc-head">' +
+        '<span class="adm-pip adm-pip-i ' + tone + '" aria-hidden="true"></span>' +
+        '<span class="adm-svc-name">' + esc(c.name) + "</span>" +
+        /* The duration of THIS check, measured. Not an average, not a
+           rolling figure — the milliseconds this one took just now. */
+        '<span class="adm-svc-ms">' + esc(String(c.ms)) + "ms</span>" +
+      "</span>" +
+      '<span class="adm-svc-state ' + tone + '">' + esc(c.label) + "</span>" +
+      '<span class="adm-svc-detail">' + esc(c.detail || "") + "</span>" +
+    "</a>";
+  }
+
+  /* ---- one service --------------------------------------------------- */
+
+  async function renderHealthService(key) {
+    el.page.innerHTML =
+      '<div class="adm-page-head">' +
+        '<div class="adm-page-head-text">' +
+          '<a class="adm-back" href="#/health">&larr; System Health</a>' +
+          '<h1 class="adm-page-title" id="hl-title">Service</h1>' +
+        "</div>" +
+      "</div>" +
+      '<div id="hl-one">' + skeleton() + "</div>";
+
+    const host = document.getElementById("hl-one");
+    host.addEventListener("click", function (e) {
+      if (e.target.closest("[data-hl-recheck]")) renderHealthService(key);
+    });
+
+    let d;
+    try {
+      d = await api("GET", "/admin/health/" + encodeURIComponent(key));
+    } catch (err) {
+      host.innerHTML = '<div class="adm-panel is-failed"><div class="adm-panel-body">' +
+        '<p class="adm-fail">' + esc(humanError(err)) + "</p>" +
+        '<a class="adm-retry" href="#/health">Back to System Health</a>' +
+        "</div></div>";
+      return;
+    }
+
+    const title = document.getElementById("hl-title");
+    if (title) title.textContent = d.name;
+    document.title = d.name + " — Admin Control Centre";
+
+    const tone = HEALTH_TONE[d.state] || "is-info";
+
+    const kv = function (k, v) {
+      return '<div class="adm-kv-k">' + esc(k) + "</div>" +
+             '<div class="adm-kv-v">' + v + "</div>";
+    };
+
+    /* Everything the check returned that is worth a line, named in
+       words. Deliberately a hand-written list rather than a dump of the
+       object: a dump is how a path or a bucket name reaches a screen. */
+    const extras = [];
+    if (d.journalMode) extras.push(kv("Journal mode", '<span class="adm-code">' + esc(d.journalMode) + "</span>"));
+    if (d.foreignKeys !== undefined) extras.push(kv("Foreign keys", d.foreignKeys ? "On" : "Off"));
+    if (d.live !== undefined && d.live !== null) extras.push(kv("Signed in now", num(d.live)));
+    if (d.awaitingCleanup !== undefined && d.awaitingCleanup !== null) {
+      extras.push(kv("Waiting to be cleared", num(d.awaitingCleanup)));
+    }
+    if (d.backups !== undefined) extras.push(kv("Local backups", num(d.backups)));
+    if (d.newestBackupAgo) extras.push(kv("Newest backup", esc(d.newestBackupAgo)));
+    if (d.provider) extras.push(kv("Provider", esc(d.provider)));
+    if (d.lastAgo) extras.push(kv("Last upload", esc(d.lastAgo)));
+    if (d.events !== undefined) extras.push(kv("Events recorded", num(d.events)));
+    if (d.newestAgo) extras.push(kv("Newest event", esc(d.newestAgo)));
+    if (d.appendOnlyEnforced !== undefined) {
+      extras.push(kv("Append-only enforced", d.appendOnlyEnforced
+        ? "Yes, by the database"
+        : '<span class="adm-over">Not enforced by the database</span>'));
+    }
+    if (d.uptime) extras.push(kv("Uptime", esc(d.uptime)));
+
+    /* A group check carries its own rows. */
+    const children = (d.jobs || d.rows || []);
+    const childList = children.length
+      ? '<div class="adm-panel"><div class="adm-panel-head">' +
+          '<h2 class="adm-panel-title">' + (d.jobs ? "Jobs" : "Services") + "</h2></div>" +
+          '<div class="adm-panel-body"><ul class="adm-list">' +
+          children.map(function (c) {
+            return '<li class="adm-row">' +
+              '<span class="adm-pip adm-pip-i ' + (HEALTH_TONE[c.state] || "is-info") +
+                '" aria-hidden="true"></span>' +
+              '<span class="adm-row-main adm-strong">' + esc(c.name) + "</span>" +
+              '<span class="adm-row-sub">' + esc(c.detail) + "</span>" +
+            "</li>";
+          }).join("") +
+          "</ul></div></div>"
+      : "";
+
+    host.innerHTML =
+      '<div class="adm-panel"><div class="adm-panel-body">' +
+        '<div class="adm-kv">' +
+          kv("Status", '<span class="adm-pip adm-pip-i ' + tone +
+            '" aria-hidden="true"></span>' + esc(d.label)) +
+          kv("Detail", esc(d.detail || "\u2014")) +
+          kv("Response", esc(String(d.ms)) + "ms") +
+          kv("Checked", esc(showStamp(d.at))) +
+          extras.join("") +
+        "</div>" +
+        '<p class="adm-foot">Checked just now, when this page was opened. ' +
+        (d.critical
+          ? "A failure here makes the whole system Critical."
+          : "A failure here raises a warning, not an outage.") + "</p>" +
+        '<button type="button" class="adm-retry" data-hl-recheck="1">Check again</button>' +
+      "</div></div>" + childList;
   }
 
   /* ------------------------------------------------------------------

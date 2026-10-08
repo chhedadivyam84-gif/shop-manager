@@ -330,6 +330,8 @@
     else if (key === "customers") renderCustomers(currentRoute().sub);
     else if (key === "products") renderProducts(currentRoute().sub);
     else if (key === "inventory") renderInventory();
+    else if (key === "invoices") renderInvoices(currentRoute().sub);
+    else if (key === "sales") renderSales();
     else el.page.innerHTML = placeholderPage(section);
     el.main.scrollTop = 0;
     window.scrollTo(0, 0);
@@ -490,8 +492,17 @@
      the eye lands on it; every other bar is the app's own navy, because
      fourteen orange bars would be the "overly orange" the brief warns
      about. ------------------------------------------------------- */
+  /* Today, as the stored date columns spell it. */
+  function todayIso() {
+    const d = new Date();
+    return d.getFullYear() + "-" +
+      String(d.getMonth() + 1).padStart(2, "0") + "-" +
+      String(d.getDate()).padStart(2, "0");
+  }
+
   function chartHtml(series) {
     if (!series || !series.length) return "";
+    const TODAY = todayIso();
     const max = Math.max.apply(null, series.map(d => d.total));
     const W = 100, H = 34, gap = 1.1;
     const bw = (W - gap * (series.length - 1)) / series.length;
@@ -501,10 +512,13 @@
          "small" never reads as "none". */
       const h = max > 0 && d.total > 0 ? Math.max(0.8, (d.total / max) * H) : 0;
       const x = i * (bw + gap);
-      const last = i === series.length - 1;
+      /* The accent means TODAY, not "the last column". A Sales window
+         that ends in the past has no today in it, and highlighting its
+         final bar would invent one. */
+      const isToday = d.date === TODAY;
       const title = d.date + " · " + money(d.total) +
         " · " + d.bills + (d.bills === 1 ? " bill" : " bills");
-      return '<rect class="adm-bar' + (last ? " is-today" : "") + '"' +
+      return '<rect class="adm-bar' + (isToday ? " is-today" : "") + '"' +
         ' x="' + x.toFixed(2) + '" y="' + (H - h).toFixed(2) + '"' +
         ' width="' + bw.toFixed(2) + '" height="' + h.toFixed(2) + '"' +
         '><title>' + esc(title) + "</title></rect>";
@@ -1942,6 +1956,511 @@
               (d.page >= d.pages ? " disabled" : "") + ">Next</button>" +
           "</div>"
         : '<p class="adm-foot">' + num(d.total) + " movement(s).</p>");
+  }
+
+  /* ==================================================================
+     SALES AND INVOICES
+
+     Read-only. There is no edit control anywhere below and no API
+     behind one: changing an invoice is a financial act and belongs
+     behind the financial-year lock in Shop Manager.
+
+     THE ONE THING TO KEEP STRAIGHT is that a delivery challan carries
+     goods but no money. Its total arrives as null rather than 0, and
+     this file prints what the goods were worth instead — a confident
+     "₹0" against five sheets of ply that really did leave the shop is
+     the kind of wrong number an owner stops trusting the screen for.
+     ================================================================== */
+
+  let docView = { q: "", type: "all", status: "all", sort: "recent", page: 1 };
+  let docSeq = 0;
+  let salesWindow = { from: "", to: "" };
+
+  function docHref(id) { return id ? "#/invoices/" + encodeURIComponent(id) : "#/invoices"; }
+
+  /* ---- the document list -------------------------------------------- */
+
+  function renderInvoices(id) {
+    if (id) return renderDocument(id);
+
+    el.page.innerHTML =
+      '<div class="adm-page-head">' +
+        '<div class="adm-page-head-text">' +
+          '<h1 class="adm-page-title">Invoices</h1>' +
+          '<p class="adm-page-sub">Every tax invoice and delivery challan the shop has ' +
+          'raised. Read-only here &mdash; a bill is changed in Shop Manager, where the ' +
+          'financial-year lock and the stock that moves with it apply.</p>' +
+        "</div>" +
+      "</div>" +
+      '<div class="adm-toolbar">' +
+        '<div class="adm-field adm-field-grow">' +
+          '<label class="adm-sr" for="doc-q">Search documents</label>' +
+          '<input type="search" id="doc-q" class="adm-input" autocomplete="off" ' +
+          'placeholder="Document number, customer or amount">' +
+        "</div>" +
+        '<div class="adm-field">' +
+          '<label class="adm-field-label" for="doc-type">Type</label>' +
+          '<select id="doc-type" class="adm-input"></select>' +
+        "</div>" +
+        '<div class="adm-field">' +
+          '<label class="adm-field-label" for="doc-status">Status</label>' +
+          '<select id="doc-status" class="adm-input"></select>' +
+        "</div>" +
+        '<div class="adm-field">' +
+          '<label class="adm-field-label" for="doc-sort">Sort by</label>' +
+          '<select id="doc-sort" class="adm-input"></select>' +
+        "</div>" +
+      "</div>" +
+      '<div class="adm-panel"><div class="adm-panel-body" id="doc-list">' +
+        skeleton() + "</div></div>";
+
+    const q = document.getElementById("doc-q");
+    q.value = docView.q;
+    let timer = null;
+    q.addEventListener("input", function () {
+      clearTimeout(timer);
+      timer = setTimeout(function () {
+        docView.q = q.value.trim(); docView.page = 1; loadDocuments();
+      }, 250);
+    });
+    q.addEventListener("keydown", function (e) {
+      if (e.key !== "Enter") return;
+      e.preventDefault(); clearTimeout(timer);
+      docView.q = q.value.trim(); docView.page = 1; loadDocuments();
+    });
+
+    [["doc-type", "type"], ["doc-status", "status"], ["doc-sort", "sort"]].forEach(pair => {
+      document.getElementById(pair[0]).addEventListener("change", function (e) {
+        docView[pair[1]] = e.target.value; docView.page = 1; loadDocuments();
+      });
+    });
+
+    document.getElementById("doc-list").addEventListener("click", function (e) {
+      const page = e.target.closest("[data-page]");
+      if (page) { docView.page = Number(page.dataset.page); loadDocuments(); return; }
+      if (e.target.closest("[data-retry-documents]")) { loadDocuments(); return; }
+      if (e.target.closest("[data-clear-documents]")) {
+        docView = { q: "", type: "all", status: "all", sort: docView.sort, page: 1 };
+        renderInvoices(null);
+      }
+    });
+
+    loadDocuments();
+  }
+
+  async function loadDocuments() {
+    const body = document.getElementById("doc-list");
+    if (!body) return;
+    body.innerHTML = skeleton();
+
+    const mine = ++docSeq;
+    let d;
+    try {
+      const qs = "?q=" + encodeURIComponent(docView.q) +
+        "&type=" + encodeURIComponent(docView.type) +
+        "&status=" + encodeURIComponent(docView.status) +
+        "&sort=" + encodeURIComponent(docView.sort) +
+        "&page=" + encodeURIComponent(docView.page);
+      d = await api("GET", "/admin/invoices" + qs);
+    } catch (err) {
+      if (mine !== docSeq) return;
+      body.innerHTML = '<p class="adm-fail">' + esc(humanError(err)) + "</p>" +
+        '<button type="button" class="adm-retry" data-retry-documents="1">Try again</button>';
+      return;
+    }
+    if (mine !== docSeq) return;
+
+    docView.page = d.page;
+    fillSelect(document.getElementById("doc-type"), d.options.types, d.type);
+    fillSelect(document.getElementById("doc-status"), d.options.statuses, d.status);
+    fillSelect(document.getElementById("doc-sort"), d.options.sorts, d.sort);
+
+    body.innerHTML = invoiceListHtml(d);
+  }
+
+  function invoiceListHtml(d) {
+    if (!d.total) {
+      return d.q || d.type !== "all" || d.status !== "all"
+        ? emptyLine("No document matches that search.") +
+          '<button type="button" class="adm-retry" data-clear-documents="1">Clear search and filters</button>'
+        : emptyLine("No invoices or challans have been raised yet.");
+    }
+
+    const from = (d.page - 1) * d.pageSize + 1;
+    const to = from + d.rows.length - 1;
+
+    const head =
+      '<div class="adm-tbl-head adm-tbl-doc" aria-hidden="true">' +
+        '<span>Document</span><span>Customer</span><span>Date</span>' +
+        '<span class="adm-num">Amount</span><span class="adm-num">Outstanding</span>' +
+        '<span>Status</span>' +
+      "</div>";
+
+    const rows = d.rows.map(r => {
+      /* A challan has no money on it, so it gets its goods value and a
+         label saying which it is, never a rupee total. */
+      const amount = r.isChallan
+        ? '<span class="adm-muted">' + money(r.goodsValue) + " goods</span>"
+        : money(r.total);
+
+      let state, cls;
+      if (r.voided)            { state = "Cancelled";  cls = "is-info"; }
+      else if (r.isChallan)    { state = r.billed ? "Billed" : "Not yet billed";
+                                 cls = r.billed ? "is-ok" : "is-warn"; }
+      else if (r.overdue)      { state = "Overdue";    cls = "is-bad"; }
+      else if (r.balanceDue>0) { state = "Outstanding"; cls = "is-warn"; }
+      else                     { state = "Settled";    cls = "is-ok"; }
+
+      return '<a class="adm-tbl-row adm-tbl-doc' + (r.voided ? " is-voided" : "") +
+             '" href="' + docHref(r.id) + '">' +
+        '<span class="adm-cell adm-cell-name">' +
+          '<span class="adm-strong">' + esc(r.no) + "</span>" +
+          '<span class="adm-row-sub">' +
+            (r.isChallan ? "Delivery challan" : "Tax invoice") +
+            " · " + num(r.lines) + " line(s)</span>" +
+        "</span>" +
+        '<span class="adm-cell" data-h="Customer">' +
+          (r.customer ? esc(r.customer) : '<span class="adm-muted">—</span>') + "</span>" +
+        '<span class="adm-cell" data-h="Date">' + esc(showDate(r.date)) + "</span>" +
+        '<span class="adm-cell adm-num" data-h="Amount">' + amount + "</span>" +
+        '<span class="adm-cell adm-num" data-h="Outstanding">' +
+          (r.balanceDue > 0 ? '<span class="adm-over">' + money(r.balanceDue) + "</span>"
+                            : '<span class="adm-muted">—</span>') + "</span>" +
+        '<span class="adm-cell" data-h="Status">' +
+          '<span class="adm-pip ' + cls + '" aria-hidden="true"></span>' + esc(state) + "</span>" +
+      "</a>";
+    }).join("");
+
+    const pager = d.pages > 1
+      ? '<div class="adm-pager">' +
+          '<button type="button" class="adm-retry" data-page="' + (d.page - 1) + '"' +
+            (d.page <= 1 ? " disabled" : "") + ">Previous</button>" +
+          '<span class="adm-pager-at">' + num(from) + "–" + num(to) +
+            " of " + num(d.total) + "</span>" +
+          '<button type="button" class="adm-retry" data-page="' + (d.page + 1) + '"' +
+            (d.page >= d.pages ? " disabled" : "") + ">Next</button>" +
+        "</div>"
+      : "";
+
+    /* The totals for everything the filter matched, not just this page. */
+    const totals = '<p class="adm-foot">' + num(d.total) + " document(s) matched · " +
+      money(d.matched.money) + " billed" +
+      (d.matched.due > 0 ? " · " + money(d.matched.due) + " still outstanding" : "") +
+      ". Cancelled documents are shown but never counted.</p>";
+
+    return '<div class="adm-tbl">' + head + rows + "</div>" + pager + totals;
+  }
+
+  /* ---- one document -------------------------------------------------- */
+
+  async function renderDocument(id) {
+    el.page.innerHTML =
+      '<div class="adm-page-head">' +
+        '<div class="adm-page-head-text">' +
+          '<a class="adm-back" href="#/invoices">&larr; All invoices</a>' +
+          '<h1 class="adm-page-title" id="doc-title">Document</h1>' +
+        "</div>" +
+      "</div>" +
+      '<div id="doc-body"><div class="adm-panel"><div class="adm-panel-body">' +
+        skeleton() + "</div></div></div>";
+
+    const host = document.getElementById("doc-body");
+    let d;
+    try {
+      d = await api("GET", "/admin/invoices/" + encodeURIComponent(id));
+    } catch (err) {
+      host.innerHTML = '<div class="adm-panel is-failed"><div class="adm-panel-body">' +
+        '<p class="adm-fail">' + esc(humanError(err)) + "</p>" +
+        '<a class="adm-retry" href="#/invoices">Back to all invoices</a>' +
+        "</div></div>";
+      return;
+    }
+    paintDocument(host, d);
+  }
+
+  function paintDocument(host, d) {
+    const doc = d.document, m = d.money;
+
+    const title = document.getElementById("doc-title");
+    if (title) title.textContent = doc.no;
+    el.crumbHere.textContent = doc.no;
+
+    const lines = d.items.map(it =>
+      '<li class="adm-row adm-line">' +
+        '<span class="adm-row-main">' + esc(it.name) +
+          (it.size ? ' <span class="adm-muted">' + esc(it.size) + "</span>" : "") + "</span>" +
+        '<span class="adm-row-sub">' +
+          num(it.qty) + (it.unit ? " " + esc(it.unit) : "") +
+          " × " + money(it.rate) +
+          (it.discountPct ? " · less " + num(it.discountPct) + "%" : "") +
+          (it.pieces ? " · " + num(it.pieces) + " piece(s)" : "") +
+          (it.hsn ? " · HSN " + esc(it.hsn) : "") +
+        "</span>" +
+        '<span class="adm-row-fig">' + money(it.value) + "</span>" +
+      "</li>").join("");
+
+    const pays = d.payments.map(p =>
+      '<li class="adm-row">' +
+        '<span class="adm-row-main">' + esc(p.method || "Payment") + "</span>" +
+        '<span class="adm-row-sub">' + esc(showDate(p.date)) +
+          (p.reference ? " · " + esc(p.reference) : "") + "</span>" +
+        '<span class="adm-row-fig">' + money(p.amount) + "</span>" +
+      "</li>").join("");
+
+    const rets = d.returns.map(r =>
+      '<li class="adm-row">' +
+        '<span class="adm-row-main">' + esc(r.no) + "</span>" +
+        '<span class="adm-row-sub">' + esc(showDate(r.date)) +
+          (r.reason ? " · " + esc(r.reason) : "") + "</span>" +
+        '<span class="adm-row-fig">' + money(r.total) + "</span>" +
+      "</li>").join("");
+
+    /* The money block, straight off the document. Nothing is re-derived
+       here: a panel that recomputes a total will eventually disagree
+       with the paper the customer is holding. */
+    const totals = m ? [
+      ["Subtotal", money(m.subtotal)],
+      m.discount ? ["Discount", "− " + money(m.discount)] : null,
+      m.cgst ? ["CGST", money(m.cgst)] : null,
+      m.sgst ? ["SGST", money(m.sgst)] : null,
+      m.igst ? ["IGST", money(m.igst)] : null,
+      m.transport ? ["Transport", money(m.transport)] : null,
+      m.loading ? ["Loading", money(m.loading)] : null,
+      m.roundOff ? ["Rounding", money(m.roundOff)] : null,
+      ["Total", '<strong>' + money(m.total) + "</strong>"],
+      m.advance ? ["Advance paid", money(m.advance)] : null,
+      ["Outstanding", m.balanceDue > 0
+        ? '<span class="adm-over">' + money(m.balanceDue) + "</span>"
+        : '<span class="adm-muted">nothing due</span>'],
+    ].filter(Boolean).map(r =>
+      '<div class="adm-kv"><span class="adm-kv-k">' + r[0] +
+      '</span><span class="adm-kv-v adm-num">' + r[1] + "</span></div>").join("") : "";
+
+    host.innerHTML =
+      '<div class="adm-profile-head">' +
+        '<span class="adm-status">' +
+          '<span class="adm-pip ' + (doc.voided ? "is-info" : (doc.isChallan ? "is-warn" : "is-ok")) +
+          '" aria-hidden="true"></span>' +
+          (doc.voided ? "Cancelled" : (doc.isChallan ? "Delivery challan" : "Tax invoice")) +
+        "</span>" +
+        '<span class="adm-doc-date">' + esc(showDate(doc.date)) + "</span>" +
+      "</div>" +
+
+      (doc.voided
+        ? '<p class="adm-notice">This document was cancelled. It is kept because the number ' +
+          'was issued, and it is never counted in any figure.</p>' : "") +
+
+      '<div class="adm-grid">' +
+        '<section class="adm-panel" data-panel="info"><header class="adm-panel-head">' +
+          '<h2 class="adm-panel-title">Document</h2></header>' +
+          '<div class="adm-panel-body">' +
+            [["Number", '<code class="adm-code">' + esc(doc.no) + "</code>"],
+             ["Date", esc(showDate(doc.date))],
+             doc.dueDate ? ["Due", esc(showDate(doc.dueDate))] : null,
+             ["Customer", d.customer.name
+               ? '<a href="' + custHref(d.customer.id) + '">' + esc(d.customer.name) + "</a>"
+               : "—"],
+             d.customer.phone ? ["Phone", esc(d.customer.phone)] : null,
+             d.customer.gst ? ["GSTIN", esc(d.customer.gst)] : null,
+             doc.paymentMethod ? ["Payment", esc(doc.paymentMethod)] : null,
+             /* Only where it says something the Totals panel does not —
+                on a challan, which has no subtotal at all. Two names for
+                one number invites "why do these not match?" when they do. */
+             (!m || Math.abs(d.goodsValue - m.subtotal) > 0.5)
+               ? ["Goods value", money(d.goodsValue)] : null,
+            ].filter(Boolean).map(r =>
+              '<div class="adm-kv"><span class="adm-kv-k">' + r[0] +
+              '</span><span class="adm-kv-v">' + r[1] + "</span></div>").join("") +
+          "</div></section>" +
+
+        '<section class="adm-panel" data-panel="summary"><header class="adm-panel-head">' +
+          '<h2 class="adm-panel-title">' + (m ? "Totals" : "No money on this document") +
+          "</h2></header>" +
+          '<div class="adm-panel-body">' +
+            (m ? totals
+               : emptyLine("A delivery challan carries goods out of the shop but no rates, " +
+                           "GST or total. The goods on this one are worth " +
+                           money(d.goodsValue) + ".")) +
+          "</div></section>" +
+
+        '<section class="adm-panel" data-panel="sizes"><header class="adm-panel-head">' +
+          '<h2 class="adm-panel-title">Items</h2></header>' +
+          '<div class="adm-panel-body">' +
+            (lines ? '<ul class="adm-list">' + lines + "</ul>"
+                   : emptyLine("This document has no lines.")) +
+          "</div></section>" +
+
+        '<section class="adm-panel" data-panel="pays"><header class="adm-panel-head">' +
+          '<h2 class="adm-panel-title">Payments against this document</h2></header>' +
+          '<div class="adm-panel-body">' +
+            (pays ? '<ul class="adm-list">' + pays + "</ul>"
+                  : emptyLine("No payment is recorded against this document.")) +
+            '<p class="adm-foot">A customer can also pay on account rather than against a ' +
+            'bill, so this is not necessarily everything they have paid. Their full ledger ' +
+            'is on the customer page.</p>' +
+          "</div></section>" +
+
+        (rets
+          ? '<section class="adm-panel" data-panel="history"><header class="adm-panel-head">' +
+            '<h2 class="adm-panel-title">Returns against this document</h2></header>' +
+            '<div class="adm-panel-body"><ul class="adm-list">' + rets + "</ul></div></section>"
+          : "") +
+      "</div>";
+  }
+
+  /* ==================================================================
+     SALES
+     ================================================================== */
+
+  function renderSales() {
+    el.page.innerHTML =
+      '<div class="adm-page-head">' +
+        '<div class="adm-page-head-text">' +
+          '<h1 class="adm-page-title">Sales</h1>' +
+          '<p class="adm-page-sub">What the shop sold over a period. Priced tax invoices ' +
+          'only &mdash; a delivery challan carries goods but no money, and is reported ' +
+          'separately rather than counted.</p>' +
+        "</div>" +
+      "</div>" +
+      '<div class="adm-toolbar">' +
+        '<div class="adm-field">' +
+          '<label class="adm-field-label" for="sales-from">From</label>' +
+          '<input type="date" id="sales-from" class="adm-input">' +
+        "</div>" +
+        '<div class="adm-field">' +
+          '<label class="adm-field-label" for="sales-to">To</label>' +
+          '<input type="date" id="sales-to" class="adm-input">' +
+        "</div>" +
+        '<div class="adm-field">' +
+          '<label class="adm-field-label" for="sales-apply">&nbsp;</label>' +
+          '<button type="button" class="adm-primary" id="sales-apply">Show</button>' +
+        "</div>" +
+      "</div>" +
+      '<div id="sales-body">' + skeleton() + "</div>";
+
+    document.getElementById("sales-apply").addEventListener("click", function () {
+      salesWindow.from = document.getElementById("sales-from").value;
+      salesWindow.to = document.getElementById("sales-to").value;
+      loadSales();
+    });
+    document.getElementById("sales-body").addEventListener("click", function (e) {
+      if (e.target.closest("[data-retry-sales]")) loadSales();
+    });
+
+    loadSales();
+  }
+
+  async function loadSales() {
+    const host = document.getElementById("sales-body");
+    if (!host) return;
+    host.innerHTML = skeleton();
+
+    let d;
+    try {
+      const qs = [];
+      if (salesWindow.from) qs.push("from=" + encodeURIComponent(salesWindow.from));
+      if (salesWindow.to) qs.push("to=" + encodeURIComponent(salesWindow.to));
+      d = await api("GET", "/admin/sales" + (qs.length ? "?" + qs.join("&") : ""));
+    } catch (err) {
+      host.innerHTML = '<p class="adm-fail">' + esc(humanError(err)) + "</p>" +
+        '<button type="button" class="adm-retry" data-retry-sales="1">Try again</button>';
+      return;
+    }
+
+    /* The window the server actually used, echoed back into the pickers
+       so they never disagree with the figures beneath them. */
+    const f = document.getElementById("sales-from"), t = document.getElementById("sales-to");
+    if (f && !f.value) f.value = d.window.from;
+    if (t && !t.value) t.value = d.window.to;
+
+    if (!d.hasAnySales) {
+      host.innerHTML = '<div class="adm-panel"><div class="adm-panel-body">' +
+        emptyLine("No sales have been recorded yet. This fills in once the first bill is raised.") +
+        "</div></div>";
+      return;
+    }
+
+    const products = d.topProducts.map(p =>
+      '<li class="adm-row">' +
+        '<span class="adm-row-main">' + esc(p.name) + "</span>" +
+        '<span class="adm-row-sub">' + num(p.units) + " piece(s)</span>" +
+        '<span class="adm-row-fig">' + money(p.value) + "</span>" +
+      "</li>").join("");
+
+    const customers = d.topCustomers.map(c =>
+      '<li class="adm-row">' +
+        '<span class="adm-row-main"><a href="' + custHref(c.id) + '">' + esc(c.name) + "</a></span>" +
+        '<span class="adm-row-sub">' + num(c.bills) + " bill(s)</span>" +
+        '<span class="adm-row-fig">' + money(c.value) + "</span>" +
+      "</li>").join("");
+
+    const methods = d.byMethod.map(x =>
+      '<li class="adm-row">' +
+        '<span class="adm-row-main">' + esc(x.method) + "</span>" +
+        '<span class="adm-row-sub">' + num(x.bills) + " bill(s)</span>" +
+        '<span class="adm-row-fig">' + money(x.value) + "</span>" +
+      "</li>").join("");
+
+    /* The daily series, reusing the dashboard's chart. */
+    const series = d.byDay.map(x => ({
+      date: x.date, total: x.total, bills: x.bills,
+      label: new Date(x.date + "T00:00:00").toLocaleDateString("en-IN", { weekday: "short" }),
+    }));
+
+    host.innerHTML =
+      '<div class="adm-grid">' +
+        '<section class="adm-panel" data-panel="overview"><header class="adm-panel-head">' +
+          '<h2 class="adm-panel-title">' + esc(showDate(d.window.from)) + " to " +
+          esc(showDate(d.window.to)) + "</h2></header>" +
+          '<div class="adm-panel-body">' +
+            '<div class="adm-tiles">' +
+              tile("Sold", money(d.money),
+                   d.change === null
+                     ? "nothing sold in the " + num(d.window.days) +
+                       " days before, so there is nothing to compare"
+                     : deltaHtml(d.change) + " on the " + num(d.window.days) + " days before") +
+              tile("Bills", num(d.bills), num(d.customersBilled) + " customer(s)") +
+              tile("Average bill", d.averageBill === null ? "—" : money(d.averageBill)) +
+              tile("GST charged", money(d.tax.total),
+                   d.tax.igst ? "including IGST" : "CGST + SGST") +
+              tile("Discount given", money(d.tax.discount)) +
+              tile("Cancelled", num(d.voidedBills), "bill(s), not counted above") +
+            "</div>" +
+            (series.length ? chartHtml(series) : "") +
+            (d.unbilledChallans.count
+              ? '<p class="adm-foot adm-over">' + num(d.unbilledChallans.count) +
+                " delivery challan(s) worth " + money(d.unbilledChallans.worth) +
+                " went out in this period and have not been billed. Not counted above.</p>"
+              : "") +
+            (d.returns && d.returns.n
+              ? '<p class="adm-foot">' + num(d.returns.n) + " sales return(s) worth " +
+                money(d.returns.value) + " in this period.</p>"
+              : "") +
+          "</div></section>" +
+
+        '<section class="adm-panel" data-panel="docs"><header class="adm-panel-head">' +
+          '<h2 class="adm-panel-title">Best sellers</h2></header>' +
+          '<div class="adm-panel-body">' +
+            (products ? '<ul class="adm-list">' + products + "</ul>"
+                      : emptyLine("Nothing sold in this period.")) +
+          "</div></section>" +
+
+        '<section class="adm-panel" data-panel="pays"><header class="adm-panel-head">' +
+          '<h2 class="adm-panel-title">Biggest customers</h2></header>' +
+          '<div class="adm-panel-body">' +
+            (customers ? '<ul class="adm-list">' + customers + "</ul>"
+                       : emptyLine("No customer was billed in this period.")) +
+          "</div></section>" +
+
+        '<section class="adm-panel" data-panel="activity"><header class="adm-panel-head">' +
+          '<h2 class="adm-panel-title">How they paid</h2></header>' +
+          '<div class="adm-panel-body">' +
+            (methods ? '<ul class="adm-list">' + methods + "</ul>"
+                     : emptyLine("No bills in this period.")) +
+            '<p class="adm-foot">The method recorded on the bill, which is not the same as ' +
+            'money actually received — a credit sale records its terms here.</p>' +
+          "</div></section>" +
+      "</div>";
   }
 
   /* ------------------------------------------------------------------

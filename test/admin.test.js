@@ -643,7 +643,8 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
                        work in the same repo. It is listed so this block
                        stays a tripwire for the UNEXPECTED rather than
                        quietly absorbing whatever happens to have changed. */
-                    "server/rateLimit.js", "test/security.test.js", ".env.example"];
+                    "server/rateLimit.js", "test/security.test.js", ".env.example",
+                    "server/adminSales.js", "test/admin-sales.test.js"];
 
   /* The two existing files the admin panel is allowed to have touched,
      and the reason each one had to be:

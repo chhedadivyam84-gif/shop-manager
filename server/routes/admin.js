@@ -23,6 +23,7 @@ const adminAccess = require("../adminAccess");
 const dashboard = require("../adminDashboard");
 const customers = require("../adminCustomers");
 const products = require("../adminProducts");
+const sales = require("../adminSales");
 
 const router = express.Router();
 
@@ -317,6 +318,46 @@ router.patch("/products/:id/sizes/:sizeId/stock", mayAdjustStock, (req, res) => 
   });
 
   return require("./products").adjustSizeStock(req, res);
+});
+
+/* ==================================================================
+   SALES AND INVOICES
+
+   READ-ONLY, and deliberately so. There is no PUT, PATCH or DELETE
+   below and there is no capability that would allow one.
+
+   An invoice is not a customer record. It has been printed, handed
+   over and filed in a GST return, and the shop app surrounds a change
+   to one with the things that make it safe: the financial-year lock
+   that refuses a write into a filed period, the stock that has to come
+   back, the customer balance that has to move with it, and the audit
+   entry. A second door onto that from here would mean reimplementing
+   all of it or quietly skipping some — and the second is how a set of
+   books ends up disagreeing with a return that has already been filed.
+
+   So the panel reads, and anyone who needs to change something is sent
+   to the screen built to do it.
+   ================================================================== */
+const mayReadSales = adminAccess.require("sales.view");
+
+/* Literal routes above the /:id one. */
+router.get("/sales", mayReadSales, (req, res) => {
+  const q = req.query || {};
+  res.json(sales.summary({ from: q.from, to: q.to }));
+});
+
+router.get("/invoices", mayReadSales, (req, res) => {
+  const q = req.query || {};
+  res.json(sales.documents({
+    q: q.q, type: q.type, status: q.status, sort: q.sort,
+    from: q.from, to: q.to, page: q.page, pageSize: q.pageSize,
+  }));
+});
+
+router.get("/invoices/:id", mayReadSales, (req, res) => {
+  const doc = sales.document(String(req.params.id || ""));
+  if (!doc) return res.status(404).json({ error: "Document not found." });
+  res.json(doc);
 });
 
 /* The roles the panel is structured for, and which capabilities each

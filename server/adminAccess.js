@@ -86,6 +86,11 @@ const CAPS = {
   "products.view":    ["OWNER", "ADMIN", "SUPPORT"],
   "products.edit":    ["OWNER", "ADMIN"],
   "inventory.adjust": ["OWNER"],
+  /* Reading the sales book. There is no matching .edit, and that is
+     deliberate — see routes/admin.js: changing an invoice is a
+     financial act and belongs behind the financial-year lock in the
+     shop app, not on an admin screen. */
+  "sales.view":       ["OWNER", "ADMIN", "SUPPORT"],
   "ai.view":       ["OWNER", "ADMIN"],
   "admin.manage":  ["OWNER"],
   "security.view": ["OWNER", "ADMIN"],

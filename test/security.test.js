@@ -230,7 +230,7 @@ function seed() {
      unknown.status === wrongPin.status &&
      JSON.stringify(unknown.j) === JSON.stringify(wrongPin.j),
      [unknown.j, wrongPin.j]);
-  ["127.0.0.1", "::1", "::ffff:127.0.0.1"].forEach(clearLoginFailures);
+  ["127.0.0.1", "::1", "::ffff:127.0.0.1"].forEach(a => clearLoginFailures(a));
 
   const bf = jar();
   let locked = null;
@@ -249,13 +249,44 @@ function seed() {
 
   /* The lockout keys on req.ip, which with `trust proxy` comes from
      X-Forwarded-For — which is why the proxy-addr advisory mattered. */
-  ok("the app trusts exactly one proxy hop", /app\.set\("trust proxy", 1\)/.test(idx));
+  ok("the proxy hop count is explicit and configurable",
+     /app\.set\("trust proxy", TRUST_PROXY\)/.test(idx));
+
+  /* ---------------------------------------------------------------
+     ONE ATTACKER MUST NOT BE ABLE TO CLOSE THE COUNTER.
+
+     The lockout keyed on the address alone. On a shop PC that is one
+     person; hosted, behind a proxy, it is EVERYBODY — so five wrong
+     PINs from a stranger's phone would have locked every member of
+     staff out of the till for fifteen minutes. Pairing the counter
+     with the account keeps the brute-force protection and takes away
+     the shop-wide outage. --------------------------------------- */
+  console.log("\n--- a lockout is per account, not per shop ---");
+  ["127.0.0.1", "::1", "::ffff:127.0.0.1"].forEach(a => clearLoginFailures(a));
+
+  const attacker = jar();
+  let ownerLocked = false;
+  for (let i = 0; i < 7; i++) {
+    const res = await attacker.call("POST", "/api/auth/login",
+      { staffId: "STAFF_owner", pin: "0000" });
+    if (res.status === 429) { ownerLocked = true; break; }
+  }
+  ok("hammering the owner's PIN locks the OWNER out", ownerLocked);
+
+  const counter = jar();
+  const stillIn = await counter.call("POST", "/api/auth/login",
+    { staffId: "ST-COUNTER", pin: "7391" });
+  ok("but the counter staff can still sign in from the same address",
+     stillIn.status === 200, [stillIn.status, stillIn.j]);
+  ok("the lockout is keyed on the pair, not the address",
+     /lockKey\(ip, staffId\)/.test(read("server/auth.js")));
+  ["127.0.0.1", "::1", "::ffff:127.0.0.1"].forEach(a => clearLoginFailures(a));
   ok("x-powered-by is disabled, so responses do not name the framework",
      /app\.disable\("x-powered-by"\)/.test(idx));
 
   /* Undo the lockout this block just created: every request in this file
      comes from 127.0.0.1, so leaving it set would 429 everything after. */
-  ["127.0.0.1", "::1", "::ffff:127.0.0.1"].forEach(clearLoginFailures);
+  ["127.0.0.1", "::1", "::ffff:127.0.0.1"].forEach(a => clearLoginFailures(a));
 
   /* ================================================================
      3.  RATE LIMITING  — the new layer
@@ -265,20 +296,107 @@ function seed() {
   rateLimit.reset();
   let hit429 = 0;
   for (let i = 0; i < 260; i++) {
-    const r = rateLimit.hit("probe", "1.2.3.4", 240, 60000);
+    const r = rateLimit.hit("probe", "s:session-a", 240, 60000);
     if (!r.ok) hit429++;
   }
-  ok("writes are capped per address", hit429 === 20, hit429);
+  ok("writes are capped per caller", hit429 === 20, hit429);
   ok("a refusal says when to come back",
-     rateLimit.hit("probe", "1.2.3.4", 240, 60000).retryAfterSec > 0);
-  ok("a different address is unaffected",
-     rateLimit.hit("probe", "9.9.9.9", 240, 60000).ok === true);
+     rateLimit.hit("probe", "s:session-a", 240, 60000).retryAfterSec > 0);
+  ok("a DIFFERENT caller is unaffected by the first one's limit",
+     rateLimit.hit("probe", "s:session-b", 240, 60000).ok === true);
+
+  /* ---------------------------------------------------------------
+     THE BUG THIS BLOCK EXISTS FOR.
+
+     The limiter first keyed on req.ip. Behind this app's hosted chain
+     — Cloudflare in front of Render — trust proxy 1 makes req.ip the
+     intermediate hop rather than the caller, which fails two ways:
+     if that address moves, nobody is ever limited; if it is stable,
+     the whole shop shares one bucket and one person hammering the app
+     locks out the counter. Thirteen hits on the live sync endpoint
+     produced no refusal, which is the first failure observed for
+     real. --------------------------------------------------------- */
+  console.log("\n--- what Express reports for a two-proxy chain ---");
+  {
+    const probe = express();
+    probe.set("trust proxy", 1);
+    probe.get("/", (q, r2) => r2.json({ ip: q.ip }));
+    const one = probe.listen(0);
+    await new Promise(f => one.once("listening", f));
+    const r1 = await (await fetch("http://127.0.0.1:" + one.address().port + "/",
+      { headers: { "x-forwarded-for": "203.0.113.55, 172.16.0.9" } })).json();
+    one.close();
+
+    const probe2 = express();
+    probe2.set("trust proxy", 2);
+    probe2.get("/", (q, r2) => r2.json({ ip: q.ip }));
+    const two = probe2.listen(0);
+    await new Promise(f => two.once("listening", f));
+    const r2j = await (await fetch("http://127.0.0.1:" + two.address().port + "/",
+      { headers: { "x-forwarded-for": "203.0.113.55, 172.16.0.9" } })).json();
+    two.close();
+
+    ok("trust proxy 1 reports the INTERMEDIATE hop, not the caller",
+       r1.ip === "172.16.0.9", r1.ip);
+    ok("trust proxy 2 reports the caller", r2j.ip === "203.0.113.55", r2j.ip);
+    ok("so the hop count is configurable rather than assumed",
+       /TRUST_PROXY/.test(read("server/index.js")) &&
+       /app\.set\("trust proxy", TRUST_PROXY\)/.test(read("server/index.js")));
+    ok("and it is documented, with a warning against rounding up",
+       /TRUST_PROXY=/.test(read(".env.example")) &&
+       /do not round up|Do NOT round up/i.test(read(".env.example")));
+  }
+
+  console.log("\n--- the limiter keys on the session, not the address ---");
+  rateLimit.reset();
+  ok("a request with a session is keyed by it",
+     rateLimit.callerKey({ sessionID: "abc", ip: "1.1.1.1",
+                           session: { loggedIn: true } }) === "s:abc");
+  ok("only a request without one falls back to the address",
+     rateLimit.callerKey({ ip: "1.1.1.1" }) === "i:1.1.1.1");
+  /* express-session hands a FRESH sessionID to every request that
+     arrives with no cookie, so presence alone is worthless as an
+     identity — a flood would get a new one per request. */
+  ok("an ANONYMOUS request is keyed by address, not by a throwaway session id",
+     rateLimit.callerKey({ sessionID: "fresh-each-time", ip: "1.1.1.1" }) === "i:1.1.1.1",
+     rateLimit.callerKey({ sessionID: "fresh-each-time", ip: "1.1.1.1" }));
+  ok("TWO SIGNED-IN CALLERS BEHIND ONE ADDRESS GET THEIR OWN LIMITS",
+     rateLimit.callerKey({ sessionID: "a", ip: "9.9.9.9", session: { loggedIn: true } }) !==
+     rateLimit.callerKey({ sessionID: "b", ip: "9.9.9.9", session: { loggedIn: true } }));
+
+  /* The whole point: one session exhausting its limit must not refuse
+     the person at the next till. */
+  rateLimit.reset();
+  for (let i = 0; i < 12; i++) rateLimit.hit("shared", "s:till-one", 10, 60000, 100000);
+  ok("one till hitting its ceiling does not lock out another",
+     rateLimit.hit("shared", "s:till-one", 10, 60000, 100000).ok === false &&
+     rateLimit.hit("shared", "s:till-two", 10, 60000, 100000).ok === true);
+
+  console.log("\n--- the backstop, for when the key is worthless ---");
+  rateLimit.reset();
+  let refusedByGlobal = false;
+  /* A flood that looks like a thousand different callers — exactly what
+     a rotating proxy address produces. Each one is under its own limit;
+     the bucket total is not. */
+  for (let i = 0; i < 400; i++) {
+    const r = rateLimit.hit("flood", "i:10.0.0." + i, 240, 60000, 300);
+    if (!r.ok && r.scope === "global") { refusedByGlobal = true; break; }
+  }
+  ok("a flood from a thousand apparent callers is still bounded", refusedByGlobal);
+  rateLimit.reset();
 
   rateLimit.reset();
   ok("READS are deliberately not limited",
      /methods\s*\|\|\s*\["POST", "PUT", "PATCH", "DELETE"\]/.test(read("server/rateLimit.js")));
   ok("the limit is generous enough for a busy counter",
      /max: 240/.test(idx), (idx.match(/max: \d+/g) || []));
+
+  ok("the write limiter is mounted AFTER the session middleware",
+     idx.indexOf("app.use(session({") <
+     idx.indexOf('app.use("/api", rateLimit.limit('),
+     [idx.indexOf("app.use(session({"), idx.indexOf('app.use("/api", rateLimit.limit(')]);
+  ok("  which is what makes req.sessionID available to it",
+     /req && req\.sessionID/.test(read("server/rateLimit.js")));
 
   ok("the sync receiver has its own, much stricter limit",
      /bucket: "sync", max: 10/.test(idx));

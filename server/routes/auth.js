@@ -158,7 +158,7 @@ router.post("/shop-login", async (req, res) => {
     return res.status(400).json({ error: "Enter the user ID and password your supplier gave you." });
   }
 
-  const lock = loginLockStatus(req.ip);
+  const lock = loginLockStatus(req.ip, username);
   if (lock.locked) {
     return res.status(429).json({ error: `Too many wrong attempts. Try again in ${Math.ceil(lock.retryAfterSec / 60)} minute(s).` });
   }
@@ -230,7 +230,7 @@ router.post("/shop-login", async (req, res) => {
      panel. A wrong password must not become a second chance at a different
      door, and the panel would answer the same anyway. */
   if (row && !row.blocked) {
-    recordLoginFailure(req.ip);
+    recordLoginFailure(req.ip, username);
     return res.status(401).json({ error: WRONG_LOGIN });
   }
 
@@ -238,7 +238,7 @@ router.post("/shop-login", async (req, res) => {
      only time it has to be asked. */
   const server = checkin.serverUrl();
   if (!server) {
-    recordLoginFailure(req.ip);
+    recordLoginFailure(req.ip, username);
     return res.status(401).json({ error: WRONG_LOGIN });
   }
 
@@ -260,7 +260,7 @@ router.post("/shop-login", async (req, res) => {
 
   const answer = asked.body;
   if (!asked.ok) {
-    recordLoginFailure(req.ip);
+    recordLoginFailure(req.ip, username);
     /* 403 means the vendor has something specific to say — expired,
        cancelled — and those words are the ones the shopkeeper was
        promised, so they are passed through. "Demo License Expired – Please
@@ -363,7 +363,7 @@ function currentFeaturesOff(req) {
 }
 
 function finish(req, res, row) {
-  clearLoginFailures(req.ip);
+  clearLoginFailures(req.ip, row.username);
   tenants.touch(row.username);
 
   /* Everything downstream reads the company from the session, so this is
@@ -411,7 +411,10 @@ router.get("/staff-list", (req, res) => {
 
 router.post("/login", (req, res) => {
   const ip = req.ip;
-  const lock = loginLockStatus(ip);
+  /* Paired with the account being tried, so a stranger guessing at one
+     person's PIN cannot lock the whole shop out of the till. See the
+     note in auth.js. */
+  const lock = loginLockStatus(ip, req.body && req.body.staffId);
   if (lock.locked) {
     return res.status(429).json({ error: `Too many wrong PINs. Try again in ${Math.ceil(lock.retryAfterSec / 60)} minute(s).` });
   }
@@ -419,11 +422,11 @@ router.post("/login", (req, res) => {
   const { staffId, pin } = req.body;
   const staff = staffId && db.prepare("SELECT * FROM staff WHERE id = ? AND active = 1").get(staffId);
   if (!staff || !pin || !verifyPin(String(pin), staff.pin_hash)) {
-    recordLoginFailure(ip);
+    recordLoginFailure(ip, staffId);
     return res.status(401).json({ error: "Incorrect PIN." });
   }
 
-  clearLoginFailures(ip);
+  clearLoginFailures(ip, staffId);
 
   /* A NEW SESSION ID, before anything is written into it.
    *

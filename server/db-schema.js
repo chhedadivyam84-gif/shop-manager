@@ -2798,8 +2798,28 @@ addColumn("invoices", "updated_at", "INTEGER");
  * all of them NULL — do not collide with each other. Additive: no
  * existing row is read, written or migrated. */
 addColumn("invoices", "idempotency_key", "TEXT");
-db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_idempotency
-           ON invoices(idempotency_key) WHERE idempotency_key IS NOT NULL`);
+
+/* GUARDED, because this runs at boot and a throw here would stop the
+   shop opening.
+ *
+ * On a fresh column it cannot fail: every row is NULL and a partial
+ * index over NULLs has nothing to collide. The case it protects against
+ * is a database that somehow already carries duplicate keys — an old
+ * backup restored over a newer schema, say — where the shop would
+ * otherwise come back to a till that will not start.
+ *
+ * Losing the index is not losing the protection: the handler in
+ * routes/invoices.js checks the key before it does anything, and that
+ * check is what catches the ordinary double-tap. The index is the
+ * belt-and-braces for two retries landing in the same instant. So this
+ * says so loudly and carries on serving. */
+try {
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_idempotency
+             ON invoices(idempotency_key) WHERE idempotency_key IS NOT NULL`);
+} catch (e) {
+  console.error("[schema] could not create the invoice idempotency index: " + e.message +
+                " — duplicate-submission protection falls back to the application check.");
+}
 
 /* ============================================================
    WHO MAY DO WHAT

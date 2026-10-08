@@ -1046,6 +1046,15 @@ body.adm-body{
 
   /* The products table has its own column rhythm — a category and a
      price need less room than a phone number and an address. */
+  /* The document table carries a due date and a money breakdown, so it
+     needs its own column rhythm. */
+  .adm-tbl-head.adm-tbl-doc,
+  .adm-tbl-row.adm-tbl-doc{
+    grid-template-columns:
+      minmax(130px, 1.6fr) minmax(110px, 1.4fr) minmax(86px, .9fr)
+      minmax(86px, .9fr) minmax(110px, 1.2fr) minmax(96px, 1fr) minmax(120px, 1.2fr);
+  }
+
   .adm-tbl-head.adm-tbl-prod,
   .adm-tbl-row.adm-tbl-prod{
     grid-template-columns:
@@ -1175,5 +1184,15 @@ body.adm-body{
   margin-left: 6px;
   font-size: var(--fs-row-sub);
   font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Subtotal, discount and tax under the total rather than as three more
+   columns — eleven columns is not a table anybody reads. */
+.adm-breakdown{
+  display: block;
+  font-size: var(--fs-row-sub);
+  font-weight: 400;
+  color: var(--muted);
   white-space: nowrap;
 }

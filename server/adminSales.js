@@ -30,6 +30,11 @@
                    only way to say what actually went out on one.
    ============================================================ */
 const db = require("./db");
+/* The shop's own status vocabulary — Pending, Partially Completed,
+   Completed, Billed, Cancelled. This module first invented its own
+   words for the same five states, which meant the admin panel and the
+   billing screen could describe one bill differently. One engine. */
+const { deriveDocStatus } = require("./routes/invoices");
 const { localDate, round2, todayStr } = require("./util");
 
 const PAGE_SIZE = 25;
@@ -84,8 +89,21 @@ const SORTS = {
   number:  { label: "Document number", sql: "i.challan_no ASC" },
 };
 
+/* Only customers who actually have a document, so the filter never
+   offers a name that would return nothing. */
+function billedCustomers() {
+  try {
+    return db.prepare(`
+      SELECT c.id, c.name, COUNT(*) AS n
+        FROM invoices i JOIN customers c ON c.id = i.customer_id
+       WHERE i.voided = 0
+       GROUP BY c.id ORDER BY c.name COLLATE NOCASE ASC LIMIT 500`).all();
+  } catch (e) { return []; }
+}
+
 function describeOptions() {
   return {
+    customers: billedCustomers(),
     types: Object.keys(TYPES).map(k => ({ key: k, label: TYPES[k].label })),
     statuses: Object.keys(STATUSES).map(k => ({ key: k, label: STATUSES[k].label })),
     sorts: Object.keys(SORTS).map(k => ({ key: k, label: SORTS[k].label })),
@@ -120,6 +138,12 @@ function documents(opts) {
 
   if (TYPES[type].where) where.push(TYPES[type].where);
 
+  /* One customer's documents. The id is matched exactly — this is a
+     filter, not a search, and a LIKE here would quietly include a
+     customer whose id merely starts the same. */
+  const customerId = String(o.customerId || "").trim();
+  if (customerId) { where.push("i.customer_id = ?"); params.push(customerId); }
+
   let statusWhere = STATUSES[status].where;
   if (statusWhere.includes(":today")) {
     statusWhere = statusWhere.replace(":today", "?");
@@ -145,7 +169,8 @@ function documents(opts) {
   const rows = db.prepare(`
     SELECT i.id, i.challan_no, i.doc_type, i.date, i.created_at, i.total,
            i.balance_due, i.advance, i.payment_method, i.due_date, i.voided,
-           i.converted_invoice_id, c.name AS customer, c.id AS customer_id,
+           i.converted_invoice_id, i.subtotal, i.discount_amount,
+           i.cgst, i.sgst, i.igst, c.name AS customer, c.id AS customer_id,
            (SELECT COUNT(*) FROM invoice_items ii WHERE ii.invoice_id = i.id) AS lines,
            (SELECT COALESCE(SUM(ii.qty * ii.rate * (1 - COALESCE(ii.discount_pct,0)/100.0)), 0)
               FROM invoice_items ii WHERE ii.invoice_id = i.id) AS goods_value
@@ -156,7 +181,7 @@ function documents(opts) {
   return {
     total: head.n,
     page: safePage, pages, pageSize: size,
-    q, type, status, sort, from: o.from || "", to: o.to || "",
+    q, type, status, sort, customerId, from: o.from || "", to: o.to || "",
     /* The totals for everything the filter matched, not just this page —
        a page total would be a number nobody asked for. */
     matched: { money: round2(head.money), due: round2(head.due) },
@@ -167,7 +192,11 @@ function documents(opts) {
 
 function shapeRow(r) {
   const challan = r.doc_type === "challan";
+  const tax = round2((r.cgst || 0) + (r.sgst || 0) + (r.igst || 0));
   return {
+    /* The shop's own word for this document's state, from the shop's own
+       function — not a label invented here. */
+    status: deriveDocStatus(r),
     id: r.id,
     no: r.challan_no,
     type: r.doc_type,
@@ -179,6 +208,11 @@ function shapeRow(r) {
        browser from printing a confident zero rupees against goods that
        really did leave the shop. */
     total: challan ? null : round2(r.total || 0),
+    /* A challan carries no money at all, so every money field on one is
+       null rather than zero. Only its goods have a value. */
+    subtotal: challan ? null : round2(r.subtotal || 0),
+    discount: challan ? null : round2(r.discount_amount || 0),
+    tax: challan ? null : tax,
     goodsValue: round2(r.goods_value || 0),
     balanceDue: r.voided ? 0 : round2(r.balance_due || 0),
     paymentMethod: r.payment_method || "",

@@ -405,6 +405,41 @@ router.post("/", (req, res) => {
   // "GST Invoice" vs "Non-GST Invoice" — same default-on, explicit-off pattern.
   const gstEnabled = req.body.gstEnabled !== false;
 
+  /* ONE BILL PER SUBMISSION.
+   *
+   * A bill is raised at a counter on a shop's broadband. The submit
+   * button gets double-tapped, the connection drops and the browser
+   * retries, somebody refreshes mid-save — and each of those posts
+   * the same cart again. The result was two invoices, two document
+   * numbers, and stock deducted twice.
+   *
+   * The browser sends a key it makes ONCE per submission and reuses
+   * on every retry of that submission. If a bill already carries it,
+   * the first one is handed straight back — the caller gets the same
+   * answer it would have got, and nothing is created, numbered or
+   * deducted a second time.
+   *
+   * This check is the fast path and not the guarantee: two genuinely
+   * simultaneous retries could both pass it. The UNIQUE index on the
+   * column is what makes that impossible, and the catch around the
+   * insert below turns the collision back into the same answer. */
+  const idempotencyKey = String(
+    req.get("Idempotency-Key") || (req.body && req.body.idempotencyKey) || "").trim();
+  if (idempotencyKey) {
+    if (idempotencyKey.length > 120) {
+      return res.status(400).json({ error: "That submission key is not valid." });
+    }
+    const already = db.prepare(
+      "SELECT * FROM invoices WHERE idempotency_key = ?").get(idempotencyKey);
+    if (already) {
+      return res.status(200).json({
+        ...withStatus(already),
+        items: db.prepare("SELECT * FROM invoice_items WHERE invoice_id = ?").all(already.id),
+        duplicateOf: already.id,
+      });
+    }
+  }
+
   if (!Array.isArray(rawItems) || !rawItems.length) {
     return res.status(400).json({ error: `Add at least one item to the ${isChallan ? "challan" : "invoice"}.` });
   }
@@ -579,11 +614,13 @@ router.post("/", (req, res) => {
     INSERT INTO invoices (id, challan_no, doc_type, date, created_at, customer_id, subtotal, discount_type, discount_value,
       discount_amount, tax_type, cgst, sgst, igst, transport, loading, gst_on_charges, gst_enabled, round_off, total, advance, balance_due,
       payment_method, paper_size, delivery_man, vehicle_number, delivery_address, remarks, location_id, area_id,
-      due_date, transport_mode, einvoice_wanted, ewb_wanted, created_by, updated_by, updated_at)
+      due_date, transport_mode, einvoice_wanted, ewb_wanted, created_by, updated_by, updated_at,
+      idempotency_key)
     VALUES (@id, @challanNo, @docType, @date, @createdAt, @customerId, @subtotal, @discountType, @discountValue,
       @discountAmount, @taxType, @cgst, @sgst, @igst, @transport, @loading, @gstOnCharges, @gstEnabled, @roundOffAmount, @total, @advance,
       @balanceDue, @paymentMethod, @paperSize, @deliveryMan, @vehicleNumber, @deliveryAddress, @remarks, @locationId, @areaId,
-      @dueDate, @transportMode, @einvoiceWanted, @ewbWanted, @createdBy, @updatedBy, @updatedAt)
+      @dueDate, @transportMode, @einvoiceWanted, @ewbWanted, @createdBy, @updatedBy, @updatedAt,
+      @idempotencyKey)
   `);
   const insertItem = db.prepare(`
     INSERT INTO invoice_items
@@ -593,7 +630,7 @@ router.post("/", (req, res) => {
   `);
   const bumpDue = db.prepare("UPDATE customers SET due = ROUND(due + ?, 2) WHERE id = ?");
 
-  db.transaction(() => {
+  const saveInvoice = db.transaction(() => {
     insertInvoice.run({
       id, challanNo, docType, date: invoiceDate, createdAt: Date.now(), customerId: customerId || null,
       subtotal: totals.subtotal, discountType: discountType === "flat" ? "flat" : "pct",
@@ -607,6 +644,10 @@ router.post("/", (req, res) => {
       /* Written once and never touched again on create; the edit handler
          moves updated_by/updated_at and leaves created_by alone. */
       createdBy: whoIs(req), updatedBy: whoIs(req), updatedAt: Date.now(),
+      /* NULL rather than empty string when absent: the UNIQUE index is
+         partial on NOT NULL, so every pre-existing bill and every one
+         raised without a key stays out of its way. */
+      idempotencyKey: idempotencyKey || null,
       roundOffAmount: totals.roundOffAmount,
       total: totals.total, advance: totals.advance, balanceDue: totals.balanceDue,
       // A challan has no tender; store a dash rather than a misleading "Cash".
@@ -646,7 +687,33 @@ router.post("/", (req, res) => {
     });
     touchedProducts.forEach(pid => syncProductStockStmt.run(pid));
     if (customerId && totals.balanceDue > 0) bumpDue.run(totals.balanceDue, customerId);
-  })();
+  });
+
+  /* THE GUARANTEE, as opposed to the check at the top.
+   *
+   * That check is a fast path and can be raced: two retries of the same
+   * submission can both find nothing and both proceed. The UNIQUE index
+   * on idempotency_key is what makes the second one impossible, and a
+   * transaction that fails rolls back whole — no number consumed, no
+   * stock moved, no balance touched.
+   *
+   * So a collision here is not an error to report. It means the other
+   * attempt won, and the honest answer is the bill it created. Anything
+   * else is refused as it always was. */
+  try {
+    saveInvoice();
+  } catch (err) {
+    const clash = idempotencyKey && /UNIQUE constraint failed: *invoices\.idempotency_key|idx_invoices_idempotency/i
+      .test(String(err && err.message));
+    if (!clash) throw err;
+    const winner = db.prepare("SELECT * FROM invoices WHERE idempotency_key = ?").get(idempotencyKey);
+    if (!winner) throw err;
+    return res.status(200).json({
+      ...withStatus(winner),
+      items: db.prepare("SELECT * FROM invoice_items WHERE invoice_id = ?").all(winner.id),
+      duplicateOf: winner.id,
+    });
+  }
 
   logAction(req, isChallan ? "challan.create" : "invoice.create",
     isChallan ? challanNo : `${challanNo} — ${totals.total}`);
@@ -1076,3 +1143,6 @@ router.delete("/:id", requireRole("owner"), (req, res) => {
 });
 
 module.exports = router;
+/* The one engine for what state a document is in. The admin panel
+   reads it so both screens describe a bill with the same word. */
+module.exports.deriveDocStatus = deriveDocStatus;

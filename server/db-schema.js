@@ -2780,6 +2780,27 @@ addColumn("invoices", "created_by", "TEXT DEFAULT ''");
 addColumn("invoices", "updated_by", "TEXT DEFAULT ''");
 addColumn("invoices", "updated_at", "INTEGER");
 
+/* ONE BILL PER SUBMISSION, enforced by the database rather than by the
+   button being quick enough to disable.
+ *
+ * A bill is raised at a counter on a shop's broadband. The submit button
+ * gets double-tapped, the phone drops the connection and the browser
+ * retries, somebody refreshes mid-save — and each of those posts the
+ * same cart again. Nothing stopped the second one, so the shop got two
+ * invoices, two document numbers, and stock deducted twice.
+ *
+ * The browser now sends a key it generates ONCE per submission attempt
+ * and reuses on every retry of that attempt. The partial UNIQUE index
+ * below is what actually enforces it: a second insert carrying the same
+ * key cannot land, whatever happens in the application above it.
+ *
+ * Partial, so the thousands of invoices raised before this existed —
+ * all of them NULL — do not collide with each other. Additive: no
+ * existing row is read, written or migrated. */
+addColumn("invoices", "idempotency_key", "TEXT");
+db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_idempotency
+           ON invoices(idempotency_key) WHERE idempotency_key IS NOT NULL`);
+
 /* ============================================================
    WHO MAY DO WHAT
 

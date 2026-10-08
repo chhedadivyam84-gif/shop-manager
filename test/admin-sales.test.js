@@ -224,6 +224,62 @@ function seed() {
   ok("and even then its money is NOT added to the matched total",
      voided.matched.money === 0, voided.matched.money);
 
+  console.log("\n--- the status is the shop's own, not one invented here ---");
+
+  const invoicesRouter = require(path.join(ROOT, "server/routes/invoices.js"));
+  ok("routes/invoices.js exports its status engine",
+     typeof invoicesRouter.deriveDocStatus === "function");
+
+  const all = await f("status=all");
+  const byNo = no => all.rows.filter(x => x.no === no)[0];
+  ok("a settled bill is 'Completed', the word the billing screen uses",
+     byNo("SP0000001").status === "Completed", byNo("SP0000001").status);
+  ok("one with money owing and no advance is 'Pending'",
+     byNo("SP0000002").status === "Pending", byNo("SP0000002").status);
+  ok("an unbilled challan is 'Pending', not a label of this module's own",
+     byNo("DC0000001").status === "Pending", byNo("DC0000001").status);
+  ok("a cancelled bill is 'Cancelled'",
+     (await f("status=voided")).rows[0].status === "Cancelled");
+  ok("every status is one of the five the app defines",
+     all.rows.every(x => ["Pending", "Partially Completed", "Completed",
+                          "Billed", "Cancelled"].includes(x.status)),
+     all.rows.map(x => x.status));
+
+  /* The point of reusing it: one bill, one word, on both screens. */
+  const direct = inShop(() => invoicesRouter.deriveDocStatus(
+    db.prepare("SELECT * FROM invoices WHERE id = ?").get("I3")));
+  ok("and it agrees with the engine, bill for bill",
+     byNo("SP0000003").status === direct, [byNo("SP0000003").status, direct]);
+
+  console.log("\n--- the money the list carries ---");
+  const one = byNo("SP0000001");
+  ok("the subtotal is the document's own", one.subtotal === 10000, one.subtotal);
+  ok("the discount is too", one.discount === 500, one.discount);
+  ok("the tax is CGST + SGST + IGST summed", one.tax === 1800, one.tax);
+  ok("and the total", one.total === 10000, one.total);
+  ok("a CHALLAN carries none of them, as null rather than zero",
+     byNo("DC0000001").subtotal === null && byNo("DC0000001").discount === null &&
+     byNo("DC0000001").tax === null && byNo("DC0000001").total === null,
+     byNo("DC0000001"));
+
+  console.log("\n--- filtering by customer ---");
+  const mine = await f("customerId=C1");
+  ok("it returns only that customer's documents",
+     mine.rows.every(x => x.customerId === "C1") && mine.total >= 1,
+     mine.rows.map(x => x.no));
+  ok("and excludes another customer's", !mine.rows.some(x => x.customerId === "C2"));
+  const theirs = await f("customerId=C2");
+  ok("the other customer's filter works too",
+     theirs.rows.every(x => x.customerId === "C2"), theirs.rows.map(x => x.no));
+  ok("an unknown customer id returns nothing rather than everything",
+     (await f("customerId=NO-SUCH-CUSTOMER")).total === 0);
+  ok("the filter is exact, not a prefix match",
+     (await f("customerId=C")).total === 0, (await f("customerId=C")).total);
+
+  ok("the customers offered are only those with documents",
+     all.options.customers.length === 2 &&
+     all.options.customers.every(c => c.n > 0), all.options.customers);
+
   console.log("\n--- date window ---");
   const windowed = await f("from=" + day(4) + "&to=" + day(0));
   ok("a window excludes what falls outside it",

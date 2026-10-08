@@ -4947,6 +4947,16 @@ function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }
 
+/* A one-off id for ONE attempt at saving a bill, so the server can tell a
+   retry of that attempt from a genuinely new bill. randomUUID is there on
+   every browser this app supports; the fallback is for an old WebView,
+   where a clash would only ever be between two saves on the same device
+   and the odds are still remote. */
+function newSubmissionKey(){
+  try { if(crypto && crypto.randomUUID) return crypto.randomUUID(); } catch(e){ /* older webview */ }
+  return "sub-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
+}
+
 /* ============================================================
    BILLING
    ============================================================ */
@@ -6288,9 +6298,27 @@ async function completeSale(){
       payload.reuseReason = reason;
     }
 
+    /* ONE KEY PER SUBMISSION ATTEMPT.
+     *
+     * Generated when a save starts and kept until one SUCCEEDS. So a
+     * double-tapped button, a dropped connection the browser retries,
+     * or a second press after an error all carry the same key — and the
+     * server hands back the bill it already made instead of raising a
+     * second one with a second number and a second stock deduction.
+     *
+     * Cleared on success below, so the next bill is a new submission.
+     * Only on create: an edit is not a submission that can duplicate. */
+    if (!editingId) {
+      if (!state.billSubmissionKey) state.billSubmissionKey = newSubmissionKey();
+      payload.idempotencyKey = state.billSubmissionKey;
+    }
+
     const invoice = editingId
       ? await api("PUT", `/invoices/${editingId}`, payload)
       : await api("POST", "/invoices", payload);
+    /* Only now. A failure deliberately leaves the key in place so the
+       retry is recognised as the same submission. */
+    state.billSubmissionKey = null;
     state.cart = []; state.advance = 0; state.discountValue = 0; state.taxTypeOverride = null; state.advanceTouched = false;
     state.transport = 0; state.loading = 0; state.deliveryMan = "";
     state.vehicleNumber = ""; state.deliveryAddress = ""; state.remarks = "";

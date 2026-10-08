@@ -350,6 +350,7 @@ router.get("/invoices", mayReadSales, (req, res) => {
   const q = req.query || {};
   res.json(sales.documents({
     q: q.q, type: q.type, status: q.status, sort: q.sort,
+    customerId: q.customerId,
     from: q.from, to: q.to, page: q.page, pageSize: q.pageSize,
   }));
 });

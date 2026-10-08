@@ -2797,6 +2797,52 @@ addColumn("invoices", "updated_at", "INTEGER");
  * Partial, so the thousands of invoices raised before this existed —
  * all of them NULL — do not collide with each other. Additive: no
  * existing row is read, written or migrated. */
+/* ============================================================
+   WHO MAY OPEN THE ADMIN PANEL
+
+   The app has always had exactly two kinds of person:
+   staff.role is CHECK (role IN ('owner','staff')), the only role CHECK
+   in this schema, and SQLite cannot ALTER a CHECK. Widening it would
+   mean rebuilding the staff table on every live shop's database, and
+   the two write clamps in routes/staff.js would still coerce anything
+   new back to 'staff'.
+
+   So the admin panel's extra roles live in their own column, exactly as
+   the note in adminAccess.js said they eventually would.
+
+   OWNER IS NOT ONE OF THE VALUES, and that is the point. Being the
+   owner is staff.role = 'owner' — the app's existing truth, decided at
+   login and nowhere else. Because this column CANNOT hold 'OWNER', no
+   request, no bug and no injected value anywhere above it can promote
+   anybody to owner through it. The protection is in the schema rather
+   than in a validation somebody can forget.
+
+   NULL means no admin panel access at all, which is what every existing
+   staff row gets. Additive: nothing is read, rewritten or migrated.
+   ============================================================ */
+addColumn("staff", "admin_role", "TEXT CHECK (admin_role IN ('ADMIN','SUPPORT'))");
+
+/* Which capabilities a role actually holds.
+ *
+ * Stored rather than hard-coded so the owner can change it without a
+ * deploy — and so a shop that tightens SUPPORT keeps that decision.
+ * Only the rows that DIFFER from the built-in defaults are kept, so an
+ * untouched installation has an empty table and the defaults in
+ * adminAccess.js remain the single description of what a role is.
+ *
+ * OWNER never appears here. An owner holds everything by definition,
+ * and a row that could take a capability away from the owner is a row
+ * that could lock the shop out of its own panel. */
+db.exec(`
+CREATE TABLE IF NOT EXISTS admin_role_permissions (
+  role      TEXT NOT NULL CHECK (role IN ('ADMIN','SUPPORT')),
+  cap       TEXT NOT NULL,
+  allowed   INTEGER NOT NULL DEFAULT 0,
+  changed_at INTEGER NOT NULL,
+  changed_by TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (role, cap)
+)`);
+
 addColumn("invoices", "idempotency_key", "TEXT");
 
 /* GUARDED, because this runs at boot and a throw here would stop the

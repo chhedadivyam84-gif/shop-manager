@@ -1055,6 +1055,13 @@ body.adm-body{
       minmax(86px, .9fr) minmax(110px, 1.2fr) minmax(96px, 1fr) minmax(120px, 1.2fr);
   }
 
+  .adm-tbl-head.adm-tbl-user,
+  .adm-tbl-row.adm-tbl-user{
+    grid-template-columns:
+      minmax(170px, 2.2fr) minmax(130px, 1.2fr) minmax(100px, 1fr)
+      minmax(96px, .9fr) minmax(104px, 1fr);
+  }
+
   .adm-tbl-head.adm-tbl-prod,
   .adm-tbl-row.adm-tbl-prod{
     grid-template-columns:
@@ -1195,4 +1202,112 @@ body.adm-body{
   font-weight: 400;
   color: var(--muted);
   white-space: nowrap;
+}
+
+/* ============================================================
+   USERS, ROLES & PERMISSIONS
+   ============================================================ */
+.adm-badge{
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: var(--fs-row-sub);
+  font-weight: 700;
+  letter-spacing: .04em;
+  white-space: nowrap;
+}
+.adm-badge.is-ok{ color: var(--ok); border-color: var(--ok); }
+.adm-badge.is-warn{ color: var(--adm-accent); border-color: var(--adm-accent); }
+.adm-badge.is-info{ color: var(--muted); }
+
+.adm-roles-head{ display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+.adm-role-card{
+  flex: 1 1 180px;
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 11px var(--card-pad);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--card-radius);
+}
+.adm-role-count{ font-size: var(--fs-row-sub); color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* The permission matrix. One row per capability, one column per role —
+   the owner's is shown and is not a control, because a permission the
+   owner could lose is one that could lock the shop out of its panel. */
+.adm-perm-head,
+.adm-perm-row{
+  display: grid;
+  grid-template-columns: 1fr 58px 58px 58px;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 0;
+  border-top: 1px solid var(--border);
+}
+.adm-perm-head{
+  border-top: 0;
+  padding-top: 0;
+  font-size: var(--fs-row-sub);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--muted);
+  text-align: center;
+}
+.adm-perm-head span:first-child{ text-align: left; }
+.adm-perm-row:first-of-type{ border-top: 0; }
+
+.adm-perm-name{
+  display: flex; flex-direction: column; gap: 1px;
+  font-size: var(--fs-row-title);
+  min-width: 0;
+}
+.adm-perm-cap{
+  font-size: 10.5px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+.adm-perm-cell{ text-align: center; }
+
+/* The owner's column: a mark, not a control. */
+.adm-perm{ color: var(--muted); font-weight: 700; }
+.adm-perm.is-on{ color: var(--ok); }
+
+.adm-perm-box{ display: inline-flex; cursor: pointer; }
+.adm-perm-box input{ width: 17px; height: 17px; cursor: pointer; accent-color: var(--adm-accent); }
+/* Something this shop changed from what it shipped with. */
+.adm-perm-box.is-altered{
+  outline: 2px solid var(--adm-accent);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+
+.adm-save-bar{
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  margin-top: 14px;
+  padding: 11px var(--card-pad);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--card-radius);
+}
+.adm-save-bar .adm-why{ flex: 1 1 240px; margin: 0; }
+
+/* The owner's column is a drawn mark, not a character: this panel has
+   one icon set and no glyphs or emoji anywhere. A tick when the role
+   holds it, a dash when it does not. */
+.adm-perm{ display: inline-block; width: 14px; height: 14px; position: relative; }
+.adm-perm::before{
+  content: "";
+  position: absolute;
+  left: 2px; top: 6px;
+  width: 10px; height: 1.5px;
+  background: var(--muted);
+}
+.adm-perm.is-on::before{
+  left: 2px; top: 2px;
+  width: 6px; height: 10px;
+  background: none;
+  border-right: 2px solid var(--ok);
+  border-bottom: 2px solid var(--ok);
+  transform: rotate(40deg);
 }

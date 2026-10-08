@@ -78,6 +78,7 @@
     employees: '<circle cx="10" cy="5.6" r="2.4"/><path d="M5.4 17v-1.6a4.6 4.6 0 0 1 9.2 0V17"/><path d="M7 10.6 10 12l3-1.4"/>',
     activity:  '<path d="M2.6 10.6h3.1l1.9-4.4 2.6 8.2 2.2-5.3 1.3 1.5h3.7"/>',
     plans:     '<path d="M10 2.8 17 6v4.4c0 3.3-2.8 5.9-7 6.8-4.2-.9-7-3.5-7-6.8V6Z"/><path d="M7.4 9.8l2 2 3.2-3.4"/>',
+    roles:     '<path d="M10 2.8 16.4 5.6v4.9c0 3.4-2.6 6-6.4 6.7-3.8-.7-6.4-3.3-6.4-6.7V5.6Z"/><path d="M7.6 9.6h4.8"/><path d="M7.6 12.4h3"/>',
     users:     '<circle cx="7.4" cy="7" r="2.6"/><path d="M2.8 16.6c0-2.5 2.1-4.3 4.6-4.3s4.6 1.8 4.6 4.3"/><path d="M14 7.4v4.8"/><path d="M11.6 9.8h4.8"/>',
     settings:  '<circle cx="10" cy="10" r="2.5"/><path d="M10 2.8v2.1M10 15.1v2.1M3.9 10H2M18 10h-1.9M5.7 5.7 4.3 4.3M15.7 15.7l1.4 1.4M14.3 5.7l1.4-1.4M5.7 14.3l-1.4 1.4"/>',
     security:  '<path d="M10 2.8 16.4 5.6v4.9c0 3.4-2.6 6-6.4 6.7-3.8-.7-6.4-3.3-6.4-6.7V5.6Z"/><path d="M10 8v3.4"/><circle cx="10" cy="13.4" r=".55" fill="currentColor" stroke="none"/>',
@@ -332,6 +333,8 @@
     else if (key === "inventory") renderInventory();
     else if (key === "invoices") renderInvoices(currentRoute().sub);
     else if (key === "sales") renderSales();
+    else if (key === "users") renderUsers(currentRoute().sub);
+    else if (key === "roles") renderRoles();
     else el.page.innerHTML = placeholderPage(section);
     el.main.scrollTop = 0;
     window.scrollTo(0, 0);
@@ -2532,6 +2535,440 @@
             'money actually received — a credit sale records its terms here.</p>' +
           "</div></section>" +
       "</div>";
+  }
+
+  /* ==================================================================
+     USERS, ROLES & PERMISSIONS
+
+     A user here is a staff row — the same row the till signs in
+     against. Nothing on this screen is a second account system.
+
+     Everything it can change is owner-only on the server. The buttons
+     below are hidden from anyone who may not use them, but that is
+     tidiness: the server refuses regardless, and the tests say so.
+     ================================================================== */
+
+  let userView = { q: "", filter: "all", sort: "name", page: 1 };
+  let userSeq = 0;
+
+  const ROLE_TONE = { OWNER: "is-ok", ADMIN: "is-warn", SUPPORT: "is-info" };
+
+  function roleBadge(role) {
+    if (!role) return '<span class="adm-muted">No admin access</span>';
+    return '<span class="adm-badge ' + (ROLE_TONE[role] || "is-info") + '">' +
+      esc(role) + "</span>";
+  }
+
+  function userHref(id) { return id ? "#/users/" + encodeURIComponent(id) : "#/users"; }
+
+  /* ---- the user list ------------------------------------------------ */
+
+  function renderUsers(id) {
+    if (id) return renderUserProfile(id);
+
+    el.page.innerHTML =
+      '<div class="adm-page-head">' +
+        '<div class="adm-page-head-text">' +
+          '<h1 class="adm-page-title">Users</h1>' +
+          '<p class="adm-page-sub">Everyone who can sign in to Shop Manager, and who among ' +
+          'them may open this panel. Accounts are created in Shop Manager under Staff ' +
+          '&mdash; this is where admin access is given and taken away.</p>' +
+        "</div>" +
+      "</div>" +
+      '<div class="adm-toolbar">' +
+        '<div class="adm-field adm-field-grow">' +
+          '<label class="adm-sr" for="usr-q">Search users</label>' +
+          '<input type="search" id="usr-q" class="adm-input" autocomplete="off" ' +
+          'placeholder="Name, login id or job title">' +
+        "</div>" +
+        '<div class="adm-field">' +
+          '<label class="adm-field-label" for="usr-filter">Show</label>' +
+          '<select id="usr-filter" class="adm-input"></select>' +
+        "</div>" +
+        '<div class="adm-field">' +
+          '<label class="adm-field-label" for="usr-sort">Sort by</label>' +
+          '<select id="usr-sort" class="adm-input"></select>' +
+        "</div>" +
+      "</div>" +
+      '<div class="adm-panel"><div class="adm-panel-body" id="usr-body">' +
+        skeleton() + "</div></div>";
+
+    const q = document.getElementById("usr-q");
+    q.value = userView.q;
+    let timer = null;
+    q.addEventListener("input", function () {
+      clearTimeout(timer);
+      timer = setTimeout(function () {
+        userView.q = q.value.trim(); userView.page = 1; loadUsers();
+      }, 250);
+    });
+
+    [["usr-filter", "filter"], ["usr-sort", "sort"]].forEach(pair => {
+      document.getElementById(pair[0]).addEventListener("change", function (e) {
+        userView[pair[1]] = e.target.value; userView.page = 1; loadUsers();
+      });
+    });
+
+    document.getElementById("usr-body").addEventListener("click", function (e) {
+      const page = e.target.closest("[data-page]");
+      if (page) { userView.page = Number(page.dataset.page); loadUsers(); return; }
+      if (e.target.closest("[data-retry-users]")) loadUsers();
+    });
+
+    loadUsers();
+  }
+
+  async function loadUsers() {
+    const body = document.getElementById("usr-body");
+    if (!body) return;
+    body.innerHTML = skeleton();
+
+    const mine = ++userSeq;
+    let d;
+    try {
+      d = await api("GET", "/admin/users?q=" + encodeURIComponent(userView.q) +
+        "&filter=" + encodeURIComponent(userView.filter) +
+        "&sort=" + encodeURIComponent(userView.sort) +
+        "&page=" + encodeURIComponent(userView.page));
+    } catch (err) {
+      if (mine !== userSeq) return;
+      body.innerHTML = '<p class="adm-fail">' + esc(humanError(err)) + "</p>" +
+        '<button type="button" class="adm-retry" data-retry-users="1">Try again</button>';
+      return;
+    }
+    if (mine !== userSeq) return;
+
+    userView.page = d.page;
+    fillSelect(document.getElementById("usr-filter"), d.options.filters, d.filter);
+    fillSelect(document.getElementById("usr-sort"), d.options.sorts, d.sort);
+
+    if (!d.total) {
+      body.innerHTML = emptyLine(userView.q || userView.filter !== "all"
+        ? "No user matches that search."
+        : "No staff accounts yet.");
+      return;
+    }
+
+    const head =
+      '<div class="adm-tbl-head adm-tbl-user" aria-hidden="true">' +
+        '<span>Name</span><span>Admin role</span><span>Status</span>' +
+        '<span>Added</span><span>Last active</span>' +
+      "</div>";
+
+    const rows = d.rows.map(u =>
+      '<a class="adm-tbl-row adm-tbl-user" href="' + userHref(u.id) + '">' +
+        '<span class="adm-cell adm-cell-name">' +
+          '<span class="adm-strong">' + esc(u.name) + "</span>" +
+          '<span class="adm-row-sub">' +
+            [u.jobRole, u.loginId].filter(Boolean).map(esc).join(" · ") +
+            (u.isOwner ? (u.jobRole || u.loginId ? " · " : "") + "shop owner" : "") +
+          "</span>" +
+        "</span>" +
+        '<span class="adm-cell" data-h="Admin role">' + roleBadge(u.adminRole) + "</span>" +
+        '<span class="adm-cell" data-h="Status">' +
+          '<span class="adm-pip ' + (u.active ? "is-ok" : "is-bad") + '" aria-hidden="true"></span>' +
+          (u.active ? "Active" : "Disabled") + "</span>" +
+        '<span class="adm-cell" data-h="Added">' + esc(showDate(u.created)) + "</span>" +
+        '<span class="adm-cell" data-h="Last active">' +
+          (u.lastActive ? esc(showDate(u.lastActive))
+                        : '<span class="adm-muted">never</span>') + "</span>" +
+      "</a>").join("");
+
+    const from = (d.page - 1) * d.pageSize + 1;
+    const pager = d.pages > 1
+      ? '<div class="adm-pager">' +
+          '<button type="button" class="adm-retry" data-page="' + (d.page - 1) + '"' +
+            (d.page <= 1 ? " disabled" : "") + ">Previous</button>" +
+          '<span class="adm-pager-at">' + num(from) + "–" +
+            num(from + d.rows.length - 1) + " of " + num(d.total) + "</span>" +
+          '<button type="button" class="adm-retry" data-page="' + (d.page + 1) + '"' +
+            (d.page >= d.pages ? " disabled" : "") + ">Next</button>" +
+        "</div>"
+      : '<p class="adm-foot">' + num(d.total) +
+        (d.total === 1 ? " user." : " users.") + "</p>";
+
+    body.innerHTML = '<div class="adm-tbl">' + head + rows + "</div>" + pager;
+  }
+
+  /* ---- one user ----------------------------------------------------- */
+
+  async function renderUserProfile(id) {
+    el.page.innerHTML =
+      '<div class="adm-page-head">' +
+        '<div class="adm-page-head-text">' +
+          '<a class="adm-back" href="#/users">&larr; All users</a>' +
+          '<h1 class="adm-page-title" id="usr-title">User</h1>' +
+        "</div>" +
+      "</div>" +
+      '<div id="usr-profile"><div class="adm-panel"><div class="adm-panel-body">' +
+        skeleton() + "</div></div></div>";
+
+    const host = document.getElementById("usr-profile");
+    let d;
+    try {
+      d = await api("GET", "/admin/users/" + encodeURIComponent(id));
+    } catch (err) {
+      host.innerHTML = '<div class="adm-panel is-failed"><div class="adm-panel-body">' +
+        '<p class="adm-fail">' + esc(humanError(err)) + "</p>" +
+        '<a class="adm-retry" href="#/users">Back to all users</a>' + "</div></div>";
+      return;
+    }
+    paintUserProfile(host, d);
+  }
+
+  function paintUserProfile(host, d) {
+    const u = d.user;
+    const title = document.getElementById("usr-title");
+    if (title) title.textContent = u.name;
+    el.crumbHere.textContent = u.name;
+
+    /* Nothing about a password or a PIN appears anywhere on this page —
+       there is no field for it and the server does not send one. */
+    const info = [
+      ["Name", esc(u.name)],
+      u.loginId ? ["Login id", esc(u.loginId)] : null,
+      u.jobRole ? ["Job title", esc(u.jobRole)] : null,
+      ["Shop role", u.isOwner ? "Owner" : "Staff"],
+      ["Admin role", roleBadge(u.adminRole)],
+      ["Status", u.active ? "Active" : "Disabled"],
+      u.dataScope ? ["Data they can see", esc(u.dataScope)] : null,
+      ["User ID", '<code class="adm-code">' + esc(u.id) + "</code>"],
+      ["Added", esc(showDate(u.created))],
+      ["Last active", d.activity.lastActive ? esc(showDate(d.activity.lastActive)) : "never"],
+    ].filter(Boolean).map(r =>
+      '<div class="adm-kv"><span class="adm-kv-k">' + r[0] +
+      '</span><span class="adm-kv-v">' + r[1] + "</span></div>").join("");
+
+    /* What their role actually grants, grouped by resource. Worked out
+       by the server the same way a request is judged, so this cannot
+       describe access the server would refuse. */
+    const byResource = {};
+    (d.permissions || []).forEach(cap => {
+      const res = cap.split(".")[0];
+      if (!byResource[res]) byResource[res] = [];
+      byResource[res].push(cap.split(".").slice(1).join("."));
+    });
+    const perms = Object.keys(byResource).sort().map(res =>
+      '<li class="adm-row">' +
+        '<span class="adm-row-main">' + esc(res) + "</span>" +
+        '<span class="adm-row-sub">' + byResource[res].map(esc).join(", ") + "</span>" +
+      "</li>").join("");
+
+    const recent = d.activity.recent.map(a =>
+      '<li class="adm-row">' +
+        '<span class="adm-row-main">' + esc(a.action) + "</span>" +
+        '<span class="adm-row-sub">' + esc(showDate(a.when)) +
+          (a.details ? " · " + esc(a.details) : "") + "</span>" +
+      "</li>").join("");
+
+    /* The owner's row is read-only here, and says why rather than
+       simply having nothing on it. */
+    const actions = u.isOwner
+      ? '<p class="adm-notice">This is the shop owner. Their role and their account ' +
+        'cannot be changed from the admin panel &mdash; ownership is held in Shop Manager, ' +
+        'and the column that carries admin roles cannot hold it.</p>'
+      : (d.canManage === false
+          ? ""
+          : '<div class="adm-profile-actions">' +
+              '<button type="button" class="adm-retry" data-set-role="ADMIN">Make ADMIN</button>' +
+              '<button type="button" class="adm-retry" data-set-role="SUPPORT">Make SUPPORT</button>' +
+              '<button type="button" class="adm-retry" data-set-role="">Remove admin access</button>' +
+              '<button type="button" class="adm-retry" data-set-active="' +
+                (u.active ? "0" : "1") + '">' +
+                (u.active ? "Disable account" : "Enable account") + "</button>" +
+            "</div>");
+
+    host.innerHTML =
+      '<div class="adm-profile-head">' +
+        '<span class="adm-status">' +
+          '<span class="adm-pip ' + (u.active ? "is-ok" : "is-bad") + '" aria-hidden="true"></span>' +
+          (u.active ? "Active" : "Disabled") + "</span>" +
+        "</div>" +
+      actions +
+      '<div class="adm-grid">' +
+        '<section class="adm-panel" data-panel="info"><header class="adm-panel-head">' +
+          '<h2 class="adm-panel-title">User</h2></header>' +
+          '<div class="adm-panel-body">' + info + "</div></section>" +
+
+        '<section class="adm-panel" data-panel="summary"><header class="adm-panel-head">' +
+          '<h2 class="adm-panel-title">What this role grants</h2></header>' +
+          '<div class="adm-panel-body">' +
+            (perms ? '<ul class="adm-list">' + perms + "</ul>" +
+              '<p class="adm-foot">Inherited from the ' + esc(d.role) + ' role. Change it ' +
+              'for everyone under Roles &amp; Permissions.</p>'
+                   : emptyLine("No admin panel access, so no permissions.")) +
+            (d.shopPermissionModules
+              ? '<p class="adm-foot">Separately, this person has shop-floor permissions on ' +
+                num(d.shopPermissionModules) + ' module(s) &mdash; billing, cash book and the ' +
+                'rest. Those are set in Shop Manager under Staff Access, not here.</p>'
+              : "") +
+          "</div></section>" +
+
+        '<section class="adm-panel" data-panel="activity"><header class="adm-panel-head">' +
+          '<h2 class="adm-panel-title">Recent activity</h2></header>' +
+          '<div class="adm-panel-body">' +
+            (recent ? '<ul class="adm-list">' + recent + "</ul>" +
+              '<p class="adm-foot">The last ' + num(d.activity.recent.length) + ' of ' +
+              num(d.activity.actions) + ' recorded action(s).</p>'
+                    : emptyLine("Nothing recorded for this person yet.")) +
+          "</div></section>" +
+      "</div>";
+
+    host.addEventListener("click", async function (e) {
+      const roleBtn = e.target.closest("[data-set-role]");
+      if (roleBtn) return changeUserRole(u, roleBtn.dataset.setRole || null);
+      const activeBtn = e.target.closest("[data-set-active]");
+      if (activeBtn) return changeUserActive(u, activeBtn.dataset.setActive === "1");
+    });
+  }
+
+  async function changeUserRole(u, role) {
+    const what = role ? "give " + u.name + " " + role + " access to the admin panel"
+                      : "remove " + u.name + "'s admin panel access";
+    if (!window.confirm("Are you sure you want to " + what + "?\n\n" +
+        "It takes effect immediately, including for anyone already signed in.")) return;
+    try {
+      await api("PATCH", "/admin/users/" + encodeURIComponent(u.id) + "/role",
+                { adminRole: role });
+    } catch (err) { toast(humanError(err)); return; }
+    toast(role ? "Role updated." : "Admin access removed.", "ok");
+    renderUserProfile(u.id);
+  }
+
+  async function changeUserActive(u, active) {
+    const ask = active
+      ? "Enable " + u.name + "'s account?"
+      : "Disable " + u.name + "'s account? They will not be able to sign in. " +
+        "Nothing they have already done is removed — their name stays on every " +
+        "invoice, cash entry and audit line, and this can be undone.";
+    if (!window.confirm(ask)) return;
+    try {
+      await api("PATCH", "/admin/users/" + encodeURIComponent(u.id) + "/active", { active });
+    } catch (err) { toast(humanError(err)); return; }
+    toast(active ? "Account enabled." : "Account disabled.", "ok");
+    renderUserProfile(u.id);
+  }
+
+  /* ==================================================================
+     ROLES & PERMISSIONS
+     ================================================================== */
+
+  let roleDraft = null;
+
+  async function renderRoles() {
+    el.page.innerHTML =
+      '<div class="adm-page-head">' +
+        '<div class="adm-page-head-text">' +
+          '<h1 class="adm-page-title">Roles &amp; Permissions</h1>' +
+          '<p class="adm-page-sub">What each role may do in this panel. Every permission ' +
+          'here is checked on the server for every request &mdash; unticking a box does not ' +
+          'merely hide a button.</p>' +
+        "</div>" +
+      "</div>" +
+      '<div id="roles-body">' + skeleton() + "</div>";
+
+    const host = document.getElementById("roles-body");
+    let d;
+    try {
+      d = await api("GET", "/admin/users/roles");
+    } catch (err) {
+      host.innerHTML = '<div class="adm-panel is-failed"><div class="adm-panel-body">' +
+        '<p class="adm-fail">' + esc(humanError(err)) + "</p>" +
+        '<button type="button" class="adm-retry" data-retry-roles="1">Try again</button>' +
+        "</div></div>";
+      host.addEventListener("click", function (e) {
+        if (e.target.closest("[data-retry-roles]")) renderRoles();
+      });
+      return;
+    }
+    paintRoles(host, d);
+  }
+
+  function paintRoles(host, d) {
+    const held = {};
+    d.roles.forEach(r => { held[r.key] = new Set(r.caps); });
+    roleDraft = { ADMIN: new Set(held.ADMIN || []), SUPPORT: new Set(held.SUPPORT || []) };
+
+    const changedBy = {};
+    (d.changed || []).forEach(c => { changedBy[c.role + "|" + c.cap] = c; });
+
+    const groups = d.catalogue.map(g => {
+      const rows = g.caps.map(c => {
+        const cell = role => {
+          const on = held[role] && held[role].has(c.cap);
+          const editable = role !== "OWNER";
+          const altered = !!changedBy[role + "|" + c.cap];
+          if (!editable) {
+            return '<span class="adm-perm' + (on ? " is-on" : "") + '" aria-hidden="true">' +
+              "</span>";
+          }
+          return '<label class="adm-perm-box' + (altered ? " is-altered" : "") + '">' +
+            '<input type="checkbox" data-role="' + role + '" data-cap="' + esc(c.cap) + '"' +
+            (on ? " checked" : "") + '>' +
+            '<span class="adm-sr">' + esc(role) + " " + esc(c.cap) + "</span></label>";
+        };
+        return '<div class="adm-perm-row">' +
+          '<span class="adm-perm-name">' + esc(c.action) +
+            '<span class="adm-perm-cap">' + esc(c.cap) + "</span></span>" +
+          '<span class="adm-perm-cell">' + cell("OWNER") + "</span>" +
+          '<span class="adm-perm-cell">' + cell("ADMIN") + "</span>" +
+          '<span class="adm-perm-cell">' + cell("SUPPORT") + "</span>" +
+        "</div>";
+      }).join("");
+
+      return '<section class="adm-panel" data-panel="perm"><header class="adm-panel-head">' +
+        '<h2 class="adm-panel-title">' + esc(g.resource) + "</h2></header>" +
+        '<div class="adm-panel-body">' +
+          '<div class="adm-perm-head" aria-hidden="true">' +
+            "<span></span><span>Owner</span><span>Admin</span><span>Support</span>" +
+          "</div>" + rows +
+        "</div></section>";
+    }).join("");
+
+    host.innerHTML =
+      '<div class="adm-roles-head">' +
+        d.roles.map(r =>
+          '<div class="adm-role-card">' +
+            roleBadge(r.key) +
+            '<span class="adm-role-count">' + num(r.caps.length) + " permission(s)</span>" +
+            (r.editable ? "" : '<span class="adm-why">Holds everything, always.</span>') +
+          "</div>").join("") +
+      "</div>" +
+      '<div class="adm-grid">' + groups + "</div>" +
+      '<div class="adm-save-bar">' +
+        '<button type="button" class="adm-primary" id="roles-save">Save permissions</button>' +
+        '<button type="button" class="adm-retry" id="roles-reset">Discard changes</button>' +
+        '<span class="adm-why" id="roles-msg">The owner’s column cannot be changed: ' +
+        'a permission the owner could lose is one that could lock the shop out of its own panel.</span>' +
+      "</div>";
+
+    host.addEventListener("change", function (e) {
+      const box = e.target.closest("input[type=checkbox][data-role]");
+      if (!box) return;
+      const set = roleDraft[box.dataset.role];
+      if (!set) return;
+      if (box.checked) set.add(box.dataset.cap); else set.delete(box.dataset.cap);
+    });
+
+    document.getElementById("roles-reset").addEventListener("click", renderRoles);
+    document.getElementById("roles-save").addEventListener("click", async function () {
+      const msg = document.getElementById("roles-msg");
+      msg.textContent = "Saving…";
+      try {
+        /* Every known capability is sent with its intended state, so the
+           server can clear an override that is back to the default
+           rather than only ever adding them. */
+        for (const role of ["ADMIN", "SUPPORT"]) {
+          const caps = {};
+          d.catalogue.forEach(g => g.caps.forEach(c => {
+            caps[c.cap] = roleDraft[role].has(c.cap);
+          }));
+          await api("PUT", "/admin/users/roles/" + role, { caps });
+        }
+      } catch (err) { msg.textContent = humanError(err); return; }
+      toast("Permissions saved.", "ok");
+      renderRoles();
+    });
   }
 
   /* ------------------------------------------------------------------

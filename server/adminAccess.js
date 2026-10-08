@@ -29,6 +29,12 @@
    than a flag, so no caller can forget to check.
    ============================================================ */
 const permissions = require("./permissions");
+/* Used ONLY by can() and the user-management helpers, never by
+   roleOf(). roleOf runs outside /api on the page route, where there is
+   no company binder and a query would answer from the default shop —
+   see the note on it. Everything in this file that DOES query is
+   reached only from inside /api. */
+const db = require("./db");
 
 /* The ladder. Order is meaningful — a role admits everything its own
    entry lists, and nothing else; there is no implicit inheritance. */
@@ -56,7 +62,8 @@ const SECTIONS = [
   { key: "activity",  label: "AI Activity",      group: "AI",             cap: "ai.view" },
 
   { key: "plans",     label: "Plans & Features", group: "Administration", cap: "admin.manage" },
-  { key: "users",     label: "Users & Roles",    group: "Administration", cap: "admin.manage" },
+  { key: "users",     label: "Users",            group: "Administration", cap: "admin.manage" },
+  { key: "roles",     label: "Roles & Permissions", group: "Administration", cap: "admin.manage" },
   { key: "settings",  label: "Settings",         group: "Administration", cap: "admin.manage" },
 
   { key: "security",  label: "Security Center",  group: "Security",       cap: "security.view" },
@@ -115,16 +122,69 @@ const CAPS = {
  */
 function roleOf(req) {
   if (permissions.isOwner(req)) return "OWNER";
-  return null;                                   // ADMIN / SUPPORT: no carrier yet
+
+  /* ADMIN and SUPPORT, carried in the SESSION rather than read from the
+     staff row here — for the same reason the comment above gives. The
+     value is put there at login (routes/auth.js), inside the company
+     the person signed in to, so it is already the right shop's answer.
+     Anything other than the two known words is nobody.
+
+     An owner PREVIEWING a staff member is not an admin either: preview
+     exists to show the owner what a staff member sees, and a preview
+     that kept admin powers would be showing them a screen no staff
+     member will ever get. */
+  if (!req || !req.session || !req.session.loggedIn) return null;
+  if (permissions.previewing(req)) return null;
+  const carried = req.session.adminRole;
+  return carried === "ADMIN" || carried === "SUPPORT" ? carried : null;
+}
+
+/* ------------------------------------------------------------------
+   WHAT A ROLE MAY DO
+
+   CAPS above is the default. A shop can tighten or widen ADMIN and
+   SUPPORT from the panel, and those decisions live in
+   admin_role_permissions — only the rows that DIFFER from the default,
+   so an untouched shop has an empty table and CAPS remains the single
+   description of what a role is.
+
+   OWNER IS NEVER CONSULTED. An owner holds every capability by
+   definition; a stored row that could take one away is a row that could
+   lock the shop out of its own panel.
+   ------------------------------------------------------------------ */
+function overridesFor(role) {
+  if (role === "OWNER") return {};
+  try {
+    const out = {};
+    db.prepare("SELECT cap, allowed FROM admin_role_permissions WHERE role = ?")
+      .all(role).forEach(r => { out[r.cap] = r.allowed === 1; });
+    return out;
+  } catch (e) {
+    /* No table yet, or no company bound. The defaults still apply, which
+       is the safe direction: a shop keeps the access it was shipped
+       with rather than silently losing or gaining any. */
+    return {};
+  }
+}
+
+/** The default answer for a role, before any stored override. */
+function defaultAllows(role, cap) {
+  const allowed = CAPS[cap];
+  return !!allowed && allowed.includes(role);
 }
 
 /** Does this request hold this capability? */
 function can(req, cap) {
   const role = roleOf(req);
   if (!role) return false;
-  const allowed = CAPS[cap];
-  if (!allowed) return false;                    // an unknown cap is refused, never allowed
-  return allowed.includes(role);
+  if (!CAPS[cap]) return false;              // an unknown cap is refused, never allowed
+  /* The owner is not subject to the table, by design. */
+  if (role === "OWNER") return defaultAllows(role, cap);
+
+  const over = overridesFor(role);
+  return Object.prototype.hasOwnProperty.call(over, cap)
+    ? over[cap]
+    : defaultAllows(role, cap);
 }
 
 /** The sections this request may see — what the sidebar is built from. */
@@ -153,8 +213,37 @@ function groupsFor(req) {
  */
 function gate() {
   return function (req, res, next) {
-    if (roleOf(req)) return next();
-    return res.status(403).json({ error: "Only the shop owner can open the admin panel." });
+    const role = roleOf(req);
+    if (!role) {
+      return res.status(403).json({ error: "You don't have access to the admin panel." });
+    }
+
+    /* THE SESSION IS NOT THE LAST WORD.
+     *
+     * roleOf() reads the session because it must answer on the page
+     * route, outside the company binder. Here we ARE inside /api, so
+     * the staff row is readable and is the truth — and checking it on
+     * every request is what makes "take that person's access away"
+     * mean NOW rather than "next time they sign in". A session issued
+     * an hour ago cannot outlive the decision.
+     *
+     * The owner is exempt from the row check for the same reason the
+     * owner is exempt from the permission table: owner-ness is
+     * staff.role, already established at login, and a failed lookup
+     * here must never be able to lock the owner out of their own shop.
+     */
+    if (role === "OWNER") return next();
+
+    let row = null;
+    try {
+      row = db.prepare("SELECT active, admin_role FROM staff WHERE id = ?")
+        .get(req.session.staffId);
+    } catch (e) { row = null; }
+
+    if (!row || !row.active || row.admin_role !== role) {
+      return res.status(403).json({ error: "You don't have access to the admin panel." });
+    }
+    return next();
   };
 }
 

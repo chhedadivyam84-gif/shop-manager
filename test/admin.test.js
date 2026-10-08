@@ -154,7 +154,7 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
     Overview: ["Dashboard"],
     Business: ["Customers", "Products", "Inventory", "Sales", "Invoices", "Payments"],
     AI: ["AI Assistant", "AI Employees", "AI Activity"],
-    Administration: ["Plans & Features", "Users & Roles", "Settings"],
+    Administration: ["Plans & Features", "Users", "Roles & Permissions", "Settings"],
     Security: ["Security Center", "Audit Logs", "System Health"],
   };
   ok("the groups are the five asked for, in order",
@@ -163,10 +163,10 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
     const got = adminAccess.SECTIONS.filter(s => s.group === g).map(s => s.label);
     ok("group " + g + " holds exactly its sections", got.join("|") === WANT[g].join("|"), got);
   });
-  ok("sixteen sections in total", adminAccess.SECTIONS.length === 16, adminAccess.SECTIONS.length);
+  ok("seventeen sections in total", adminAccess.SECTIONS.length === 17, adminAccess.SECTIONS.length);
 
   console.log("\n--- adminAccess: what each caller sees ---");
-  ok("an owner sees all sixteen", adminAccess.sectionsFor(ownerReq).length === 16);
+  ok("an owner sees all seventeen", adminAccess.sectionsFor(ownerReq).length === 17);
   ok("a staff member sees none", adminAccess.sectionsFor(staffReq).length === 0);
   ok("an owner in preview sees none",
      adminAccess.sectionsFor({ session: { loggedIn: true, role: "owner", previewStaffId: "X" } }).length === 0);
@@ -189,7 +189,9 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
   r = await call("GET", "/api/admin/me", null, STAFF);
   ok("staff: /me is 403", r.status === 403, r.status);
   ok("staff: no section list comes back", !r.text.includes("Dashboard"), r.text.slice(0, 80));
-  ok("staff: the refusal says who may", /owner/i.test(r.text), r.text.slice(0, 80));
+  ok("staff: the refusal is plain and gives nothing away",
+     /don't have access/i.test(r.text) && !/pin|hash|staff_id/i.test(r.text),
+     r.text.slice(0, 80));
 
   r = await call("GET", "/api/admin/me", null, PREVIEW);
   ok("owner in preview: /me is 403", r.status === 403, r.status);
@@ -197,7 +199,7 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
   r = await call("GET", "/api/admin/me", null, OWNER);
   ok("owner: /me is 200", r.status === 200, r.status);
   ok("owner: role is OWNER", r.j && r.j.role === "OWNER", r.j && r.j.role);
-  ok("owner: sixteen sections", r.j && r.j.sections.length === 16, r.j && r.j.sections.length);
+  ok("owner: seventeen sections", r.j && r.j.sections.length === 17, r.j && r.j.sections.length);
   ok("owner: five groups", r.j && r.j.groups.length === 5, r.j && r.j.groups);
   ok("owner: every section has key, label, group and href",
      r.j.sections.every(s => s.key && s.label && s.group && s.href));
@@ -222,8 +224,7 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
      r.j && r.j.active.length === 1 && r.j.active[0] === "OWNER", r.j && r.j.active);
 
   console.log("\n--- /api/admin: nothing else is mounted in PART 1 ---");
-  for (const p of ["/api/admin/", "/api/admin/users",
-                   "/api/admin/settings", "/api/admin/health"]) {
+  for (const p of ["/api/admin/", "/api/admin/settings", "/api/admin/health"]) {
     r = await call("GET", p, null, OWNER);
     ok("GET " + p + " is not a route yet", r.status === 404, r.status);
   }
@@ -504,8 +505,14 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
      !/Plans & Features|Security Center|System Health/.test(js));
   ok("it builds the nav from the server's answer",
      /\/admin\/me/.test(js) && /me\.sections/.test(js));
-  ok("it does not test a role itself to decide what to show",
-     !/role\s*===\s*["']owner["']/i.test(jsCode) && !/isOwner/.test(jsCode));
+  ok("it holds no permission table of its own",
+     !/CAPS\s*=|ROLE_DEFAULTS|ADMIN_ROLES\s*=/.test(jsCode));
+  ok("every change it makes goes through the admin API, where the server decides",
+     (jsCode.match(/api\("(PUT|PATCH|POST|DELETE)",\s*"([^"]+)"/g) || [])
+       .every(c => /"\/(admin|auth)/.test(c)),
+     (jsCode.match(/api\("(PUT|PATCH|POST|DELETE)",\s*"([^"]+)"/g) || []));
+  ok("and it never decides a role for itself from the shop's own session",
+     !/session\.role/.test(jsCode) && !/permissions\.isOwner/.test(jsCode));
   ok("it holds no capability names", !/admin\.manage|security\.view|business\.view/.test(js));
   /* The original form of this banned the rupee sign outright, which was
      the right proxy while every section was a placeholder and became the
@@ -594,8 +601,21 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
   console.log("\n--- the page route touches no database (it has no company scope) ---");
   const pageRouteBlock = idx.slice(iPageRoute, iPageRoute + 400);
   ok("no db call inside the /admin handler", !/\bdb\./.test(pageRouteBlock), pageRouteBlock.slice(0, 120));
-  ok("adminAccess.roleOf reads the session only — no db in adminAccess.js",
-     !/require\(["']\.\/db["']\)/.test(read("server/adminAccess.js")));
+  /* adminAccess reads the stored permission table now, so the old
+     "this file runs no SQL" claim is gone. The claim that MATTERS is
+     narrower and still true: roleOf() itself queries nothing, because
+     it answers on the /admin page route which runs outside /api with
+     no company binder — a query there would read the default shop. */
+  const aaSrc = read("server/adminAccess.js");
+  const roleOfBody = aaSrc.slice(aaSrc.indexOf("function roleOf(req)"),
+                                aaSrc.indexOf("function overridesFor"));
+  ok("roleOf() itself runs no query", !/db\.prepare|db\.exec/.test(roleOfBody),
+     roleOfBody.slice(0, 100));
+  ok("it answers from the session alone",
+     /req\.session\.adminRole/.test(roleOfBody));
+  ok("and the page route still calls only roleOf, never can()",
+     /adminAccess\.roleOf\(req\)\) return res\.redirect/.test(idx) &&
+     !/app\.get\("\/admin",[\s\S]{0,400}?adminAccess\.can\(/.test(idx));
 
   /* ================================================================
      6.  WHAT WAS PRESERVED — asserted against git, not by eye
@@ -645,7 +665,8 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
                        quietly absorbing whatever happens to have changed. */
                     "server/rateLimit.js", "test/security.test.js", ".env.example",
                     "server/adminSales.js", "test/admin-sales.test.js",
-                    "test/invoice-create.test.js"];
+                    "test/invoice-create.test.js",
+                    "server/adminUsers.js", "test/admin-users.test.js"];
 
   /* The two existing files the admin panel is allowed to have touched,
      and the reason each one had to be:
@@ -726,7 +747,16 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
 
   console.log("\n--- the only schema change is additive ---");
   const schema = read("server/db-schema.js");
-  ok("no admin_role column was added", !/admin_role/.test(schema));
+  /* PART 1 asserted this column did NOT exist, to prove the shell had
+     made no schema change. PART 8 is the part that adds it, so the
+     claim inverts — and what matters is not that the column exists
+     but what it CANNOT hold. */
+  ok("the admin role column exists now",
+     /addColumn\("staff", "admin_role"/.test(schema));
+  ok("AND IT CANNOT HOLD 'OWNER' — the protection is in the schema",
+     /CHECK \(admin_role IN \('ADMIN','SUPPORT'\)\)/.test(schema), schema.length);
+  ok("the stored role-permission table cannot name OWNER either",
+     /CHECK \(role IN \('ADMIN','SUPPORT'\)\)/.test(schema));
   ok("the staff role CHECK is still owner/staff only",
      /CHECK \(role IN \('owner',\s*'staff'\)\)/.test(schema));
 
@@ -759,13 +789,28 @@ const PREVIEW = { role: "owner", staffId: "ST-OWNER", staffName: "Owner", previe
 
   const adminRouteCode = code("server/routes/admin.js");
   ok("the admin panel creates no table", !/CREATE TABLE/i.test(adminRouteCode));
-  ok("routes/admin.js runs no INSERT, UPDATE or DELETE",
-     !/\b(INSERT|UPDATE|DELETE)\b/.test(adminRouteCode));
-  ok("the one SELECT it does run reads only the shop's name",
-     (adminRouteCode.match(/SELECT/g) || []).length === 1 &&
-     /SELECT business_name FROM settings WHERE id = 1/.test(adminRouteCode));
-  ok("adminAccess.js runs no SQL at all",
-     !/\b(SELECT|INSERT|UPDATE|DELETE)\b/.test(code("server/adminAccess.js")));
+  /* It was read-only until PART 8 gave it user management. What it
+     writes is now the question, and the answer must stay these three:
+     who may open the panel, whether an account is on, and what a role
+     grants. Never a bill, a payment, a product or a stock count. */
+  /* "DO UPDATE SET" inside an ON CONFLICT clause is not a table name —
+     the first pass of this counted "set" as one. */
+  const writes = (adminRouteCode.match(/(INSERT INTO|UPDATE|DELETE FROM)\s+[a-z_]+/gi) || [])
+    .filter(w => !/UPDATE\s+SET$/i.test(w));
+  const writtenTables = [...new Set(writes.map(w =>
+    w.replace(/^(INSERT INTO|UPDATE|DELETE FROM)\s+/i, "").toLowerCase()))];
+  ok("it writes only to staff and the role-permission table",
+     writtenTables.every(t => ["staff", "admin_role_permissions"].includes(t)),
+     writtenTables);
+  ok("it never writes to a financial or stock table",
+     !writtenTables.some(t => /invoice|payment|cash|product|size|stock|customer|purchase/.test(t)),
+     writtenTables);
+  ok("and it never selects every column of anything",
+     !/SELECT\s+\*/i.test(adminRouteCode));
+  /* It reads the stored permission table now. It must never WRITE:
+     the module that decides access is not the module that grants it. */
+  ok("adminAccess decides access and never grants it",
+     !/\b(INSERT|UPDATE|DELETE)\b/.test(code("server/adminAccess.js")));
 
   console.log("\n==============================================");
   console.log("  " + pass + " passed, " + fail + " failed");

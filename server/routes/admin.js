@@ -24,6 +24,9 @@ const dashboard = require("../adminDashboard");
 const customers = require("../adminCustomers");
 const products = require("../adminProducts");
 const sales = require("../adminSales");
+const users = require("../adminUsers");
+const db = require("../db");
+const { logAction } = require("../util");
 
 const router = express.Router();
 
@@ -359,6 +362,186 @@ router.get("/invoices/:id", mayReadSales, (req, res) => {
   const doc = sales.document(String(req.params.id || ""));
   if (!doc) return res.status(404).json({ error: "Document not found." });
   res.json(doc);
+});
+
+/* ==================================================================
+   USERS, ROLES & PERMISSIONS
+
+   A user here is a row in `staff` — the same row the till signs in
+   against. There is no second user table and no second login.
+
+   EVERY WRITE BELOW IS OWNER-ONLY. Deciding who may open the admin
+   panel is not an ordinary admin task: an ADMIN who could appoint
+   another ADMIN is an ADMIN who can grant themselves anything by
+   proxy, and a SUPPORT who could edit the permission matrix needs no
+   escalation at all — they would simply tick the box. So the
+   capability that governs all of it, admin.manage, is OWNER and
+   nothing else, and these routes ask for it rather than for anything
+   softer.
+
+   THE OWNER CANNOT BE TOUCHED FROM HERE. Not demoted, not disabled,
+   not given or stripped of a role. Three locks, deliberately:
+     - admin_role is CHECK (admin_role IN ('ADMIN','SUPPORT')), so the
+       column cannot hold OWNER at all;
+     - the handlers below refuse any request naming an owner;
+     - owner-ness is staff.role, which this module never writes.
+   One lock in security code is a lock nobody checked.
+
+   SELF-ESCALATION IS REFUSED SEPARATELY from owner protection, because
+   they are different mistakes: an owner editing their own row is the
+   one who could lock the shop out of its own panel.
+   ================================================================== */
+const mayManageUsers = adminAccess.require("admin.manage");
+
+router.get("/users", mayManageUsers, (req, res) => {
+  const q = req.query || {};
+  res.json(users.list({ q: q.q, filter: q.filter, sort: q.sort,
+                        page: q.page, pageSize: q.pageSize }));
+});
+
+/* Literal route above the /:id one. */
+router.get("/users/roles", mayManageUsers, (req, res) => {
+  res.json(users.roleMatrix());
+});
+
+router.get("/users/:id", mayManageUsers, (req, res) => {
+  const detail = users.profile(String(req.params.id || ""));
+  /* A 404 for an id this shop does not have — and because `db` is bound
+     to the session's company, another shop's staff id is simply not in
+     the file being read. Knowing somebody's id buys nothing. */
+  if (!detail) return res.status(404).json({ error: "User not found." });
+  res.json(detail);
+});
+
+/**
+ * Give somebody admin access, change which kind, or take it away.
+ *
+ * `adminRole` is "ADMIN", "SUPPORT", or null to remove it entirely.
+ */
+router.patch("/users/:id/role", mayManageUsers, (req, res) => {
+  const target = db.prepare("SELECT id, name, role, admin_role, active FROM staff WHERE id = ?")
+    .get(String(req.params.id || ""));
+  if (!target) return res.status(404).json({ error: "User not found." });
+
+  /* THE OWNER IS NOT ADMINISTERED FROM HERE. */
+  if (target.role === "owner") {
+    return res.status(403).json({
+      error: "The shop owner's access cannot be changed from the admin panel." });
+  }
+
+  /* Nor is your own. An owner cannot quietly rewrite their own row, and
+     nobody else reaches this route at all. */
+  if (req.session && target.id === req.session.staffId) {
+    return res.status(403).json({ error: "You cannot change your own access." });
+  }
+
+  const raw = req.body ? req.body.adminRole : undefined;
+  const wanted = raw === null || raw === "" || raw === undefined ? null : String(raw);
+
+  /* The whitelist. "OWNER" arriving here is the escalation attempt this
+     exists to refuse, and it is named so the refusal is unambiguous
+     rather than falling through a generic "invalid role". */
+  if (wanted !== null && !users.ASSIGNABLE.includes(wanted)) {
+    return res.status(400).json({
+      error: wanted.toUpperCase() === "OWNER"
+        ? "Ownership is not granted from the admin panel."
+        : "That is not a role this panel can assign." });
+  }
+
+  db.prepare("UPDATE staff SET admin_role = ? WHERE id = ?").run(wanted, target.id);
+
+  logAction(req, "admin.user.role",
+    `${target.name}: ${target.admin_role || "no admin access"} -> ${wanted || "no admin access"}`);
+  res.json(users.profile(target.id));
+});
+
+/**
+ * Switch an account off, or back on.
+ *
+ * Never a delete. A staff member's name is on invoices, cash entries
+ * and audit lines going back years, and removing the row would orphan
+ * all of it — so leaving the company switches the account off and the
+ * history stays readable.
+ */
+router.patch("/users/:id/active", mayManageUsers, (req, res) => {
+  const target = db.prepare("SELECT id, name, role, active FROM staff WHERE id = ?")
+    .get(String(req.params.id || ""));
+  if (!target) return res.status(404).json({ error: "User not found." });
+
+  if (target.role === "owner") {
+    return res.status(403).json({ error: "The shop owner's account cannot be disabled here." });
+  }
+  if (req.session && target.id === req.session.staffId) {
+    return res.status(403).json({ error: "You cannot disable your own account." });
+  }
+
+  const active = req.body && req.body.active ? 1 : 0;
+  db.prepare("UPDATE staff SET active = ? WHERE id = ?").run(active, target.id);
+
+  logAction(req, active ? "admin.user.enable" : "admin.user.disable", target.name);
+  res.json(users.profile(target.id));
+});
+
+/**
+ * Change what a role may do.
+ *
+ * Only rows that DIFFER from the shipped default are stored, so an
+ * untouched shop has an empty table and adminAccess.CAPS stays the one
+ * description of what a role is.
+ */
+router.put("/users/roles/:role", mayManageUsers, (req, res) => {
+  const role = String(req.params.role || "").toUpperCase();
+
+  /* The owner's row is shown on that screen and is not editable. A
+     stored row that could take a capability away from the owner is a
+     row that could lock the shop out of its own panel. */
+  if (role === "OWNER") {
+    return res.status(403).json({ error: "The owner holds every permission and cannot be limited." });
+  }
+  if (!users.ASSIGNABLE.includes(role)) {
+    return res.status(400).json({ error: "That is not a role this panel manages." });
+  }
+
+  const wanted = (req.body && req.body.caps) || {};
+  if (typeof wanted !== "object" || Array.isArray(wanted)) {
+    return res.status(400).json({ error: "Send the permissions as an object." });
+  }
+
+  const known = Object.keys(adminAccess.CAPS);
+  const unknown = Object.keys(wanted).filter(c => !known.includes(c));
+  if (unknown.length) {
+    /* A capability this app does not have cannot be granted. Silently
+       dropping it would leave the screen showing a permission that
+       does nothing. */
+    return res.status(400).json({ error: "Unknown permission: " + unknown[0] });
+  }
+
+  const now = Date.now();
+  const by = (req.session && req.session.staffName) || "";
+
+  db.transaction(() => {
+    Object.keys(wanted).forEach(cap => {
+      const allow = !!wanted[cap];
+      const isDefault = adminAccess.CAPS[cap].includes(role);
+      if (allow === isDefault) {
+        /* Back to how it shipped — forget the override rather than
+           storing a row that says "the same as the default". */
+        db.prepare("DELETE FROM admin_role_permissions WHERE role = ? AND cap = ?").run(role, cap);
+      } else {
+        db.prepare(`INSERT INTO admin_role_permissions (role, cap, allowed, changed_at, changed_by)
+                    VALUES (?,?,?,?,?)
+                    ON CONFLICT(role, cap) DO UPDATE SET
+                      allowed = excluded.allowed,
+                      changed_at = excluded.changed_at,
+                      changed_by = excluded.changed_by`)
+          .run(role, cap, allow ? 1 : 0, now, by);
+      }
+    });
+  })();
+
+  logAction(req, "admin.role.permissions",
+    `${role}: ${Object.keys(wanted).length} permission(s) reviewed`);
+  res.json(users.roleMatrix());
 });
 
 /* The roles the panel is structured for, and which capabilities each

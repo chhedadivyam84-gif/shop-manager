@@ -430,8 +430,10 @@ function seed() {
   console.log("\n--- the session secret ---");
   ok("SESSION_SECRET from the environment is honoured",
      /process\.env\.SESSION_SECRET/.test(idx));
-  ok("a too-short SESSION_SECRET is refused rather than accepted",
-     /SESSION_SECRET is set but too short/.test(idx));
+  ok("a too-short SESSION_SECRET is ignored rather than used",
+     /shorter than 32 characters, so it is/.test(idx) && /sessionSecret = "";/.test(idx));
+  ok("and ignoring it does NOT take the shop down",
+     !/throw new Error\("SESSION_SECRET/.test(idx));
   ok("the generated fallback is 32 random bytes",
      /crypto\.randomBytes\(32\)\.toString\("hex"\)/.test(idx));
   ok("the secret file is written owner-only where the OS supports it",

@@ -152,12 +152,21 @@ const SECRET_PATH = path.join(
    secret in the platform's own secret store rather than on a disk — and
    so two instances of the same shop agree about a cookie. The file stays
    as the fallback, which is what a shop PC with no environment to
-   configure actually needs. A secret that is set but obviously too short
-   to be one is refused rather than quietly accepted: a four-character
-   SESSION_SECRET is worse than none, because it looks configured. */
+   configure actually needs.
+
+   A SET-BUT-TOO-SHORT SECRET IS IGNORED LOUDLY, not fatal. The first
+   version of this threw, on the usual fail-closed reasoning — and that
+   reasoning does not hold here, because there IS a safe fallback. This
+   variable was read by nothing until today, so a hosted copy may well
+   have one set to anything at all; refusing to boot would take a live
+   shop down to protect it from a value it was already not using, and
+   the generated 32-byte file secret it falls back to is strong. So:
+   shout where an operator will see it, and keep the till running. */
 let sessionSecret = String(process.env.SESSION_SECRET || "").trim();
 if (sessionSecret && sessionSecret.length < 32) {
-  throw new Error("SESSION_SECRET is set but too short — use at least 32 characters, or leave it unset.");
+  console.error("[session] SESSION_SECRET is set but shorter than 32 characters, so it is " +
+                "being IGNORED. Set a longer one, or remove it and the app will keep its own.");
+  sessionSecret = "";
 }
 if (!sessionSecret) {
   if (fs.existsSync(SECRET_PATH)) {

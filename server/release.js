@@ -58,6 +58,10 @@ const BOOT = {
      has looked yet OR nothing was found — `gapChecked` says which. */
   gap: null,
   gapChecked: false,
+  /* True only while taking in a newer backup — /api is held off. */
+  catchingUp: false,
+  /* What happened about the gap: "none", "taken-in", or why not. */
+  gapOutcome: null,
 };
 
 /** shop-20261009-191130.db (or --company / --registry parts) → "20261009-191130". */
@@ -79,9 +83,35 @@ function startupPlan(restore) {
     startupSnapshot: !restored,
     /* Long enough for the old container's SIGTERM backup (8s budget) and
        Render's handover to finish, short enough to report while somebody
-       is still looking at the deploy. */
-    checkGapAfterMs: restored ? 90 * 1000 : 0,
+       is still looking at the deploy. DEPLOY_CHECK_AFTER_MS exists so the
+       handover can be tested without a ninety-second wait. */
+    checkGapAfterMs: restored ? checkDelay() : 0,
   };
+}
+
+function checkDelay() {
+  const v = Number(process.env.DEPLOY_CHECK_AFTER_MS);
+  return Number.isFinite(v) && v > 0 ? v : 90 * 1000;
+}
+
+/**
+ * Should a newer backup be taken in automatically?
+ *
+ * Only when doing so cannot lose anything: nothing written here since we
+ * started. `changedSince` is how many rows have been written since the
+ * baseline; anything above zero means work has begun on THIS container,
+ * and two diverged copies of a shop's books are a person's to reconcile.
+ * DEPLOY_CATCHUP=off turns it off entirely, leaving only the warning.
+ */
+function catchupDecision(newer, changedSince) {
+  if (!newer) return { act: false, why: "none" };
+  if (String(process.env.DEPLOY_CATCHUP || "").toLowerCase() === "off") {
+    return { act: false, why: "automatic catch-up is switched off (DEPLOY_CATCHUP=off)" };
+  }
+  if (changedSince !== 0) {
+    return { act: false, why: "work has already been entered on this container, so the two copies have diverged" };
+  }
+  return { act: true, why: "nothing has been written here, so the newer backup only adds" };
 }
 
 /**
@@ -126,8 +156,10 @@ function healthReport(probe) {
     /* The deploy-gap finding, if there is one. A stamp, nothing more. */
     newerBackupThanRunning: BOOT.gap,
     gapChecked: BOOT.gapChecked,
+    /* "none", "taken-in", or a sentence saying why it was left alone. */
+    gapOutcome: BOOT.gapOutcome,
   };
   return { status: body.ok ? 200 : 503, body };
 }
 
-module.exports = { BOOT, version, stampOf, startupPlan, newerThanRestored, healthReport };
+module.exports = { BOOT, version, stampOf, startupPlan, newerThanRestored, healthReport, catchupDecision };

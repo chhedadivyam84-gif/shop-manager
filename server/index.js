@@ -89,6 +89,24 @@ function assertOwnBucket() {
 
 async function start() {
   assertOwnBucket();
+
+  /* A newer backup the previous boot downloaded and verified, because the
+     container this one replaced saved work after we had restored. Applied
+     FIRST and before anything opens a database — see server/catchup.js.
+     Whatever it replaces is moved aside and kept, never deleted. An
+     owner's own uploaded restore (just below) still applies on top of it. */
+  {
+    const dataDir = process.env.DATA_DIR
+      ? require("path").resolve(process.env.DATA_DIR)
+      : require("path").join(__dirname, "..", "data");
+    const caught = require("./catchup").applyStaged(dataDir);
+    if (caught.applied) {
+      console.log(`[release] took in the newer backup ${caught.stamp} that the previous ` +
+        `container saved after this one had restored. What it replaced is kept in ${caught.keptAs}.`);
+    } else if (caught.error) {
+      console.error(`[release] a newer backup was waiting but could NOT be put in place: ${caught.error}`);
+    }
+  }
   // Must happen before anything requires ./db — on an ephemeral-disk host
   // (Render free tier resets the filesystem on every redeploy) this is what
   // puts shop.db back in place from the last cloud snapshot, before the
@@ -394,6 +412,17 @@ app.get("/api/health", (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   const r = release.healthReport(() => db.prepare("SELECT 1 AS ok").get());
   res.status(r.status).json(r.body);
+});
+
+/* Held off for the moment this container is taking in a newer backup —
+   between the last check that nothing has been written and the restart.
+   A request let through then could write into a file that is about to be
+   moved aside. 503 with retry, which the app already treats as "try again
+   shortly" rather than as an error. */
+app.use("/api", (req, res, next) => {
+  if (!release.BOOT.catchingUp) return next();
+  res.setHeader("Retry-After", "10");
+  res.status(503).json({ error: "Updating — try again in a few seconds.", retry: true });
 });
 
 app.use("/api", rateLimit.limit({ bucket: "api-write", max: 240, windowMs: 60 * 1000 }));
@@ -815,35 +844,87 @@ app.listen(PORT, "0.0.0.0", () => {
   const plan = release.startupPlan(restore);
   backup.startSchedule({ skipStartup: !plan.startupSnapshot });
 
-  /* DID THE DEPLOY THAT STARTED US LOSE ANYTHING?
+  /* DID THE DEPLOY THAT STARTED US LOSE ANYTHING — AND IF SO, TAKE IT IN.
 
      Only asked after a cloud restore. A backup newer than the one we
-     restored can only be the old container's final save — work this
-     container does not have. Said loudly, and held for /api/health, but
-     NOT acted on: staff may already be working here, and swapping the
-     database under them is a decision for a person. See release.js. */
+     restored can only be the old container's final save: work this
+     container does not have.
+
+     Taken in AUTOMATICALLY only if nothing at all has been written here
+     since start-up, because then the newer backup is a strict superset of
+     what we hold and taking it in only adds. If anything has been written,
+     the two copies have diverged and it is said loudly and left alone.
+     The mechanics — verify, stage, restart, apply before any database
+     opens — are in server/catchup.js. */
   if (plan.checkGapAfterMs) {
+    const tenants = require("./tenants");
+    const catchup = require("./catchup");
+    const cloudStore = require("./cloudStore");
+
+    /* Counted from NOW, once start-up has finished writing its own
+       migrations: everything after this is work the old container never
+       saw. Every INSERT, UPDATE and DELETE counts, not just new rows. */
+    const writes = () => db.companies.changeCount() + tenants.changeCount();
+    const baseline = writes();
+
+    const warn = (newer, why) => {
+      release.BOOT.gapOutcome = why;
+      console.error(
+        `[release] A BACKUP NEWER THAN THE ONE THIS RELEASE RESTORED EXISTS: ${newer}. ` +
+        `It was saved by the container this deploy replaced, after this one had restored — ` +
+        `so anything entered in that window is in the cloud but NOT in the running shop. ` +
+        `It was NOT taken in, because ${why}. Check it with: ` +
+        `node tools/verify-backup.js --cloud --stamp ${newer}`);
+    };
+
     setTimeout(async () => {
+      let listing, newer;
       try {
-        const listing = await backup.listCloud();
+        listing = await backup.listCloud();
         const names = ((listing && listing.runs) || []).flatMap(r => r.files || []);
-        const newer = release.newerThanRestored(restore.file, names);
+        newer = release.newerThanRestored(restore.file, names);
         release.BOOT.gap = newer;
         release.BOOT.gapChecked = true;
-        if (newer) {
-          console.error(
-            `[release] A BACKUP NEWER THAN THE ONE THIS RELEASE RESTORED EXISTS: ${newer}. ` +
-            `It was almost certainly saved by the container this deploy replaced, after this ` +
-            `one had already restored — so anything entered in that window is in the cloud ` +
-            `but NOT in the running shop. Check it with: node tools/verify-backup.js --cloud ` +
-            `--stamp ${newer}. Nothing has been restored automatically.`);
-        } else {
-          console.log("[release] deploy check: no backup newer than the one restored — nothing was lost in the handover");
-        }
       } catch (e) {
         release.BOOT.gapChecked = false;
+        release.BOOT.gapOutcome = "could not look in the cloud";
         console.error("[release] deploy check could not list the cloud:", e.message);
+        return;
       }
+
+      if (!newer) {
+        release.BOOT.gapOutcome = "none";
+        console.log("[release] deploy check: no backup newer than the one restored — nothing was lost in the handover");
+        return;
+      }
+
+      const decision = release.catchupDecision(newer, writes() - baseline);
+      if (!decision.act) return warn(newer, decision.why);
+
+      const run = listing.runs.find(r => r.stamp === newer);
+      const staged = await catchup.stageRun(cloudStore, db.dataDir, newer, run ? run.files : []);
+      if (!staged.ok) return warn(newer, "it did not verify: " + staged.error);
+
+      /* The last look, with requests held off so nothing can slip in
+         between this check and the restart. */
+      release.BOOT.catchingUp = true;
+      if (writes() - baseline !== 0) {
+        release.BOOT.catchingUp = false;
+        catchup.discard(db.dataDir);
+        return warn(newer, "work was entered while the newer backup was being checked");
+      }
+
+      catchup.markReady(db.dataDir, newer);
+      release.BOOT.gapOutcome = "taken-in";
+      console.log(`[release] taking in the newer backup ${newer}: nothing has been written here ` +
+        `since start-up, so it only adds. Restarting so it is put in place before anything ` +
+        `opens a database. What it replaces will be kept.`);
+      try { db.companies.closeAll(); } catch (e) { /* exiting either way */ }
+      try { tenants.close(); } catch (e) { /* exiting either way */ }
+      /* Exit, and let the host start us again. A process.exit() does not
+         run the SIGTERM handler, so no backup of the OLD data is taken on
+         the way out — which is the point. */
+      setTimeout(() => process.exit(0), 200);
     }, plan.checkGapAfterMs).unref?.();
   }
 });

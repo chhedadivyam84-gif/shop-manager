@@ -49,8 +49,21 @@ const progress = t => { if (process.stdout.isTTY) process.stdout.write("  …   
 
 /* The suites that must pass before money, identity or backups change. */
 const CRITICAL_SUITES = [
-  "security", "restore", "backup-verify", "tenant-identity", "assistant", "voice", "release",
+  "security", "restore", "backup-verify", "tenant-identity", "assistant", "voice", "release", "handover",
 ];
+
+/* IN CI THESE CANNOT RUN, BY DESIGN, and that is not the same as skipped.
+
+   tenant-identity boots the licence panel beside the shop and signs
+   verdicts with the vendor's PRIVATE key — which must never be handed to
+   a CI provider. Staging boots the release on a copy of the shop's REAL
+   books — which must never be uploaded to one either.
+
+   So in CI they are reported as LOCAL: not passed, not blocking CI, and
+   named in the summary as still owed. Outside CI they are ordinary
+   critical checks, and a release that has not passed them is NOT READY. */
+const IN_CI = process.argv.includes("--ci") || String(process.env.CI || "").toLowerCase() === "true";
+const LOCAL_ONLY = new Set(["tests: tenant-identity", "staging on a copy of the real books"]);
 
 /* What production needs, by NAME. Never read, never printed: this tool
    runs on a laptop, not on the host, so it cannot honestly say whether
@@ -275,8 +288,25 @@ async function main() {
   record("migrations are safe to run twice", b.second.status, b.second.detail);
 
   for (const s of CRITICAL_SUITES) {
-    if (QUICK) { record("tests: " + s, "SKIP", "--quick"); continue; }
-    run("tests: " + s, () => checkSuite(ROOT, s));
+    const name = "tests: " + s;
+    if (IN_CI && LOCAL_ONLY.has(name)) {
+      record(name, "LOCAL", "needs the licence panel and the vendor's private key, which never go to CI — run it locally before release");
+      continue;
+    }
+    if (QUICK) { record(name, "SKIP", "--quick"); continue; }
+    run(name, () => checkSuite(ROOT, s));
+  }
+
+  {
+    const name = "staging on a copy of the real books";
+    if (IN_CI) {
+      record(name, "LOCAL", "the shop's real books never go to CI — run it on the machine that holds the backups");
+    } else {
+      progress(name);
+      const r = await require("./staging").stage(ROOT);
+      /* No real backup here is not a pass. It is a check nobody could run. */
+      record(name, r.status === "LOCAL" ? "SKIP" : r.status, r.detail);
+    }
   }
 
   /* Reported, never passed: this machine is not the host. */
@@ -285,7 +315,7 @@ async function main() {
       sets.map(s => s.join(" + ")).join("  OR  ") + "  — confirm on the host's Environment page", false);
   }
 
-  const mark = { PASS: "PASS  ", FAIL: "FAIL  ", SKIP: "SKIP  ", MANUAL: "CHECK " };
+  const mark = { PASS: "PASS  ", FAIL: "FAIL  ", SKIP: "SKIP  ", MANUAL: "CHECK ", LOCAL: "LOCAL " };
   if (process.stdout.isTTY) console.log(" ".repeat(70) + "\r");
   for (const r of results) {
     console.log("  " + mark[r.status] + r.name + (r.detail ? "\n          " + r.detail : ""));
@@ -293,6 +323,7 @@ async function main() {
 
   const failed = results.filter(r => r.critical && r.status === "FAIL");
   const skipped = results.filter(r => r.critical && r.status === "SKIP");
+  const owed = results.filter(r => r.status === "LOCAL");
 
   console.log("\n" + "=".repeat(62));
   if (failed.length) {
@@ -300,6 +331,10 @@ async function main() {
   } else if (skipped.length) {
     console.log("  NOT READY — " + skipped.length + " critical check(s) were not run.");
     console.log("  A check nobody ran is not a check that passed.");
+  } else if (IN_CI) {
+    console.log("  CI PASSED — every check CI can run passed.");
+    console.log("  Still owed before release, on the release machine: " + owed.length);
+    for (const r of owed) console.log("    · " + r.name);
   } else {
     console.log("  READY on the checks that can be run from here.");
     console.log("  Still yours to do: the items marked CHECK, and deploying only");

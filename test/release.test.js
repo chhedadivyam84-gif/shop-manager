@@ -225,6 +225,73 @@ function freshRelease(env) {
   }
 
   /* ---------------------------------------------------------------- */
+  console.log("\n--- staging on real books can FAIL ---\n");
+  {
+    const staging = require(path.join(ROOT, "tools/staging.js"));
+    const { DatabaseSync } = require("node:sqlite");
+
+    /* A tiny shop's backup, laid out the way backups are named. */
+    const makeBackup = dir => {
+      fs.mkdirSync(dir, { recursive: true });
+      const f = path.join(dir, "shop-20261009-120000.db");
+      const d = new DatabaseSync(f);
+      d.exec(`CREATE TABLE invoices (id TEXT PRIMARY KEY);
+              CREATE TABLE customers (id TEXT PRIMARY KEY);
+              INSERT INTO invoices VALUES ('A'),('B'),('C');
+              INSERT INTO customers VALUES ('X');`);
+      d.close();
+      return dir;
+    };
+
+    const none = await staging.stage(ROOT, { backupDir: tmp("stg-none-") });
+    ok("with no real backup to stage on, it says so rather than passing", none.status === "LOCAL", none);
+
+    /* A release whose migrations quietly lose rows. */
+    const lossy = tmp("stg-lossy-");
+    fs.mkdirSync(path.join(lossy, "server"));
+    fs.writeFileSync(path.join(lossy, "server/catchup.js"),
+      fs.readFileSync(path.join(ROOT, "server/catchup.js")));
+    fs.writeFileSync(path.join(lossy, "server/index.js"), `
+      const { DatabaseSync } = require("node:sqlite");
+      const path = require("path"), http = require("http");
+      const d = new DatabaseSync(path.join(process.env.DATA_DIR, "shop.db"));
+      d.exec("DELETE FROM invoices WHERE id = 'C'");     // the bug a test cannot see
+      d.close();
+      http.createServer((q, s) => { s.writeHead(200, {"content-type":"application/json"});
+        s.end(JSON.stringify({ ok:true, db:"ok" })); })
+        .listen(process.env.PORT, () => console.log("running on port " + process.env.PORT));
+    `);
+    const lost = await staging.stage(lossy, { backupDir: makeBackup(tmp("stg-bk1-")), port: 4871 });
+    ok("A RELEASE THAT LOSES A ROW OF REAL BOOKS FAILS STAGING", lost.status === "FAIL", lost);
+    ok("...naming the table and the count", /invoices 3→2/.test(lost.detail), lost.detail);
+
+    /* A release that cannot start on real books at all. */
+    const dead = tmp("stg-dead-");
+    fs.mkdirSync(path.join(dead, "server"));
+    fs.writeFileSync(path.join(dead, "server/index.js"),
+      'console.error("Fatal startup error: no such column: legacy_rate"); process.exit(1);\n');
+    const died = await staging.stage(dead, { backupDir: makeBackup(tmp("stg-bk2-")), port: 4872 });
+    ok("a release that will not start on real books FAILS staging", died.status === "FAIL", died);
+    ok("...with the reason", /legacy_rate/.test(died.detail), died.detail);
+
+    const leftover = fs.readdirSync(os.tmpdir()).filter(n => n.startsWith("staging-"));
+    ok("no copy of anybody's books is left in the temp folder", leftover.length === 0, leftover);
+  }
+
+  /* ---------------------------------------------------------------- */
+  console.log("\n--- CI ---\n");
+  {
+    const wf = path.join(ROOT, ".github/workflows/release-check.yml");
+    ok("there is a CI workflow", fs.existsSync(wf));
+    const y = fs.existsSync(wf) ? fs.readFileSync(wf, "utf8") : "";
+    ok("...it installs exactly what the host installs", /npm ci/.test(y));
+    ok("...and runs the release check in CI mode", /release-check\.js --ci/.test(y));
+    ok("...with read-only access", /contents:\s*read/.test(y));
+    ok("...and asks for no secrets", !/secrets\./.test(y));
+    ok("the handover test is a critical suite", check.CRITICAL_SUITES.includes("handover"));
+  }
+
+  /* ---------------------------------------------------------------- */
   console.log("\n--- the runbook matches what is actually here ---\n");
   {
     const doc = fs.readFileSync(path.join(ROOT, "RELEASING.md"), "utf8");

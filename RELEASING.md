@@ -23,33 +23,57 @@ Work happens on the `cashbook-explore` branch in `~/shop-manager`.
 `master` is checked out in a separate worktree, `~/sm-deploy`, which is
 why `git checkout master` in the main folder refuses.
 
-There is **no CI**. Nothing runs the checks for you on push. That is what
-`tools/release-check.js` is for, and it only helps if somebody runs it.
+**CI**: `.github/workflows/release-check.yml` runs the release check on
+every push to `master` and `cashbook-explore`, on GitHub's free minutes.
+It needs no secrets and gets read-only access.
+
+**It is only a gate once Render waits for it.** Until each service's
+*Settings → Auto-Deploy* is set to **After CI Checks Pass**, Render deploys
+on push whatever CI says. That is a dashboard setting — see below.
 
 ---
 
-## The one rule
-
-**Deploy the live shop only when nobody is billing.**
+## The deploy handover, and the one rule left
 
 Render starts the new container *before* it stops the old one. The new
 one restores from the newest cloud backup, and only then does the old one
-take its final backup. Anything billed between the last scheduled backup
-(every 15 minutes) and the deploy reaches the cloud **after** the new
-container has already restored without it.
+take its final backup. So a bill entered in the last moments reaches the
+cloud **after** the new container restored without it.
 
-Two things now limit the damage — see `server/release.js`:
+That is now handled — `server/release.js` and `server/catchup.js`:
 
-- after a restore, the new container no longer takes a startup snapshot.
-  That snapshot used to be written in the same second, under the same
+- **No collision.** After a restore, the new container takes no startup
+  snapshot. It used to be written in the same second, under the same
   name, as the old container's final backup, and could overwrite it.
-- 90 seconds after a restore, it looks in the cloud. If a newer backup is
-  there, it logs `[release] A BACKUP NEWER THAN THE ONE THIS RELEASE
-  RESTORED EXISTS` and shows the stamp in `/api/health`.
+- **The gap is closed.** 90 seconds after a restore it looks in the
+  cloud. If the old container saved later, and **nothing has been written
+  on the new one yet**, it downloads that backup, checks it with SQLite's
+  own integrity check, restarts, and puts it in place before any database
+  opens. The late bills are in the running shop. What it replaced is kept
+  in `DATA_DIR/superseded-<time>/`, never deleted.
+- **If work has already started on the new container**, the two copies
+  have diverged. It does not guess which wins: it logs
+  `[release] A BACKUP NEWER THAN THE ONE THIS RELEASE RESTORED EXISTS`,
+  shows the stamp in `/api/health`, and leaves it to a person.
+- **A damaged newer backup is never applied.**
+- `DEPLOY_CATCHUP=off` on the host turns the automatic part off and keeps
+  only the warning.
 
-Neither of those puts the missing bills back in the running shop. They
-make sure the bills are **not destroyed** and that **somebody is told**.
-Restoring them is a person's decision.
+`test/handover.test.js` plays all of that out with the real app against a
+stand-in cloud that speaks S3 and refuses unsigned requests.
+
+**What is left: deploy the live shop when nobody is billing.** The one
+case still not closed automatically is somebody billing on the NEW
+container inside those first 90 seconds *and* on the old one just before
+it — then there are two different sets of new bills, and only a person
+can merge those.
+
+**And one thing about Render this was not able to verify:** the catch-up
+restarts the process with `process.exit(0)` and relies on Render starting
+it again, as it does for any web service whose process ends. That was
+tested with a real restart on this machine, not on Render. The first
+deploy after this ships is the time to watch the logs for
+`[release] took in the newer backup`.
 
 ---
 
@@ -73,9 +97,23 @@ Exit 0 means READY. It checks, and **fails** on:
 | `/api/health` reports the database | the release is actually usable |
 | the critical test suites | money, identity, backups, the assistant |
 
+| **staging: the release on a copy of the real books** | the only check that uses rows nobody wrote for a test — it must start healthy and keep every row |
+
 A check that could not run is reported as SKIPPED, and **a skipped
 critical check is NOT READY**. `--quick` skips the test suites and is
 therefore never READY.
+
+**Staging** (`tools/staging.js`) copies the newest backup in
+`data/backups/`, boots the release on the copy with the cloud unset, and
+checks it comes up healthy and that every row in the money and stock
+tables is still there afterwards. The live data is never opened for
+writing, and the copy is deleted when it is done — it is the shop's
+customer list. It can be run on its own: `node tools/staging.js`.
+
+**In CI**, two checks are reported `LOCAL` instead of run: the identity
+test needs the vendor's private signing key, and staging needs the real
+books. Neither is ever given to a CI provider. CI says which are still
+owed, and they still have to pass on the release machine.
 
 Things it cannot check from a laptop are marked `CHECK` — the backup
 credentials on the host above all. It names them; it never reads them.
@@ -139,14 +177,21 @@ its Dockerfile, README, scripts — is the deployment's own.
 
 ## You have to do this — once, in the Render dashboard
 
-**Set the health check path** on both services:
-*Service → Settings → Health Checks → Health Check Path* = `/api/health`
+On **both** services:
 
-Until it is set, Render decides a release is healthy as soon as the port
-opens — even if the database never came up. With it set, a release whose
-`/api/health` answers 503 is not cut over to. This is a dashboard setting;
-it is **not configured by anything in this repository**, and nothing
-here can tell whether it is set.
+1. *Settings → Health Checks → Health Check Path* = `/api/health`
+
+   Until it is set, Render decides a release is healthy as soon as the
+   port opens — even if the database never came up. With it set, a
+   release whose `/api/health` answers 503 is not cut over to.
+
+2. *Settings → Auto-Deploy* = **After CI Checks Pass**
+
+   This is what turns CI from a report into a gate. Without it, Render
+   deploys on every push to `master` whether CI passed or not.
+
+Both are dashboard settings. **Nothing in this repository configures
+them**, and nothing here can tell whether they are set.
 
 ---
 
@@ -234,13 +279,19 @@ If `/api/health` or the logs report a backup newer than the one restored:
 
 ## Known limits
 
-- **No CI.** The release check is a habit, not a gate. Nothing stops a push
-  that skipped it.
-- **The handover gap is detected, not closed.** Closing it needs the new
-  container to wait for the old one's final save, which Render does not
-  offer on the free plan.
-- **The health check path is not set by this repository** — see above.
-- **No staging environment.** The empty-directory boot and the test
-  suites stand in for one.
+- **CI is a gate only once Render waits for it** — the Auto-Deploy
+  setting above. And two checks can never run in CI by design; they are
+  owed on the release machine.
+- **Two sets of new bills cannot be merged automatically.** If staff bill
+  on both containers during the handover, the catch-up stands back and
+  says so.
+- **Render restarting after the catch-up exits** is how Render treats any
+  web service; it was verified with a real restart on this machine, not
+  on Render itself.
+- **Staging uses the local backups.** On a machine without them it cannot
+  run, and the release check says NOT READY rather than pretending.
+- **There is no hosted staging server.** Staging runs here, on a copy.
+  A hosted one would be a separate free Render service; that has not been
+  created, because it is a new piece of infrastructure in the account.
 - **The licence panel releases separately** — `shop-manager-licence`,
   branch `main`, its own tests.

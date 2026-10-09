@@ -166,8 +166,33 @@ function updateCompany(id, { name, active }) {
 }
 
 module.exports = db;
+/* How many rows have been written, across every business, since each
+   connection opened. SQLite's own total_changes() counts every INSERT,
+   UPDATE and DELETE on a connection — so it misses nothing, unlike a row
+   count, which an edit to an existing customer would leave untouched.
+
+   Used to answer one question after a deploy: has anybody written ANYTHING
+   here yet? A business that cannot be opened counts as changed, because
+   "I could not tell" must never be read as "nothing happened". */
+function changeCount() {
+  let n = 0;
+  for (const c of listCompanies()) {
+    try { n += connectionFor(c.id).prepare("SELECT total_changes() AS n").get().n; }
+    catch (e) { n += 1e9; }
+  }
+  return n;
+}
+
+/* Every pooled connection closed, so the files can be moved. The next
+   query reopens whatever is then on disk. */
+function closeAll() {
+  for (const c of pool.values()) { try { c.close(); } catch (e) { /* already closed */ } }
+  pool.clear();
+}
+
 module.exports.companies = {
   list: listCompanies, get: getCompany, create: createCompany,
   update: updateCompany, defaultId: defaultCompanyId,
-  runAs: runAsCompany, currentId: currentCompanyId, file: companyFile
+  runAs: runAsCompany, currentId: currentCompanyId, file: companyFile,
+  changeCount, closeAll
 };

@@ -36,10 +36,22 @@ function r2Config() {
   const accessKey = process.env.R2_ACCESS_KEY_ID || "";
   const secret = process.env.R2_SECRET_ACCESS_KEY || "";
   const bucket = process.env.R2_BUCKET || "shop-backups";
+
+  /* R2_ENDPOINT_OVERRIDE sends the same SIGNED requests somewhere else —
+     a stand-in while testing, so the deploy handover can be exercised
+     against something that speaks S3 and refuses unsigned requests,
+     instead of only against hand-made file lists. Unset in production,
+     where the host is derived from the account as it always was. The
+     signature is unaffected; only where it is sent. */
+  const override = String(process.env.R2_ENDPOINT_OVERRIDE || "").trim().replace(/\/+$/, "");
+  const base = override || `https://${account}.r2.cloudflarestorage.com`;
+
   return {
     ok: !!(account && accessKey && secret),
     account, accessKey, secret, bucket,
-    host: `${account}.r2.cloudflarestorage.com`
+    base,
+    /* Signed as the Host header, so the bare name (and port), no scheme. */
+    host: base.replace(/^https?:\/\//, "")
   };
 }
 
@@ -126,7 +138,7 @@ function signedFetch({ method, path, query = {}, body = null, extraHeaders = {} 
     `AWS4-HMAC-SHA256 Credential=${cfg.accessKey}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
 
   const qs = canonicalQuery ? "?" + canonicalQuery : "";
-  return fetch(`https://${cfg.host}${path}${qs}`, {
+  return fetch(`${cfg.base}${path}${qs}`, {
     method,
     headers,
     body: body || undefined,

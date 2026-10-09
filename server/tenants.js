@@ -62,6 +62,30 @@ function open() {
     );
     CREATE INDEX IF NOT EXISTS idx_tenants_company ON tenants(company_id);
   `);
+
+  /* ----------------------------------------------------------------
+     WHO THE VENDOR SAYS THIS SHOP IS.
+
+     `code` above was doing this job and could not keep doing it: the
+     vendor can issue a replacement activation code, and the instant
+     they do, the old one matches nothing. A sign-in then finds no
+     company for this shop and makes a new empty one — with their real
+     books sitting beside it, unreachable.
+
+     The panel's customer id never changes, for the life of the
+     customer, through every reissue, cancellation and renewal. So it
+     is what the company is matched on now, with `code` kept as the
+     fallback for shops that signed in before this column existed.
+
+     Blank for those shops until their next sign-in fills it in. That
+     is why the fallback stays rather than being replaced.
+     ---------------------------------------------------------------- */
+  const cols = tdb.prepare("PRAGMA table_info(tenants)").all().map(c => c.name);
+  if (!cols.includes("customer_id")) {
+    tdb.exec("ALTER TABLE tenants ADD COLUMN customer_id TEXT DEFAULT ''");
+  }
+  tdb.exec("CREATE INDEX IF NOT EXISTS idx_tenants_customer ON tenants(customer_id)");
+
   return tdb;
 }
 
@@ -98,18 +122,24 @@ function list() {
 }
 
 /** Remember a shop, or update what we know about it. */
-function upsert({ username, companyId, shopName, code, plan, expiresOn, password, passwordHash, featuresOff }) {
+function upsert({ username, companyId, shopName, code, plan, expiresOn, password, passwordHash, featuresOff, customerId }) {
   const u = norm(username);
   const existing = get(u);
   const ph = passwordHash || (password ? hash(password) : (existing && existing.password_hash));
   if (!ph) throw new Error("A shop cannot be remembered without a password.");
+  /* A sign-in decided offline never spoke to the panel, so it has no
+     customer id to offer. Keeping what is already stored rather than
+     writing a blank is the difference between this column surviving a
+     week of bad internet and being erased by the first one. */
+  const cid = String(customerId || "").trim() || (existing && existing.customer_id) || "";
   open().prepare(`
-    INSERT INTO tenants (username, company_id, shop_name, code, plan, expires_on, password_hash, created_at, last_seen_at, blocked, features_off)
-    VALUES (?,?,?,?,?,?,?,?,?,0,?)
+    INSERT INTO tenants (username, company_id, shop_name, code, plan, expires_on, password_hash, created_at, last_seen_at, blocked, features_off, customer_id)
+    VALUES (?,?,?,?,?,?,?,?,?,0,?,?)
     ON CONFLICT(username) DO UPDATE SET
       company_id = excluded.company_id,
       shop_name  = excluded.shop_name,
       code       = excluded.code,
+      customer_id = excluded.customer_id,
       plan       = excluded.plan,
       expires_on = excluded.expires_on,
       password_hash = excluded.password_hash,
@@ -120,8 +150,23 @@ function upsert({ username, companyId, shopName, code, plan, expiresOn, password
       features_off = CASE WHEN excluded.features_off IS NULL THEN tenants.features_off ELSE excluded.features_off END
   `).run(u, companyId, shopName || "", code || "", plan || "paid", expiresOn || "", ph, Date.now(), Date.now(),
          featuresOff === undefined || featuresOff === null ? null
-           : (Array.isArray(featuresOff) ? featuresOff.join(",") : String(featuresOff)));
+           : (Array.isArray(featuresOff) ? featuresOff.join(",") : String(featuresOff)),
+         cid);
   return get(u);
+}
+
+/**
+ * Which company belongs to this vendor customer?
+ *
+ * Asked before anything is created. Unlike the activation code, this
+ * answer stays right after the vendor reissues a code — which is the
+ * whole reason the column exists.
+ */
+function byCustomerId(customerId) {
+  const id = String(customerId || "").trim();
+  if (!id) return null;
+  return open().prepare(
+    "SELECT * FROM tenants WHERE customer_id = ? ORDER BY created_at LIMIT 1").get(id) || null;
 }
 
 function touch(username) {
@@ -186,5 +231,5 @@ function restoreFrom(srcPath) {
   return true;
 }
 
-module.exports = { open, get, list, count, upsert, touch, block, verify, hash, multiTenant, norm,
+module.exports = { open, get, list, count, upsert, touch, block, verify, hash, multiTenant, norm, byCustomerId,
   file, snapshotTo, restoreFrom, declared };

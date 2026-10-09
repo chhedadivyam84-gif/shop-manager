@@ -136,19 +136,32 @@ async function askVendor(username, password) {
  * opens every company — but it runs once, on a sign-in that was about to
  * create a company anyway.
  */
-function companyHoldingCode(code) {
-  const want = String(code || "").trim().toUpperCase();
-  if (!want) return null;
+function companyHoldingCode(customerId, code) {
+  const wantId = String(customerId || "").trim();
+  const wantCode = String(code || "").trim().toUpperCase();
+  if (!wantId && !wantCode) return null;
+
+  /* One pass, reading both marks out of each company. The id is the
+     answer whenever it is there; the code only settles it for books
+     stamped before the id existed. Checked in that order per company
+     rather than in two sweeps, because opening every company twice to
+     ask two questions about the same row is the slow way round. */
+  let byCode = null;
   for (const c of db.companies.list()) {
     try {
-      const found = db.companies.runAs(c.id, () => {
-        const row = db.prepare("SELECT tenant_code FROM settings WHERE id = 1").get();
-        return row && String(row.tenant_code || "").trim().toUpperCase() === want;
-      });
-      if (found) return c.id;
+      const marks = db.companies.runAs(c.id, () =>
+        db.prepare("SELECT tenant_code, tenant_customer_id FROM settings WHERE id = 1").get());
+      if (!marks) continue;
+
+      if (wantId && String(marks.tenant_customer_id || "").trim() === wantId) return c.id;
+
+      /* Remembered, not returned yet: a later company may still match on
+         the id, and the id is the better answer. */
+      if (!byCode && wantCode &&
+          String(marks.tenant_code || "").trim().toUpperCase() === wantCode) byCode = c.id;
     } catch (e) { /* a company that will not open is not the one */ }
   }
-  return null;
+  return byCode;
 }
 
 router.post("/shop-login", async (req, res) => {
@@ -277,14 +290,20 @@ router.post("/shop-login", async (req, res) => {
      loses a customer's books. */
   let companyId = null;
 
-  /* 1. the tenant map, when it is intact */
-  const known = tenants.list().find(t => t.code && answer.code && t.code === answer.code);
-  if (known) companyId = known.company_id;
+  /* 1. the tenant map, on the id that survives a reissued code */
+  const byId = tenants.byCustomerId(answer.customerId);
+  if (byId) companyId = byId.company_id;
 
-  /* 2. the books themselves, when the map is not */
-  if (!companyId) companyId = companyHoldingCode(answer.code);
+  /* 2. the map again, on the code — for shops whose row predates the id */
+  if (!companyId) {
+    const known = tenants.list().find(t => t.code && answer.code && t.code === answer.code);
+    if (known) companyId = known.company_id;
+  }
 
-  /* 3. and only then, a genuinely new shop */
+  /* 3. the books themselves, when the map is lost or out of step */
+  if (!companyId) companyId = companyHoldingCode(answer.customerId, answer.code);
+
+  /* 4. and only then, a genuinely new shop */
   if (!companyId) {
     const created = db.companies.create({ name: answer.shop || "Shop" });
     companyId = created.id;
@@ -294,7 +313,11 @@ router.post("/shop-login", async (req, res) => {
      if the map is gone. */
   try {
     db.companies.runAs(companyId, () => {
-      db.prepare("UPDATE settings SET tenant_code = ? WHERE id = 1").run(String(answer.code || ""));
+      /* The id first, because it is the one that still finds these books
+         after the vendor replaces the code. The code is kept beside it:
+         it is what an older copy, or an older backup, will look for. */
+      db.prepare("UPDATE settings SET tenant_code = ?, tenant_customer_id = ? WHERE id = 1")
+        .run(String(answer.code || ""), String(answer.customerId || ""));
     });
   } catch (e) { /* the sign-in still stands; the map covers the usual case */ }
 
@@ -302,6 +325,7 @@ router.post("/shop-login", async (req, res) => {
     username, companyId,
     shopName: answer.shop || "",
     code: answer.code || "",
+    customerId: answer.customerId || "",
     plan: answer.plan || "paid",
     featuresOff: answer.featuresOff,
     expiresOn: answer.expiresOn || "",
@@ -331,11 +355,32 @@ function refreshFeatures(username, password, row) {
         username, companyId: row.company_id,
         shopName: fresh.body.shop || row.shop_name,
         code: fresh.body.code || row.code,
+        /* HOW AN INSTALL THAT PREDATES THE ID EVER GETS ONE.
+
+           A returning shop is decided offline and never reaches the
+           binding code below, so without this the id would only ever be
+           written for shops signing in on a fresh machine — which is
+           precisely the case where it is too late to help. Filled in
+           here instead, quietly, on the next ordinary sign-in. */
+        customerId: fresh.body.customerId || row.customer_id || "",
         plan: fresh.body.plan || row.plan,
         expiresOn: fresh.body.expiresOn || row.expires_on,
         passwordHash: row.password_hash,
         featuresOff: fresh.body.featuresOff
       });
+
+      /* And into the books themselves, for the same reason the code is
+         written there: the map is one file, and the books are what get
+         backed up. Only ever filled in or corrected — never blanked,
+         because an answer without an id must not erase a good one. */
+      if (fresh.body.customerId) {
+        try {
+          db.companies.runAs(row.company_id, () => {
+            db.prepare("UPDATE settings SET tenant_customer_id = ? WHERE id = 1")
+              .run(String(fresh.body.customerId));
+          });
+        } catch (e) { /* the shop is signed in; this is housekeeping */ }
+      }
     })
     .catch(() => { /* the shop is already signed in; this changes nothing */ });
 }

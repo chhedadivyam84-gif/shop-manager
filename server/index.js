@@ -107,6 +107,8 @@ async function start() {
   }
 
   const restore = await require("./restore").restoreIfNeeded();
+  const release = require("./release");
+  release.BOOT.restore = { restored: !!restore.restored, from: restore.file || null };
   if (restore.restored) {
     const many = restore.businesses > 1 ? `, ${restore.businesses} businesses` : "";
     console.log(`[restore] Restored database from cloud backup: ${restore.file} (${restore.size} bytes${many})`);
@@ -375,6 +377,25 @@ app.use(session({
  * behind a single shared limit. The login route keeps its own, much
  * stricter lockout (auth.js); this sits underneath as the general
  * case. */
+/* IS THIS RELEASE UP, AND WHOLE?
+
+   Public, because a health check that needs a login cannot be used by the
+   host, a monitor, or somebody checking a deploy from their phone. And so
+   it says nothing a stranger should not read: the commit, how long it has
+   been up, whether the database answers, and a backup TIMESTAMP — no
+   bucket, no provider, no path, no error text, no variable names. The
+   reasoning is in server/release.js.
+
+   503 when the database will not answer, so Render can be pointed at this
+   path as its health check and refuse to cut over to a release that came
+   up without its data. That last part is a dashboard setting; see
+   RELEASING.md. */
+app.get("/api/health", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const r = release.healthReport(() => db.prepare("SELECT 1 AS ok").get());
+  res.status(r.status).json(r.body);
+});
+
 app.use("/api", rateLimit.limit({ bucket: "api-write", max: 240, windowMs: 60 * 1000 }));
 
 /* ------------------------------------------------------------
@@ -791,7 +812,40 @@ app.listen(PORT, "0.0.0.0", () => {
   }
   // Automatic rotating snapshots (+ cloud if configured). Started after the
   // server is up so a backup can never delay accepting requests.
-  backup.startSchedule();
+  const plan = release.startupPlan(restore);
+  backup.startSchedule({ skipStartup: !plan.startupSnapshot });
+
+  /* DID THE DEPLOY THAT STARTED US LOSE ANYTHING?
+
+     Only asked after a cloud restore. A backup newer than the one we
+     restored can only be the old container's final save — work this
+     container does not have. Said loudly, and held for /api/health, but
+     NOT acted on: staff may already be working here, and swapping the
+     database under them is a decision for a person. See release.js. */
+  if (plan.checkGapAfterMs) {
+    setTimeout(async () => {
+      try {
+        const listing = await backup.listCloud();
+        const names = ((listing && listing.runs) || []).flatMap(r => r.files || []);
+        const newer = release.newerThanRestored(restore.file, names);
+        release.BOOT.gap = newer;
+        release.BOOT.gapChecked = true;
+        if (newer) {
+          console.error(
+            `[release] A BACKUP NEWER THAN THE ONE THIS RELEASE RESTORED EXISTS: ${newer}. ` +
+            `It was almost certainly saved by the container this deploy replaced, after this ` +
+            `one had already restored — so anything entered in that window is in the cloud ` +
+            `but NOT in the running shop. Check it with: node tools/verify-backup.js --cloud ` +
+            `--stamp ${newer}. Nothing has been restored automatically.`);
+        } else {
+          console.log("[release] deploy check: no backup newer than the one restored — nothing was lost in the handover");
+        }
+      } catch (e) {
+        release.BOOT.gapChecked = false;
+        console.error("[release] deploy check could not list the cloud:", e.message);
+      }
+    }, plan.checkGapAfterMs).unref?.();
+  }
 });
 
 // On an ephemeral-disk host (Render), a code deploy kills THIS process and

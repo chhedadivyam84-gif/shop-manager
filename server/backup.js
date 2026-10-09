@@ -408,7 +408,15 @@ function snapshotForDownload() {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CLOUD_INTERVAL_MS = 15 * 60 * 1000;
 
-function startSchedule() {
+/**
+ * `skipStartup` is set after a cloud restore. That snapshot would upload
+ * data the cloud already holds, and on Render it is written in the same
+ * second as the OLD container's final backup — under the same name — so
+ * it can overwrite the one copy of whatever was billed just before the
+ * deploy. See server/release.js for the logs that showed it.
+ */
+function startSchedule(opts) {
+  const skipStartup = !!(opts && opts.skipStartup);
   const kick = async (trigger) => {
     try {
       const r = await runBackup(trigger);
@@ -420,7 +428,12 @@ function startSchedule() {
   };
   const intervalMs = cloudConfig().enabled ? CLOUD_INTERVAL_MS : DAY_MS;
   // Delay the first run a little so it doesn't compete with startup work.
-  setTimeout(() => kick("startup"), 10_000).unref?.();
+  if (skipStartup) {
+    console.log("[backup] startup snapshot skipped — this boot restored from the cloud, " +
+      "so the cloud already holds this data");
+  } else {
+    setTimeout(() => kick("startup"), 10_000).unref?.();
+  }
   setInterval(() => kick("scheduled"), intervalMs).unref?.();
 }
 

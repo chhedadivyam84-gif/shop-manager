@@ -179,6 +179,25 @@ function seed() {
   ok("a pasted wall of text is refused", huge.status === 400, huge.status);
 
   /* ---------------------------------------------------------------- */
+  console.log("\n--- the one route that spends money is metered ---\n");
+  {
+    /* The general /api limiter allows 240 writes a minute, which is right
+       for a till and wrong for a route that pays a provider per press.
+       Asserted on the MOUNT rather than by firing 25 live requests: the
+       limiter is already tested on its own, and what can go wrong here is
+       somebody mounting the route without it. */
+    const idx = fs.readFileSync(path.join(ROOT, "server/index.js"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, " ");
+    const mount = /app\.use\(\s*"\/api\/assistant"([\s\S]{0,400}?)\);/.exec(idx);
+    ok("the assistant route is mounted", !!mount);
+    ok("...behind requireAuth", !!mount && /requireAuth/.test(mount[1]));
+    ok("...AND behind a rate limit of its own",
+        !!mount && /rateLimit\.limit\(/.test(mount[1]), mount && mount[1]);
+    const max = mount && /max:\s*(\d+)/.exec(mount[1]);
+    ok("...far tighter than the general one", !!max && Number(max[1]) <= 60, max && max[1]);
+  }
+
+  /* ---------------------------------------------------------------- */
   console.log("\n--- the tools answer from the real database ---\n");
 
   inShop(() => {

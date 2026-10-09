@@ -3320,3 +3320,14 @@ a.chip{display:inline-flex;align-items:center;gap:5px;text-decoration:none;}
 /* What is being heard, before it is a question. Dimmed and italic so it
    is plainly not yet an answer to anything. */
 .ai-partial{ opacity:.6; font-style:italic; }
+
+/* The policy links on the sign-in screen. Quiet — they are there to be
+   found, not to compete with the PIN pad — and light enough to read on the
+   dark sign-in background. */
+.login-legal{ margin-top:22px; font-size:12px; color:rgba(255,255,255,.62); text-align:center; }
+.login-legal a{ color:rgba(255,255,255,.82); text-decoration:none; }
+.login-legal a:hover, .login-legal a:focus-visible{ color:#fff; text-decoration:underline; }
+
+/* What the assistant sends, said where the person is about to type. */
+.ai-privacy{ font-size:12px; color:var(--muted); margin:6px 0 0; }
+.ai-privacy a{ color:var(--navy); }

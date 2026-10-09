@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI &amp; Voice · Shop Manager</title>
+<link rel="stylesheet" href="/legal/legal.css">
+</head>
+<body>
+<header class="top"><div class="top-in">
+  <a class="brand" href="/legal/"><span class="brand-mark">SM</span>Shop Manager</a>
+  <nav class="legal-nav" aria-label="Policies">
+    <a href="/legal/privacy.html">Privacy</a>
+    <a href="/legal/terms.html">Terms</a>
+    <a href="/legal/retention.html">Retention</a>
+    <a href="/legal/ai.html" aria-current="page">AI &amp; voice</a>
+    <a href="/legal/contact.html">Contact</a>
+  </nav>
+</div></header>
+
+<main><article class="doc">
+  <div class="draft"><strong>Draft — not yet in force.</strong> Details marked <span class="ph">[like this]</span>
+    must be supplied by the operator, and clauses marked “For legal review” must be checked by a qualified
+    lawyer, before this page is published or relied on.</div>
+
+  <h1>AI and Voice Assistant</h1>
+  <p class="meta">Effective <span class="ph">[EFFECTIVE DATE]</span></p>
+
+  <p class="lead">Shop Manager has two features that use artificial intelligence: <strong>Bill Scanner</strong>,
+  which reads a photographed supplier bill, and the <strong>Assistant</strong>, which answers questions about the
+  shop’s own records and can be asked out loud. Both are off until the shop is given them and adds a key. This
+  page explains exactly what each one sends, and where.</p>
+
+  <h2>Who does the AI work</h2>
+  <p>Both features use <strong>Google’s Gemini API</strong>. Shop Manager sends the request from its server,
+  using a key the shop provides. The key stays on the server and is stored encrypted; it is never sent to the
+  browser.</p>
+
+  <h2>What is sent to Google</h2>
+  <h3>Bill Scanner</h3>
+  <p>The photo of the bill, so the details on it can be read. Nothing else from the shop’s records is sent.</p>
+
+  <h3>Assistant</h3>
+  <p>Each question is answered in two steps, and Google receives:</p>
+  <ol>
+    <li>the question, and a list of the kinds of lookup the person asking is allowed to run;</li>
+    <li>the question again, with the records found for it — at most 25 — so the answer is written from them.</li>
+  </ol>
+  <p>Those records can include product names, stock quantities, prices, customer and supplier names, invoice
+  numbers, totals, and amounts owed. <strong>They never include phone numbers, PINs, passwords or API keys.</strong>
+  A phone number can be searched for, but it is not sent back to Google.</p>
+  <p>The AI does not reach the database. It can only name one of a fixed list of read-only lookups, and the
+  server decides — against the signed-in person’s own permissions — whether to run it. A staff member who cannot
+  see a figure in the app cannot get it from the Assistant either.</p>
+
+  <h2>What Google does with it</h2>
+  <p>That depends on the kind of key the shop uses, under Google’s own terms:</p>
+  <ul>
+    <li><strong>A key from a Google Cloud project with billing turned on</strong> (“paid”): under Google’s
+      published Gemini API terms, what is sent is not used to improve Google’s products, may be held briefly while
+      the request is processed, and is logged for a limited period to detect misuse.</li>
+    <li><strong>A key on the free tier</strong> (“unpaid”): under the same terms, Google may use what is sent to
+      improve its products, and <strong>people at Google may read it</strong>. Google advises against sending
+      personal information to the free tier.</li>
+  </ul>
+  <p><strong>Because the Assistant sends customers’ names and amounts owed, use a key from a project with billing
+  turned on.</strong> Shop Manager cannot tell which kind of key it has been given.</p>
+  <p>Google’s terms change. The current wording is at
+  <a href="https://ai.google.dev/gemini-api/terms" rel="noopener">ai.google.dev/gemini-api/terms</a> and
+  governs; this page is a summary and may be out of date.</p>
+  <aside class="review">Whether sending records about a shop’s customers to an AI provider needs a disclosure to,
+    or consent from, those customers — and whether a Data Processing Addendum with Google is needed.</aside>
+
+  <h2>Asking out loud</h2>
+  <ul>
+    <li>The microphone is used only after someone presses the microphone button, and stops as soon as they
+      stop speaking or press it again.</li>
+    <li>Turning speech into text is done by <strong>the web browser’s own speech recognition</strong>, not by
+      Shop Manager. Some browsers do this on the device; others send the audio to the browser maker’s servers
+      to do it — Google Chrome, for example, sends it to Google.</li>
+    <li><strong>Shop Manager never records, uploads or keeps audio.</strong> What it receives is the text, and
+      that text is handled exactly like a typed question.</li>
+    <li>Answers to spoken questions are read aloud by the browser’s own speech. Some browser voices run on the
+      device; others are online voices that send the answer’s text to the browser maker to be spoken.</li>
+  </ul>
+
+  <h2>What is kept</h2>
+  <ul>
+    <li><strong>Conversations are not stored.</strong> A conversation exists only on the screen it is on, and is
+      gone when the Assistant is closed.</li>
+    <li>Questions and answers are not saved to the shop’s records or written to the server’s logs.</li>
+    <li>Google’s own retention is described above, and is governed by Google’s terms.</li>
+  </ul>
+
+  <h2>What it can and cannot do</h2>
+  <p>The Assistant can only <strong>look things up</strong>. It cannot create, change or delete anything — no
+  bills, no stock, no customers, no payments. Answers can be wrong: it says where each answer came from, so it
+  can be checked against the record itself.</p>
+  <p>Each question costs the shop a small amount, charged by Google to the key’s account. To limit runaway cost,
+  a person can ask at most 20 questions a minute.</p>
+</article></main>
+
+<footer class="legal-foot">This page describes how the Shop Manager software works. It is not legal advice and
+does not by itself make any business compliant with the law.</footer>
+</body>
+</html>

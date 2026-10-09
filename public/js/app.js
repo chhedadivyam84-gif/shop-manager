@@ -9532,6 +9532,15 @@ async function renderScanSettings() {
       : '<div class="row-sub" style="margin-bottom:6px;">Not set up. New Purchase shows no scan button.</div>') +
     '<input type="password" id="st-scan-key" autocomplete="off" spellcheck="false" placeholder="' +
     (st.configured ? "Paste a new key to replace the one saved" : "Paste your Google Gemini API key") + '">' +
+    /* WHICH KIND OF KEY MATTERS, and only the person pasting it can know.
+       This key also serves the Assistant, which sends customers' names and
+       amounts owed. Under Google's published Gemini API terms, free-tier
+       requests may be read by Google's reviewers and used to improve its
+       products; requests on a billed project are not. The app cannot tell
+       the two apart, so it says so here, at the moment of choosing. */
+    '<div class="row-sub" style="margin-top:6px;">Use a key from a Google Cloud project with <b>billing turned on</b>. ' +
+    "On Google’s free tier, what is sent — including the Assistant’s customer names and amounts owed — may be " +
+    'read by Google and used to improve its products. <a href="/legal/ai.html" target="_blank" rel="noopener">Details</a></div>' +
     '<div class="acts" style="margin-top:8px;">' +
     '<button class="btn btn-gold" id="st-scan-save">Save key</button>' +
     (st.configured ? '<button class="btn btn-outline" id="st-scan-clear">Turn it off</button>' : "") +
@@ -14315,6 +14324,12 @@ function paintAssistant(loadingNote){
           ${ASSIST.busy ? "disabled" : ""}>${ASSIST.mode === "listening" ? "&#9632;" : "&#127908;"}</button>` : ""}
         <button class="btn btn-primary" id="ai-send" ${ASSIST.busy || ASSIST.mode === "listening" ? "disabled" : ""}>Ask</button>
       </div>
+      <!-- Said where the question is typed, not buried in Settings: the
+           question and the records that answer it go to Google, and the
+           person asking should know that before they press Ask. -->
+      <p class="ai-privacy">Your question and the records that answer it are sent to Google to write the answer —
+        never phone numbers, PINs or passwords. Spoken questions are turned into text by your browser.
+        Nothing is kept here. <a href="/legal/ai.html" target="_blank" rel="noopener">How this works</a></p>
       ${ASSIST.turns.length ? `<button class="btn btn-outline" id="ai-new" style="margin-top:10px;">Start again</button>` : ""}
     </div>`;
 

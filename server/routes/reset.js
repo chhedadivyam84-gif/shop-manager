@@ -140,7 +140,9 @@ router.post("/", requireRole("owner"), async (req, res) => {
         `All bills, challans, returns, orders and deliveries cleared — backup: ${backupResult.file}`);
     } catch (_) { /* the backup is the real safety net */ }
   }
-  console.log(`[reset] ${billsOnly ? "Bills cleared" : "Shop data wiped"} by ${staff.name}. Backup: ${backupResult.file}`);
+  /* The staff ID, not their name: this line goes to the host's logs, and
+     who did it is already recorded in full in the shop's own audit log. */
+  console.log(`[reset] ${billsOnly ? "Bills cleared" : "Shop data wiped"} by staff ${staff.id}. Backup: ${backupResult.file}`);
 
   res.json({ ok: true, scope: billsOnly ? "bills" : "all", backupFile: backupResult.file });
 });

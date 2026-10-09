@@ -50,6 +50,10 @@ const progress = t => { if (process.stdout.isTTY) process.stdout.write("  …   
 /* The suites that must pass before money, identity or backups change. */
 const CRITICAL_SUITES = [
   "security", "restore", "backup-verify", "tenant-identity", "assistant", "voice", "release", "handover",
+  /* Includes the policy pages read against the code: a release that
+     changes a retention number without the page is a false statement to
+     the people the policy is meant to protect. */
+  "privacy",
 ];
 
 /* IN CI THESE CANNOT RUN, BY DESIGN, and that is not the same as skipped.

@@ -824,7 +824,16 @@ app.use(express.static(path.join(__dirname, "..", "public"), {
 }));
 
 app.use((err, req, res, next) => {
-  console.error(err);
+  /* NOT console.error(err): a request whose body failed to parse carries
+     that raw body on the error, and printing it put PINs and customers'
+     details into the host's logs. See server/logSafe.js. The route is the
+     path only — never the query string, which can carry a search term. */
+  console.error("[error]", req.method, req.path, JSON.stringify(require("./logSafe").describeError(err)));
+  /* A malformed body is the caller's mistake, not the server's, and saying
+     so is more useful to whoever sent it than a 500. */
+  if (err && err.type === "entity.parse.failed") {
+    return res.status(400).json({ error: "That request was not readable." });
+  }
   res.status(500).json({ error: "Something went wrong on the server." });
 });
 

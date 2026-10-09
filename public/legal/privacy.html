@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy · Shop Manager</title>
+<link rel="stylesheet" href="/legal/legal.css">
+</head>
+<body>
+<header class="top"><div class="top-in">
+  <a class="brand" href="/legal/"><span class="brand-mark">SM</span>Shop Manager</a>
+  <nav class="legal-nav" aria-label="Policies">
+    <a href="/legal/privacy.html" aria-current="page">Privacy</a>
+    <a href="/legal/terms.html">Terms</a>
+    <a href="/legal/retention.html">Retention</a>
+    <a href="/legal/ai.html">AI &amp; voice</a>
+    <a href="/legal/contact.html">Contact</a>
+  </nav>
+</div></header>
+
+<main><article class="doc">
+  <div class="draft"><strong>Draft — not yet in force.</strong> Details marked <span class="ph">[like this]</span>
+    must be supplied by the operator, and clauses marked “For legal review” must be checked by a qualified
+    lawyer, before this policy is published or relied on.</div>
+
+  <h1>Privacy Policy</h1>
+  <p class="meta">Effective <span class="ph">[EFFECTIVE DATE]</span> · Operated by <span class="ph">[OPERATOR LEGAL NAME]</span></p>
+
+  <p class="lead">Shop Manager is billing, stock and accounts software for shops. This policy explains what
+  information the software handles, where it goes, how long it is kept, and who to ask about it. It describes
+  how the software actually works; where something depends on how a particular shop has set it up, it says so.</p>
+
+  <h2>Who this is about</h2>
+  <p>Two different kinds of information pass through Shop Manager, and they are treated differently:</p>
+  <ul>
+    <li><strong>About a business that uses Shop Manager</strong> — the shop’s own details, and its staff who
+      sign in. We provide the service to that business.</li>
+    <li><strong>About the people in a business’s records</strong> — its customers, suppliers and employees.
+      The business enters this information and decides what it is used for. We hold and process it on the
+      business’s behalf, to provide the software to it.</li>
+  </ul>
+  <p>If you are a customer of a shop that uses Shop Manager, that shop is responsible for your information in
+  its records. Please contact the shop first; see <a href="/legal/contact.html">Contact</a>.</p>
+  <aside class="review">Whether the operator acts as a Data Fiduciary or a Data Processor under the Digital
+    Personal Data Protection Act, 2023 — for each kind of information above — depends on the contracts and the
+    facts, and should be confirmed by a lawyer.</aside>
+
+  <h2>What information is handled</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Kind</th><th>What it includes</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td>Business profile</td><td>Business name, GSTIN, address, bank account details for printing on
+        invoices, logo</td><td>Printed on invoices and reports; required for GST documents</td></tr>
+      <tr><td>Staff sign-in</td><td>Staff name, role, permissions, and a PIN — stored only as a one-way
+        hash, never in readable form</td><td>So each person signs in, and sees only what the owner allows</td></tr>
+      <tr><td>Customers and suppliers</td><td>Name, type, phone number, address, GSTIN, state, PIN code,
+        credit limit, amount owed, WhatsApp group links where the shop adds them</td><td>Billing, delivery,
+        GST invoices, and keeping track of what is owed</td></tr>
+      <tr><td>Products and stock</td><td>Product names, sizes, prices, quantities, locations</td><td>Selling,
+        and knowing what is in stock</td></tr>
+      <tr><td>Sales, purchases and money</td><td>Invoices, challans, purchases, payments, cash book, bank
+        book, cheques</td><td>Running the shop’s accounts and meeting GST record-keeping rules</td></tr>
+      <tr><td>Employees and pay</td><td>Where a shop uses it: attendance, salary, advances and expenses</td>
+        <td>Paying staff</td></tr>
+      <tr><td>Files</td><td>Photos or documents attached to payments, photographed supplier bills, and copies
+        of printed documents</td><td>Proof of payment, faster purchase entry, reprinting</td></tr>
+      <tr><td>Activity record</td><td>Which staff member did what, and when</td><td>Accountability, and
+        settling disputes about who changed a record</td></tr>
+      <tr><td>Sign-in session</td><td>One cookie holding a random session identifier</td><td>Keeping a staff
+        member signed in on their device</td></tr>
+      <tr><td>Technical details</td><td>IP address of a request, used to slow down repeated wrong PINs and
+        floods of requests; the hosting provider’s own server logs</td><td>Security</td></tr>
+      <tr><td>Licence check-in</td><td>The shop’s activation code, an installation identifier, the app
+        version, and the IP address it checks in from</td><td>Confirming the shop’s subscription is
+        active</td></tr>
+      <tr><td>AI and voice</td><td>Only if the shop turns these on — see
+        <a href="/legal/ai.html">AI &amp; voice</a></td><td>Answering questions; reading supplier bills</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Where information goes</h2>
+  <p>Shop Manager sends information outside the software only to these services, and only for the reasons given.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Service</th><th>What it receives</th><th>When</th></tr></thead>
+    <tbody>
+      <tr><td>Hosting — Render</td><td>All of the above, because the software runs there</td><td>Always, for
+        hosted copies. Region: <span class="ph">[HOSTING REGION]</span></td></tr>
+      <tr><td>Backup storage — Cloudflare R2 or Supabase Storage</td><td>Complete copies of the business’s
+        database, and payment attachments</td><td>Automatically, if the shop has backups set up</td></tr>
+      <tr><td>Google (Gemini API)</td><td>A photographed supplier bill; or a question and the matching records
+        needed to answer it</td><td>Only when someone uses Bill Scanner or the Assistant. See
+        <a href="/legal/ai.html">AI &amp; voice</a></td></tr>
+      <tr><td>The web browser’s speech service</td><td>Spoken audio, sent by the browser itself, not by Shop
+        Manager</td><td>Only when someone asks the Assistant out loud</td></tr>
+      <tr><td>A GST Suvidha Provider</td><td>Invoice details needed for an e-way bill</td><td>Only if the shop
+        has set one up and generates an e-way bill</td></tr>
+      <tr><td>WhatsApp</td><td>A message the staff member chooses to send</td><td>Only when a staff member
+        taps a WhatsApp button; Shop Manager does not send WhatsApp messages itself</td></tr>
+      <tr><td>The licence server, run by the operator</td><td>The licence check-in details above; for hosted
+        copies, the shop’s sign-in user ID and password, checked against a stored hash</td><td>On check-in
+        and sign-in</td></tr>
+    </tbody>
+  </table></div>
+  <p>Each of these services has its own privacy terms, which apply to what it receives.</p>
+
+  <h2>What Shop Manager does not do</h2>
+  <ul>
+    <li>It contains <strong>no advertising and no analytics or tracking</strong> of any kind.</li>
+    <li>It <strong>does not sell</strong> information, or share it with anyone for their own marketing.</li>
+    <li>It uses <strong>one cookie</strong>, for staying signed in, and no others.</li>
+    <li>It <strong>does not record or keep audio</strong>.</li>
+  </ul>
+
+  <h2>Cookies</h2>
+  <p>A single session cookie keeps a staff member signed in. It holds a random identifier, not personal
+  details; it cannot be read by scripts on the page; and it lasts up to 30 days, or until the person signs out.
+  It is needed for the software to work at all, so there is no setting to refuse it.</p>
+
+  <h2>How information is protected</h2>
+  <p>These are measures the software actually takes. No system is perfectly secure, and these are not a
+  guarantee.</p>
+  <ul>
+    <li>Each business’s records are kept in a separate database, and a signed-in session can only reach its
+      own business’s.</li>
+    <li>Staff see only the parts of the software the owner has allowed them; this is checked on the server, not
+      just hidden on screen.</li>
+    <li>PINs and passwords are stored only as one-way hashes. API keys are stored encrypted.</li>
+    <li>Hosted copies are served only over HTTPS, with protections against the page being loaded inside other
+      websites or running outside scripts.</li>
+    <li>Repeated wrong PINs are slowed down and locked out.</li>
+    <li>Error logs record what kind of fault happened and where in the software — not the details that were
+      being entered when it happened.</li>
+    <li>Changes are recorded in an activity log that cannot be edited afterwards.</li>
+  </ul>
+  <aside class="review">The Information Technology (Reasonable Security Practices and Procedures and Sensitive
+    Personal Data or Information) Rules, 2011 still apply until the relevant parts of the Digital Personal Data
+    Protection Act, 2023 take effect. Passwords and bank account details are “sensitive personal data” under those
+    Rules. Whether the measures above meet the “reasonable security practices” standard, and whether written
+    consent is needed for collecting that data, should be confirmed by a lawyer.</aside>
+
+  <h2>How long information is kept</h2>
+  <p>Business records are kept while the business uses Shop Manager, and invoices and accounts are kept for as
+  long as GST law requires. The details, and how deletion works, are in the
+  <a href="/legal/retention.html">Data Retention and Deletion Policy</a>.</p>
+
+  <h2>Your choices and rights</h2>
+  <p><strong>If you are in a shop’s records</strong> — as a customer, supplier or employee — ask that shop to
+  show, correct or remove your information. The shop’s owner can edit any record. A record linked to past
+  invoices cannot be deleted, because GST law requires those invoices to be kept; it can be corrected or
+  marked inactive instead.</p>
+  <p><strong>If you are a business or staff member using Shop Manager</strong>, contact us using the details
+  on the <a href="/legal/contact.html">Contact</a> page to ask what information we hold about you, to correct
+  it, or to ask for it to be removed. We will explain anything we are required by law to keep.</p>
+  <p>You can complain to our grievance officer, named on the <a href="/legal/contact.html">Contact</a> page.
+  Once the relevant provisions of the Digital Personal Data Protection Act, 2023 are in force, you may also be
+  able to complain to the Data Protection Board of India.</p>
+  <aside class="review">The main obligations under the Digital Personal Data Protection Rules, 2025 —
+    including notice, consent, security safeguards, breach notification and individuals’ rights — take effect
+    on or around 13 May 2027. The wording of this section should be updated to match them before that date.</aside>
+
+  <h2>Children</h2>
+  <p>Shop Manager is software for businesses and is not meant for children. It does not knowingly collect
+  information from children for its own purposes. A shop’s records may include customers of any age; the shop
+  is responsible for them.</p>
+
+  <h2>Information stored outside India</h2>
+  <p>The hosting, backup and AI services above may store or process information outside India, including in
+  <span class="ph">[HOSTING REGION]</span> and wherever those providers operate.</p>
+  <aside class="review">Cross-border transfer of personal data under the Digital Personal Data Protection Act,
+    2023, and under the 2011 Rules in the meantime.</aside>
+
+  <h2>If you run Shop Manager on your own computer</h2>
+  <p>If you install Shop Manager on your own computer instead of using a hosted copy, your records stay on that
+  computer. Only the licence check-in, any backups you set up, and any AI features you turn on send information
+  elsewhere — to the services in the table above.</p>
+
+  <h2>Changes to this policy</h2>
+  <p>If this policy changes, the new version will be published here with a new effective date. Significant
+  changes will be notified to businesses using Shop Manager <span class="ph">[HOW CHANGES ARE NOTIFIED]</span>.</p>
+
+  <h2>Contact</h2>
+  <p>Privacy questions and requests: <span class="ph">[PRIVACY EMAIL]</span>. Full details, including the
+  grievance officer, are on the <a href="/legal/contact.html">Contact</a> page.</p>
+</article></main>
+
+<footer class="legal-foot">This page describes how the Shop Manager software works. It is not legal advice and
+does not by itself make any business compliant with the law.</footer>
+</body>
+</html>

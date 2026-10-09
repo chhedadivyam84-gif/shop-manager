@@ -270,6 +270,15 @@ let FEATURES_OFF = [];
 
 function hasFeature(key){ return !key || FEATURES_OFF.indexOf(key) < 0; }
 
+/* Shown only where the vendor sold it. Re-run whenever the feature list
+   arrives, because it arrives AFTER the page has drawn — and a button that
+   appeared and then vanished, or opened a screen that said "not sold to
+   you", would be worse than one that was never there. */
+function syncAssistantFab(){
+  const b = document.getElementById("ai-fab-btn");
+  if(b) b.hidden = !hasFeature("assistant");
+}
+
 /* Which feature each way in belongs to. Keyed by what the markup already
    carries — the tab name, the data-goto, or the tile's id — so no tile
    needed rewriting to be gated. */
@@ -458,7 +467,7 @@ function wireTileEditor(){
 async function boot(){
   try{
     const sess = await fetch("/api/auth/session").then(r=>r.json()).catch(()=>({loggedIn:false}));
-    FEATURES_OFF = Array.isArray(sess.featuresOff) ? sess.featuresOff : [];
+    FEATURES_OFF = Array.isArray(sess.featuresOff) ? sess.featuresOff : []; syncAssistantFab();
     /* Whether this is a hosted copy serving many shops, or the one
        installed at a shop. Remembered at boot because the menu is built
        long afterwards, and a screen that can only work on a local copy
@@ -672,7 +681,7 @@ async function handleKey(k){
            boot() saw before anybody had signed in. */
         try{
           const sess = await fetch("/api/auth/session").then(r=>r.json());
-          FEATURES_OFF = Array.isArray(sess.featuresOff) ? sess.featuresOff : [];
+          FEATURES_OFF = Array.isArray(sess.featuresOff) ? sess.featuresOff : []; syncAssistantFab();
         }catch(e){ /* keep what boot() had */ }
         applyFeatureAccess();
         await initApp();
@@ -776,6 +785,11 @@ async function initApp(){
      is a keyboard, and the counter uses it from wherever they happen to be. */
   wireWedgeScanner();
   document.getElementById("wa-fab-btn").addEventListener("click", ()=>openWhatsApp());
+  /* The assistant, one tap away on every screen rather than two menus
+     deep. openAssistant() explains itself when no key is set, so the
+     button is honest even before the feature can answer. */
+  document.getElementById("ai-fab-btn").addEventListener("click", ()=>openAssistant());
+  syncAssistantFab();
 
   document.querySelectorAll("[data-close-fs]").forEach(b=>{
     b.addEventListener("click", ()=>closeFullscreen(b.dataset.closeFs));

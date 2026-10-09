@@ -1513,6 +1513,19 @@ table.erp-table tfoot td{font-weight:800;border-top:1.5px solid #178a6e;color:#0
   background:#25d366;border:none;display:flex;align-items:center;justify-content:center;
   box-shadow:0 4px 14px rgba(0,0,0,.28);pointer-events:auto;cursor:pointer;
 }
+/* THE ASSISTANT, stacked directly above WhatsApp.
+   Same size and the same corner, so the two read as a pair of shortcuts
+   rather than one button and a stray. Navy rather than green because the
+   two do different things, and a shopkeeper reaching for WhatsApp at the
+   counter must not open the assistant by mistake. */
+.ai-fab{
+  position:absolute;right:16px;bottom:134px;width:52px;height:52px;border-radius:50%;
+  background:var(--navy);border:none;display:flex;align-items:center;justify-content:center;
+  box-shadow:0 4px 14px rgba(0,0,0,.28);pointer-events:auto;cursor:pointer;
+}
+.ai-fab[hidden]{ display:none; }
+.ai-fab:focus-visible{ outline:3px solid var(--gold); outline-offset:2px; }
+
 
 @media print{
   /* Shop-side notes never reach the paper. */

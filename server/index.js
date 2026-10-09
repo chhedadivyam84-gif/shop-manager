@@ -614,6 +614,12 @@ app.use("/api/delivery", requireAuth, require("./routes/delivery"));
 app.use("/api/alerts", requireAuth, require("./routes/alerts"));
 app.use("/api/reminders", requireAuth, require("./routes/reminders"));
 app.use("/api/notes", requireAuth, require("./routes/notes"));
+/* The assistant. requireAuth like everything else, and behind the feature
+   gate above — it costs the shop money per question, so it is something
+   the vendor sells rather than something that is simply on. Every lookup
+   it can do is re-checked against this person's own permissions inside
+   server/assistant/tools.js; the model decides nothing. */
+app.use("/api/assistant", requireAuth, require("./routes/assistant"));
 app.use("/api/categories", requireAuth, require("./routes/categories"));
 app.use("/api/cashbook", requireAuth, require("./routes/cashbook"));
 

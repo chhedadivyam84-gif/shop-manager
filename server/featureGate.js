@@ -47,7 +47,10 @@ const ROUTES = {
      unlike the read-only report screens above it, which can only be
      hidden. A shop that was not sold this gets a refusal from the server,
      not just a missing button. */
-  billscan:    ["/api/bill-scan"]
+  billscan:    ["/api/bill-scan"],
+  /* Every question costs the shop a call to a paid API, so this is sold
+     rather than simply switched on — same as bill scanning above. */
+  assistant:   ["/api/assistant"]
 };
 
 /** Never gated, whatever the vendor ticks. */

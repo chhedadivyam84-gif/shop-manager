@@ -2204,6 +2204,8 @@ function openMenu(){
       ).join("")}`).join("")}
     <div class="menu-group">Shop</div>
     ${isOwner() ? `<button class="menu-item" id="menu-permissions"><span class="ic">&#128100;</span>Staff Access</button>` : ""}
+    ${hasFeature("assistant")
+      ? `<button class="menu-item" id="menu-assistant"><span class="ic">&#128172;</span>Assistant</button>` : ""}
     <button class="menu-item" id="menu-wa-history"><span class="ic">&#128172;</span>WhatsApp History</button>
     ${mayI("tally", "view")
       ? `<button class="menu-item" id="menu-tally"><span class="ic">&#128202;</span>${tallyOffline() ? "Tally Export" : "Tally Sync"}</button>` : ""}
@@ -2219,6 +2221,9 @@ function openMenu(){
     }));
   const tallyBtn = document.getElementById("menu-tally");
   if(tallyBtn) tallyBtn.addEventListener("click", () => { closeAllSheets(); openTallySync(); });
+
+  const aiBtn = document.getElementById("menu-assistant");
+  if(aiBtn) aiBtn.addEventListener("click", () => { closeAllSheets(); openAssistant(); });
 
   const waHistBtn = document.getElementById("menu-wa-history");
   if(waHistBtn) waHistBtn.addEventListener("click", () => { closeAllSheets(); openWaHistory(null); });
@@ -14185,6 +14190,147 @@ const WA_STATUS_LABEL = {
   cancelled: "Cancelled",
   failed:    "Failed"
 };
+
+/* ============================================================
+   THE ASSISTANT
+
+   A sheet, like every other screen here, so it arrives as part of the app
+   rather than as a widget bolted onto the corner of it.
+
+   THE CONVERSATION LIVES IN THIS VARIABLE AND NOWHERE ELSE. Not in
+   localStorage: what gets typed here is the shop's own trade — who owes
+   what, what is running out — and a browser store is readable by anything
+   else running on that machine and survives the staff member walking
+   away. Closing the sheet forgets it, which is the behaviour a shared
+   counter PC should have. Each question carries its own answer, so
+   nothing is lost by it.
+
+   Every answer shows WHERE IT CAME FROM. An assistant that cannot be
+   checked is one nobody should trust with a stock figure, and the server
+   says which lookup it ran.
+   ============================================================ */
+let ASSIST = { turns: [], busy: false, status: null };
+
+async function openAssistant(){
+  const sheet = document.getElementById("sheet-assistant");
+  if(!sheet) return;
+  showSheet("sheet-assistant");
+  ASSIST.turns = [];
+  ASSIST.busy = false;
+  ASSIST.status = null;
+  paintAssistant("Checking…");
+
+  try {
+    ASSIST.status = await api("GET", "/assistant/status");
+  } catch(e) {
+    ASSIST.status = { ready:false, reason: e.message || "The assistant could not be reached." };
+  }
+  paintAssistant();
+}
+
+function paintAssistant(loadingNote){
+  const sheet = document.getElementById("sheet-assistant");
+  if(!sheet) return;
+  const s = ASSIST.status;
+
+  const head = `
+    <div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>&#10005;</button>
+    <div class="sheet-title">Assistant</div>`;
+
+  if(loadingNote){
+    sheet.innerHTML = head + `<p class="muted" style="padding:16px;">${escapeHtml(loadingNote)}</p>`;
+    wireAssistantClose(sheet);
+    return;
+  }
+
+  /* NOT READY IS AN EXPLANATION, never an input box that cannot work. */
+  if(!s || !s.ready){
+    sheet.innerHTML = head + `
+      <div style="padding:4px 16px 16px;">
+        <p><b>The assistant is not available yet.</b></p>
+        <p class="muted">${escapeHtml((s && s.reason) || "It is not set up on this server.")}</p>
+      </div>`;
+    wireAssistantClose(sheet);
+    return;
+  }
+
+  const turns = ASSIST.turns.map(t => t.role === "you"
+    ? `<div class="ai-you">${escapeHtml(t.text)}</div>`
+    : `<div class="ai-bot">${escapeHtml(t.text).replace(/\n/g,"<br>")}
+         ${t.lookedUp ? `<div class="ai-src">from your ${escapeHtml(t.lookedUp.replace(/_/g," "))}${
+            t.found === null || t.found === undefined ? "" : " — " + t.found + " found"}</div>` : ""}
+       </div>`).join("");
+
+  const suggestions = (!ASSIST.turns.length && (s.suggestions||[]).length)
+    ? `<div class="ai-sugg">${s.suggestions.map(q =>
+        `<button class="btn btn-outline ai-chip" data-ask="${escapeHtml(q)}">${escapeHtml(q)}</button>`).join("")}</div>`
+    : "";
+
+  sheet.innerHTML = head + `
+    <div style="padding:0 16px 16px;">
+      ${!ASSIST.turns.length ? `<p class="muted">
+        Ask about your own stock, bills and customers. It only reads what your
+        account is already allowed to see, and it will say so when it cannot find something.
+      </p>` : ""}
+      ${suggestions}
+      <div class="ai-log" id="ai-log">${turns}
+        ${ASSIST.busy ? `<div class="ai-bot muted">Looking that up…</div>` : ""}</div>
+      <div class="ai-ask">
+        <input id="ai-q" type="text" maxlength="500" placeholder="Ask a question…"
+               autocomplete="off" ${ASSIST.busy ? "disabled" : ""}>
+        <button class="btn btn-primary" id="ai-send" ${ASSIST.busy ? "disabled" : ""}>Ask</button>
+      </div>
+      ${ASSIST.turns.length ? `<button class="btn btn-outline" id="ai-new" style="margin-top:10px;">Start again</button>` : ""}
+    </div>`;
+
+  wireAssistantClose(sheet);
+  sheet.querySelectorAll("[data-ask]").forEach(b =>
+    b.addEventListener("click", () => askAssistant(b.dataset.ask)));
+  const send = document.getElementById("ai-send");
+  if(send) send.addEventListener("click", () => askAssistant(document.getElementById("ai-q").value));
+  const q = document.getElementById("ai-q");
+  if(q){
+    q.addEventListener("keydown", e => { if(e.key === "Enter") askAssistant(q.value); });
+    if(!ASSIST.busy) q.focus();
+  }
+  const again = document.getElementById("ai-new");
+  if(again) again.addEventListener("click", () => { ASSIST.turns = []; paintAssistant(); });
+
+  const log = document.getElementById("ai-log");
+  if(log) log.scrollTop = log.scrollHeight;
+}
+
+function wireAssistantClose(sheet){
+  sheet.querySelectorAll("[data-sheetclose]").forEach(b =>
+    b.addEventListener("click", closeAllSheets));
+}
+
+async function askAssistant(question){
+  const text = String(question || "").trim();
+  if(!text || ASSIST.busy) return;
+
+  ASSIST.turns.push({ role:"you", text });
+  ASSIST.busy = true;
+  paintAssistant();
+
+  try {
+    const r = await api("POST", "/assistant/ask", { question: text });
+    ASSIST.turns.push({
+      role:"bot", text: r.answer || "No answer came back.",
+      lookedUp: r.lookedUp || null, found: r.found
+    });
+  } catch(e) {
+    /* Shown IN the conversation rather than as a toast that vanishes —
+       the question is still on screen above it, and the two belong
+       together. A failure here never closes the sheet or disturbs the
+       rest of the app. */
+    ASSIST.turns.push({ role:"bot", text: e.message || "That did not work. Try again." });
+  } finally {
+    ASSIST.busy = false;
+    paintAssistant();
+  }
+}
 
 async function openWaHistory(customer){
   const sheet = document.getElementById("sheet-wa-groups");   // reused shell

@@ -2716,6 +2716,20 @@ addColumn("settings", "app_theme", "TEXT DEFAULT ''");
    Backed up automatically, because it lives inside the books. */
 addColumn("settings", "tenant_code", "TEXT DEFAULT ''");
 
+/* THE SAME IDEA, BUT ON SOMETHING THAT CANNOT BE CHANGED UNDERNEATH US.
+
+   tenant_code above is the activation code, and the vendor can replace
+   it. The instant they do, the line above stops matching these books and
+   a sign-in starts a fresh empty company beside them — the exact
+   orphaning that column was added to prevent, reintroduced through a
+   button in the panel.
+
+   The vendor's customer id never changes. It is written here next to the
+   code, backed up with the books for the same reason, and checked first.
+   Blank on shops that have not signed in since this was added, which is
+   why tenant_code is still read as a fallback rather than replaced. */
+addColumn("settings", "tenant_customer_id", "TEXT DEFAULT ''");
+
 /* WHICH HOME TILES THIS SHOP HAS PUT AWAY.
 
    The shop's own choice, and nothing to do with what the vendor sold

@@ -3237,3 +3237,73 @@ a.chip{display:inline-flex;align-items:center;gap:5px;text-decoration:none;}
   max-width:100%; max-height:100%; object-fit:contain; display:block;
 }
 .invoice-page.size-a5 .erp-art-item{ max-width:60mm; }
+
+/* ============================================================
+   THE ASSISTANT
+
+   A conversation, in the app's own colours. The two sides are told apart
+   by alignment and ground rather than by avatars or bubbles with tails —
+   this sits inside business software, next to a cash book.
+   ============================================================ */
+.ai-log{
+  max-height:46vh; overflow-y:auto; margin:10px 0;
+  display:flex; flex-direction:column; gap:10px;
+}
+.ai-you, .ai-bot{
+  padding:9px 12px; border-radius:10px; font-size:14px; line-height:1.45;
+  max-width:88%; overflow-wrap:anywhere;
+}
+.ai-you{
+  align-self:flex-end; background:var(--info-bg); color:var(--text);
+  border:1px solid var(--border);
+}
+.ai-bot{
+  align-self:flex-start; background:var(--card); color:var(--text);
+  border:1px solid var(--border);
+}
+/* WHERE THE ANSWER CAME FROM. Quiet, but always there: a figure whose
+   source cannot be seen is a figure nobody should read down a phone. */
+.ai-src{
+  margin-top:6px; font-size:11px; color:var(--muted);
+  text-transform:uppercase; letter-spacing:.04em;
+}
+.ai-sugg{ display:flex; flex-wrap:wrap; gap:8px; margin:10px 0 4px; }
+/* .btn is width:100% across this app, which would stack the chips one
+   per line and leave the ask box a sliver beside a full-width button. */
+.ai-chip{ font-size:13px; padding:6px 10px; width:auto; }
+.ai-ask{ display:flex; gap:8px; align-items:center; }
+.ai-ask input{
+  flex:1; min-width:0; padding:10px 12px; font-size:15px;
+  border:1px solid var(--border); border-radius:8px; background:var(--card); color:var(--text);
+}
+.ai-ask input:disabled{ background:var(--bg); color:var(--muted); }
+.ai-ask .btn{ width:auto; flex:0 0 auto; padding-left:18px; padding-right:18px; }
+
+/* ---- the assistant's voice ---------------------------------------
+   One line that says what is happening, with the way out of it beside
+   it. A microphone with no visible off switch is one people hold their
+   breath in front of. */
+.ai-state{
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+  margin:8px 0; padding:8px 10px; border-radius:8px;
+  background:var(--bg); border:1px solid var(--border);
+  font-size:13px; color:var(--text);
+}
+.ai-state.warn{ background:var(--warn-bg); color:var(--warn-text); border-color:transparent; }
+.ai-state.muted{ color:var(--muted); }
+.ai-state .btn{ width:auto; flex:0 0 auto; margin-left:auto; }
+
+/* Breathing, not flashing — this sits on a counter all day. */
+.ai-dot{
+  width:9px; height:9px; border-radius:50%; background:var(--danger);
+  flex:0 0 auto; animation:ai-pulse 1.4s ease-in-out infinite;
+}
+@keyframes ai-pulse{ 0%,100%{opacity:1;} 50%{opacity:.25;} }
+@media (prefers-reduced-motion: reduce){ .ai-dot{ animation:none; } }
+
+.ai-mic{ width:auto; flex:0 0 auto; padding-left:14px; padding-right:14px; font-size:16px; }
+.ai-mic.on{ background:var(--danger); color:#fff; border-color:var(--danger); }
+
+/* What is being heard, before it is a question. Dimmed and italic so it
+   is plainly not yet an answer to anything. */
+.ai-partial{ opacity:.6; font-style:italic; }

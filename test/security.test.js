@@ -690,6 +690,19 @@ function seed() {
     ok("X-Content-Type-Options is nosniff", h("x-content-type-options") === "nosniff");
     ok("Referrer-Policy is set", !!h("referrer-policy"), h("referrer-policy"));
     ok("Permissions-Policy is set", !!h("permissions-policy"), h("permissions-policy").slice(0, 60));
+    /* ASSERTING IT EXISTS WAS NOT ENOUGH, and that is how the voice
+       assistant shipped unable to work: the header said microphone=(),
+       the browser refused before any of that code ran, and the tests
+       replaced the recogniser with a fake that needs no permission.
+       So the contents are checked now, in both directions. */
+    ok("  the camera is switched off", /camera=\(\)/.test(h("permissions-policy")),
+       h("permissions-policy"));
+    ok("  so is location", /geolocation=\(\)/.test(h("permissions-policy")));
+    ok("  so is payment", /payment=\(\)/.test(h("permissions-policy")));
+    ok("  the microphone is allowed, because the assistant can be asked out loud",
+       /microphone=\(self\)/.test(h("permissions-policy")), h("permissions-policy"));
+    ok("  ...for THIS origin only, never for anything embedded",
+       !/microphone=\*/.test(h("permissions-policy")), h("permissions-policy"));
     ok("HSTS is sent in production", /max-age=\d+/.test(h("strict-transport-security")),
        h("strict-transport-security"));
     ok("the server does not advertise what it is", !h("x-powered-by"), h("x-powered-by"));

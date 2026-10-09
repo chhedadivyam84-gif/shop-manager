@@ -289,9 +289,22 @@ app.use((req, res, next) => {
   /* A bill's URL can carry its number. Send the origin to other sites and
      nothing more, so a document id never rides out in a Referer header. */
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-  /* This app asks for none of these. Saying so means a script that somehow
-     got in cannot ask either. */
-  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
+  /* Everything this app does not need stays switched off, so a script that
+     somehow got in cannot ask for it either.
+
+     THE MICROPHONE IS THE ONE EXCEPTION, and only since the assistant
+     could be asked out loud. `(self)` is this origin and nothing else — an
+     iframe is still refused, which is what `*` would have given away for
+     no benefit.
+
+     It was `microphone=()` when the voice feature shipped, which meant the
+     browser refused the microphone before any of that code ran. It did not
+     show up in testing because the tests replace the recogniser with a
+     fake, and a fake needs no permission. Found by asking the browser
+     itself: document.featurePolicy.allowsFeature("microphone") was false
+     on a page that had just drawn a microphone button. */
+  res.setHeader("Permissions-Policy",
+    "camera=(), microphone=(self), geolocation=(), payment=()");
   res.setHeader("Content-Security-Policy", CSP);
 
   /* HTTPS ONLY, FROM NOW ON — and only in production. TLS is terminated
@@ -614,6 +627,26 @@ app.use("/api/delivery", requireAuth, require("./routes/delivery"));
 app.use("/api/alerts", requireAuth, require("./routes/alerts"));
 app.use("/api/reminders", requireAuth, require("./routes/reminders"));
 app.use("/api/notes", requireAuth, require("./routes/notes"));
+/* The assistant. requireAuth like everything else, and behind the feature
+   gate above — it costs the shop money per question, so it is something
+   the vendor sells rather than something that is simply on. Every lookup
+   it can do is re-checked against this person's own permissions inside
+   server/assistant/tools.js; the model decides nothing. */
+/* EVERY QUESTION COSTS THE SHOP MONEY.
+
+   The general /api limiter is 240 writes a minute, which is right for a
+   till being hammered by a busy counter and wrong for the one route that
+   spends on a paid API per press. Left at 240, a stuck key or a bored
+   staff member is a bill, and a shop that hits its provider quota loses
+   the feature for everybody for the rest of the day.
+
+   20 a minute is far above anyone asking real questions and far below
+   anything that costs real money. Keyed per session by the limiter, so
+   one person cannot spend another shop's quota. */
+app.use("/api/assistant", requireAuth, rateLimit.limit({
+  bucket: "assistant", max: 20, windowMs: 60 * 1000,
+  message: "That is a lot of questions at once. Give it a minute.",
+}), require("./routes/assistant"));
 app.use("/api/categories", requireAuth, require("./routes/categories"));
 app.use("/api/cashbook", requireAuth, require("./routes/cashbook"));
 

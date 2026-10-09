@@ -415,6 +415,72 @@ const CLOUD_INTERVAL_MS = 15 * 60 * 1000;
  * it can overwrite the one copy of whatever was billed just before the
  * deploy. See server/release.js for the logs that showed it.
  */
+/* ------------------------------------------------------------
+   TELLING THE OWNER WHEN BACKUPS STOP WORKING
+
+   Only on what was actually seen: a run that threw, or a cloud upload that
+   came back refused. One failure is not reported — a single timeout at
+   three in the morning fixes itself fifteen minutes later — but two in a
+   row is a pattern, and the owner hears it once per run of failures, then
+   once more when it recovers. Never on every failed run.
+
+   The count lives in memory, so a restart starts it again. That loses at
+   most one run's worth of warning and needs nothing stored.
+
+   Not on a shared installation: there the backups are the vendor's to
+   watch, and telling a hundred shops about the vendor's bucket helps none
+   of them.
+   ------------------------------------------------------------ */
+const FAIL_STREAK_ALERT = 2;
+let failStreak = 0;
+let failingSince = 0;
+function health(outcome) {
+  try {
+    if (require("./tenants").multiTenant()) return;
+    const notify = require("./notify");
+    if (outcome === "failed") {
+      failStreak++;
+      if (!failingSince) failingSince = Date.now();
+      if (failStreak === FAIL_STREAK_ALERT) {
+        notify.createEverywhere({
+          category: "system", severity: "critical", audience: "owner", link: "backups",
+          key: `system:backup-failing:${failingSince}`,
+          title: "Backups are failing",
+          body: `The last ${failStreak} automatic backups did not complete. Your records are still here — ` +
+                "open Backups to see the error, and take a backup by hand."
+        });
+      }
+    } else if (outcome === "ok") {
+      if (failStreak >= FAIL_STREAK_ALERT) {
+        notify.createEverywhere({
+          category: "system", severity: "info", audience: "owner", link: "backups",
+          key: `system:backup-recovered:${failingSince}`,
+          title: "Backups are working again",
+          body: `After ${failStreak} failed attempts, the latest backup completed.`
+        });
+      }
+      failStreak = 0;
+      failingSince = 0;
+    }
+
+    /* The bucket filling up — measured by the rotation that just ran. The
+       Reminders screen already shows this from 70%; the bell rings at 90%,
+       because that is when uploads are about to stop. */
+    const u = lastCloudUsage;
+    if (u && u.limit && u.used >= 0.9) {
+      notify.createEverywhere({
+        category: "system", severity: "warning", audience: "owner", link: "backups",
+        key: "system:storage-90", repeatAfterMs: 3 * 86400000,
+        title: "Backup storage is almost full",
+        body: `${u.label || "The backup store"} is ${Math.round(u.used * 100)}% full. ` +
+              "Backups stop when it is full — clear old ones from Backups."
+      });
+    }
+  } catch (e) {
+    console.error("[backup] could not record backup health:", e.message);
+  }
+}
+
 function startSchedule(opts) {
   const skipStartup = !!(opts && opts.skipStartup);
   const kick = async (trigger) => {
@@ -422,8 +488,10 @@ function startSchedule(opts) {
       const r = await runBackup(trigger);
       const where = r.cloud.ok ? " + cloud" : (r.cloud.attempted ? " (cloud failed: " + r.cloud.error + ")" : "");
       console.log(`[backup] ${trigger} snapshot ${r.file} (${r.size} bytes)${where}`);
+      if (!r.refused) health(r.cloud.attempted ? (r.cloud.ok ? "ok" : "failed") : "local-only");
     } catch (err) {
       console.error("[backup] FAILED:", err.message);
+      health("failed");
     }
   };
   const intervalMs = cloudConfig().enabled ? CLOUD_INTERVAL_MS : DAY_MS;
@@ -505,5 +573,6 @@ async function deleteCloudRuns(stamps) {
 
 module.exports = {
   runBackup, status, cloudUsage, rotateCloud, snapshotForDownload, startSchedule, listCloud, deleteCloudRuns,
+  _health: health,
   cloudConfig, uploadToCloud, listLocal, BACKUP_DIR
 };

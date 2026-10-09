@@ -450,7 +450,12 @@ const LICENCE_EXEMPT = [
   "/api/auth",      // must be able to log in to see the renew screen
   "/api/license",   // entering the new key
   "/api/backup",    // taking their data with them
-  "/api/sync"       // and the same for sending it to their own cloud copy
+  "/api/sync",      // and the same for sending it to their own cloud copy
+  /* Reading the notice that says the subscription has ended must not be
+     refused because the subscription has ended. Marking read and choosing
+     what to be told are not records; posting a notice is, and is not here. */
+  "/api/notifications/read",
+  "/api/notifications/prefs"
 ];
 app.use("/api", (req, res, next) => {
   if (!license.enabled()) return next();
@@ -676,6 +681,8 @@ app.use("/api/dispatch", requireAuth, require("./routes/dispatch"));
 app.use("/api/delivery", requireAuth, require("./routes/delivery"));
 app.use("/api/alerts", requireAuth, require("./routes/alerts"));
 app.use("/api/reminders", requireAuth, require("./routes/reminders"));
+/* The bell: things that happened, per person. See server/notify.js. */
+app.use("/api/notifications", requireAuth, require("./routes/notifications"));
 app.use("/api/notes", requireAuth, require("./routes/notes"));
 /* The assistant. requireAuth like everything else, and behind the feature
    gate above — it costs the shop money per question, so it is something
@@ -841,6 +848,9 @@ app.use((err, req, res, next) => {
    must never hold up a shop opening its own app. Whatever was cached at
    the last successful check-in applies until it answers. */
 checkin.start();
+/* "Your subscription ends in 7 days", once, to the owner — read from the
+   same state the gate above uses. Dormant where nothing is enforced. */
+require("./notifyLicence").start();
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Shop Manager running on port ${PORT}`);

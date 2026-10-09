@@ -107,8 +107,15 @@ function activeConnection() {
    Forwards the whole handle — prepare, exec, transaction, dataDir, file — to
    the connection for the request in flight. Methods are bound so `this` stays
    the real connection. */
+/* `companies` is answered by the proxy itself, not by a connection.
+   It used to be assigned through the set trap below, which put it on
+   whichever connection was active at load — the default company's — so
+   `db.companies` was undefined for code running inside any OTHER company.
+   Measured: a second company read it as undefined. */
+let companiesApi = null;
 const db = new Proxy({}, {
   get(_t, prop) {
+    if (prop === "companies" && companiesApi) return companiesApi;
     const conn = activeConnection();
     const value = conn[prop];
     return typeof value === "function" ? value.bind(conn) : value;
@@ -190,9 +197,10 @@ function closeAll() {
   pool.clear();
 }
 
-module.exports.companies = {
+companiesApi = {
   list: listCompanies, get: getCompany, create: createCompany,
   update: updateCompany, defaultId: defaultCompanyId,
   runAs: runAsCompany, currentId: currentCompanyId, file: companyFile,
   changeCount, closeAll
 };
+module.exports.companies = companiesApi;

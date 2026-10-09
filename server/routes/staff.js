@@ -27,6 +27,15 @@ router.post("/", (req, res) => {
   `).run(id, name.trim(), hashPin(String(pin)), finalRole, Date.now());
 
   logAction(req, "staff.create", `Added ${finalRole} "${name.trim()}"`);
+  require("../notify").create({
+    category: "security", severity: finalRole === "owner" ? "warning" : "info", audience: "owner",
+    key: "security:staff-added:" + id,
+    title: finalRole === "owner" ? `New owner login: ${name.trim()}` : `New staff login: ${name.trim()}`,
+    body: finalRole === "owner"
+      ? `Added by ${req.session.staffName || "an owner"}. An owner can see and change everything, including staff and PINs.`
+      : `Added by ${req.session.staffName || "an owner"}.`,
+    link: "staff"
+  });
   res.status(201).json(serialize(db.prepare("SELECT * FROM staff WHERE id = ?").get(id)));
 });
 
@@ -54,6 +63,46 @@ router.put("/:id", (req, res) => {
   );
 
   logAction(req, "staff.update", `Updated "${s.name}"${pin ? " (PIN changed)" : ""}${active === false ? " — deactivated" : ""}`);
+
+  /* ACCOUNT CHANGES ARE TOLD TO THE PEOPLE THEY ARE ABOUT.
+     A changed PIN is told to its holder, so somebody whose PIN was changed
+     behind their back finds out the next time they sign in. Becoming an
+     owner and being switched off are told to the owners. Keyed on the
+     moment, so a save that is retried is one notice. Never the PIN. */
+  const notify = require("../notify");
+  const by = req.session.staffName || "an owner";
+  const stamp = Math.floor(Date.now() / 60000);
+  if (pin && s.id !== req.session.staffId) {
+    notify.create({
+      category: "security", severity: "warning", audience: "staff:" + s.id,
+      key: `security:pin:${s.id}:${stamp}`,
+      title: "Your PIN was changed",
+      body: `Changed by ${by}. If you did not ask for this, tell the owner.`
+    });
+    if (s.role === "owner") {
+      notify.create({
+        category: "security", severity: "warning", audience: "owner",
+        key: `security:owner-pin:${s.id}:${stamp}`,
+        title: `PIN changed for owner ${s.name}`, body: `Changed by ${by}.`, link: "staff"
+      });
+    }
+  }
+  if (role === "owner" && s.role !== "owner") {
+    notify.create({
+      category: "security", severity: "warning", audience: "owner",
+      key: `security:made-owner:${s.id}:${stamp}`,
+      title: `${s.name} is now an owner`,
+      body: `Changed by ${by}. An owner can see and change everything, including staff and PINs.`,
+      link: "staff"
+    });
+  }
+  if (active === false && s.active) {
+    notify.create({
+      category: "security", severity: "info", audience: "owner",
+      key: `security:deactivated:${s.id}:${stamp}`,
+      title: `${s.name} can no longer sign in`, body: `Switched off by ${by}.`, link: "staff"
+    });
+  }
   res.json(serialize(db.prepare("SELECT * FROM staff WHERE id = ?").get(s.id)));
 });
 

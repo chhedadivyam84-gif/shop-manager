@@ -78,11 +78,16 @@ function recordLoginFailure(ip, staffId) {
   const key = lockKey(ip, staffId);
   const rec = attempts.get(key) || { count: 0, lockedUntil: 0 };
   rec.count += 1;
+  let lockedNow = false;
   if (rec.count >= MAX_ATTEMPTS) {
     rec.lockedUntil = Date.now() + LOCKOUT_MS;
     rec.count = 0;
+    lockedNow = true;
   }
   attempts.set(key, rec);
+  /* So the sign-in route can tell the owner — once, at the moment of the
+     lock, rather than on every wrong PIN. */
+  return { lockedNow };
 }
 
 /**

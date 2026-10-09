@@ -555,6 +555,29 @@ header.topbar .greet-main{font-size:19px;font-weight:800;margin-top:2px;}
 }
 .bell:focus-visible{outline:2px solid var(--gold);outline-offset:2px;}
 
+/* Notifications, at the top of the Reminders screen. Unread is a dot and a
+   heavier title — said twice, so it reads in a glance and without colour.
+   Severity is a left edge in the app's own good/warning/danger colours. */
+.ntf-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.ntf-actions{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;}
+.ntf-row{margin-top:0;margin-bottom:6px;border-left:4px solid var(--border);}
+.ntf-row.ntf-warning{border-left-color:var(--gold);}
+.ntf-row.ntf-critical{border-left-color:var(--danger);}
+.ntf-row .row-title{font-weight:600;}
+.ntf-row.ntf-unread .row-title{font-weight:800;}
+.ntf-top{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);margin-bottom:3px;}
+.ntf-kind{font-weight:700;text-transform:uppercase;letter-spacing:.04em;}
+.ntf-time{margin-left:auto;white-space:nowrap;font-variant-numeric:tabular-nums;}
+.ntf-dot{width:8px;height:8px;border-radius:50%;background:var(--navy);display:inline-block;flex-shrink:0;}
+.ntf-dot-head{background:var(--navy);}
+.ntf-body{white-space:pre-line;overflow-wrap:anywhere;}
+.ntf-btns{display:flex;gap:8px;margin-top:9px;flex-wrap:wrap;}
+.ntf-btns .btn{flex:0 0 auto;padding:6px 14px;font-size:12.5px;width:auto;}
+.ntf-empty{margin-top:0;margin-bottom:6px;}
+.ntf-switch{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:13px;}
+.ntf-switch input{width:18px;height:18px;flex-shrink:0;}
+.ntf-switch input:disabled + span{color:var(--muted);}
+
 main{flex:1;padding:14px 16px 90px;overflow-y:auto;}
 .screen{display:none;}
 .screen.active{display:block;}

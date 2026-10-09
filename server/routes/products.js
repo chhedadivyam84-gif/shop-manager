@@ -531,6 +531,42 @@ function adjustSizeStock(req, res) {
 router.patch("/:id/sizes/:sizeId/stock", adjustSizeStock);
 
 /**
+ * The level below which a size should be re-ordered, per location.
+ *
+ * The column has existed since locations did and nothing could set it, so
+ * every size has sat at 0 — which means "never warn". This is the setter.
+ * 0 switches the warning off again.
+ *
+ * Stock EDIT permission, not merely signed in: the minimum decides who gets
+ * told what, and a counter login that can quietly turn a warning off is a
+ * warning that cannot be trusted. Owners always pass.
+ */
+router.put("/:id/sizes/:sizeId/min-stock", (req, res) => {
+  if (!require("../permissions").can(req, "stock", "edit")) {
+    return res.status(403).json({ error: "You need permission to edit stock to set a minimum." });
+  }
+  const p = db.prepare("SELECT id, name FROM products WHERE id = ?").get(req.params.id);
+  if (!p) return res.status(404).json({ error: "Product not found." });
+  const size = db.prepare("SELECT * FROM product_sizes WHERE id = ? AND product_id = ?").get(req.params.sizeId, p.id);
+  if (!size) return res.status(404).json({ error: "Size not found on this product." });
+  const loc = inventory.getLocationById(req.body && req.body.locationId);
+  if (!loc || !loc.active) return res.status(400).json({ error: "Choose a location." });
+  const raw = req.body && req.body.minStock;
+  const min = Number(raw);
+  if (raw === "" || raw == null || !Number.isFinite(min) || min < 0 || min > 1e7) {
+    return res.status(400).json({ error: "The minimum must be a number, 0 or more." });
+  }
+  const before = (inventory.getStockByLocation(size.id).find(r => r.location_id === loc.id) || {}).min_stock || 0;
+  inventory.setMinStock(size.id, loc.id, min);
+  logAction(req, "product.min_stock",
+    `${p.name} (${size.label}) @ ${loc.name}: minimum ${before} → ${min}`,
+    { resourceType: "product", resourceId: p.id,
+      before: { min_stock: before }, after: { min_stock: min }, fields: ["min_stock"],
+      meta: { size: size.label, sizeId: size.id, location: loc.name } });
+  res.json({ ok: true, sizeId: size.id, locationId: loc.id, minStock: Math.max(0, min) });
+});
+
+/**
  * Full Purchase Entry for one product: date, supplier, invoice number, size/
  * thickness with the SAME auto Sq.ft calculation sales use (via the shared
  * Pricing module), GST, transport, and a grand total. `qty` is the physical

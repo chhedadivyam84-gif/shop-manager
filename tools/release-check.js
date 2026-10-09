@@ -54,6 +54,9 @@ const CRITICAL_SUITES = [
      changes a retention number without the page is a false statement to
      the people the policy is meant to protect. */
   "privacy",
+  /* Who sees which notification. A release that lets one shop read
+     another's, or staff read the owner's, must not go out. */
+  "notifications",
 ];
 
 /* IN CI THESE CANNOT RUN, BY DESIGN, and that is not the same as skipped.

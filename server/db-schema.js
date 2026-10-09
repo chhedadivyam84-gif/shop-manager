@@ -3997,6 +3997,80 @@ try {
                 " — the Audit Logs screen will be slower on a large log but correct.");
 }
 
+/* ------------------------------------------------------------------
+   NOTIFICATIONS
+
+   Things that HAPPENED, kept so they can be read later: the subscription
+   is about to run out, somebody entered five wrong PINs, a board fell
+   below the level the owner set. Different from /api/alerts on purpose —
+   those are worked out of the books every time and vanish when the work
+   is done; these are events, and an event that happened at 9:14 still
+   happened after the stock is topped up again.
+
+   ONE ROW PER EVENT, READ STATE PER PERSON. A notice to "everyone" is one
+   row, and whether Ramesh has seen it is a row in notification_reads, so
+   one person opening it does not mark it read for the whole shop.
+
+   Kept inside each company's own file, which is what keeps one shop's
+   notifications out of another's: there is no query in this app that can
+   reach across two files.
+
+   dedupe_key is not UNIQUE because some incidents may legitimately recur
+   (a size that falls below its minimum again next month). The service in
+   server/notify.js decides, per key, whether a repeat is a new event.
+   ------------------------------------------------------------------ */
+db.exec(`
+CREATE TABLE IF NOT EXISTS notifications (
+  id          TEXT PRIMARY KEY,
+  created_at  INTEGER NOT NULL,
+  category    TEXT NOT NULL CHECK (category IN ('licence','security','stock','announcement','system')),
+  severity    TEXT NOT NULL DEFAULT 'info' CHECK (severity IN ('info','warning','critical')),
+  title       TEXT NOT NULL,
+  body        TEXT NOT NULL DEFAULT '',
+  link_tab    TEXT NOT NULL DEFAULT '',
+  link_id     TEXT NOT NULL DEFAULT '',
+  -- owner | all | perm:<module> | staff:<staff id>
+  audience    TEXT NOT NULL DEFAULT 'owner',
+  dedupe_key  TEXT,
+  -- system (this app noticed it) | vendor (your supplier sent it) | owner
+  source      TEXT NOT NULL DEFAULT 'system',
+  created_by  TEXT NOT NULL DEFAULT '',
+  -- Withdrawn by whoever published it. Hidden, never deleted.
+  hidden_at   INTEGER,
+  emailed_at  INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_at ON notifications(created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_key ON notifications(dedupe_key, created_at);
+
+CREATE TABLE IF NOT EXISTS notification_reads (
+  notification_id TEXT NOT NULL,
+  staff_id        TEXT NOT NULL,
+  read_at         INTEGER NOT NULL,
+  PRIMARY KEY (notification_id, staff_id)
+);
+CREATE INDEX IF NOT EXISTS idx_notification_reads_staff ON notification_reads(staff_id);
+
+-- One row per person per kind they have changed. in_app is only ever 0 for
+-- the optional kinds (stock, announcement): licence, security and system
+-- notices cannot be switched off. email is the owner's choice alone.
+CREATE TABLE IF NOT EXISTS notification_prefs (
+  staff_id   TEXT NOT NULL,
+  category   TEXT NOT NULL,
+  in_app     INTEGER NOT NULL DEFAULT 1,
+  email      INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER,
+  PRIMARY KEY (staff_id, category)
+);
+
+-- What the notifier last saw, so it can tell a change from a repeat:
+-- the licence expiry date it last knew, whether backups were failing.
+CREATE TABLE IF NOT EXISTS notification_state (
+  k          TEXT PRIMARY KEY,
+  v          TEXT,
+  updated_at INTEGER
+);
+`);
+
 // Where the data lives — the backup module needs the on-disk paths, and this
 // is the single place that knows them.
 db.dataDir = DATA_DIR;

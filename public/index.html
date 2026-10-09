@@ -1473,6 +1473,11 @@
       <button class="tab" data-tab="delivery"><span class="ic">&#128666;</span>Delivery</button>
     </nav>
 
+    <!-- The assistant, on every screen. Hidden until the app knows this shop
+         was sold the feature — see syncAssistantFab() in app.js. -->
+    <div class="wa-fab-wrap"><button class="ai-fab" id="ai-fab-btn" title="Ask the assistant" aria-label="Ask the assistant" hidden>
+      <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z"/><path d="M12 8.2l.9 1.9 1.9.9-1.9.9-.9 1.9-.9-1.9-1.9-.9 1.9-.9.9-1.9Z" fill="#fff" stroke="none"/></svg>
+    </button></div>
     <div class="wa-fab-wrap"><button class="wa-fab" id="wa-fab-btn" title="Open WhatsApp">
       <svg viewBox="0 0 32 32" width="28" height="28" fill="#fff"><path d="M16.004 3C9.03 3 3.374 8.65 3.374 15.62c0 2.44.68 4.72 1.86 6.67L3 29l6.87-2.2a12.6 12.6 0 0 0 6.13 1.57h.005c6.97 0 12.63-5.65 12.63-12.62C28.635 8.65 22.98 3 16.004 3Zm0 22.9h-.004a10.46 10.46 0 0 1-5.34-1.46l-.383-.227-3.98 1.28 1.3-3.87-.25-.4a10.44 10.44 0 0 1-1.61-5.6c0-5.79 4.72-10.5 10.53-10.5 2.81 0 5.45 1.1 7.44 3.08a10.43 10.43 0 0 1 3.08 7.43c0 5.8-4.72 10.5-10.53 10.5Zm5.77-7.87c-.316-.158-1.87-.923-2.16-1.03-.29-.106-.5-.158-.71.158-.21.316-.812 1.03-.996 1.24-.184.21-.368.237-.684.08-.316-.158-1.334-.492-2.542-1.57-.94-.838-1.574-1.874-1.758-2.19-.184-.316-.02-.487.138-.645.142-.14.316-.368.474-.552.158-.184.21-.316.316-.526.106-.21.053-.395-.026-.553-.08-.158-.71-1.71-.973-2.343-.256-.615-.517-.532-.71-.542l-.605-.01c-.21 0-.552.079-.842.395s-1.106 1.08-1.106 2.634 1.132 3.055 1.29 3.266c.158.21 2.228 3.4 5.398 4.77.754.325 1.343.52 1.802.665.757.24 1.446.207 1.99.126.607-.09 1.87-.764 2.134-1.502.264-.738.264-1.37.184-1.502-.08-.132-.29-.21-.605-.368Z"/></svg>
     </button></div>

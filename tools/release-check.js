@@ -43,6 +43,10 @@ const { spawn, spawnSync } = require("child_process");
 const ROOT = path.join(__dirname, "..");
 const QUICK = process.argv.includes("--quick");
 
+/* Progress is drawn over itself with \r, which only means anything on a
+   terminal. Piped into a log it would pile every step onto one line. */
+const progress = t => { if (process.stdout.isTTY) process.stdout.write("  …     " + t + "\r"); };
+
 /* The suites that must pass before money, identity or backups change. */
 const CRITICAL_SUITES = [
   "security", "restore", "backup-verify", "tenant-identity", "assistant", "voice", "release",
@@ -253,7 +257,7 @@ async function main() {
   console.log("  branch  " + (branch.stdout || "unknown").trim() + "\n");
 
   const run = (name, fn, critical = true) => {
-    process.stdout.write("  …     " + name + "\r");
+    progress(name);
     const r = fn();
     record(name, r.status, r.detail, critical);
   };
@@ -264,7 +268,7 @@ async function main() {
   run("every file parses", () => checkSyntax(ROOT));
   run("migrations are non-destructive", () => checkMigrations(ROOT));
 
-  process.stdout.write("  …     booting against an empty data directory\r");
+  progress("booting against an empty data directory");
   const b = await checkBoots(ROOT);
   record("starts on an empty data directory", b.empty.status, b.empty.detail);
   record("health endpoint reports the database", b.health.status, b.health.detail);
@@ -282,7 +286,7 @@ async function main() {
   }
 
   const mark = { PASS: "PASS  ", FAIL: "FAIL  ", SKIP: "SKIP  ", MANUAL: "CHECK " };
-  console.log(" ".repeat(70) + "\r");
+  if (process.stdout.isTTY) console.log(" ".repeat(70) + "\r");
   for (const r of results) {
     console.log("  " + mark[r.status] + r.name + (r.detail ? "\n          " + r.detail : ""));
   }

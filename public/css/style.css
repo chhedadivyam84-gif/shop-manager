@@ -3278,3 +3278,32 @@ a.chip{display:inline-flex;align-items:center;gap:5px;text-decoration:none;}
 }
 .ai-ask input:disabled{ background:var(--bg); color:var(--muted); }
 .ai-ask .btn{ width:auto; flex:0 0 auto; padding-left:18px; padding-right:18px; }
+
+/* ---- the assistant's voice ---------------------------------------
+   One line that says what is happening, with the way out of it beside
+   it. A microphone with no visible off switch is one people hold their
+   breath in front of. */
+.ai-state{
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+  margin:8px 0; padding:8px 10px; border-radius:8px;
+  background:var(--bg); border:1px solid var(--border);
+  font-size:13px; color:var(--text);
+}
+.ai-state.warn{ background:var(--warn-bg); color:var(--warn-text); border-color:transparent; }
+.ai-state.muted{ color:var(--muted); }
+.ai-state .btn{ width:auto; flex:0 0 auto; margin-left:auto; }
+
+/* Breathing, not flashing — this sits on a counter all day. */
+.ai-dot{
+  width:9px; height:9px; border-radius:50%; background:var(--danger);
+  flex:0 0 auto; animation:ai-pulse 1.4s ease-in-out infinite;
+}
+@keyframes ai-pulse{ 0%,100%{opacity:1;} 50%{opacity:.25;} }
+@media (prefers-reduced-motion: reduce){ .ai-dot{ animation:none; } }
+
+.ai-mic{ width:auto; flex:0 0 auto; padding-left:14px; padding-right:14px; font-size:16px; }
+.ai-mic.on{ background:var(--danger); color:#fff; border-color:var(--danger); }
+
+/* What is being heard, before it is a question. Dimmed and italic so it
+   is plainly not yet an answer to anything. */
+.ai-partial{ opacity:.6; font-style:italic; }

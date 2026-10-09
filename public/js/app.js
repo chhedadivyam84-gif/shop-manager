@@ -14209,7 +14209,17 @@ const WA_STATUS_LABEL = {
    checked is one nobody should trust with a stock figure, and the server
    says which lookup it ran.
    ============================================================ */
-let ASSIST = { turns: [], busy: false, status: null };
+let ASSIST = {
+  turns: [], busy: false, status: null,
+  /* idle | listening | speaking. One at a time, deliberately: a
+     microphone open while the answer is being read aloud hears the
+     answer. */
+  mode: "idle",
+  partial: "",      // what is being heard, shown as it arrives
+  voiceNote: "",    // why listening stopped, when it stopped badly
+  lang: "en-IN",
+  speakAnswers: true,
+};
 
 async function openAssistant(){
   const sheet = document.getElementById("sheet-assistant");
@@ -14218,6 +14228,9 @@ async function openAssistant(){
   ASSIST.turns = [];
   ASSIST.busy = false;
   ASSIST.status = null;
+  ASSIST.mode = "idle";
+  ASSIST.partial = "";
+  ASSIST.voiceNote = "";
   paintAssistant("Checking…");
 
   try {
@@ -14275,11 +14288,18 @@ function paintAssistant(loadingNote){
       </p>` : ""}
       ${suggestions}
       <div class="ai-log" id="ai-log">${turns}
+        ${ASSIST.partial ? `<div class="ai-you ai-partial">${escapeHtml(ASSIST.partial)}…</div>` : ""}
         ${ASSIST.busy ? `<div class="ai-bot muted">Looking that up…</div>` : ""}</div>
+
+      ${assistantVoiceBar()}
+
       <div class="ai-ask">
         <input id="ai-q" type="text" maxlength="500" placeholder="Ask a question…"
-               autocomplete="off" ${ASSIST.busy ? "disabled" : ""}>
-        <button class="btn btn-primary" id="ai-send" ${ASSIST.busy ? "disabled" : ""}>Ask</button>
+               autocomplete="off" ${ASSIST.busy || ASSIST.mode === "listening" ? "disabled" : ""}>
+        ${canUseVoice() ? `<button class="btn btn-outline ai-mic ${ASSIST.mode === "listening" ? "on" : ""}"
+          id="ai-mic" title="${ASSIST.mode === "listening" ? "Stop listening" : "Ask by voice"}"
+          ${ASSIST.busy ? "disabled" : ""}>${ASSIST.mode === "listening" ? "&#9632;" : "&#127908;"}</button>` : ""}
+        <button class="btn btn-primary" id="ai-send" ${ASSIST.busy || ASSIST.mode === "listening" ? "disabled" : ""}>Ask</button>
       </div>
       ${ASSIST.turns.length ? `<button class="btn btn-outline" id="ai-new" style="margin-top:10px;">Start again</button>` : ""}
     </div>`;
@@ -14295,31 +14315,186 @@ function paintAssistant(loadingNote){
     if(!ASSIST.busy) q.focus();
   }
   const again = document.getElementById("ai-new");
-  if(again) again.addEventListener("click", () => { ASSIST.turns = []; paintAssistant(); });
+  if(again) again.addEventListener("click", () => {
+    stopAssistantVoice();
+    ASSIST.turns = []; ASSIST.voiceNote = ""; paintAssistant();
+  });
+
+  const mic = document.getElementById("ai-mic");
+  if(mic) mic.addEventListener("click", () => {
+    /* The same button stops it. A microphone you cannot switch off from
+       the control that switched it on is one people hold their breath in
+       front of. */
+    if(ASSIST.mode === "listening") Voice.cancel();
+    else startAssistantListening();
+  });
+
+  const stopL = document.getElementById("ai-stop-listen");
+  if(stopL) stopL.addEventListener("click", () => Voice.cancel());
+
+  const hush = document.getElementById("ai-hush");
+  if(hush) hush.addEventListener("click", () => {
+    Voice.hush();
+    ASSIST.mode = "idle";
+    paintAssistant();
+  });
+
+  const retry = document.getElementById("ai-retry");
+  if(retry) retry.addEventListener("click", () => startAssistantListening());
 
   const log = document.getElementById("ai-log");
   if(log) log.scrollTop = log.scrollHeight;
 }
 
-function wireAssistantClose(sheet){
-  sheet.querySelectorAll("[data-sheetclose]").forEach(b =>
-    b.addEventListener("click", closeAllSheets));
+/* Voice is offered only where it can actually work. A microphone drawn in
+   a browser that cannot listen is a button that does nothing, and the
+   person pressing it concludes the shop's software is broken. */
+function canUseVoice(){
+  return typeof Voice !== "undefined" && Voice.canListen();
 }
 
-async function askAssistant(question){
+/* WHAT IS HAPPENING RIGHT NOW, in one line. Listening, reading aloud, or
+   a reason the last attempt stopped — with the way out of it beside it,
+   because a microphone that failed is useless without a retry. */
+function assistantVoiceBar(){
+  if(typeof Voice === "undefined") return "";
+
+  if(ASSIST.mode === "listening"){
+    return `<div class="ai-state listening">
+      <span class="ai-dot"></span> Listening… speak now
+      <button class="btn btn-outline btn-sm" id="ai-stop-listen">Cancel</button>
+    </div>`;
+  }
+  if(ASSIST.mode === "speaking"){
+    return `<div class="ai-state">
+      Reading the answer
+      <button class="btn btn-outline btn-sm" id="ai-hush">Stop speaking</button>
+    </div>`;
+  }
+  if(ASSIST.voiceNote){
+    return `<div class="ai-state warn">
+      ${escapeHtml(ASSIST.voiceNote)}
+      ${canUseVoice() ? `<button class="btn btn-outline btn-sm" id="ai-retry">Try again</button>` : ""}
+    </div>`;
+  }
+  if(!canUseVoice()){
+    /* Said once, quietly, and only here — the typed box above still works
+       and is the thing to use. */
+    return `<div class="ai-state muted">This browser cannot listen. Type your question instead.</div>`;
+  }
+  return "";
+}
+
+function wireAssistantClose(sheet){
+  sheet.querySelectorAll("[data-sheetclose]").forEach(b =>
+    b.addEventListener("click", () => { stopAssistantVoice(); closeAllSheets(); }));
+}
+
+/* The microphone and the speaker both released. Called when the sheet
+   closes, when a new conversation starts, and before the page unloads —
+   a microphone left open because somebody navigated away is the kind of
+   thing that gets a shop's software distrusted. */
+function stopAssistantVoice(){
+  if(typeof Voice === "undefined") return;
+  Voice.release();
+  ASSIST.mode = "idle";
+  ASSIST.partial = "";
+}
+
+/* Leaving the page with a microphone open is the kind of thing that gets
+   a shop's software distrusted, whatever the truth of it. */
+if(typeof window !== "undefined"){
+  window.addEventListener("pagehide", stopAssistantVoice);
+  window.addEventListener("beforeunload", stopAssistantVoice);
+}
+
+function startAssistantListening(){
+  if(typeof Voice === "undefined" || !canUseVoice()) return;
+  if(ASSIST.busy || ASSIST.mode === "listening") return;
+
+  /* Never listen while talking — the microphone would hear the answer. */
+  Voice.hush();
+
+  ASSIST.voiceNote = "";
+  ASSIST.partial = "";
+  ASSIST.mode = "listening";
+  paintAssistant();
+
+  Voice.listen({
+    lang: ASSIST.lang,
+    onPartial(text){
+      if(ASSIST.mode !== "listening") return;
+      ASSIST.partial = text;
+      paintAssistant();
+    },
+    onFinal(text){
+      ASSIST.mode = "idle";
+      ASSIST.partial = "";
+      if(!Voice.worthSending(text)){
+        ASSIST.voiceNote = "That did not come through clearly.";
+        paintAssistant();
+        return;
+      }
+      /* Sent straight off, and shown as the question in the conversation
+         so a misheard word is visible beside the answer it produced.
+         Nothing here changes a record — every lookup is read-only — so
+         there is nothing to confirm before it runs. The day a spoken
+         action can CHANGE something, it must be read back and confirmed
+         before it happens, and that is not this. */
+      paintAssistant();
+      askAssistant(text, { spoken: true });
+    },
+    onError(kind){
+      ASSIST.mode = "idle";
+      ASSIST.partial = "";
+      ASSIST.voiceNote =
+        kind === "not-allowed" || kind === "service-not-allowed"
+          ? "The microphone is blocked. Allow it for this site in your browser, then try again."
+        : kind === "no-speech" ? "I did not hear anything."
+        : kind === "audio-capture" ? "No microphone was found."
+        : kind === "network" ? "Speech recognition could not reach the network."
+        : kind === "unsupported" ? "This browser cannot listen."
+        : "Listening stopped.";
+      paintAssistant();
+    },
+    onCancel(){
+      ASSIST.mode = "idle";
+      ASSIST.partial = "";
+      paintAssistant();
+    },
+  });
+}
+
+async function askAssistant(question, opts){
   const text = String(question || "").trim();
   if(!text || ASSIST.busy) return;
+  const spoken = !!(opts && opts.spoken);
 
   ASSIST.turns.push({ role:"you", text });
   ASSIST.busy = true;
+  ASSIST.voiceNote = "";
   paintAssistant();
 
   try {
     const r = await api("POST", "/assistant/ask", { question: text });
+    const answer = r.answer || "No answer came back.";
     ASSIST.turns.push({
-      role:"bot", text: r.answer || "No answer came back.",
+      role:"bot", text: answer,
       lookedUp: r.lookedUp || null, found: r.found
     });
+
+    /* READ ALOUD ONLY WHAT WAS ASKED ALOUD. Somebody typing at a counter
+       has not asked the shop's software to start talking, and a till that
+       speaks unprompted gets switched off. */
+    if(spoken && ASSIST.speakAnswers && typeof Voice !== "undefined" && Voice.canSpeak()){
+      ASSIST.mode = "speaking";
+      Voice.speak(answer, {
+        lang: ASSIST.lang,
+        onEnd(){
+          if(ASSIST.mode === "speaking"){ ASSIST.mode = "idle"; paintAssistant(); }
+        },
+      });
+    }
   } catch(e) {
     /* Shown IN the conversation rather than as a toast that vanishes —
        the question is still on screen above it, and the two belong

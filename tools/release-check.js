@@ -57,6 +57,9 @@ const CRITICAL_SUITES = [
   /* Who sees which notification. A release that lets one shop read
      another's, or staff read the owner's, must not go out. */
   "notifications",
+  /* What a customer owes. A release that marks a bill paid without a
+     payment, or records one payment twice, must not go out. */
+  "sales",
 ];
 
 /* IN CI THESE CANNOT RUN, BY DESIGN, and that is not the same as skipped.

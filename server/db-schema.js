@@ -2883,6 +2883,24 @@ try {
                 " — duplicate-submission protection falls back to the application check.");
 }
 
+/* The same protection for money coming in and going out. A receipt is
+   typed at the counter on the same broadband as a bill, so "Save" is
+   double-tapped and retried in exactly the same ways — and a duplicate
+   payment is worse than a duplicate bill, because it quietly takes money
+   off what a customer owes. NULL for every existing row and for any
+   caller that sends no key, so nothing already recorded is touched. */
+addColumn("payments", "idempotency_key", "TEXT");
+addColumn("purchase_payments", "idempotency_key", "TEXT");
+try {
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_idempotency
+             ON payments(idempotency_key) WHERE idempotency_key IS NOT NULL`);
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_purchase_payments_idempotency
+             ON purchase_payments(idempotency_key) WHERE idempotency_key IS NOT NULL`);
+} catch (e) {
+  console.error("[schema] could not create a payment idempotency index: " + e.message +
+                " — duplicate-payment protection falls back to the application check.");
+}
+
 /* ============================================================
    WHO MAY DO WHAT
 

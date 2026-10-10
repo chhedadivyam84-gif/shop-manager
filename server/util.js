@@ -70,4 +70,20 @@ function bindId(value) {
   return value === undefined ? null : value;
 }
 
-module.exports = { uid, todayStr, localDate, round2, logAction, bindId };
+/** A real calendar day as YYYY-MM-DD — not just the shape. "2026-02-30"
+ *  has the shape and Date.parse rolls it into March without complaint, so
+ *  the parsed day is written back out and compared. */
+function isRealDate(s) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(s || ""))) return false;
+  const d = new Date(s + "T00:00:00Z");
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+}
+
+/** A client-made idempotency key, or "" — bounded and plain, so it can be
+ *  stored and indexed without becoming a way to put arbitrary text in. */
+function cleanKey(k) {
+  const s = String(k == null ? "" : k).trim();
+  return /^[A-Za-z0-9_-]{8,100}$/.test(s) ? s : "";
+}
+
+module.exports = { uid, todayStr, localDate, round2, logAction, bindId, isRealDate, cleanKey };

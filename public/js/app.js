@@ -1414,7 +1414,7 @@ async function initApp(){
   if(bfSearch) bfSearch.addEventListener("click", runBillFind);
   const bfClear = document.getElementById("bf-clear");
   if(bfClear) bfClear.addEventListener("click", () => {
-    ["bf-no","bf-customer","bf-from","bf-to","bf-salesman","bf-order","bf-delivery","bf-amount"]
+    ["bf-no","bf-customer","bf-from","bf-to","bf-salesman","bf-order","bf-delivery","bf-amount","bf-status"]
       .forEach(id => { const el = document.getElementById(id); if(el) el.value = ""; });
     const out = document.getElementById("bf-results"); if(out) out.innerHTML = "";
     const first = document.getElementById("bf-no"); if(first) first.focus();
@@ -5749,6 +5749,19 @@ function billFindDate(d){
     : t.toLocaleDateString("en-IN", {day:"numeric", month:"short", year:"numeric"});
 }
 
+/* What a bill's money position is NOW — paid, partly paid with what is
+   left, unpaid, overdue — from the server's allocation of the payments
+   actually recorded. A challan and a cancelled bill carry no demand. */
+function billPaymentPill(b){
+  if(b.voided) return `<span class="muted">—</span>`;
+  const p = b.payment;
+  if(!p) return `<span class="muted">${b.doc_type==="challan" ? "No bill yet" : "—"}</span>`;
+  if(p.state === "paid") return `<span class="pill ok">Paid</span>`;
+  const left = `<span class="muted" style="font-size:11px;"> ${fmtPaise(p.balance)} left</span>`;
+  if(p.overdue) return `<span class="pill danger">Overdue</span>${left}`;
+  return `<span class="pill ${p.state==="partial"?"warn":"danger"}">${p.state==="partial"?"Partly paid":"Unpaid"}</span>${left}`;
+}
+
 async function runBillFind(){
   const out = document.getElementById("bf-results");
   if(!out) return;
@@ -5757,7 +5770,8 @@ async function runBillFind(){
     no: val("bf-no").trim(), customer: val("bf-customer").trim(),
     from: val("bf-from"), to: val("bf-to"),
     salesman: val("bf-salesman").trim(), orderNo: val("bf-order").trim(),
-    deliveryNo: val("bf-delivery").trim(), amount: val("bf-amount").trim()
+    deliveryNo: val("bf-delivery").trim(), amount: val("bf-amount").trim(),
+    status: val("bf-status")
   };
   const qs = Object.entries(q).filter(([,v]) => String(v).trim() !== "")
     .map(([k,v]) => encodeURIComponent(k) + "=" + encodeURIComponent(v)).join("&");
@@ -5778,7 +5792,7 @@ async function runBillFind(){
     <div class="bf-wrap"><table class="bf-table">
       <thead><tr>
         <th>Bill No.</th><th>Date</th><th>Customer</th><th>Salesman</th>
-        <th>Order No.</th><th>Delivery No.</th><th class="num">Amount</th>
+        <th>Order No.</th><th>Delivery No.</th><th class="num">Amount</th><th>Payment</th>
       </tr></thead>
       <tbody>${rows.map(b=>`
         <tr data-bf-open="${escapeHtml(b.id)}">
@@ -5791,6 +5805,7 @@ async function runBillFind(){
           <td>${escapeHtml(b.order_no||"—")}</td>
           <td>${escapeHtml(b.delivery_no||"—")}</td>
           <td class="num">${fmtPaise(b.total)}</td>
+          <td>${billPaymentPill(b)}</td>
         </tr>`).join("")}</tbody>
     </table></div>`;
 
@@ -5875,6 +5890,22 @@ function renderBillingBillNav(){
   });
 }
 
+/** The money position of the bill being looked at: paid so far, what is
+ *  still owed, whether it is overdue, and the receipts that cite it. */
+function editingPaymentHtml(){
+  const p = state.editingPayment;
+  if(!p) return "";
+  const linked = state.editingLinkedPayments || [];
+  return `<div class="card" style="margin-bottom:10px;padding:10px 12px;display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;font-size:12.5px;">
+      ${billPaymentPill({ payment: p })}
+      <span>Total <b>${fmtPaise(p.total)}</b></span>
+      <span>Paid <b>${fmtPaise(p.paid)}</b></span>
+      <span>Still owed <b style="color:${p.balance>0?"var(--danger)":"var(--ok)"};">${fmtPaise(p.balance)}</b></span>
+      ${p.dueDate ? `<span class="muted">Due ${escapeHtml(billFindDate(p.dueDate))}</span>` : ""}
+      ${linked.length ? `<span class="muted">${linked.length===1 ? "1 receipt names" : linked.length + " receipts name"} this bill</span>` : ""}
+    </div>`;
+}
+
 function renderEditModeBanner(){
   renderBillingBillNav();
   const el = document.getElementById("edit-mode-banner");
@@ -5886,6 +5917,7 @@ function renderEditModeBanner(){
       <div style="font-size:12px;font-weight:700;color:var(--warn-text);">✎ Editing an existing document — Complete Sale below will UPDATE it, not create a new one.</div>
       <a href="#" id="cancel-edit-link" style="font-size:12px;font-weight:800;color:var(--warn-text);white-space:nowrap;">Cancel</a>
     </div>
+    ${editingPaymentHtml()}
   `;
   document.getElementById("cancel-edit-link").addEventListener("click", (e)=>{
     e.preventDefault();
@@ -5945,6 +5977,10 @@ async function editExistingInvoice(inv){
   // before the new one is applied, so re-sending the true figure is safe.
   state.advance = inv.advance || 0;
   state.advanceTouched = true;   // a saved figure is the operator's, never overwrite it
+  /* Where this bill's money stands now — from the server's allocation of
+     every payment since, shown in the banner above the bill. */
+  state.editingPayment = inv.payment || null;
+  state.editingLinkedPayments = inv.linkedPayments || [];
   state.paymentMethod = inv.payment_method || "Cash";
   state.paperSize = inv.paper_size || "A5";
   state.transport = inv.transport || 0;
@@ -8821,6 +8857,10 @@ function getSelectedBankAccountId(sheet, prefix){
 /** `editEntry` is a ledger entry (type:"payment") to edit in place, or omitted for a new payment. */
 function openRecordPayment(customer, editEntry){
   const sheet = document.getElementById("sheet-record-payment");
+  /* One key per opening of this form = one receipt. A double tap or a
+     retry after a lost reply sends the same key, and the server answers
+     with the receipt it already recorded instead of a second one. */
+  const payKey = newSubmissionKey();
   const today = isoDate(new Date());
   const e = editEntry;
   sheet.innerHTML = `
@@ -8883,7 +8923,7 @@ function openRecordPayment(customer, editEntry){
         attachment
       };
       if(e) await api("PUT", `/customers/${customer.id}/payments/${e.id}`, body);
-      else await api("POST", `/customers/${customer.id}/payments`, { ...body, invoiceId: document.getElementById("rp-invoice").value || null });
+      else await api("POST", `/customers/${customer.id}/payments`, { ...body, idempotencyKey: payKey, invoiceId: document.getElementById("rp-invoice").value || null });
       await loadCustomers();
       closeAllSheets();
       await openCustomerDetail(customer.id);
@@ -9073,6 +9113,7 @@ async function openSupplierDetail(supplierId){
 /** `editEntry` is a ledger entry (type:"payment") to edit in place, or omitted for a new payment. */
 function openRecordPurchasePayment(supplier, editEntry){
   const sheet = document.getElementById("sheet-record-purchase-payment");
+  const payKey = newSubmissionKey();   // one payment per opening — see openRecordPayment
   const today = isoDate(new Date());
   const e = editEntry;
   sheet.innerHTML = `
@@ -9171,7 +9212,7 @@ function openRecordPurchasePayment(supplier, editEntry){
         attachment
       };
       if(e) await api("PUT", `/suppliers/${supplier.id}/payments/${e.id}`, body);
-      else await api("POST", `/suppliers/${supplier.id}/payments`, { ...body, stockInId: document.getElementById("pp-stockin").value || null });
+      else await api("POST", `/suppliers/${supplier.id}/payments`, { ...body, idempotencyKey: payKey, stockInId: document.getElementById("pp-stockin").value || null });
       await loadSuppliers();
       closeAllSheets();
       await openSupplierDetail(supplier.id);
@@ -16129,7 +16170,7 @@ async function renderTaxInvoiceReport(body){
       <div class="list-row" style="cursor:pointer;" data-open-invoice="${r.id}"><div>
         <div class="row-title">${escapeHtml(r.challan_no)}</div>
         <div class="row-sub">${escapeHtml(r.date)} · ${escapeHtml(r.customer_name||"Walk-in")} · ${escapeHtml(r.payment_method)}</div>
-        ${r.balance_due>0?`<div class="row-sub" style="color:var(--danger);">Due ${fmt(r.balance_due)}</div>`:""}
+        ${(r.outstanding ?? r.balance_due)>0?`<div class="row-sub" style="color:var(--danger);">${r.overdue?"Overdue":"Due"} ${fmt(r.outstanding ?? r.balance_due)}</div>`:(r.payment_status==="Paid"?`<div class="row-sub" style="color:var(--ok);">Paid</div>`:"")}
       </div><div class="row-right row-title">${fmt(r.total)}</div></div>
     `).join("") : `<div class="empty-hint">No tax invoices issued yet.</div>`);
   setBillNav("invoice", rows.map(r=>({
@@ -17675,7 +17716,7 @@ async function saveBankEntry(sheet, type){
       const bankAccEl = sheet.querySelector("#be-bankacct-chips [data-be-account].selected");
       if(method!=="Cash" && !bankAccEl){ toast("Choose a bank account for this payment mode."); btn.disabled=false; return; }
       const path = isCust ? `/customers/${partyId}/payments` : `/suppliers/${partyId}/payments`;
-      await api("POST", path, { amount, method, bankAccountId: method==="Cash"?null:bankAccEl.dataset.beAccount, referenceNo, note: remarks, date, attachment });
+      await api("POST", path, { amount, method, bankAccountId: method==="Cash"?null:bankAccEl.dataset.beAccount, referenceNo, note: remarks, date, attachment, idempotencyKey: sheet._payKey });
 
     } else if(type==="Bank Charges" || type==="Interest Received"){
       const accEl = sheet.querySelector("#be-account-chips [data-be-account].selected");
@@ -17802,6 +17843,8 @@ function openBankEntry(editEntry){
     currentType = b.dataset.type;
     renderBankEntryTypeFields(sheet, currentType);
   }));
+  /* One receipt or payment per opening of this sheet. */
+  sheet._payKey = newSubmissionKey();
   sheet.querySelector("#be-save").addEventListener("click", ()=>saveBankEntry(sheet, currentType));
   showSheet("sheet-bank-entry");
 }

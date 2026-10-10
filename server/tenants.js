@@ -231,5 +231,17 @@ function restoreFrom(srcPath) {
   return true;
 }
 
+/** Writes to the sign-in map since it opened — see db.changeCount(). */
+function changeCount() {
+  try { return open().prepare("SELECT total_changes() AS n").get().n; }
+  catch (e) { return 1e9; }
+}
+
+/** Closed so the file can be moved; reopened by the next call. */
+function close() {
+  if (tdb) { try { tdb.close(); } catch (e) { /* already closed */ } }
+  tdb = null;
+}
+
 module.exports = { open, get, list, count, upsert, touch, block, verify, hash, multiTenant, norm, byCustomerId,
-  file, snapshotTo, restoreFrom, declared };
+  file, snapshotTo, restoreFrom, declared, changeCount, close };

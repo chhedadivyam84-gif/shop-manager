@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Retention &amp; Deletion · Shop Manager</title>
+<link rel="stylesheet" href="/legal/legal.css">
+</head>
+<body>
+<header class="top"><div class="top-in">
+  <a class="brand" href="/legal/"><span class="brand-mark">SM</span>Shop Manager</a>
+  <nav class="legal-nav" aria-label="Policies">
+    <a href="/legal/privacy.html">Privacy</a>
+    <a href="/legal/terms.html">Terms</a>
+    <a href="/legal/retention.html" aria-current="page">Retention</a>
+    <a href="/legal/ai.html">AI &amp; voice</a>
+    <a href="/legal/contact.html">Contact</a>
+  </nav>
+</div></header>
+
+<main><article class="doc">
+  <div class="draft"><strong>Draft — not yet in force.</strong> Details marked <span class="ph">[like this]</span>
+    must be supplied by the operator, and clauses marked “For legal review” must be checked by a qualified
+    lawyer, before this policy is published or relied on.</div>
+
+  <h1>Data Retention and Deletion</h1>
+  <p class="meta">Effective <span class="ph">[EFFECTIVE DATE]</span></p>
+
+  <p class="lead">How long Shop Manager keeps each kind of information, why, and what deleting something actually
+  does. Some records cannot simply be deleted, because the law requires a shop to keep them; this page says which,
+  rather than promising more than the software does.</p>
+
+  <h2>The rule that overrides the rest</h2>
+  <p>GST law requires a registered business to keep its accounts, invoices, credit and debit notes and delivery
+  challans for <strong>72 months from the due date of the annual return</strong> for the year they belong to —
+  and longer while an appeal, proceeding or investigation about them is open. Shop Manager is built so that those
+  records are not lost by accident: a customer or supplier who appears on a past bill cannot be deleted, and a
+  product that has been sold can only be deleted by the owner on purpose — and even then the past bills keep the
+  product’s description on each line.</p>
+  <aside class="review">Section 36 of the CGST Act, 2017 and Rule 56 of the CGST Rules, 2017; and whether income-tax
+    or other record-keeping rules require any record to be kept longer.</aside>
+
+  <h2>How long each kind of information is kept</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Information</th><th>How long</th><th>How it goes</th></tr></thead>
+    <tbody>
+      <tr><td>Invoices, purchases, payments, cash and bank books</td><td>While the business uses Shop Manager, and
+        at least as long as GST law requires</td><td>The business decides; see “Deleting” below</td></tr>
+      <tr><td>Customers and suppliers</td><td>Until the business deletes them</td><td>Deleted by the owner if
+        they have no transactions; otherwise marked inactive</td></tr>
+      <tr><td>Products and stock</td><td>Until the business deletes them</td><td>Deleted by the owner. A
+        product that has been sold needs a second, deliberate confirmation; its name stays on the past bills</td></tr>
+      <tr><td>Staff sign-ins</td><td>Until the owner removes the staff member</td><td>Removed by the owner</td></tr>
+      <tr><td>Activity record (who did what)</td><td><strong>Permanently</strong> — it cannot be edited or
+        deleted, by design</td><td>Not removable; see below</td></tr>
+      <tr><td>Sign-in sessions</td><td>Up to 30 days, or until sign-out</td><td>Expire automatically</td></tr>
+      <tr><td>Automatic backups, on the server</td><td>The most recent 30</td><td>Older ones removed
+        automatically</td></tr>
+      <tr><td>Automatic backups, off-site</td><td>The most recent 96 runs; the newest can never be removed</td>
+        <td>Older ones removed automatically</td></tr>
+      <tr><td>Copies kept when a backup is restored</td><td>Kept on the server until removed by hand</td>
+        <td>Removed by the operator</td></tr>
+      <tr><td>Payment attachments</td><td>Until the business removes them; also copied to off-site backup</td>
+        <td>Removed by the business</td></tr>
+      <tr><td>Copies of printed documents</td><td>Kept on the server; on hosted copies, cleared whenever the
+        software is updated</td><td>Removed by the operator</td></tr>
+      <tr><td>Licence check-ins, on the licence server</td><td>90 days</td><td>Removed automatically</td></tr>
+      <tr><td>Assistant conversations</td><td><strong>Not kept</strong> — gone when the Assistant is closed</td>
+        <td>Nothing to remove</td></tr>
+      <tr><td>Audio</td><td><strong>Never recorded or kept</strong> by Shop Manager</td><td>Nothing to remove</td></tr>
+      <tr><td>The hosting provider’s server logs</td><td>As set by the hosting provider</td><td>Governed by the
+        provider</td></tr>
+    </tbody>
+  </table></div>
+  <aside class="review">The CERT-In Directions of 28 April 2022 may require some businesses to keep system logs
+    for 180 days, in India. The hosting provider’s own log retention and location should be checked against this.</aside>
+
+  <h2>Deleting</h2>
+  <h3>A customer or supplier</h3>
+  <p>The shop’s owner can delete a customer or supplier who has <strong>no transactions</strong>. One who appears
+  on any bill, payment or other record cannot be deleted — the software refuses, so that past invoices stay
+  complete. They can instead be corrected, or marked inactive so they no longer appear in day-to-day use.</p>
+  <p>Deleting removes the record itself. The fact that it was deleted — and the name it had — stays in the
+  activity record, which cannot be edited.</p>
+  <aside class="review">The activity record keeps names permanently, including after the record they belonged to
+    is deleted. This supports accountability and fraud prevention, but it may need to be reconciled with a person’s
+    right to have their data erased under the Digital Personal Data Protection Act, 2023.</aside>
+
+  <h3>A business’s account</h3>
+  <p>A business that stops using Shop Manager can ask for its data to be exported and then removed, using the
+  details on the <a href="/legal/contact.html">Contact</a> page. Removal from the live service and from off-site
+  backups is done by the operator <span class="ph">[WITHIN HOW MANY DAYS]</span>. Copies already in backups are
+  removed as those backups expire.</p>
+  <aside class="review">How long the operator may, or must, keep a former business’s data — and who keeps GST
+    records once a business has left the service.</aside>
+
+  <h3>Information about you in a shop’s records</h3>
+  <p>Ask the shop. Its owner can correct your details, and delete them where there are no transactions. Where there
+  are, the shop is required to keep its invoices, and the owner can explain what has to stay.</p>
+</article></main>
+
+<footer class="legal-foot">This page describes how the Shop Manager software works. It is not legal advice and
+does not by itself make any business compliant with the law.</footer>
+</body>
+</html>

@@ -88,6 +88,7 @@ function addStock(sizeId, locationId, delta) {
     "SELECT quantity FROM size_location_stock WHERE size_id = ? AND location_id = ?"
   ).get(sizeId, locationId);
   const prev = before ? Number(before.quantity) || 0 : 0;
+  const totalBefore = db.prepare("SELECT stock FROM product_sizes WHERE id = ?").get(sizeId);
 
   db.prepare(`
     UPDATE size_location_stock SET quantity = quantity + ?, last_updated = ?
@@ -105,6 +106,70 @@ function addStock(sizeId, locationId, delta) {
       productId: size ? size.product_id : "",
       delta: Number(delta), prev, next: prev + Number(delta)
     });
+    stockAlerts(sizeId, locationId, prev, prev + Number(delta),
+      totalBefore ? Number(totalBefore.stock) || 0 : 0);
+  }
+}
+
+/* ------------------------------------------------------------
+   TELLING SOMEBODY THE STOCK HAS RUN DOWN
+
+   Raised here because this is the only place a quantity changes — a sale,
+   a transfer, a return and a hand correction all arrive through addStock,
+   so none of them can forget to.
+
+   ON THE CROSSING, NOT ON EVERY SALE BELOW IT. A size at 3 with a minimum
+   of 10 that sells one sheet at a time would otherwise ring the bell three
+   times for one problem. The notice fires when the line is crossed, and
+   the same size crossing again within twelve hours is the same incident.
+
+   Out of stock is judged on the size's TOTAL across every location: a
+   board moved from the shop to the warehouse has not run out. The minimum
+   is per location, because that is where the owner sets it.
+
+   Inside the caller's transaction on purpose: a sale that is rolled back
+   takes its "now below minimum" notice with it. And notify.create() never
+   throws, so a notice that cannot be written never stops a sale.
+   ------------------------------------------------------------ */
+const STOCK_REPEAT_MS = 12 * 3600 * 1000;
+const fmtQty = n => String(Math.round(Number(n) * 100) / 100);
+
+function stockAlerts(sizeId, locationId, prev, next, totalBefore) {
+  try {
+    const row = db.prepare("SELECT min_stock FROM size_location_stock WHERE size_id = ? AND location_id = ?")
+      .get(sizeId, locationId);
+    const min = row ? Number(row.min_stock) || 0 : 0;
+    const after = db.prepare("SELECT stock FROM product_sizes WHERE id = ?").get(sizeId);
+    const totalAfter = after ? Number(after.stock) || 0 : 0;
+    const ranOut = totalBefore > 0 && totalAfter <= 0;
+    const fellBelow = min > 0 && prev >= min && next < min && !ranOut;
+    if (!ranOut && !fellBelow) return;
+
+    const info = db.prepare(`SELECT p.id AS product_id, p.name, s.label FROM product_sizes s
+      JOIN products p ON p.id = s.product_id WHERE s.id = ?`).get(sizeId);
+    if (!info) return;
+    const what = info.label ? `${info.name} (${info.label})` : info.name;
+    const notify = require("./notify");
+    if (ranOut) {
+      notify.create({
+        category: "stock", severity: "warning", audience: "perm:stock",
+        key: "stock-out:" + sizeId, repeatAfterMs: STOCK_REPEAT_MS,
+        title: `Out of stock: ${what}`,
+        body: "None left in any location.",
+        link: "product", linkId: info.product_id
+      });
+    } else {
+      const loc = getLocationById(locationId);
+      notify.create({
+        category: "stock", severity: "info", audience: "perm:stock",
+        key: `stock-low:${sizeId}:${locationId}`, repeatAfterMs: STOCK_REPEAT_MS,
+        title: `Below minimum: ${what}`,
+        body: `${fmtQty(next)} left at ${loc ? loc.name : "this location"} — the minimum set is ${fmtQty(min)}.`,
+        link: "product", linkId: info.product_id
+      });
+    }
+  } catch (e) {
+    console.error("[stock] could not check the minimum:", e.message);
   }
 }
 

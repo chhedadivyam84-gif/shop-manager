@@ -89,6 +89,24 @@ function assertOwnBucket() {
 
 async function start() {
   assertOwnBucket();
+
+  /* A newer backup the previous boot downloaded and verified, because the
+     container this one replaced saved work after we had restored. Applied
+     FIRST and before anything opens a database — see server/catchup.js.
+     Whatever it replaces is moved aside and kept, never deleted. An
+     owner's own uploaded restore (just below) still applies on top of it. */
+  {
+    const dataDir = process.env.DATA_DIR
+      ? require("path").resolve(process.env.DATA_DIR)
+      : require("path").join(__dirname, "..", "data");
+    const caught = require("./catchup").applyStaged(dataDir);
+    if (caught.applied) {
+      console.log(`[release] took in the newer backup ${caught.stamp} that the previous ` +
+        `container saved after this one had restored. What it replaced is kept in ${caught.keptAs}.`);
+    } else if (caught.error) {
+      console.error(`[release] a newer backup was waiting but could NOT be put in place: ${caught.error}`);
+    }
+  }
   // Must happen before anything requires ./db — on an ephemeral-disk host
   // (Render free tier resets the filesystem on every redeploy) this is what
   // puts shop.db back in place from the last cloud snapshot, before the
@@ -107,6 +125,8 @@ async function start() {
   }
 
   const restore = await require("./restore").restoreIfNeeded();
+  const release = require("./release");
+  release.BOOT.restore = { restored: !!restore.restored, from: restore.file || null };
   if (restore.restored) {
     const many = restore.businesses > 1 ? `, ${restore.businesses} businesses` : "";
     console.log(`[restore] Restored database from cloud backup: ${restore.file} (${restore.size} bytes${many})`);
@@ -375,6 +395,36 @@ app.use(session({
  * behind a single shared limit. The login route keeps its own, much
  * stricter lockout (auth.js); this sits underneath as the general
  * case. */
+/* IS THIS RELEASE UP, AND WHOLE?
+
+   Public, because a health check that needs a login cannot be used by the
+   host, a monitor, or somebody checking a deploy from their phone. And so
+   it says nothing a stranger should not read: the commit, how long it has
+   been up, whether the database answers, and a backup TIMESTAMP — no
+   bucket, no provider, no path, no error text, no variable names. The
+   reasoning is in server/release.js.
+
+   503 when the database will not answer, so Render can be pointed at this
+   path as its health check and refuse to cut over to a release that came
+   up without its data. That last part is a dashboard setting; see
+   RELEASING.md. */
+app.get("/api/health", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const r = release.healthReport(() => db.prepare("SELECT 1 AS ok").get());
+  res.status(r.status).json(r.body);
+});
+
+/* Held off for the moment this container is taking in a newer backup —
+   between the last check that nothing has been written and the restart.
+   A request let through then could write into a file that is about to be
+   moved aside. 503 with retry, which the app already treats as "try again
+   shortly" rather than as an error. */
+app.use("/api", (req, res, next) => {
+  if (!release.BOOT.catchingUp) return next();
+  res.setHeader("Retry-After", "10");
+  res.status(503).json({ error: "Updating — try again in a few seconds.", retry: true });
+});
+
 app.use("/api", rateLimit.limit({ bucket: "api-write", max: 240, windowMs: 60 * 1000 }));
 
 /* ------------------------------------------------------------
@@ -400,7 +450,12 @@ const LICENCE_EXEMPT = [
   "/api/auth",      // must be able to log in to see the renew screen
   "/api/license",   // entering the new key
   "/api/backup",    // taking their data with them
-  "/api/sync"       // and the same for sending it to their own cloud copy
+  "/api/sync",      // and the same for sending it to their own cloud copy
+  /* Reading the notice that says the subscription has ended must not be
+     refused because the subscription has ended. Marking read and choosing
+     what to be told are not records; posting a notice is, and is not here. */
+  "/api/notifications/read",
+  "/api/notifications/prefs"
 ];
 app.use("/api", (req, res, next) => {
   if (!license.enabled()) return next();
@@ -626,6 +681,8 @@ app.use("/api/dispatch", requireAuth, require("./routes/dispatch"));
 app.use("/api/delivery", requireAuth, require("./routes/delivery"));
 app.use("/api/alerts", requireAuth, require("./routes/alerts"));
 app.use("/api/reminders", requireAuth, require("./routes/reminders"));
+/* The bell: things that happened, per person. See server/notify.js. */
+app.use("/api/notifications", requireAuth, require("./routes/notifications"));
 app.use("/api/notes", requireAuth, require("./routes/notes"));
 /* The assistant. requireAuth like everything else, and behind the feature
    gate above — it costs the shop money per question, so it is something
@@ -774,7 +831,16 @@ app.use(express.static(path.join(__dirname, "..", "public"), {
 }));
 
 app.use((err, req, res, next) => {
-  console.error(err);
+  /* NOT console.error(err): a request whose body failed to parse carries
+     that raw body on the error, and printing it put PINs and customers'
+     details into the host's logs. See server/logSafe.js. The route is the
+     path only — never the query string, which can carry a search term. */
+  console.error("[error]", req.method, req.path, JSON.stringify(require("./logSafe").describeError(err)));
+  /* A malformed body is the caller's mistake, not the server's, and saying
+     so is more useful to whoever sent it than a 500. */
+  if (err && err.type === "entity.parse.failed") {
+    return res.status(400).json({ error: "That request was not readable." });
+  }
   res.status(500).json({ error: "Something went wrong on the server." });
 });
 
@@ -782,6 +848,9 @@ app.use((err, req, res, next) => {
    must never hold up a shop opening its own app. Whatever was cached at
    the last successful check-in applies until it answers. */
 checkin.start();
+/* "Your subscription ends in 7 days", once, to the owner — read from the
+   same state the gate above uses. Dormant where nothing is enforced. */
+require("./notifyLicence").start();
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Shop Manager running on port ${PORT}`);
@@ -791,7 +860,92 @@ app.listen(PORT, "0.0.0.0", () => {
   }
   // Automatic rotating snapshots (+ cloud if configured). Started after the
   // server is up so a backup can never delay accepting requests.
-  backup.startSchedule();
+  const plan = release.startupPlan(restore);
+  backup.startSchedule({ skipStartup: !plan.startupSnapshot });
+
+  /* DID THE DEPLOY THAT STARTED US LOSE ANYTHING — AND IF SO, TAKE IT IN.
+
+     Only asked after a cloud restore. A backup newer than the one we
+     restored can only be the old container's final save: work this
+     container does not have.
+
+     Taken in AUTOMATICALLY only if nothing at all has been written here
+     since start-up, because then the newer backup is a strict superset of
+     what we hold and taking it in only adds. If anything has been written,
+     the two copies have diverged and it is said loudly and left alone.
+     The mechanics — verify, stage, restart, apply before any database
+     opens — are in server/catchup.js. */
+  if (plan.checkGapAfterMs) {
+    const tenants = require("./tenants");
+    const catchup = require("./catchup");
+    const cloudStore = require("./cloudStore");
+
+    /* Counted from NOW, once start-up has finished writing its own
+       migrations: everything after this is work the old container never
+       saw. Every INSERT, UPDATE and DELETE counts, not just new rows. */
+    const writes = () => db.companies.changeCount() + tenants.changeCount();
+    const baseline = writes();
+
+    const warn = (newer, why) => {
+      release.BOOT.gapOutcome = why;
+      console.error(
+        `[release] A BACKUP NEWER THAN THE ONE THIS RELEASE RESTORED EXISTS: ${newer}. ` +
+        `It was saved by the container this deploy replaced, after this one had restored — ` +
+        `so anything entered in that window is in the cloud but NOT in the running shop. ` +
+        `It was NOT taken in, because ${why}. Check it with: ` +
+        `node tools/verify-backup.js --cloud --stamp ${newer}`);
+    };
+
+    setTimeout(async () => {
+      let listing, newer;
+      try {
+        listing = await backup.listCloud();
+        const names = ((listing && listing.runs) || []).flatMap(r => r.files || []);
+        newer = release.newerThanRestored(restore.file, names);
+        release.BOOT.gap = newer;
+        release.BOOT.gapChecked = true;
+      } catch (e) {
+        release.BOOT.gapChecked = false;
+        release.BOOT.gapOutcome = "could not look in the cloud";
+        console.error("[release] deploy check could not list the cloud:", e.message);
+        return;
+      }
+
+      if (!newer) {
+        release.BOOT.gapOutcome = "none";
+        console.log("[release] deploy check: no backup newer than the one restored — nothing was lost in the handover");
+        return;
+      }
+
+      const decision = release.catchupDecision(newer, writes() - baseline);
+      if (!decision.act) return warn(newer, decision.why);
+
+      const run = listing.runs.find(r => r.stamp === newer);
+      const staged = await catchup.stageRun(cloudStore, db.dataDir, newer, run ? run.files : []);
+      if (!staged.ok) return warn(newer, "it did not verify: " + staged.error);
+
+      /* The last look, with requests held off so nothing can slip in
+         between this check and the restart. */
+      release.BOOT.catchingUp = true;
+      if (writes() - baseline !== 0) {
+        release.BOOT.catchingUp = false;
+        catchup.discard(db.dataDir);
+        return warn(newer, "work was entered while the newer backup was being checked");
+      }
+
+      catchup.markReady(db.dataDir, newer);
+      release.BOOT.gapOutcome = "taken-in";
+      console.log(`[release] taking in the newer backup ${newer}: nothing has been written here ` +
+        `since start-up, so it only adds. Restarting so it is put in place before anything ` +
+        `opens a database. What it replaces will be kept.`);
+      try { db.companies.closeAll(); } catch (e) { /* exiting either way */ }
+      try { tenants.close(); } catch (e) { /* exiting either way */ }
+      /* Exit, and let the host start us again. A process.exit() does not
+         run the SIGTERM handler, so no backup of the OLD data is taken on
+         the way out — which is the point. */
+      setTimeout(() => process.exit(0), 200);
+    }, plan.checkGapAfterMs).unref?.();
+  }
 });
 
 // On an ephemeral-disk host (Render), a code deploy kills THIS process and

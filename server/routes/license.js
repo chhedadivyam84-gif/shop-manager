@@ -52,6 +52,12 @@ router.post("/activate", requireRole("owner"), async (req, res) => {
   const r = await checkin.activate(String(req.body.code || ""));
   if (!r.ok) return res.status(400).json({ error: r.error });
   logAction(req, "license.activate", `${r.state.licensedTo || "—"} until ${r.state.expiresOn || "—"}`);
+  require("../notify").createEverywhere({
+    category: "licence", severity: "info", audience: "owner", link: "settings",
+    key: `licence:activated:${r.state.code || "-"}:${r.state.expiresOn || "-"}`,
+    title: "Subscription activated",
+    body: r.state.expiresOn ? `Active until ${r.state.expiresOn}.` : "Active."
+  });
   res.json({ ok: true, state: r.state });
 });
 
@@ -95,6 +101,7 @@ router.post("/", requireRole("owner"), (req, res) => {
 
   db.prepare("UPDATE settings SET license_key = ? WHERE id = 1").run(key);
   logAction(req, "license.update", `${data.shop || "—"} until ${data.expires}`);
+  require("../notifyLicence").sweep();
   res.json(license.state(key));
 });
 

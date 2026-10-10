@@ -138,11 +138,18 @@ const TOOLS = [
       const q = text(a.query);
       if (!q) return { error: "No search text was given." };
       const rows = db.prepare(`
-        SELECT id, name, type, phone, state FROM customers
+        SELECT id, name, type, state FROM customers
         WHERE name LIKE ? ESCAPE '\\' OR phone LIKE ? ESCAPE '\\'
         ORDER BY name LIMIT ?
       `).all(like(q), like(q), cap(a.limit, 10));
-      /* Deliberately WITHOUT `due` and `credit_limit`. What a customer
+      /* NO PHONE NUMBERS, in this tool or the next. Whatever a tool returns
+         is sent to the AI provider to write the answer from, and a phone
+         number is somebody else's personal data that no answer about who
+         a customer is, or how much they owe, actually needs. Searching BY
+         phone still works — the number is matched here and simply not sent
+         back. Opening the customer in the app shows it.
+
+         Deliberately WITHOUT `due` and `credit_limit`. What a customer
          owes is a different permission from knowing they exist, and a
          search is not the place to hand it over. */
       return { matched: rows.length, customers: rows };
@@ -156,7 +163,7 @@ const TOOLS = [
     module: "outstanding", action: "view",
     run(a) {
       const rows = db.prepare(`
-        SELECT id, name, phone, due FROM customers
+        SELECT id, name, due FROM customers
         WHERE due > 0 ORDER BY due DESC LIMIT ?
       `).all(cap(a.limit, 15));
       const total = db.prepare("SELECT COALESCE(SUM(due),0) AS t FROM customers WHERE due > 0").get().t;

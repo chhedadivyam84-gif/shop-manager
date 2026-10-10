@@ -140,7 +140,19 @@ router.post("/", requireRole("owner"), async (req, res) => {
         `All bills, challans, returns, orders and deliveries cleared — backup: ${backupResult.file}`);
     } catch (_) { /* the backup is the real safety net */ }
   }
-  console.log(`[reset] ${billsOnly ? "Bills cleared" : "Shop data wiped"} by ${staff.name}. Backup: ${backupResult.file}`);
+  /* The staff ID, not their name: this line goes to the host's logs, and
+     who did it is already recorded in full in the shop's own audit log. */
+  console.log(`[reset] ${billsOnly ? "Bills cleared" : "Shop data wiped"} by staff ${staff.id}. Backup: ${backupResult.file}`);
+
+  /* The largest thing anybody can do to this shop, so every owner hears of
+     it — including one who was not the one who did it. */
+  require("../notify").create({
+    category: "security", severity: "critical", audience: "owner",
+    key: `security:reset:${backupResult.file}`,
+    title: billsOnly ? `All bills were cleared by ${staff.name}` : `All shop data was wiped by ${staff.name}`,
+    body: `A safety backup was taken first: ${backupResult.file}. It can be restored from Backups.`,
+    link: "backups"
+  });
 
   res.json({ ok: true, scope: billsOnly ? "bills" : "all", backupFile: backupResult.file });
 });

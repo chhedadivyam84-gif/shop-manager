@@ -341,6 +341,20 @@ async function checkIn(reason) {
     }
     lastError = "";
     console.log(`[licence] checked in (${reason}): ${v.status}${v.expires ? ", until " + v.expires : ""}`);
+
+    /* WHAT THE VERDICT MEANS FOR THE OWNER, AND WHAT THE SUPPLIER HAS SAID.
+       Announcements ride inside the signed verdict, so a notice in this
+       shop's bell can only have come from the vendor's key — not from
+       anybody who can answer on the licence server's address. Older panels
+       send none, which is simply no announcements. */
+    try {
+      const notify = require("./notify");
+      for (const c of db.companies.list()) {
+        if (c.active === false) continue;
+        db.companies.runAs(c.id, () => notify.syncVendorAnnouncements(v.announcements, v.withdrawnAnnouncements));
+      }
+      require("./notifyLicence").sweep();
+    } catch (e) { console.error("[licence] could not update notifications:", e.message); }
     return { ok: true, status: v.status };
   } catch (e) {
     lastError = e.message;

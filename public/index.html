@@ -102,6 +102,13 @@
     </div>
 
     <div id="login-error"></div>
+    <!-- Reachable before signing in, which is when somebody deciding whether
+         to trust this with their customers' details actually reads it. -->
+    <nav class="login-legal" aria-label="Policies">
+      <a href="/legal/privacy.html">Privacy</a> ·
+      <a href="/legal/terms.html">Terms</a> ·
+      <a href="/legal/ai.html">AI &amp; voice</a>
+    </nav>
   </div>
 
   <!-- ============ APP ============ -->
@@ -124,7 +131,7 @@
         <div style="display:flex;align-items:center;gap:8px;">
           <!-- What is still waiting, on every screen rather than only on Home:
                an unbilled challan is worth seeing while you are billing. -->
-          <button id="bell-btn" class="bell" title="Reminders">
+          <button id="bell-btn" class="bell" title="Notifications and reminders" aria-label="Notifications and reminders">
             &#128276;<span id="bell-count" class="bell-count" style="display:none;">0</span>
           </button>
           <button id="refresh-btn" title="Refresh">&#8635;</button>
@@ -195,8 +202,13 @@
         <div class="section-title">Top Customers</div>
         <div class="card" id="top-customers"></div>
 
-        <div class="section-title">Recent Invoices</div>
-        <div class="card" id="recent-invoices"></div>
+        <!-- Hidden from Home at the owner's request (Oct 2026). Kept, not
+             removed: delete the `hidden` attribute to bring it back. The
+             invoices themselves are untouched and still open from Billing. -->
+        <div id="recent-invoices-block" hidden>
+          <div class="section-title">Recent Invoices</div>
+          <div class="card" id="recent-invoices"></div>
+        </div>
       </div>
 
       <!-- BILLING -->

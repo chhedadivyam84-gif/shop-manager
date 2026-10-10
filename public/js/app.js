@@ -1497,7 +1497,7 @@ async function switchTab(tab){
   // brought into view — otherwise switching from a tile leaves it off-screen.
   const activeBtn = document.querySelector(`nav.bottom .tab[data-tab="${tab}"]`);
   if(activeBtn && activeBtn.scrollIntoView) activeBtn.scrollIntoView({ block:"nearest", inline:"nearest" });
-  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",selection:"Selection Slip",quotation:"Quotation",so:"Sales Order",pquery:"Product Query",stockhistory:"Stock History / Stock Ledger",accounts:"Accounts",otherledger:(state.olKind==="income"?"Other Income":"Other Expenses"),fyear:"Financial Year",fyclose:"Financial Year",printmgr:"Print Management",outstanding:"Outstanding",position:"Business Position",materialflow:"Material Flow & Document Tracking",ewb:"E-Way Bill",delivery:"Delivery & Dispatch",alerts:"Reminders",notes:"Notepad",backups:"Cloud Backups",employees:"Staff Pay",imports:"Import Old Data"};
+  const subMap = {home:(isOwner()?"Owner Dashboard":"Staff Dashboard"),billing:"Create Invoice",inventory:"Inventory",customers:"Customers",reports:"Reports",cashbook:"Cash Book",bankbook:"Bank Book",inquiries:"Customer Inquiry Book",purchase:"New Purchase",po:"Purchase Order",selection:"Selection Slip",quotation:"Quotation",so:"Sales Order",pquery:"Product Query",stockhistory:"Stock History / Stock Ledger",accounts:"Accounts",otherledger:(state.olKind==="income"?"Other Income":"Other Expenses"),fyear:"Financial Year",fyclose:"Financial Year",printmgr:"Print Management",outstanding:"Outstanding",position:"Business Position",materialflow:"Material Flow & Document Tracking",ewb:"E-Way Bill",delivery:"Delivery & Dispatch",alerts:"Notifications & Reminders",notes:"Notepad",backups:"Cloud Backups",employees:"Staff Pay",imports:"Import Old Data"};
   document.getElementById("hdr-sub").textContent = subMap[tab];
   document.getElementById("hdr-main").textContent = tab==="home" ? greeting() : subMap[tab];
   if(tab==="billing") await renderBilling();
@@ -3906,9 +3906,13 @@ async function renderAlerts(){
      would otherwise leave it red forever, and a bell that is always on is
      a bell nobody looks at. */
   const dueNow = mine.filter(m => !m.done && (m.overdue || m.dueToday)).length;
-  paintAlertCount(r.total + dueNow);
+  BELL.reminders = r.total + dueNow;
+  paintAlertCount(BELL.reminders + BELL.unread);
 
-  const mineHtml = renderMyReminders(mine);
+  /* Things that happened sit above things still to do. Drawn into its own
+     box by renderNotifications(), so marking one read never redraws — or
+     loses the scroll position of — the reminders underneath. */
+  const mineHtml = `<div id="ntf-section"></div>` + renderMyReminders(mine);
 
   if(!r.total){
     body.innerHTML = mineHtml + `<div class="card" style="margin-top:0;">
@@ -3916,6 +3920,7 @@ async function renderAlerts(){
       <div class="row-sub">No unbilled challans, nothing overdue, nothing left on a van.</div>
     </div>`;
     wireMyReminders(body);
+    renderNotifications();
     return;
   }
 
@@ -3936,6 +3941,7 @@ async function renderAlerts(){
       </div>`).join("")}`).join("");
 
   wireMyReminders(body);
+  renderNotifications();
 
   body.querySelectorAll(".alert-row").forEach(el => {
     el.querySelector(".alert-edit").addEventListener("click", async () => {
@@ -3971,9 +3977,265 @@ function paintAlertCount(n){
   });
 }
 
+/* The bell is two numbers added together: reminders still to act on, and
+   notifications not yet read. Kept apart so either can be refreshed alone. */
+const BELL = { reminders: 0, unread: 0, polling: false };
+
 async function refreshAlertCount(){
-  try{ paintAlertCount((await api("GET", "/alerts")).total); }
-  catch(e){ /* a badge is never worth an error on the counter screen */ }
+  /* Each half fails on its own. An older server without notifications
+     still shows its reminders, and the other way round. */
+  const [a, n] = await Promise.allSettled([api("GET", "/alerts"), api("GET", "/notifications/count")]);
+  if(a.status === "fulfilled") BELL.reminders = a.value.total || 0;
+  if(n.status === "fulfilled") BELL.unread = n.value.unread || 0;
+  if(a.status === "fulfilled" || n.status === "fulfilled") paintAlertCount(BELL.reminders + BELL.unread);
+  startBellPolling();
+}
+
+/* NO PUSH CHANNEL EXISTS IN THIS APP — the three dependencies include no
+   websocket, deliberately — so the bell asks. Every two minutes, and only
+   while the screen is actually being looked at and somebody is signed in:
+   a till left on overnight in a background tab costs nothing. Coming back
+   to the tab asks at once rather than waiting for the next tick. */
+function startBellPolling(){
+  if(BELL.polling) return;
+  BELL.polling = true;
+  const signedIn = () => appInited && document.getElementById("app").style.display !== "none";
+  const tick = () => {
+    if(document.visibilityState !== "visible" || !signedIn()) return;
+    refreshAlertCount().catch(() => {});
+  };
+  setInterval(tick, 120000);
+  document.addEventListener("visibilitychange", tick);
+}
+
+/* ============================================================
+   NOTIFICATIONS — what happened, per person
+
+   Read state belongs to the person signed in, and the server decides what
+   they may see. Everything drawn here is escaped, and a notification can
+   only send somebody to a screen named in NTF_LINKS — never to an address.
+   ============================================================ */
+const NTF = { items: [], next: null, loading: false, error: "" };
+
+const NTF_LINKS = {
+  alerts:    { label: "Open",            go: () => switchTab("alerts") },
+  inventory: { label: "Open stock",      go: () => switchTab("inventory") },
+  product:   { label: "Open product",    go: (id) => { const p = state.products.find(x => x.id === id);
+                                                       if(!p) return toast("That product is no longer listed.");
+                                                       openProductDetail(id, "inventory"); } },
+  backups:   { label: "Open backups",    go: () => switchTab("backups"), owner: true },
+  settings:  { label: "Open settings",   go: () => openSettings() },
+  staff:     { label: "Manage staff",    go: () => openStaffManage(), owner: true },
+  audit:     { label: "Open activity log", go: () => openAuditLog(), owner: true }
+};
+
+const NTF_KIND = { licence: "Subscription", security: "Security", stock: "Stock",
+                   announcement: "Notice", system: "System" };
+
+function ntfWhen(at){
+  const mins = Math.round((Date.now() - at) / 60000);
+  if(mins < 1) return "just now";
+  if(mins < 60) return `${mins} min ago`;
+  const hrs = Math.round(mins / 60);
+  if(hrs < 24) return `${hrs} hr ago`;
+  const d = new Date(at);
+  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: d.getFullYear() === new Date().getFullYear() ? undefined : "numeric" });
+}
+
+async function loadNotifications(more){
+  NTF.loading = true; NTF.error = "";
+  try{
+    const q = more && NTF.next ? `?before=${encodeURIComponent(NTF.next)}` : "";
+    const r = await api("GET", "/notifications" + q);
+    NTF.items = more ? NTF.items.concat(r.items) : r.items;
+    NTF.next = r.next;
+    BELL.unread = r.unread || 0;
+  }catch(e){ NTF.error = e.message || "Could not load notifications."; }
+  NTF.loading = false;
+}
+
+async function renderNotifications(more){
+  const box = document.getElementById("ntf-section");
+  if(!box) return;
+  if(!more){
+    box.innerHTML = `<div class="section-title">Notifications</div>
+      <p class="muted" style="font-size:13px;margin:0 0 10px;">Loading…</p>`;
+  }
+  await loadNotifications(more);
+  drawNotifications();
+}
+
+function drawNotifications(){
+  const box = document.getElementById("ntf-section");
+  if(!box) return;
+  paintAlertCount(BELL.reminders + BELL.unread);
+  const owner = isOwner();
+  const head = `
+    <div class="section-title ntf-head">
+      <span class="ntf-dot ntf-dot-head" aria-hidden="true"></span>
+      Notifications <span class="muted" style="font-weight:400;">· ${BELL.unread} unread</span>
+      <span class="ntf-actions">
+        ${BELL.unread ? `<button class="chip" id="ntf-all">Mark all read</button>` : ""}
+        ${owner ? `<button class="chip" id="ntf-post">+ Notice</button>` : ""}
+        <button class="chip" id="ntf-prefs" aria-label="Notification settings">Settings</button>
+      </span>
+    </div>`;
+
+  let list;
+  if(NTF.error && !NTF.items.length){
+    list = `<div class="card ntf-empty"><div class="row-title">Could not load notifications</div>
+      <div class="row-sub">${escapeHtml(NTF.error)}</div>
+      <button class="btn btn-outline" id="ntf-retry" style="margin-top:9px;padding:7px 14px;">Try again</button></div>`;
+  }else if(!NTF.items.length){
+    list = `<div class="card ntf-empty"><div class="row-title">No notifications</div>
+      <div class="row-sub">Subscription, security and stock notices will appear here.</div></div>`;
+  }else{
+    list = NTF.items.map(n => {
+      const link = NTF_LINKS[n.link];
+      const showLink = link && (!link.owner || owner);
+      return `
+      <div class="card ntf-row ntf-${escapeHtml(n.severity)}${n.read ? "" : " ntf-unread"}" data-ntf="${escapeHtml(n.id)}">
+        <div class="ntf-top">
+          ${n.read ? "" : `<span class="ntf-dot" aria-label="Unread"></span>`}
+          <span class="ntf-kind">${escapeHtml(NTF_KIND[n.category] || "Notice")}${n.source === "vendor" ? " · from your supplier" : ""}</span>
+          <span class="ntf-time">${escapeHtml(ntfWhen(n.at))}</span>
+        </div>
+        <div class="row-title">${escapeHtml(n.title)}</div>
+        ${n.body ? `<div class="row-sub ntf-body">${escapeHtml(n.body)}</div>` : ""}
+        ${showLink || !n.read || (n.mine && owner) ? `<div class="ntf-btns">
+          ${showLink ? `<button class="btn btn-outline ntf-open" data-link="${escapeHtml(n.link)}" data-link-id="${escapeHtml(n.linkId || "")}">${escapeHtml(link.label)}</button>` : ""}
+          ${n.read ? "" : `<button class="btn btn-outline ntf-read">Mark read</button>`}
+          ${n.mine && owner ? `<button class="btn btn-outline ntf-withdraw">Withdraw</button>` : ""}
+        </div>` : ""}
+      </div>`;
+    }).join("") + (NTF.next ? `<button class="btn btn-outline" id="ntf-more" style="width:100%;margin:2px 0 8px;">Show older</button>` : "")
+      + (NTF.error ? `<p class="muted" style="font-size:12px;">${escapeHtml(NTF.error)}</p>` : "");
+  }
+  box.innerHTML = head + list;
+
+  const markRead = async (ids) => {
+    try{
+      const r = await api("POST", "/notifications/read", { ids });
+      NTF.items.forEach(n => { if(ids.includes(n.id)) n.read = true; });
+      BELL.unread = r.unread || 0;
+      drawNotifications();
+    }catch(e){ toast(e.message); }
+  };
+
+  box.querySelectorAll(".ntf-row").forEach(el => {
+    const id = el.dataset.ntf;
+    const item = NTF.items.find(n => n.id === id);
+    const open = el.querySelector(".ntf-open");
+    if(open) open.addEventListener("click", async () => {
+      if(item && !item.read) markRead([id]);
+      const l = NTF_LINKS[open.dataset.link];
+      try{ if(l) await l.go(open.dataset.linkId); }catch(e){ toast(e.message); }
+    });
+    const rd = el.querySelector(".ntf-read");
+    if(rd) rd.addEventListener("click", () => markRead([id]));
+    const wd = el.querySelector(".ntf-withdraw");
+    if(wd) wd.addEventListener("click", async () => {
+      if(!confirm("Withdraw this notice? Nobody will see it any more.")) return;
+      try{ await api("POST", `/notifications/${encodeURIComponent(id)}/withdraw`); await renderNotifications(); toast("Notice withdrawn.", "ok"); }
+      catch(e){ toast(e.message); }
+    });
+  });
+  const all = box.querySelector("#ntf-all");
+  if(all) all.addEventListener("click", async () => {
+    all.disabled = true;
+    try{
+      await api("POST", "/notifications/read-all");
+      NTF.items.forEach(n => n.read = true);
+      BELL.unread = 0;
+      drawNotifications();
+      toast("All marked read.", "ok");
+    }catch(e){ toast(e.message); all.disabled = false; }
+  });
+  const moreBtn = box.querySelector("#ntf-more");
+  if(moreBtn) moreBtn.addEventListener("click", async () => {
+    moreBtn.disabled = true; moreBtn.textContent = "Loading…";
+    await renderNotifications(true);
+  });
+  const retry = box.querySelector("#ntf-retry");
+  if(retry) retry.addEventListener("click", () => renderNotifications());
+  box.querySelector("#ntf-prefs").addEventListener("click", openNotificationPrefs);
+  const post = box.querySelector("#ntf-post");
+  if(post) post.addEventListener("click", openNoticeSheet);
+}
+
+/** What each person is told. Essential kinds are shown, and shown as fixed. */
+async function openNotificationPrefs(){
+  const sheet = document.getElementById("sheet-reminder");
+  sheet.innerHTML = `<div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>&#10005;</button>
+    <div class="sheet-title">Notification settings</div>
+    <div id="ntf-prefs-body"><p class="muted" style="font-size:13px;">Loading…</p></div>`;
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  showSheet("sheet-reminder");
+  const body = sheet.querySelector("#ntf-prefs-body");
+  let prefs;
+  try{ prefs = await api("GET", "/notifications/prefs"); }
+  catch(e){ body.innerHTML = `<div class="pm-warn">${escapeHtml(e.message)}</div>`; return; }
+
+  const draw = () => {
+    body.innerHTML = prefs.categories.map(c => `
+      <div class="card ntf-pref" style="margin-top:0;margin-bottom:6px;">
+        <div class="row-title">${escapeHtml(NTF_KIND[c.category] || c.category)}</div>
+        <label class="ntf-switch">
+          <input type="checkbox" data-pref="${escapeHtml(c.category)}" data-kind="inApp" ${c.inApp ? "checked" : ""} ${c.essential ? "disabled" : ""}>
+          <span>${c.essential ? "Always shown — cannot be turned off" : "Show in the bell"}</span>
+        </label>
+        ${c.emailAllowed ? `<label class="ntf-switch">
+          <input type="checkbox" data-pref="${escapeHtml(c.category)}" data-kind="email" ${c.email ? "checked" : ""} ${prefs.emailConfigured ? "" : "disabled"}>
+          <span>Also email it to the business email in Settings</span>
+        </label>` : ""}
+      </div>`).join("") + (isOwner() && !prefs.emailConfigured
+        ? `<p class="muted" style="font-size:11.5px;margin-top:8px;">Email is not set up on this installation yet, so nothing is emailed. Notifications still appear in the bell.</p>` : "");
+    body.querySelectorAll("[data-pref]").forEach(box => box.addEventListener("change", async () => {
+      const payload = { [box.dataset.kind]: box.checked };
+      box.disabled = true;
+      try{ prefs = await api("PUT", `/notifications/prefs/${encodeURIComponent(box.dataset.pref)}`, payload); draw(); toast("Saved.", "ok"); renderNotifications(); }
+      catch(e){ toast(e.message); box.checked = !box.checked; box.disabled = false; }
+    }));
+  };
+  draw();
+}
+
+/** The owner's notice to everybody in this shop. */
+function openNoticeSheet(){
+  const sheet = document.getElementById("sheet-reminder");
+  sheet.innerHTML = `<div class="sheet-handle"></div>
+    <button class="sheet-close" data-sheetclose>&#10005;</button>
+    <div class="sheet-title">Notice to all staff</div>
+    <label class="field-label" for="ntf-title">Heading</label>
+    <input type="text" id="ntf-title" maxlength="140" autocomplete="off" placeholder="e.g. Shop closed on Sunday">
+    <label class="field-label" for="ntf-text" style="margin-top:10px;">Message (optional)</label>
+    <textarea id="ntf-text" maxlength="600" rows="4" style="width:100%;"></textarea>
+    <p class="muted" style="font-size:11px;margin-top:6px;">Everyone who signs in to this business sees it in their bell.</p>
+    <div id="ntf-post-error" style="margin-top:10px;"></div>
+    <div style="display:flex;gap:8px;margin-top:14px;">
+      <button class="btn btn-outline" id="ntf-cancel" style="flex:1;">Cancel</button>
+      <button class="btn btn-gold" id="ntf-send" style="flex:1;">Post notice</button>
+    </div>`;
+  sheet.querySelector("[data-sheetclose]").addEventListener("click", closeAllSheets);
+  sheet.querySelector("#ntf-cancel").addEventListener("click", closeAllSheets);
+  sheet.querySelector("#ntf-send").addEventListener("click", async (ev) => {
+    const btn = ev.currentTarget;
+    const err = sheet.querySelector("#ntf-post-error");
+    err.innerHTML = "";
+    btn.disabled = true;
+    try{
+      await api("POST", "/notifications/announce", {
+        title: sheet.querySelector("#ntf-title").value.trim(),
+        body: sheet.querySelector("#ntf-text").value.trim()
+      });
+      closeAllSheets();
+      await renderNotifications();
+      toast("Notice posted.", "ok");
+    }catch(e){ err.innerHTML = `<div class="pm-warn">${escapeHtml(e.message)}</div>`; btn.disabled = false; }
+  });
+  showSheet("sheet-reminder");
+  sheet.querySelector("#ntf-title").focus();
 }
 
 /* ============================================================
@@ -7442,7 +7704,15 @@ function renderProductDetailSheet(context){
                 <input type="number" value="${loc.quantity}" data-loc-stock-input="${s.id}" data-loc-id="${loc.location_id}" style="width:60px;">
                 <button data-loc-inc="${s.id}" data-loc-id="${loc.location_id}">+</button>
               </div>
-            </div>`).join("")}
+            </div>
+            ${mayI("stock","edit") ? `
+            <div class="list-row min-stock-row" style="padding:0 0 4px;">
+              <label style="flex:1;font-size:11px;" class="muted" for="min-${s.id}-${loc.location_id}">
+                Warn me below</label>
+              <input type="number" min="0" step="any" id="min-${s.id}-${loc.location_id}"
+                value="${Number(loc.min_stock)||0}" data-min-stock="${s.id}" data-loc-id="${loc.location_id}"
+                title="0 means never warn" style="width:60px;">
+            </div>` : (Number(loc.min_stock) ? `<div class="muted" style="font-size:11px;padding:0 0 4px;">Warns below ${Number(loc.min_stock)}</div>` : "")}`).join("")}
         </div>`).join("") || `<div class="empty-hint">No sizes on this product.</div>`}
     `;
     stockArea.querySelectorAll("[data-loc-dec]").forEach(b=>b.addEventListener("click", async ()=>{
@@ -7456,6 +7726,23 @@ function renderProductDetailSheet(context){
     stockArea.querySelectorAll("[data-loc-stock-input]").forEach(inp=>inp.addEventListener("change", async (e)=>{
       const updated = await api("PATCH", `/products/${p.id}/sizes/${inp.dataset.locStockInput}/stock`, {stock: parseInt(e.target.value)||0, locationId:inp.dataset.locId});
       Object.assign(p, updated); renderProductDetailSheet(context); renderInventoryList();
+    }));
+    /* The level the bell warns below. 0 is "never warn", which is what
+       every size has until somebody sets one. */
+    stockArea.querySelectorAll("[data-min-stock]").forEach(inp=>inp.addEventListener("change", async ()=>{
+      const v = inp.value === "" ? 0 : Number(inp.value);
+      try{
+        await api("PUT", `/products/${p.id}/sizes/${inp.dataset.minStock}/min-stock`, {minStock: v, locationId: inp.dataset.locId});
+        const size = p.sizes.find(z => String(z.id) === String(inp.dataset.minStock));
+        const row = size && (size.byLocation||[]).find(l => l.location_id === inp.dataset.locId);
+        if(row) row.min_stock = Math.max(0, v);
+        /* Setting a minimum above what is on the rack does not ring the bell —
+           nothing moved — so say where it shows instead. */
+        const already = row && v > 0 && Number(row.quantity) < v;
+        toast(v <= 0 ? "No minimum for this one."
+          : already ? `Already below ${v} — it is listed under Reminders now.`
+          : `You will be told when it falls below ${v}.`, "ok");
+      }catch(e){ toast(e.message); }
     }));
     sheet.querySelector("#stock-in-btn").addEventListener("click", ()=>openStockIn(p));
     sheet.querySelector("#transfer-stock-btn").addEventListener("click", ()=>openTransferStock(p));
@@ -9532,6 +9819,15 @@ async function renderScanSettings() {
       : '<div class="row-sub" style="margin-bottom:6px;">Not set up. New Purchase shows no scan button.</div>') +
     '<input type="password" id="st-scan-key" autocomplete="off" spellcheck="false" placeholder="' +
     (st.configured ? "Paste a new key to replace the one saved" : "Paste your Google Gemini API key") + '">' +
+    /* WHICH KIND OF KEY MATTERS, and only the person pasting it can know.
+       This key also serves the Assistant, which sends customers' names and
+       amounts owed. Under Google's published Gemini API terms, free-tier
+       requests may be read by Google's reviewers and used to improve its
+       products; requests on a billed project are not. The app cannot tell
+       the two apart, so it says so here, at the moment of choosing. */
+    '<div class="row-sub" style="margin-top:6px;">Use a key from a Google Cloud project with <b>billing turned on</b>. ' +
+    "On Google’s free tier, what is sent — including the Assistant’s customer names and amounts owed — may be " +
+    'read by Google and used to improve its products. <a href="/legal/ai.html" target="_blank" rel="noopener">Details</a></div>' +
     '<div class="acts" style="margin-top:8px;">' +
     '<button class="btn btn-gold" id="st-scan-save">Save key</button>' +
     (st.configured ? '<button class="btn btn-outline" id="st-scan-clear">Turn it off</button>' : "") +
@@ -14315,6 +14611,12 @@ function paintAssistant(loadingNote){
           ${ASSIST.busy ? "disabled" : ""}>${ASSIST.mode === "listening" ? "&#9632;" : "&#127908;"}</button>` : ""}
         <button class="btn btn-primary" id="ai-send" ${ASSIST.busy || ASSIST.mode === "listening" ? "disabled" : ""}>Ask</button>
       </div>
+      <!-- Said where the question is typed, not buried in Settings: the
+           question and the records that answer it go to Google, and the
+           person asking should know that before they press Ask. -->
+      <p class="ai-privacy">Your question and the records that answer it are sent to Google to write the answer —
+        never phone numbers, PINs or passwords. Spoken questions are turned into text by your browser.
+        Nothing is kept here. <a href="/legal/ai.html" target="_blank" rel="noopener">How this works</a></p>
       ${ASSIST.turns.length ? `<button class="btn btn-outline" id="ai-new" style="margin-top:10px;">Start again</button>` : ""}
     </div>`;
 

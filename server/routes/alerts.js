@@ -145,6 +145,33 @@ function buildAlerts(req) {
   add("stock-out", "Products showing no stock", "info",
     lowStock.map(r => ({ id: r.id, line: r.name, sub: "nothing on the racks", goto: "inventory" })));
 
+  /* ---- below the minimum the shop set ----------------------------------
+
+     Only sizes somebody gave a minimum to: 0 means "do not warn me", which
+     is what every size has until the owner says otherwise. Nothing is
+     guessed. Out-of-stock sizes are left to the list above. Shown only to
+     somebody allowed to see stock, the same as the bell's stock notices. */
+  let belowMin = [];
+  if (require("../permissions").can(req, "stock", "view")) {
+    try {
+      belowMin = db.prepare(`
+        SELECT sls.size_id, sls.location_id, sls.quantity, sls.min_stock,
+               p.id AS product_id, p.name, s.label, l.name AS location
+          FROM size_location_stock sls
+          JOIN product_sizes s ON s.id = sls.size_id
+          JOIN products p ON p.id = s.product_id
+          JOIN locations l ON l.id = sls.location_id
+         WHERE p.active = 1 AND l.active = 1 AND sls.min_stock > 0
+           AND sls.quantity < sls.min_stock AND COALESCE(s.stock, 0) > 0
+         ORDER BY (sls.quantity / sls.min_stock) ASC, p.name LIMIT 50`).all();
+    } catch { /* older schema */ }
+  }
+  add("stock-low", "Below the minimum you set", "warn",
+    belowMin.map(r => ({ id: `${r.size_id}@${r.location_id}`,
+      line: r.label ? `${r.name} (${r.label})` : r.name,
+      sub: `${Math.round(r.quantity * 100) / 100} at ${r.location} · minimum ${Math.round(r.min_stock * 100) / 100}`,
+      goto: "inventory" })));
+
 
   /* ---- the backup store filling up --------------------------------------
 

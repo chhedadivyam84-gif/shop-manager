@@ -1,0 +1,39 @@
+# The release check, on every push — the same one a person runs before a
+# deploy (tools/release-check.js). It exists so that a commit that cannot
+# start, or that breaks the money, identity or backup tests, is caught
+# here rather than by Render failing to deploy it or, worse, deploying it.
+#
+# To make this a real GATE rather than a report, set each Render service's
+# Settings -> Auto-Deploy to "After CI Checks Pass". Until then Render
+# deploys on push whatever this says. See RELEASING.md.
+#
+# No secrets are used or needed. Two checks are reported LOCAL and do not
+# run here, on purpose: one needs the vendor's private signing key and the
+# other a copy of the shop's real books, and neither is ever given to CI.
+
+name: Release check
+
+on:
+  push:
+    branches: [master, cashbook-explore]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  release-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Production runs in India time (see the Dockerfile); dates in bills
+      # and reports must be checked in the same zone.
+      TZ: Asia/Kolkata
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: node tools/release-check.js --ci

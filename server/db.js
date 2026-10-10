@@ -107,8 +107,15 @@ function activeConnection() {
    Forwards the whole handle — prepare, exec, transaction, dataDir, file — to
    the connection for the request in flight. Methods are bound so `this` stays
    the real connection. */
+/* `companies` is answered by the proxy itself, not by a connection.
+   It used to be assigned through the set trap below, which put it on
+   whichever connection was active at load — the default company's — so
+   `db.companies` was undefined for code running inside any OTHER company.
+   Measured: a second company read it as undefined. */
+let companiesApi = null;
 const db = new Proxy({}, {
   get(_t, prop) {
+    if (prop === "companies" && companiesApi) return companiesApi;
     const conn = activeConnection();
     const value = conn[prop];
     return typeof value === "function" ? value.bind(conn) : value;
@@ -166,8 +173,34 @@ function updateCompany(id, { name, active }) {
 }
 
 module.exports = db;
-module.exports.companies = {
+/* How many rows have been written, across every business, since each
+   connection opened. SQLite's own total_changes() counts every INSERT,
+   UPDATE and DELETE on a connection — so it misses nothing, unlike a row
+   count, which an edit to an existing customer would leave untouched.
+
+   Used to answer one question after a deploy: has anybody written ANYTHING
+   here yet? A business that cannot be opened counts as changed, because
+   "I could not tell" must never be read as "nothing happened". */
+function changeCount() {
+  let n = 0;
+  for (const c of listCompanies()) {
+    try { n += connectionFor(c.id).prepare("SELECT total_changes() AS n").get().n; }
+    catch (e) { n += 1e9; }
+  }
+  return n;
+}
+
+/* Every pooled connection closed, so the files can be moved. The next
+   query reopens whatever is then on disk. */
+function closeAll() {
+  for (const c of pool.values()) { try { c.close(); } catch (e) { /* already closed */ } }
+  pool.clear();
+}
+
+companiesApi = {
   list: listCompanies, get: getCompany, create: createCompany,
   update: updateCompany, defaultId: defaultCompanyId,
-  runAs: runAsCompany, currentId: currentCompanyId, file: companyFile
+  runAs: runAsCompany, currentId: currentCompanyId, file: companyFile,
+  changeCount, closeAll
 };
+module.exports.companies = companiesApi;

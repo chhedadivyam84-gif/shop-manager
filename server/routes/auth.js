@@ -373,6 +373,11 @@ function refreshFeatures(username, password, row) {
          written there: the map is one file, and the books are what get
          backed up. Only ever filled in or corrected — never blanked,
          because an answer without an id must not erase a good one. */
+      /* What the supplier has published for this shop, into this shop's
+         own bell and nobody else's. */
+      db.companies.runAs(row.company_id, () => require("../notify")
+        .syncVendorAnnouncements(fresh.body.announcements, fresh.body.withdrawnAnnouncements));
+
       if (fresh.body.customerId) {
         try {
           db.companies.runAs(row.company_id, () => {
@@ -414,6 +419,8 @@ function finish(req, res, row) {
   /* Everything downstream reads the company from the session, so this is
      the line that decides whose books the rest of the request sees. */
   req.session.businessId = row.company_id;
+  /* Ends in three days? The owner hears it in the bell this sign-in. */
+  require("../notifyLicence").forTenant(row);
   req.session.tenant = {
     username: row.username, companyId: row.company_id,
     shopName: row.shop_name, plan: row.plan, expiresOn: row.expires_on,
@@ -467,7 +474,20 @@ router.post("/login", (req, res) => {
   const { staffId, pin } = req.body;
   const staff = staffId && db.prepare("SELECT * FROM staff WHERE id = ? AND active = 1").get(staffId);
   if (!staff || !pin || !verifyPin(String(pin), staff.pin_hash)) {
-    recordLoginFailure(ip, staffId);
+    const r = recordLoginFailure(ip, staffId);
+    /* Five wrong PINs for a real account is worth the owner knowing about.
+       Not the PINs, not the address — just whose account and that it is
+       paused. One notice per account per six hours, however many rounds
+       of guessing follow. */
+    if (r && r.lockedNow && staff) {
+      require("../notify").create({
+        category: "security", severity: "warning", audience: "owner",
+        key: "security:lockout:" + staff.id, repeatAfterMs: 6 * 3600 * 1000,
+        title: `Five wrong PINs for ${staff.name}`,
+        body: "Sign-in to this account is paused for 15 minutes. If this was not them, change their PIN in Settings → Staff.",
+        link: "staff"
+      });
+    }
     return res.status(401).json({ error: "Incorrect PIN." });
   }
 

@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shop Manager — New Look Preview</title>
+<style>
+/* A PREVIEW ONLY. Not wired to the app; every figure is invented.
+   The look follows the reference the owner chose: white cards on a pale
+   grey page, a left sidebar, a quiet top bar, blue / purple / orange
+   accents, green and red only for good and bad. */
+:root{
+  --page:#F4F6FA; --card:#FFFFFF; --line:#E5E9F1; --line-2:#EEF1F6;
+  --text:#18212F; --muted:#6A7386; --faint:#98A0AF;
+  --blue:#2F6BED; --blue-soft:#E9F0FE;
+  --purple:#7457D6; --purple-soft:#F0ECFC;
+  --orange:#EE9A1C; --orange-soft:#FDF3E2;
+  --good:#16935A; --good-soft:#E5F5EC;
+  --bad:#D23C3C; --bad-soft:#FBEAEA;
+  --side:236px; --radius:12px;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--page);color:var(--text);
+  font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  -webkit-text-size-adjust:100%}
+button{font:inherit;color:inherit;cursor:pointer}
+:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+.num{font-variant-numeric:tabular-nums}
+
+/* ---- frame ---------------------------------------------------------- */
+.app{display:grid;grid-template-columns:var(--side) 1fr;min-height:100vh}
+.side{background:var(--card);border-right:1px solid var(--line);padding:18px 14px;position:sticky;top:0;height:100vh;
+  display:flex;flex-direction:column;gap:4px;z-index:30}
+.brand{display:flex;align-items:center;gap:10px;font-weight:800;letter-spacing:.02em;padding:4px 8px 18px}
+.brand-mark{width:30px;height:30px;border-radius:8px;background:var(--blue);color:#fff;display:grid;place-items:center;font-size:12px;font-weight:800}
+.nav-btn{display:flex;align-items:center;gap:11px;width:100%;border:0;background:none;padding:9px 10px;border-radius:9px;
+  color:#3A4354;font-weight:600;text-align:left}
+.nav-btn svg{width:18px;height:18px;flex:none;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.nav-btn:hover{background:var(--page)}
+.nav-btn[aria-current="page"]{background:var(--blue-soft);color:var(--blue)}
+.nav-sep{height:1px;background:var(--line);margin:10px 6px}
+.side-foot{margin-top:auto;font-size:12px;color:var(--faint);padding:8px}
+
+.main{min-width:0}
+.top{height:62px;background:var(--card);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;padding:0 24px;position:sticky;top:0;z-index:20}
+.menu-btn{display:none;border:0;background:none;padding:6px;border-radius:8px}
+.menu-btn svg,.icon-btn svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round}
+.search{flex:1;max-width:360px;display:flex;align-items:center;gap:8px;background:var(--page);border:1px solid var(--line-2);border-radius:9px;padding:8px 11px;color:var(--faint)}
+.search svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2}
+.search input{border:0;background:none;outline:0;font:inherit;color:var(--text);width:100%}
+.top-right{margin-left:auto;display:flex;align-items:center;gap:14px}
+.icon-btn{position:relative;border:0;background:none;padding:6px;border-radius:8px;color:#4A5366}
+.icon-btn:hover{background:var(--page)}
+.dot{position:absolute;top:2px;right:1px;min-width:16px;height:16px;padding:0 4px;border-radius:99px;background:var(--bad);color:#fff;font-size:10px;font-weight:800;line-height:16px;text-align:center}
+.who{display:flex;align-items:center;gap:9px}
+.avatar{width:34px;height:34px;border-radius:50%;background:#E8C766;color:#2B2410;display:grid;place-items:center;font-weight:800;font-size:12px}
+.who b{display:block;font-size:13.5px;line-height:1.2}
+.who span{font-size:12px;color:var(--muted)}
+
+.content{padding:24px;max-width:1280px}
+.head{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+.head h1{margin:0;font-size:24px;line-height:1.2;text-wrap:balance}
+.head p{margin:3px 0 0;color:var(--muted)}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{border:1px solid var(--line);background:var(--card);border-radius:8px;padding:6px 11px;font-size:12.5px;font-weight:600;color:#3A4354}
+.chip.on{border-color:var(--blue);color:var(--blue);background:var(--blue-soft)}
+.btn{border:0;border-radius:9px;padding:9px 15px;font-weight:700;background:var(--blue);color:#fff}
+.btn.ghost{background:var(--card);color:var(--text);border:1px solid var(--line)}
+
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;min-width:0}
+.card h2{margin:0;font-size:15px}
+.card .sub{color:var(--muted);font-size:12.5px;margin-top:2px}
+.card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+
+.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:14px}
+.kpi .label{color:#3A4354;font-weight:600;font-size:13px}
+.kpi .row{display:flex;align-items:center;gap:8px;margin:4px 0 6px;flex-wrap:wrap}
+.kpi .val{font-size:24px;font-weight:800;letter-spacing:-.01em}
+.delta{font-size:11.5px;font-weight:700;border-radius:6px;padding:2px 6px}
+.delta.up{background:var(--good-soft);color:var(--good)}
+.delta.down{background:var(--bad-soft);color:var(--bad)}
+.delta.warn{background:var(--orange-soft);color:#A9670A}
+.spark{display:block;width:100%;height:42px}
+
+.grid-2{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:14px;margin-bottom:14px}
+.grid-2b{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:14px;margin-bottom:14px}
+.chart{display:block;width:100%;height:auto}
+.legend{display:flex;gap:14px;font-size:12px;color:var(--muted);flex-wrap:wrap}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+
+.table-wrap{overflow-x:auto;margin:0 -18px -16px;border-top:1px solid var(--line-2)}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:11px 12px;border-bottom:1px solid var(--line-2);white-space:nowrap}
+th:first-child,td:first-child{padding-left:18px}
+th:last-child,td:last-child{padding-right:18px}
+th{font-size:12px;color:var(--muted);font-weight:700;background:#FAFBFD}
+tr:last-child td{border-bottom:0}
+td.r,th.r{text-align:right}
+.pill{display:inline-block;font-size:11.5px;font-weight:700;border-radius:6px;padding:2px 8px}
+.pill.blue{background:var(--blue-soft);color:var(--blue)}
+.pill.purple{background:var(--purple-soft);color:var(--purple)}
+.pill.good{background:var(--good-soft);color:var(--good)}
+.pill.bad{background:var(--bad-soft);color:var(--bad)}
+.pill.warn{background:var(--orange-soft);color:#A9670A}
+
+.bars{display:flex;flex-direction:column;gap:12px}
+.bar-row .t{display:flex;justify-content:space-between;font-size:13px;margin-bottom:5px}
+.bar-row .t span{color:var(--muted)}
+.track{height:8px;border-radius:99px;background:var(--line-2);overflow:hidden}
+.fill{height:100%;border-radius:99px}
+
+/* Billing */
+.bill{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:14px}
+.prod-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px}
+.prod{border:1px solid var(--line);border-radius:10px;padding:12px;background:var(--card);text-align:left}
+.prod:hover{border-color:var(--blue)}
+.prod b{display:block;font-size:13.5px}
+.prod span{font-size:12px;color:var(--muted)}
+.prod .p{margin-top:8px;display:flex;justify-content:space-between;align-items:center}
+.line{display:flex;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid var(--line-2)}
+.line:last-of-type{border-bottom:0}
+.line small{display:block;color:var(--muted)}
+.tot{display:flex;justify-content:space-between;padding:4px 0;color:var(--muted)}
+.tot.big{color:var(--text);font-weight:800;font-size:18px;padding-top:10px;border-top:1px solid var(--line);margin-top:6px}
+
+.note{font-size:12px;color:var(--muted);margin-top:18px}
+.view{display:none}
+.view.on{display:block}
+.scrim{display:none}
+
+/* ---- tablet: the sidebar becomes a rail of icons ---------------------- */
+@media (max-width:1100px){
+  .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .grid-2,.grid-2b,.bill{grid-template-columns:minmax(0,1fr)}
+}
+@media (max-width:1023px) and (min-width:768px){
+  :root{--side:72px}
+  .brand span:last-child,.nav-btn span,.side-foot{display:none}
+  .nav-btn{justify-content:center;padding:10px}
+  .brand{justify-content:center;padding:4px 0 18px}
+}
+/* ---- phone: the sidebar slides in from a menu button ------------------ */
+@media (max-width:767px){
+  .app{grid-template-columns:minmax(0,1fr)}
+  .side{position:fixed;left:0;top:0;width:250px;transform:translateX(-100%);transition:transform .2s ease;box-shadow:0 0 0 rgba(0,0,0,0)}
+  .side.open{transform:none;box-shadow:0 10px 40px rgba(16,24,40,.18)}
+  .scrim.open{display:block;position:fixed;inset:0;background:rgba(16,24,40,.32);z-index:25}
+  .menu-btn{display:inline-flex}
+  .top{padding:0 16px;gap:10px}
+  .search{display:none}
+  .who div{display:none}
+  .content{padding:16px}
+  .head h1{font-size:20px}
+  .kpis{gap:10px}
+  .kpi{padding:12px 13px}
+  .kpi .val{font-size:19px}
+}
+@media (prefers-reduced-motion:reduce){.side{transition:none}}
+
+/* ---- comfortable on every device ------------------------------------- */
+/* Fingers, not cursors: every control is at least 40px tall. */
+.nav-btn{min-height:42px}
+.chip{min-height:36px}
+.icon-btn{min-width:40px;min-height:40px;display:inline-flex;align-items:center;justify-content:center}
+.menu-btn{min-width:40px;min-height:40px;align-items:center;justify-content:center}
+.btn{min-height:42px}
+.prod{min-height:92px}
+
+/* The bottom bar: only on phones, for one-thumb use. */
+.tabbar{display:none}
+.search-btn{display:none}
+.search-row{display:none}
+
+/* Tablet rail: the label appears beside the icon on hover/focus. */
+@media (max-width:1023px) and (min-width:768px){
+  .nav-btn{position:relative}
+  .nav-btn:hover span,.nav-btn:focus-visible span{display:block;position:absolute;left:58px;top:50%;transform:translateY(-50%);
+    background:var(--text);color:#fff;font-size:12px;padding:5px 9px;border-radius:6px;white-space:nowrap;z-index:40}
+  .content{padding:20px}
+}
+
+@media (max-width:767px){
+  .tabbar{display:grid;grid-template-columns:repeat(5,1fr);position:fixed;left:0;right:0;bottom:0;z-index:20;
+    background:var(--card);border-top:1px solid var(--line);padding:6px 4px calc(6px + env(safe-area-inset-bottom))}
+  .tab{border:0;background:none;display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px 2px;
+    font-size:11px;font-weight:600;color:var(--muted);border-radius:8px;min-height:50px}
+  .tab svg{width:21px;height:21px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .tab[aria-current="page"]{color:var(--blue)}
+  .content{padding-bottom:92px}
+  .search-btn{display:inline-flex}
+  .search-row.open{display:block;padding:10px 16px;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:62px;z-index:19}
+  .search-row .search{display:flex;max-width:none}
+  .chips{overflow-x:auto;flex-wrap:nowrap;max-width:100%;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+  .chips::-webkit-scrollbar{display:none}
+  .chip{flex:none}
+  .head{align-items:flex-start;flex-direction:column}
+  .head > .chips,.head > .btn{width:100%}
+  .card{padding:14px}
+  .table-wrap{margin:0 -14px -14px}
+}
+
+/* Tables become stacked cards whenever THEIR card is narrow — a phone, a
+   tablet held upright, or a half-width card on a laptop. Nothing scrolls
+   sideways, and every value sits next to its label. */
+.card{container-type:inline-size}
+@container (max-width:470px){
+  .table-wrap{overflow:visible;border-top:0;margin:0}
+  table{min-width:0}
+  thead{display:none}
+  table,tbody,tr,td{display:block;width:100%}
+  tr{border:1px solid var(--line);border-radius:10px;padding:8px 12px;margin-bottom:8px;background:var(--card)}
+  td{display:flex;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px solid var(--line-2);white-space:normal;text-align:right}
+  td:last-child{border-bottom:0}
+  td::before{content:attr(data-label);color:var(--muted);font-size:12px;font-weight:600;text-align:left}
+  td:first-child{font-weight:700;font-size:14.5px}
+  td:first-child::before{display:none}
+  td:first-child,td:last-child{padding-left:0;padding-right:0}
+  td.r{text-align:right}
+}
+@media (max-width:360px){
+  .kpis{grid-template-columns:minmax(0,1fr)}
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side" id="side" aria-label="Main menu">
+    <div class="brand"><span class="brand-mark">SM</span><span>SHOP MANAGER</span></div>
+    <nav id="nav"></nav>
+    <div class="side-foot">Preview · sample figures</div>
+  </aside>
+  <div class="scrim" id="scrim"></div>
+
+  <div class="main">
+    <header class="top">
+      <button class="menu-btn" id="menu" aria-label="Open menu"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+      <label class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input placeholder="Search products, customers, bills" aria-label="Search"></label>
+      <div class="top-right">
+        <button class="icon-btn search-btn" id="search-btn" aria-label="Search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button>
+        <button class="icon-btn" aria-label="Notifications, 4 unread"><svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 8 3 8H3s3-1 3-8"/><path d="M10 20a2 2 0 0 0 4 0"/></svg><span class="dot">4</span></button>
+        <div class="who"><span class="avatar">RS</span><div><b>Ramesh Shah</b><span>Owner</span></div></div>
+      </div>
+    </header>
+    <div class="search-row" id="search-row"><label class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input placeholder="Search products, customers, bills" aria-label="Search"></label></div>
+
+    <main class="content">
+      <!-- DASHBOARD -->
+      <section class="view on" id="v-home">
+        <div class="head">
+          <div><h1>Good morning, Ramesh</h1><p>Shop Overview · Saturday, 10 Oct</p></div>
+          <div class="chips"><button class="chip on">Today</button><button class="chip">This week</button><button class="chip">This month</button></div>
+        </div>
+        <div class="kpis">
+          <div class="card kpi"><div class="label">Today's Sales</div><div class="row"><span class="val num">₹1,84,250</span><span class="delta up">+12%</span></div><svg class="spark" data-spark="38,42,35,51,47,58,55,66" data-color="#7457D6"></svg></div>
+          <div class="card kpi"><div class="label">Outstanding</div><div class="row"><span class="val num">₹6,42,900</span><span class="delta down">+4%</span></div><svg class="spark" data-spark="50,52,49,55,58,57,60,62" data-color="#2F6BED"></svg></div>
+          <div class="card kpi"><div class="label">Cash Balance</div><div class="row"><span class="val num">₹92,400</span><span class="delta up">+8%</span></div><svg class="spark" data-spark="40,36,44,41,48,45,52,56" data-color="#EE9A1C"></svg></div>
+          <div class="card kpi"><div class="label">Low Stock</div><div class="row"><span class="val num">7 items</span><span class="delta warn">3 out</span></div><svg class="spark" data-spark="3,4,4,5,6,5,6,7" data-color="#D23C3C"></svg></div>
+        </div>
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><div><h2>Sales vs Purchases</h2><div class="sub">₹ lakh, by month</div></div>
+              <div class="legend"><span><i style="background:var(--blue)"></i>Sales</span><span><i style="background:var(--orange)"></i>Purchases</span></div></div>
+            <svg class="chart" id="line-chart"></svg>
+          </div>
+          <div class="card">
+            <div class="card-head"><div><h2>Cash vs Credit Sales</h2><div class="sub">₹ lakh, last 6 weeks</div></div>
+              <div class="legend"><span><i style="background:var(--blue)"></i>Cash</span><span><i style="background:var(--purple)"></i>Credit</span></div></div>
+            <svg class="chart" id="bar-chart"></svg>
+          </div>
+        </div>
+        <div class="grid-2b">
+          <div class="card">
+            <div class="card-head"><div><h2>Top Customers</h2><div class="sub">This month</div></div><button class="chip">View all</button></div>
+            <div class="table-wrap"><table>
+              <thead><tr><th>Customer</th><th>Type</th><th class="r">Bought</th><th class="r">Due</th><th>Status</th></tr></thead>
+              <tbody id="top-cust"></tbody></table></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><div><h2>Best Selling Products</h2><div class="sub">Sheets sold this month</div></div></div>
+            <div class="bars" id="best"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- BILLING -->
+      <section class="view" id="v-billing">
+        <div class="head"><div><h1>New Invoice</h1><p>Tap a product to add it to the bill</p></div>
+          <div class="chips"><button class="chip on">Tax Invoice</button><button class="chip">Challan</button><button class="chip">Quotation</button></div></div>
+        <div class="bill">
+          <div class="card"><div class="card-head"><div><h2>Products</h2><div class="sub">Shop stock</div></div></div><div class="prod-list" id="prods"></div></div>
+          <div class="card">
+            <div class="card-head"><div><h2>Bill</h2><div class="sub">Laxmi Interiors · Credit</div></div><span class="pill blue">INV-0412</span></div>
+            <div class="line"><div>Century Club Prime 18mm<small>8×4 · 4 sheets × ₹3,200</small></div><b class="num">₹12,800</b></div>
+            <div class="line"><div>Merino Laminate 1mm<small>8×4 · 10 sheets × ₹1,150</small></div><b class="num">₹11,500</b></div>
+            <div class="line"><div>Greenply MR 12mm<small>8×4 · 6 sheets × ₹1,780</small></div><b class="num">₹10,680</b></div>
+            <div style="margin-top:12px">
+              <div class="tot"><span>Subtotal</span><span class="num">₹34,980</span></div>
+              <div class="tot"><span>GST 18%</span><span class="num">₹6,296</span></div>
+              <div class="tot big"><span>Total</span><span class="num">₹41,276</span></div>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap"><button class="btn" style="flex:1">Save &amp; Print</button><button class="btn ghost" style="flex:1">WhatsApp</button></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- INVENTORY -->
+      <section class="view" id="v-inventory">
+        <div class="head"><div><h1>Inventory</h1><p>Stock at Shop and Warehouse</p></div>
+          <div class="chips"><button class="chip on">All</button><button class="chip">Plywood</button><button class="chip">Laminate</button><button class="chip">PVC</button><button class="chip">Low stock</button></div></div>
+        <div class="kpis">
+          <div class="card kpi"><div class="label">Products</div><div class="row"><span class="val num">248</span></div></div>
+          <div class="card kpi"><div class="label">Stock value</div><div class="row"><span class="val num">₹38.6 L</span></div></div>
+          <div class="card kpi"><div class="label">Below minimum</div><div class="row"><span class="val num">4</span><span class="delta warn">act</span></div></div>
+          <div class="card kpi"><div class="label">Out of stock</div><div class="row"><span class="val num">3</span><span class="delta down">reorder</span></div></div>
+        </div>
+        <div class="card"><div class="card-head"><div><h2>Stock list</h2><div class="sub">Per size, both locations</div></div><button class="btn">+ Add product</button></div>
+          <div class="table-wrap"><table><thead><tr><th>Product</th><th>Size</th><th class="r">Shop</th><th class="r">Warehouse</th><th class="r">Minimum</th><th>Status</th></tr></thead><tbody id="stock"></tbody></table></div></div>
+      </section>
+
+      <!-- CUSTOMERS -->
+      <section class="view" id="v-customers">
+        <div class="head"><div><h1>Customers</h1><p>Who owes what, and since when</p></div><button class="btn">+ New customer</button></div>
+        <div class="kpis">
+          <div class="card kpi"><div class="label">Customers</div><div class="row"><span class="val num">186</span></div></div>
+          <div class="card kpi"><div class="label">Total due</div><div class="row"><span class="val num">₹6.43 L</span></div></div>
+          <div class="card kpi"><div class="label">Overdue</div><div class="row"><span class="val num">₹1.12 L</span><span class="delta down">9 parties</span></div></div>
+          <div class="card kpi"><div class="label">Collected today</div><div class="row"><span class="val num">₹48,000</span><span class="delta up">+3</span></div></div>
+        </div>
+        <div class="card"><div class="card-head"><div><h2>All customers</h2></div></div>
+          <div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Area</th><th class="r">Due</th><th>Last bill</th><th>Status</th></tr></thead><tbody id="custs"></tbody></table></div></div>
+      </section>
+
+      <!-- REPORTS -->
+      <section class="view" id="v-reports">
+        <div class="head"><div><h1>Reports</h1><p>April – October 2026</p></div>
+          <div class="chips"><button class="chip on">Sales</button><button class="chip">Purchase</button><button class="chip">GST</button><button class="chip">Profit</button></div></div>
+        <div class="grid-2">
+          <div class="card"><div class="card-head"><div><h2>Sales by month</h2><div class="sub">₹ lakh</div></div></div><svg class="chart" id="line-chart-2"></svg></div>
+          <div class="card"><div class="card-head"><div><h2>Sales by category</h2><div class="sub">Share of this year</div></div></div><div class="bars" id="cats"></div></div>
+        </div>
+      </section>
+
+      <!-- placeholder for the remaining tabs -->
+      <section class="view" id="v-other">
+        <div class="head"><div><h1 id="other-title">Cash Book</h1><p>Same frame, same cards and tables as every other screen</p></div></div>
+        <div class="card"><div class="sub">In the full redesign this screen gets the same treatment: a header, summary cards on top, and its list in a clean table.</div></div>
+      </section>
+
+      <p class="note">Preview only — not connected to your shop. Every name and figure here is a made-up example.</p>
+    </main>
+  </div>
+</div>
+<!-- Phones only: the four screens used all day, and More for the rest. -->
+<nav class="tabbar" id="tabbar" aria-label="Main screens"></nav>
+
+<script>
+const ICON = {
+  home:'<rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/>',
+  billing:'<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/>',
+  purchase:'<path d="M3 4h2l2.5 11h11L21 7H7"/><circle cx="10" cy="19" r="1.5"/><circle cx="17" cy="19" r="1.5"/>',
+  inventory:'<path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/>',
+  customers:'<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.5 3.5-5.5 6.5-5.5s5.7 2 6.5 5.5"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.8c2 .8 3.2 2.6 3.6 5.2"/>',
+  reports:'<path d="M4 20V10M10 20V4M16 20v-7M21 20H3"/>',
+  cash:'<rect x="3" y="6" width="18" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/>',
+  delivery:'<path d="M3 6h11v9H3zM14 9h4l3 3v3h-7"/><circle cx="7" cy="17.5" r="1.8"/><circle cx="17" cy="17.5" r="1.8"/>',
+  settings:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 1.3 14H1a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 2.6 7a1.6 1.6 0 0 0-.3-1.8l-.1-.1A2 2 0 1 1 5 2.3l.1.1A1.6 1.6 0 0 0 7 2.6 1.6 1.6 0 0 0 8 1.1V1a2 2 0 1 1 4 0"/>'
+};
+const NAV = [
+  ["home","Dashboard","v-home"],["billing","Billing","v-billing"],["purchase","Purchase","v-other"],
+  ["inventory","Inventory","v-inventory"],["customers","Customers","v-customers"],["reports","Reports","v-reports"],
+  "-",["cash","Cash Book","v-other"],["delivery","Delivery","v-other"],["settings","Settings","v-other"]
+];
+const nav = document.getElementById("nav");
+nav.innerHTML = NAV.map((n,i) => n === "-" ? '<div class="nav-sep"></div>' :
+  `<button class="nav-btn" data-i="${i}" title="${n[1]}" ${i===0?'aria-current="page"':''}><svg viewBox="0 0 24 24">${ICON[n[0]]}</svg><span>${n[1]}</span></button>`).join("");
+
+/* Phones: the four screens used all day, then More for everything else. */
+const TABS = [0, 1, 3, 4];
+const tabbar = document.getElementById("tabbar");
+tabbar.innerHTML = TABS.map(i => `<button class="tab" data-i="${i}" ${i===0?'aria-current="page"':''}><svg viewBox="0 0 24 24">${ICON[NAV[i][0]]}</svg>${NAV[i][1]}</button>`).join("")
+  + `<button class="tab" id="more"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>More</button>`;
+
+const side = document.getElementById("side"), scrim = document.getElementById("scrim");
+const openMenu = () => { side.classList.add("open"); scrim.classList.add("open"); };
+const closeMenu = () => { side.classList.remove("open"); scrim.classList.remove("open"); };
+function go(i){
+  const n = NAV[i];
+  document.querySelectorAll(".nav-btn,.tab").forEach(x => x.toggleAttribute("aria-current", +x.dataset.i === i));
+  document.querySelectorAll(".nav-btn[aria-current],.tab[aria-current]").forEach(x => x.setAttribute("aria-current","page"));
+  /* A screen reached from More lights up More on the bottom bar. */
+  if(!TABS.includes(i)) document.getElementById("more").setAttribute("aria-current","page");
+  document.querySelectorAll(".view").forEach(v => v.classList.toggle("on", v.id === n[2]));
+  if(n[2] === "v-other") document.getElementById("other-title").textContent = n[1];
+  closeMenu(); window.scrollTo(0,0);
+}
+nav.addEventListener("click", e => { const b = e.target.closest(".nav-btn"); if(b) go(+b.dataset.i); });
+tabbar.addEventListener("click", e => {
+  const b = e.target.closest(".tab"); if(!b) return;
+  if(b.id === "more") return openMenu();
+  go(+b.dataset.i);
+});
+document.getElementById("menu").addEventListener("click", openMenu);
+scrim.addEventListener("click", closeMenu);
+document.addEventListener("keydown", e => { if(e.key === "Escape") closeMenu(); });
+document.getElementById("search-btn").addEventListener("click", () => {
+  const row = document.getElementById("search-row");
+  row.classList.toggle("open");
+  if(row.classList.contains("open")) row.querySelector("input").focus();
+});
+
+/* ---- charts, drawn as plain SVG ---------------------------------------- */
+const NS = "http://www.w3.org/2000/svg";
+function spark(svg){
+  const v = svg.dataset.spark.split(",").map(Number), c = svg.dataset.color;
+  const W = 200, H = 42, min = Math.min(...v), max = Math.max(...v);
+  const pts = v.map((y,i) => [i*(W/(v.length-1)), H-4-((y-min)/((max-min)||1))*(H-10)]);
+  const d = pts.map((p,i) => (i?"L":"M")+p[0].toFixed(1)+" "+p[1].toFixed(1)).join(" ");
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`); svg.setAttribute("preserveAspectRatio","none");
+  svg.innerHTML = `<defs><linearGradient id="g${c.slice(1)}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${c}" stop-opacity=".22"/><stop offset="1" stop-color="${c}" stop-opacity="0"/></linearGradient></defs>
+    <path d="${d} L${W} ${H} L0 ${H}Z" fill="url(#g${c.slice(1)})"/><path d="${d}" fill="none" stroke="${c}" stroke-width="2.2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>`;
+}
+document.querySelectorAll("[data-spark]").forEach(spark);
+
+function lineChart(id, series, labels, maxY){
+  const svg = document.getElementById(id), W = Math.max(280, Math.round(svg.parentElement.clientWidth - 36)), H = W < 420 ? 200 : 260, L = 34, R = 12, T = 12, B = 30;
+  const every = W < 420 ? 2 : 1;
+  const x = i => L + i*((W-L-R)/(labels.length-1)), y = v => T + (1 - v/maxY)*(H-T-B);
+  let g = "";
+  for(let k=0;k<=5;k++){ const v = maxY*k/5, yy = y(v);
+    g += `<line x1="${L}" x2="${W-R}" y1="${yy}" y2="${yy}" stroke="#EEF1F6"/><text x="${L-8}" y="${yy+4}" text-anchor="end" font-size="11" fill="#98A0AF">${v}</text>`; }
+  labels.forEach((l,i) => { if(i % every) return; g += `<text x="${x(i)}" y="${H-8}" text-anchor="middle" font-size="11" fill="#98A0AF">${l}</text>`; });
+  series.forEach(s => {
+    const d = s.v.map((v,i) => (i?"L":"M")+x(i).toFixed(1)+" "+y(v).toFixed(1)).join(" ");
+    g += `<path d="${d}" fill="none" stroke="${s.c}" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>`;
+    const li = s.v.length-1; g += `<circle cx="${x(li)}" cy="${y(s.v[li])}" r="4" fill="#fff" stroke="${s.c}" stroke-width="2.4"/>`;
+  });
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`); svg.innerHTML = g;
+}
+const MONTHS = ["Nov","Dec","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct"];
+function drawAll(){
+lineChart("line-chart", [
+  {c:"#2F6BED", v:[18,22,19,24,31,26,28,33,29,34,38,41]},
+  {c:"#EE9A1C", v:[14,17,15,16,24,21,19,25,22,23,27,30]}], MONTHS, 50);
+lineChart("line-chart-2", [{c:"#2F6BED", v:[26,28,33,29,34,38,41]}], ["Apr","May","Jun","Jul","Aug","Sep","Oct"], 50);
+
+bars();
+}
+function bars(){
+  const svg = document.getElementById("bar-chart"), W = Math.max(260, Math.round(svg.parentElement.clientWidth - 36)), H = 260, L = 34, B = 30, T = 12;
+  const cash = [4.2,5.1,4.8,6.0,6.6,7.4], credit = [3.1,3.6,4.4,4.1,5.2,5.8], maxY = 15;
+  const bw = (W-L-10)/cash.length, y = v => T + (1 - v/maxY)*(H-T-B);
+  let g = "";
+  for(let k=0;k<=5;k++){ const v = maxY*k/5; g += `<line x1="${L}" x2="${W-6}" y1="${y(v)}" y2="${y(v)}" stroke="#EEF1F6"/><text x="${L-7}" y="${y(v)+4}" text-anchor="end" font-size="11" fill="#98A0AF">${v}</text>`; }
+  cash.forEach((c,i) => { const x0 = L + i*bw + bw*.22, w = bw*.56;
+    g += `<rect x="${x0}" y="${y(c)}" width="${w}" height="${y(0)-y(c)}" rx="3" fill="#2F6BED"/>`;
+    g += `<rect x="${x0}" y="${y(c+credit[i])}" width="${w}" height="${y(0)-y(credit[i])}" rx="3" fill="#7457D6"/>`;
+    g += `<text x="${x0+w/2}" y="${H-8}" text-anchor="middle" font-size="11" fill="#98A0AF">W${i+1}</text>`; });
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`); svg.innerHTML = g;
+}
+/* Drawn at the width they are shown at, so 11px text stays 11px on a phone. */
+drawAll();
+let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(drawAll, 120); });
+document.getElementById("nav").addEventListener("click", () => setTimeout(drawAll, 0));
+document.getElementById("tabbar").addEventListener("click", () => setTimeout(drawAll, 0));
+
+/* ---- sample rows -------------------------------------------------------- */
+const money = n => "₹" + n.toLocaleString("en-IN");
+document.getElementById("top-cust").innerHTML = [
+  ["Laxmi Interiors","Contractor",182400,42000,"Due"],["Patel Furniture","Dealer",146900,0,"Paid"],
+  ["Om Sai Carpenters","Carpenter",98250,18500,"Due"],["Shree Ganesh Decor","Interior",86000,0,"Paid"],
+  ["Mehta Builders","Builder",74300,74300,"Overdue"]
+].map(r => `<tr><td>${r[0]}</td><td><span class="pill ${r[1]==="Dealer"?"purple":"blue"}">${r[1]}</span></td><td class="r num">${money(r[2])}</td><td class="r num">${r[3]?money(r[3]):"—"}</td><td><span class="pill ${r[4]==="Paid"?"good":r[4]==="Overdue"?"bad":"warn"}">${r[4]}</span></td></tr>`).join("");
+
+const bar = (rows, colors) => rows.map((r,i) => `<div class="bar-row"><div class="t"><b>${r[0]}</b><span class="num">${r[2]}</span></div><div class="track"><div class="fill" style="width:${r[1]}%;background:${colors[i%colors.length]}"></div></div></div>`).join("");
+document.getElementById("best").innerHTML = bar([
+  ["Century Club Prime 18mm",100,"312 sheets"],["Merino Laminate 1mm",82,"256 sheets"],["Greenply MR 12mm",64,"198 sheets"],
+  ["Rajshri PVC Door",41,"128 pcs"],["Action Tesa MDF 6mm",29,"91 sheets"]], ["#2F6BED","#7457D6","#EE9A1C","#2F6BED","#7457D6"]);
+document.getElementById("cats").innerHTML = bar([
+  ["Plywood",100,"52%"],["Laminates",54,"28%"],["PVC & doors",23,"12%"],["Hardware & others",15,"8%"]], ["#2F6BED","#7457D6","#EE9A1C","#16935A"]);
+
+document.getElementById("prods").innerHTML = [
+  ["Century Club Prime","18mm · 8×4",3200,46],["Greenply MR","12mm · 8×4",1780,12],["Merino Laminate","1mm · 8×4",1150,88],
+  ["Rajshri PVC Door","30\" × 7'",2650,6],["Action Tesa MDF","6mm · 8×4",890,0],["Kitply Gold","19mm · 8×4",3480,21]
+].map(p => `<button class="prod"><b>${p[0]}</b><span>${p[1]}</span><div class="p"><b class="num">${money(p[2])}</b><span class="pill ${p[3]===0?"bad":p[3]<10?"warn":"good"}">${p[3]===0?"Out":p[3]+" left"}</span></div></button>`).join("");
+
+document.getElementById("stock").innerHTML = [
+  ["Century Club Prime","18mm 8×4",46,120,40],["Greenply MR","12mm 8×4",12,0,20],["Merino Laminate","1mm 8×4",88,240,50],
+  ["Rajshri PVC Door","30\"×7'",6,4,10],["Action Tesa MDF","6mm 8×4",0,0,15],["Kitply Gold","19mm 8×4",21,60,10]
+].map(r => { const st = r[2]+r[3]===0 ? ["bad","Out of stock"] : r[2] < r[4] ? ["warn","Below minimum"] : ["good","OK"];
+  return `<tr><td>${r[0]}</td><td>${r[1]}</td><td class="r num">${r[2]}</td><td class="r num">${r[3]}</td><td class="r num">${r[4]}</td><td><span class="pill ${st[0]}">${st[1]}</span></td></tr>`; }).join("");
+
+document.getElementById("custs").innerHTML = [
+  ["Laxmi Interiors","Contractor","Thane",42000,"8 Oct","Due"],["Patel Furniture","Dealer","Kalyan",0,"9 Oct","Paid"],
+  ["Om Sai Carpenters","Carpenter","Dombivli",18500,"2 Oct","Due"],["Mehta Builders","Builder","Mulund",74300,"14 Aug","Overdue"],
+  ["Shree Ganesh Decor","Interior","Ghatkopar",0,"7 Oct","Paid"],["Kumar Woodworks","Carpenter","Bhandup",9800,"28 Sep","Due"]
+].map(r => `<tr><td>${r[0]}</td><td><span class="pill ${r[1]==="Dealer"?"purple":"blue"}">${r[1]}</span></td><td>${r[2]}</td><td class="r num">${r[3]?money(r[3]):"—"}</td><td>${r[4]}</td><td><span class="pill ${r[5]==="Paid"?"good":r[5]==="Overdue"?"bad":"warn"}">${r[5]}</span></td></tr>`).join("");
+
+/* Each cell carries its column's name, so on a phone a row reads as a card:
+   "Due  ₹42,000" rather than a number with no heading in sight. */
+document.querySelectorAll("table").forEach(t => {
+  const heads = [...t.querySelectorAll("thead th")].map(th => th.textContent);
+  t.querySelectorAll("tbody tr").forEach(tr => [...tr.children].forEach((td, i) => td.dataset.label = heads[i] || ""));
+});
+</script>
+</body>
+</html>

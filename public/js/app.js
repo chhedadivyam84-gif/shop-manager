@@ -733,7 +733,7 @@ async function initApp(){
   state.settings = await api("GET","/settings");
   /* The device remembered a colour at boot so the app did not flash;
      this is the shop's actual answer, and it wins. */
-  applyAppTheme((state.settings && state.settings.app_theme) || "navy-gold");
+  applyAppTheme((state.settings && state.settings.app_theme) || DEFAULT_THEME);
   /* The shop's own arrangement of its front screen. Applied on every load
      of the app, and re-applied whenever the vendor's list changes, because
      what is on offer to hide depends on what they were sold. */
@@ -27960,7 +27960,13 @@ async function openGstFilings(){
    a phone and a tablet showing three different colours reads as three
    different apps to the staff using them.
    ============================================================ */
+/* Clean Blue is the default — the look the owner chose in October 2026.
+   A shop that never picked a colour has a blank setting, and blank now
+   means Clean Blue. Navy & Gold, the original, is still here and is saved
+   by its own name so it can be chosen back. */
+const DEFAULT_THEME = "clean-blue";
 const APP_THEMES = [
+  { key: "clean-blue",    name: "Clean Blue",      sub: "The new look",              a: "#2F6BED",              b: "#EE9A1C" },
   { key: "navy-gold",     name: "Navy & Gold",     sub: "The original",              a: "oklch(0.30 0.06 258)", b: "oklch(0.78 0.13 85)" },
   { key: "forest-brass",  name: "Forest & Brass",  sub: "Green, warm accent",        a: "oklch(0.30 0.06 155)", b: "oklch(0.78 0.11 95)" },
   { key: "maroon-gold",   name: "Maroon & Gold",   sub: "The shop-board pairing",    a: "oklch(0.30 0.09 20)",  b: "oklch(0.78 0.13 85)" },
@@ -27981,7 +27987,7 @@ const THEME_CACHE_KEY = "shopManagerAppTheme";
  * slow morning connection is long enough to look like a fault.
  */
 function applyAppTheme(key){
-  const k = APP_THEMES.some(t => t.key === key) ? key : "navy-gold";
+  const k = APP_THEMES.some(t => t.key === key) ? key : DEFAULT_THEME;
   if(k === "navy-gold") document.documentElement.removeAttribute("data-theme");
   else document.documentElement.setAttribute("data-theme", k);
   try{ localStorage.setItem(THEME_CACHE_KEY, k); }catch(e){ /* private mode; the server still knows */ }
@@ -27991,8 +27997,8 @@ function applyAppTheme(key){
    Reconciled with the shop's real setting the moment settings load. */
 (function paintRememberedTheme(){
   try{
-    const k = localStorage.getItem(THEME_CACHE_KEY);
-    if(k && k !== "navy-gold" && APP_THEMES.some(t => t.key === k)){
+    const k = localStorage.getItem(THEME_CACHE_KEY) || DEFAULT_THEME;
+    if(k !== "navy-gold" && APP_THEMES.some(t => t.key === k)){
       document.documentElement.setAttribute("data-theme", k);
     }
   }catch(e){ /* nothing remembered; the default is already correct */ }
@@ -28000,7 +28006,7 @@ function applyAppTheme(key){
 
 function openAppThemePicker(){
   const sheet = document.getElementById("sheet-app-theme");
-  const current = (state.settings && state.settings.app_theme) || "navy-gold";
+  const current = (state.settings && state.settings.app_theme) || DEFAULT_THEME;
 
   const draw = (sel) => {
     sheet.innerHTML = `
@@ -28050,7 +28056,9 @@ function openAppThemePicker(){
       const chosen = sheet.querySelector(".theme-card.selected");
       const key = chosen ? chosen.dataset.themePick : current;
       try{
-        await api("PUT", "/settings/app-theme", { theme: key === "navy-gold" ? "" : key });
+        /* Blank is the default (Clean Blue); every other scheme, the
+           original Navy & Gold included, is saved by name. */
+        await api("PUT", "/settings/app-theme", { theme: key === DEFAULT_THEME ? "" : key });
         state.settings = await api("GET", "/settings");
         applyAppTheme(key);
         toast("Colour saved for the whole shop.", "ok");

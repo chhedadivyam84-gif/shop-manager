@@ -1,0 +1,212 @@
+/* ============================================================
+   THE NEW LOOK
+
+   Layered over style.css, which is untouched underneath. Remove the one
+   <link> to this file in index.html and the app is exactly as it was.
+
+   Two separate things live here:
+
+   1. THE LAYOUT, for every colour scheme. A white top bar; on a tablet the
+      seven tabs become a slim icon rail down the left, on a laptop a
+      sidebar with names; on a phone they stay along the bottom where a
+      thumb reaches. Cards are white on a pale page, tiles read as
+      summary cards.
+
+   2. CLEAN BLUE, the new default scheme: blue for action, orange as the
+      accent, green and red still meaning good and bad. The seven older
+      schemes — Navy & Gold included — are still in Settings → App Colour,
+      and pick up the same layout.
+
+   Nothing here hides or removes a control. Every tab, tile, menu entry
+   and button the app had is still there; only where it sits and how it is
+   drawn changes.
+   ============================================================ */
+
+/* ---------------------------------------------------------- CLEAN BLUE */
+html[data-theme="clean-blue"]{
+  --navy:   #2F6BED;
+  --navy-2: #1E3F8F;
+  --gold:   #EE9A1C;
+  --gold-2: #D98612;
+  --bg:       #F4F6FA;
+  --bg-outer: #F4F6FA;
+  --card:     #FFFFFF;
+  --border:   #E5E9F1;
+  --text:     #18212F;
+  --muted:    #6A7386;
+  --info:     #2F6BED;
+  --info-bg:  #E9F0FE;
+  --tile-money: #F0ECFC;
+}
+/* In the old schemes gold sits under navy text — a dark-on-light pairing.
+   Clean Blue's accent is a mid orange, and blue on orange is hard to read,
+   so every place that pairs them gets an explicit, readable pairing. */
+html[data-theme="clean-blue"] .btn-gold{ background:var(--navy); color:#fff; }
+html[data-theme="clean-blue"] .btn-gold:hover{ background:var(--navy-2); }
+html[data-theme="clean-blue"] .gold-fab{ background:var(--info-bg); color:var(--navy); }
+html[data-theme="clean-blue"] .avatar{ background:#F3D27A; color:#3A2C05; }
+html[data-theme="clean-blue"] .fs-bar .chip.selected{ background:#fff; color:var(--navy); }
+html[data-theme="clean-blue"] .qa-edit-btn.primary{ background:var(--navy); color:#fff; }
+html[data-theme="clean-blue"] #preview-bar{ color:#2B1D03; }
+html[data-theme="clean-blue"] #preview-bar button:hover{ color:#fff; }
+html[data-theme="clean-blue"] #license-bar[style*="var(--gold)"]{ color:#2B1D03 !important; }
+html[data-theme="clean-blue"] #login .logo,
+html[data-theme="clean-blue"] #splash .splash-mark{ background:#fff; color:var(--navy); }
+
+/* ---------------------------------------------------------- TOP BAR
+   White, for every scheme, like the reference: the screen name on the
+   left, the bell / refresh / you on the right. */
+header.topbar{
+  background:var(--card); color:var(--text);
+  border-radius:0; border-bottom:1px solid var(--border);
+  padding:12px var(--gutter);
+}
+header.topbar .greet-sub{ color:var(--muted); font-size:11px; }
+header.topbar .greet-main{ font-size:18px; color:var(--text); }
+.hdr-ic{ width:19px; height:19px; stroke:currentColor; fill:none; stroke-width:1.9; stroke-linecap:round; stroke-linejoin:round; display:block; }
+.menu-btn, .bell, #refresh-btn{
+  background:var(--bg); color:var(--text); border:1px solid var(--border);
+  width:38px; height:38px; border-radius:10px;
+  display:inline-flex; align-items:center; justify-content:center; padding:0;
+}
+.menu-btn:hover, .bell:hover, #refresh-btn:hover{ border-color:#C9D1DE; }
+.menu-btn:focus-visible, .bell:focus-visible, #refresh-btn:focus-visible{ outline:2px solid var(--navy); outline-offset:2px; }
+.bell-count{ top:-6px; right:-6px; border:2px solid var(--card); }
+.biz-switch{ background:var(--bg); color:var(--text); border:1px solid var(--border); }
+
+/* ---------------------------------------------------------- THE TABS */
+nav.bottom .ic{ display:flex; align-items:center; justify-content:center; }
+nav.bottom .ic svg{ width:22px; height:22px; stroke:currentColor; fill:none; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+nav.bottom .tab{ color:var(--muted); }
+nav.bottom .tab.active{ color:var(--navy); }
+.nav-brand{ display:none; }
+
+/* ---------------------------------------------------------- SURFACES */
+.card{ border-color:var(--border); }
+.section-title{ font-size:calc(var(--fs-title) + 1px); }
+.btn{ border-radius:10px; }
+.chip{ border-color:var(--border); }
+
+/* Home: the seven figures as summary cards — white, the label above,
+   the number large, its colour saying good or bad. The thick coloured
+   left edges and the one dark tile give way to the reference's calm
+   cards; the colours stay on the numbers, where they mean something. */
+#screen-home .stat-grid{ gap:var(--gap); }
+#screen-home .stat-grid .stat-card,
+#screen-home .stat-grid .stat-card.plain,
+#screen-home .stat-grid .stat-card.navy{
+  background:var(--card); color:var(--text);
+  border:1px solid var(--border); border-radius:var(--card-radius);
+  padding:14px 16px;
+}
+#screen-home .stat-grid .stat-card .label{
+  text-transform:none; letter-spacing:0; opacity:1;
+  font-size:12.5px; font-weight:600; color:var(--muted);
+}
+#screen-home .stat-grid .stat-card .value{ font-size:21px; letter-spacing:-.01em; font-variant-numeric:tabular-nums; }
+#screen-home .stat-grid .stat-card.navy .value{ color:var(--navy); }
+/* A small accent under each figure stands in for the reference's trend
+   line — a colour key, not invented data. */
+#screen-home .stat-grid .stat-card::after{
+  content:""; display:block; height:3px; width:36px; border-radius:99px; margin-top:10px;
+  background:var(--navy); opacity:.85;
+}
+#screen-home .stat-grid .stat-card:has(#stat-profit)::after,
+#screen-home .stat-grid .stat-card:has(#stat-cash)::after{ background:var(--ok); }
+#screen-home .stat-grid .stat-card:has(#stat-outstanding)::after,
+#screen-home .stat-grid .stat-card:has(#stat-payable)::after{ background:var(--danger); }
+#screen-home .stat-grid .stat-card:has(#stat-bank)::after{ background:var(--info); }
+#screen-home .stat-grid .stat-card:has(#stat-lowstock)::after{ background:var(--gold); }
+
+/* The 7-day chart: taller, rounded bars, the latest day picked out. */
+.bar-chart{ height:130px; gap:10px; }
+.bar-chart .bar{ background:var(--navy); opacity:.82; border-radius:6px 6px 2px 2px; }
+.bar-chart .bar-wrap:last-child .bar{ opacity:1; }
+.bar-chart .bar-lbl{ font-size:10.5px; }
+
+/* ============================================================
+   TABLET — 768 to 1023: the tabs become an icon rail on the left.
+   ============================================================ */
+@media (min-width:768px){
+  :root{ --side-w:76px; --nav-h:0px; }
+
+  /* The column no longer floats in the middle of a grey margin: the
+     sidebar takes the left edge and the work takes the rest. */
+  #shell{ max-width:none; background:var(--bg); }
+  #app{ padding-left:var(--side-w); }
+  header.topbar{ position:sticky; top:0; z-index:30; }
+  main{ max-width:1320px; }
+
+  nav.bottom{
+    position:fixed; top:0; bottom:0; left:0; right:auto;
+    width:var(--side-w); max-width:none; margin:0;
+    flex-direction:column; justify-content:flex-start; align-items:stretch; gap:4px;
+    padding:14px 10px; overflow-y:auto; overflow-x:hidden;
+    border-top:0; border-right:1px solid var(--border); background:var(--card);
+    z-index:31;
+  }
+  nav.bottom .tab{
+    flex:none; flex-direction:row; justify-content:center; gap:12px;
+    min-height:46px; padding:10px; border-radius:10px;
+  }
+  nav.bottom .tab .lbl{ display:none; }
+  nav.bottom .tab:hover{ background:var(--bg); }
+  nav.bottom .tab.active{ background:color-mix(in oklab, var(--navy) 11%, white); color:var(--navy); }
+  nav.bottom .tab:focus-visible{ outline:2px solid var(--navy); outline-offset:-2px; }
+  .nav-brand{ display:flex; align-items:center; justify-content:center; gap:10px; padding:2px 0 16px; }
+  .nav-brand-mark{
+    width:34px; height:34px; border-radius:9px; background:var(--navy); color:#fff;
+    display:grid; place-items:center; font-weight:800; font-size:12.5px; letter-spacing:.02em; flex:none;
+  }
+  .nav-brand-name{ display:none; font-weight:800; font-size:14.5px; letter-spacing:.02em; color:var(--text); white-space:nowrap; }
+
+  /* Anything that pinned itself above the bottom bar now pins to the
+     bottom of the work area, beside the rail rather than under it. */
+  .cta-bar{ left:var(--side-w); max-width:none; bottom:0; }
+  .wa-fab-wrap{ max-width:none; }
+  .wa-fab{ bottom:24px; }
+  .ai-fab{ bottom:88px; }
+
+  #screen-home .stat-grid .stat-card .value{ font-size:23px; }
+  .bar-chart{ height:170px; }
+}
+
+/* ============================================================
+   LAPTOP — 1024 and up: the rail opens into a sidebar with names.
+   ============================================================ */
+@media (min-width:1024px){
+  :root{ --side-w:232px; }
+  nav.bottom{ padding:18px 14px; }
+  nav.bottom .tab{
+    justify-content:flex-start; padding:10px 12px; min-height:42px;
+    font-size:14px; font-weight:600;
+  }
+  nav.bottom .tab .lbl{ display:inline; }
+  nav.bottom .tab .ic svg{ width:19px; height:19px; }
+  .nav-brand{ justify-content:flex-start; padding:4px 8px 20px; }
+  .nav-brand-name{ display:inline; }
+  header.topbar{ padding:14px var(--gutter); }
+  header.topbar .greet-main{ font-size:21px; }
+}
+
+/* ============================================================
+   PHONE — under 768: the bar stays at the bottom, as before, with the
+   same seven tabs; only the icons are new.
+   ============================================================ */
+@media (max-width:767px){
+  nav.bottom{ border-top:1px solid var(--border); background:var(--card); }
+  nav.bottom .tab .ic svg{ width:21px; height:21px; }
+}
+/* style.css meant the seven tabs to SCROLL on a narrow phone (its rule at
+   "Seven tabs do not fit a 375px phone"), but a later touch rule squeezed
+   them back to equal slices, so "Customers" and "Cash Book" were cut to
+   "Custom…" and "Cash Bo…". Restored here: each tab is as wide as its
+   name, and the bar swipes. The active tab is already scrolled into view
+   by switchTab(). */
+@media (max-width:520px){
+  nav.bottom .tab{ flex:0 0 auto; min-width:64px; padding:4px 8px; }
+}
+
+@media (prefers-reduced-motion:reduce){
+  .qa-btn, .qa-btn:hover{ transform:none; transition:none; }
+}

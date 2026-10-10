@@ -641,6 +641,9 @@ app.use("/api", (req, res, next) => {
    below the company binder, so one line covers the whole app rather than
    forty routes each remembering to check. Reads are never refused. */
 app.use("/api", require("./featureGate").gate());
+/* Who may reach which area, and the owner's figures kept to the owner —
+   the permissions the screens already show, enforced. See permissionGate.js. */
+app.use("/api", require("./permissionGate").gate());
 
 /* WHO IS MOVING THE STOCK.
    ------------------------------------------------------------------

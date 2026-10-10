@@ -33,6 +33,16 @@ const ALLOWED = {
 };
 const MAX_BYTES = 8 * 1024 * 1024; // 8MB decoded — a phone photo of a receipt/cheque, generously.
 
+/** The fixed opening bytes of each allowed type. */
+function looksLike(mime, buf) {
+  const starts = (...b) => b.every((v, i) => buf[i] === v);
+  if (mime === "image/jpeg") return starts(0xFF, 0xD8, 0xFF);
+  if (mime === "image/png") return starts(0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A);
+  if (mime === "image/webp") return buf.length >= 12 && buf.toString("latin1", 0, 4) === "RIFF" && buf.toString("latin1", 8, 12) === "WEBP";
+  if (mime === "application/pdf") return buf.toString("latin1", 0, 5) === "%PDF-";
+  return false;
+}
+
 /**
  * `input` is { filename, mimeType, dataBase64 } from the client, or falsy.
  * Returns { path, name } (path = the stored filename only) or null when
@@ -47,6 +57,11 @@ function saveAttachment(input) {
   const buf = Buffer.from(input.dataBase64, "base64");
   if (buf.length === 0) throw new Error("Attachment file is empty.");
   if (buf.length > MAX_BYTES) throw new Error("Attachment is too large (max 8MB).");
+  /* What the file IS, not what the browser called it. The declared type is
+     whatever the request says, so a web page labelled image/png would have
+     been stored and served back from this app's own address. The first
+     bytes of every allowed type are fixed; anything else is refused. */
+  if (!looksLike(input.mimeType, buf)) throw new Error("That file is not the type it claims to be. Attach a JPEG, PNG, WEBP or PDF.");
 
   const storedName = crypto.randomBytes(8).toString("hex") + ext;
   fs.writeFileSync(path.join(UPLOAD_DIR, storedName), buf);

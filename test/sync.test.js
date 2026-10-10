@@ -20,6 +20,10 @@ const fs = require("fs"), path = require("path"), os = require("os");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
 const { DatabaseSync } = require("node:sqlite");
+/* This test syncs to a local http stand-in on purpose; the servers it starts
+   inherit this. Production refuses private and non-https addresses (see
+   server/sync.js checkTarget). */
+process.env.SYNC_ALLOW_PRIVATE_TARGET = "1";
 
 const ROOT = path.join(__dirname, "..");
 const BASE_DIR = path.join(os.tmpdir(), "sm-sync-" + process.pid);

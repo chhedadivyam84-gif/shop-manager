@@ -78,13 +78,51 @@ function accepts(key) {
    THE SENDING SIDE
    ------------------------------------------------------------------ */
 
-function setTarget(url, key) {
-  const clean = String(url || "").trim().replace(/\/+$/, "");
-  if (clean && !/^https:\/\//i.test(clean)) {
+/* NOT AN ADDRESS INSIDE THE SERVER'S OWN NETWORK.
+
+   The server itself makes this request, so on a hosted copy serving many
+   shops a sync address is a way to make the SHARED server call somewhere —
+   and the error that comes back carries part of the reply. A cloud copy of
+   a shop is always a public https address; a loopback, private,
+   link-local (cloud metadata lives at 169.254.169.254) or unqualified name
+   never is. Checked when the address is saved and again before every use,
+   so an address saved before this check is caught too. Names are not
+   resolved: a public name pointed at a private address is not covered,
+   and is noted in SECURITY-AUDIT.md. */
+function isPrivateHost(host) {
+  const h = String(host || "").toLowerCase().replace(/^\[|\]$/g, "");
+  if (!h || h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".internal")) return true;
+  if (!h.includes(".") && !h.includes(":")) return true;            // a bare intranet name
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+  if (v4) {
+    const a = Number(v4[1]), b = Number(v4[2]);
+    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31)
+        || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
+  }
+  if (h.includes(":")) return h === "::1" || h === "::" || /^(fc|fd|fe8|fe9|fea|feb)/.test(h) || h.startsWith("::ffff:");
+  return false;
+}
+function checkTarget(clean, atSave) {
+  if (!clean) return;
+  /* The test suite syncs to a local http stand-in on purpose; nothing in
+     production sets this. It never relaxes the https rule when an address
+     is SAVED — only the private-address rule, and the check at use. */
+  const testing = process.env.SYNC_ALLOW_PRIVATE_TARGET === "1";
+  if (testing && !atSave) return;
+  if (!/^https:\/\//i.test(clean)) {
     /* http would put the whole shop, and the key with it, across the wire
        in the clear. */
     throw new Error("The cloud address must start with https://");
   }
+  let u;
+  try { u = new URL(clean); } catch (e) { throw new Error("That is not a web address."); }
+  if (u.username || u.password) throw new Error("Leave the user name and password out of the address.");
+  if (!testing && isPrivateHost(u.hostname)) throw new Error("That address is inside a private network. Use the cloud copy's public https address.");
+}
+
+function setTarget(url, key) {
+  const clean = String(url || "").trim().replace(/\/+$/, "");
+  checkTarget(clean, true);
   db.prepare("UPDATE settings SET sync_cloud_url = ?, sync_cloud_key = ? WHERE id = 1")
     .run(clean, String(key || "").trim());
   return { url: clean, hasKey: !!String(key || "").trim() };
@@ -136,6 +174,7 @@ async function askCloud(pathname) {
   if (!s.sync_cloud_url || !s.sync_cloud_key) {
     return { ok: false, error: "No cloud address has been set." };
   }
+  try { checkTarget(s.sync_cloud_url); } catch (e) { return { ok: false, error: e.message }; }
   try {
     const r = await fetch(s.sync_cloud_url + pathname, {
       headers: { "x-sync-key": s.sync_cloud_key },
@@ -174,6 +213,8 @@ async function push(opts) {
     log({ direction: "push", staff, target, ok: false, error });
     return { ok: false, error };
   }
+  try { checkTarget(target); }
+  catch (e) { log({ direction: "push", staff, target, ok: false, error: e.message }); return { ok: false, error: e.message }; }
 
   let snap;
   try {

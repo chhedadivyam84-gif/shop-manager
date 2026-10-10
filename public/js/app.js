@@ -50,7 +50,14 @@ async function api(method, path, body){
   let data = null;
   const ct = res.headers.get("content-type")||"";
   if(ct.includes("application/json")) data = await res.json();
-  if(!res.ok){ throw new Error((data && data.error) || "Request failed."); }
+  if(!res.ok){
+    /* The status rides on the error so a screen can tell "you may not see
+       this" (403 from the permission gate) from a real failure. */
+    const err = new Error((data && data.error) || "Request failed.");
+    err.status = res.status;
+    err.permission = !!(data && data.permission);
+    throw err;
+  }
   return data;
 }
 function toast(msg, kind){
@@ -1544,7 +1551,11 @@ async function switchTab(tab){
 
 async function renderAll(){
   await refreshMyAccess();          // before anything draws, so nothing flashes up and vanishes
-  await Promise.all([loadProducts(), loadCustomers(), loadSuppliers(), loadLocations(), loadBankAccounts(), loadStaffNames(), loadCategories(), loadAreas(), loadBusinesses()]);
+  /* Each list a staff login is not allowed is simply left empty. Before the
+     server enforced permissions every load succeeded; now one refusal must
+     not stop the app opening for somebody who may still bill. */
+  const allowed = p => p.catch(e => { if(e && e.status === 403) return; throw e; });
+  await Promise.all([loadProducts(), loadCustomers(), loadSuppliers(), loadLocations(), loadBankAccounts(), loadStaffNames(), loadCategories(), loadAreas(), loadBusinesses()].map(allowed));
   await renderHome();
   /* Not awaited: the bell is worth having but never worth holding up the
      screen for, and a slow count must not delay billing. */
@@ -1765,7 +1776,14 @@ async function loadStaffNames(){ state.staffNames = await api("GET","/auth/staff
    ============================================================ */
 async function renderHome(){
   let d;
-  try{ d = await api("GET","/reports/dashboard"); } catch(e){ toast(e.message); return; }
+  try{ d = await api("GET","/reports/dashboard"); }
+  catch(e){
+    /* No Dashboard permission: Home shows its tiles and nothing else,
+       without a warning on every sign-in. */
+    if(e && e.status === 403){ const g = document.querySelector("#screen-home .stat-grid"); if(g) g.style.display = "none"; return; }
+    toast(e.message); return;
+  }
+  { const g = document.querySelector("#screen-home .stat-grid"); if(g) g.style.display = ""; }
   state.dashboard = d;
 
   document.getElementById("stat-sales").textContent = fmt(d.todaysSales);
@@ -1783,6 +1801,11 @@ async function renderHome(){
   document.getElementById("stat-payable").textContent = fmt(d.payableTotal) + (d.payableCount? " · "+d.payableCount+" supp.":"");
   document.getElementById("stat-cash").textContent = fmt(d.cashBalance);
   document.getElementById("stat-bank").textContent = fmt(d.bankBalance);
+  /* Figures the server keeps from a staff login (cash and bank balances,
+     whole-shop totals) are absent, not zero — so their tiles are removed
+     rather than reading ₹0, the same rule as the profit tile above. */
+  [["stat-outstanding","outstandingTotal"],["stat-payable","payableTotal"],["stat-cash","cashBalance"],["stat-bank","bankBalance"]]
+    .forEach(([id, key]) => { const c = document.getElementById(id).closest(".stat-card"); if(c) c.style.display = d[key] === undefined ? "none" : ""; });
   document.getElementById("stat-lowstock").textContent = d.lowStockCount;
 
   const max = Math.max(1, ...d.revenueChart.map(x=>x.total));

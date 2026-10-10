@@ -60,6 +60,9 @@ const CRITICAL_SUITES = [
   /* What a customer owes. A release that marks a bill paid without a
      payment, or records one payment twice, must not go out. */
   "sales",
+  /* A staff login reaches what its permissions say and no more; one shop
+     never opens another's receipts. */
+  "permissions-gate", "audit",
 ];
 
 /* IN CI THESE CANNOT RUN, BY DESIGN, and that is not the same as skipped.

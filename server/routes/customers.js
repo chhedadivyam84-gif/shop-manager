@@ -1,6 +1,6 @@
 const express = require("express");
 const db = require("../db");
-const { uid, logAction, round2, todayStr, localDate, bindId } = require("../util");
+const { uid, logAction, round2, todayStr, localDate, bindId, isRealDate, cleanKey } = require("../util");
 const { requireRole } = require("../auth");
 const { saveAttachment } = require("../attachments");
 const { postPaymentToLedger, voidLinkedLedgerEntry } = require("../bankLink");
@@ -220,6 +220,22 @@ router.post("/:id/payments", (req, res) => {
   const upiId = (req.body.upiId || "").trim();
   const bankAccountId = req.body.bankAccountId || null;
   const paymentDate = (req.body.date || "").trim() || todayStr();
+  if (!isRealDate(paymentDate)) return res.status(400).json({ error: "That payment date is not a real date." });
+  if (amount > 1e10) return res.status(400).json({ error: "That amount is too large to be a real payment." });
+
+  /* ONE RECEIPT PER SAVE. The screen sends a key made when the payment
+     form opened; the same key again — a double tap, a retry after a lost
+     reply — is the same payment, answered with what was already recorded
+     instead of recording it twice. The unique index in db-schema.js is
+     what holds when two retries arrive in the same instant. */
+  const idempotencyKey = cleanKey(req.body.idempotencyKey);
+  if (idempotencyKey) {
+    const already = db.prepare("SELECT customer_id FROM payments WHERE idempotency_key = ?").get(idempotencyKey);
+    if (already) {
+      if (already.customer_id !== c.id) return res.status(409).json({ error: "That payment key belongs to another customer's receipt." });
+      return res.status(200).json({ ...db.prepare("SELECT * FROM customers WHERE id = ?").get(c.id), duplicate: true });
+    }
+  }
 
   let invoiceId = null;
   if (req.body.invoiceId) {
@@ -236,9 +252,9 @@ router.post("/:id/payments", (req, res) => {
   try {
     db.transaction(() => {
       db.prepare(`
-        INSERT INTO payments (id, customer_id, amount, method, note, invoice_id, reference_no, bank_name, upi_id, bank_account_id, attachment_path, attachment_name, payment_date, voided, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
-      `).run(id, c.id, amount, method, note, invoiceId, referenceNo, bankName, upiId, bankAccountId, attachment ? attachment.path : "", attachment ? attachment.name : "", paymentDate, Date.now());
+        INSERT INTO payments (id, customer_id, amount, method, note, invoice_id, reference_no, bank_name, upi_id, bank_account_id, attachment_path, attachment_name, payment_date, voided, created_at, idempotency_key)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+      `).run(id, c.id, amount, method, note, invoiceId, referenceNo, bankName, upiId, bankAccountId, attachment ? attachment.path : "", attachment ? attachment.name : "", paymentDate, Date.now(), idempotencyKey || null);
       db.prepare("UPDATE customers SET due = MAX(0, ROUND(due - ?, 2)) WHERE id = ?").run(amount, c.id);
       // Auto-posts into Cash Book (method Cash) or Bank Book (any other
       // method) so this screen keeps working unchanged while the ledgers
@@ -250,7 +266,16 @@ router.post("/:id/payments", (req, res) => {
         sourceType: "payment", sourceId: id, direction: "in"
       });
     })();
-  } catch (err) { return res.status(400).json({ error: err.message }); }
+  } catch (err) {
+    /* Lost the race to an identical retry: the other one recorded it, and
+       this transaction rolled back whole — no receipt, no ledger line, no
+       change to the due. Same answer as the fast path above. */
+    if (idempotencyKey && /UNIQUE/i.test(String(err && err.message)) &&
+        db.prepare("SELECT 1 FROM payments WHERE idempotency_key = ? AND customer_id = ?").get(idempotencyKey, c.id)) {
+      return res.status(200).json({ ...db.prepare("SELECT * FROM customers WHERE id = ?").get(c.id), duplicate: true });
+    }
+    return res.status(400).json({ error: err.message });
+  }
 
   /* Money IN from a customer is a Receipt in Tally. */
   {

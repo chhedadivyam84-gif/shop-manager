@@ -111,46 +111,68 @@ function emptyAging() {
  * Bills and payments for one side, shaped identically so the allocation
  * below does not care whether it is looking at a customer or a supplier.
  */
-function loadSide(side) {
+/* MONEY PAID WHEN THE BILL WAS MADE.
+
+   A bill is not owed in full just because it exists. The billing screen
+   books a Cash, UPI or Card sale as received in full (invoices.advance =
+   total), and a part payment at the counter as that part — and the
+   customer's due only ever rose by what was left (balance_due). Until this
+   column was read here, the bill-wise breakdown ignored that money, so
+   every counter sale to a named customer showed as unpaid and the aging
+   buckets were inflated by it. The headline balance (customers.due) was
+   right all along; this brings the breakdown back into line with it.
+
+   Purchases are the same idea in the purchase screen's terms: only a
+   Credit purchase raises the supplier's due, so anything else was paid
+   when it was bought. A purchase challan is goods without a bill, and is
+   left out exactly as a sales challan is. */
+function loadSide(side, partyIds) {
+  /* Optional narrowing to a few parties, for a screen that needs the
+     status of a handful of bills rather than the whole book. */
+  const ids = Array.isArray(partyIds) ? [...new Set(partyIds.filter(Boolean))] : null;
+  const only = col => ids ? ` AND ${col} IN (${ids.length ? ids.map(() => "?").join(",") : "NULL"})` : "";
+  const args = ids || [];
   if (side === "supplier") {
     return {
       parties: db.prepare(
-        "SELECT id, name, phone, due FROM suppliers ORDER BY name COLLATE NOCASE"
-      ).all(),
+        "SELECT id, name, phone, due FROM suppliers WHERE 1=1" + only("id") + " ORDER BY name COLLATE NOCASE"
+      ).all(...args),
       bills: db.prepare(`
-        SELECT id, supplier_id AS party_id, purchase_no AS no, date, total
-        FROM purchases WHERE voided = 0
-      `).all(),
+        SELECT id, supplier_id AS party_id, purchase_no AS no, date, total, due_date,
+               CASE WHEN COALESCE(payment_method, 'Credit') = 'Credit' THEN 0 ELSE total END AS paid_at_bill
+        FROM purchases WHERE voided = 0 AND COALESCE(doc_type, 'purchase') <> 'challan'` + only("supplier_id")
+      ).all(...args),
       payments: db.prepare(`
         SELECT supplier_id AS party_id, stock_in_id AS bill_id, amount,
                COALESCE(payment_date, date(created_at/1000, 'unixepoch')) AS date
-        FROM purchase_payments WHERE voided = 0
-      `).all(),
+        FROM purchase_payments WHERE voided = 0` + only("supplier_id")
+      ).all(...args),
       openings: db.prepare(`
         SELECT supplier_id AS party_id, date, amount, balance_type
-        FROM supplier_opening_balances WHERE voided = 0
-      `).all(),
+        FROM supplier_opening_balances WHERE voided = 0` + only("supplier_id")
+      ).all(...args),
       advanceType: "Advance"
     };
   }
   return {
     parties: db.prepare(
-      "SELECT id, name, phone, due FROM customers ORDER BY name COLLATE NOCASE"
-    ).all(),
+      "SELECT id, name, phone, due FROM customers WHERE 1=1" + only("id") + " ORDER BY name COLLATE NOCASE"
+    ).all(...args),
     // A challan is not a demand for payment, so it never becomes outstanding.
     bills: db.prepare(`
-      SELECT id, customer_id AS party_id, challan_no AS no, date, total
-      FROM invoices WHERE voided = 0 AND doc_type = 'invoice'
-    `).all(),
+      SELECT id, customer_id AS party_id, challan_no AS no, date, total, due_date,
+             COALESCE(advance, 0) AS paid_at_bill
+      FROM invoices WHERE voided = 0 AND doc_type = 'invoice'` + only("customer_id")
+    ).all(...args),
     payments: db.prepare(`
       SELECT customer_id AS party_id, invoice_id AS bill_id, amount,
              COALESCE(payment_date, date(created_at/1000, 'unixepoch')) AS date
-      FROM payments WHERE voided = 0
-    `).all(),
+      FROM payments WHERE voided = 0` + only("customer_id")
+    ).all(...args),
     openings: db.prepare(`
       SELECT customer_id AS party_id, date, amount, balance_type
-      FROM customer_opening_balances WHERE voided = 0
-    `).all(),
+      FROM customer_opening_balances WHERE voided = 0` + only("customer_id")
+    ).all(...args),
     advanceType: "Advance"
   };
 }
@@ -169,6 +191,100 @@ function groupBy(rows, key) {
  *
  * `side` is "customer" (receivable) or "supplier" (payable).
  */
+/**
+ * One party's bills, with what has been paid against each — THE allocation,
+ * used by the Outstanding report and by every screen that shows a single
+ * bill's status, so the two can never disagree about whether a bill is paid.
+ */
+function allocateParty(partyId, bills, pays, opens, advanceType) {
+  const rawBills = (bills || []).map(b => {
+    const total = round2(b.total);
+    return {
+      id: b.id, no: b.no, date: b.date, due_date: b.due_date || "", total,
+      // Paid at the counter when the bill was raised — see loadSide().
+      paid: Math.min(total, Math.max(0, round2(b.paid_at_bill || 0)))
+    };
+  });
+
+  // Opening balance rides along as the oldest entry. An "Advance" opening
+  // is money already with us, so it pays bills off rather than adding one.
+  let advance = 0;
+  for (const o of (opens || [])) {
+    if (o.balance_type === advanceType) advance += round2(o.amount);
+    else rawBills.push({ id: "OPENING:" + partyId, no: "Opening Balance",
+                         date: o.date, total: round2(o.amount), paid: 0, opening: true });
+  }
+
+  rawBills.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const byId = new Map(rawBills.map(b => [b.id, b]));
+
+  // 1. payments that name a bill settle that bill first
+  let pool = advance;
+  for (const pay of (pays || [])) {
+    const target = pay.bill_id != null ? byId.get(pay.bill_id) : null;
+    if (target) {
+      const room = Math.max(0, round2(target.total - target.paid));
+      const used = Math.min(room, round2(pay.amount));
+      target.paid = round2(target.paid + used);
+      pool = round2(pool + (round2(pay.amount) - used));  // overpayment flows on
+    } else {
+      pool = round2(pool + round2(pay.amount));
+    }
+  }
+  // 2. whatever is left settles the oldest bills first
+  for (const b of rawBills) {
+    if (pool <= 0) break;
+    const room = round2(b.total - b.paid);
+    if (room <= 0) continue;
+    const used = Math.min(room, pool);
+    b.paid = round2(b.paid + used);
+    pool = round2(pool - used);
+  }
+  return { rawBills, pool, advance };
+}
+
+/**
+ * The payment status of particular bills, from the allocation above.
+ *
+ *   state    unpaid | partial | paid
+ *   overdue  true when something is still owed and its due date has passed
+ *
+ * Bills without a party (a walk-in sale) have nobody to allocate against,
+ * so they are judged on the money taken at the counter alone.
+ */
+function billStatus(side, bills) {
+  const out = new Map();
+  const list = (bills || []).filter(b => b && b.id);
+  const partyIds = [...new Set(list.map(b => b.party_id).filter(Boolean))];
+  const today = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; })();
+  const shape = (total, paid, dueDate) => {
+    const balance = round2(Math.max(0, total - paid));
+    const state = balance <= 0.005 ? "paid" : (paid > 0 ? "partial" : "unpaid");
+    return {
+      total, paid: round2(paid), balance, state,
+      label: state === "paid" ? "Paid" : state === "partial" ? "Partly paid" : "Unpaid",
+      overdue: state !== "paid" && !!dueDate && /^\d{4}-\d{2}-\d{2}$/.test(dueDate) && dueDate < today,
+      dueDate: dueDate || ""
+    };
+  };
+  if (partyIds.length) {
+    const src = loadSide(side, partyIds);
+    const billsBy = groupBy(src.bills, "party_id");
+    const paysBy = groupBy(src.payments, "party_id");
+    const opensBy = groupBy(src.openings, "party_id");
+    for (const pid of partyIds) {
+      const { rawBills } = allocateParty(pid, billsBy.get(pid), paysBy.get(pid), opensBy.get(pid), src.advanceType);
+      for (const b of rawBills) if (!b.opening) out.set(b.id, shape(b.total, b.paid, b.due_date));
+    }
+  }
+  for (const b of list) {
+    if (out.has(b.id)) continue;
+    const total = round2(b.total);
+    out.set(b.id, shape(total, Math.min(total, round2(b.paid_at_bill || 0)), b.due_date));
+  }
+  return out;
+}
+
 function outstandingDetails(side) {
   const src = loadSide(side);
   const billsBy = groupBy(src.bills, "party_id");
@@ -177,44 +293,8 @@ function outstandingDetails(side) {
 
   const parties = [];
   for (const p of src.parties) {
-    const rawBills = (billsBy.get(p.id) || []).map(b => ({
-      id: b.id, no: b.no, date: b.date, total: round2(b.total), paid: 0
-    }));
-
-    // Opening balance rides along as the oldest entry. An "Advance" opening
-    // is money already with us, so it pays bills off rather than adding one.
-    let advance = 0;
-    for (const o of (opensBy.get(p.id) || [])) {
-      if (o.balance_type === src.advanceType) advance += round2(o.amount);
-      else rawBills.push({ id: "OPENING:" + p.id, no: "Opening Balance",
-                           date: o.date, total: round2(o.amount), paid: 0, opening: true });
-    }
-
-    rawBills.sort((a, b) => String(a.date).localeCompare(String(b.date)));
-    const byId = new Map(rawBills.map(b => [b.id, b]));
-
-    // 1. payments that name a bill settle that bill first
-    let pool = advance;
-    for (const pay of (paysBy.get(p.id) || [])) {
-      const target = pay.bill_id != null ? byId.get(pay.bill_id) : null;
-      if (target) {
-        const room = Math.max(0, target.total - target.paid);
-        const used = Math.min(room, round2(pay.amount));
-        target.paid = round2(target.paid + used);
-        pool = round2(pool + (round2(pay.amount) - used));  // overpayment flows on
-      } else {
-        pool = round2(pool + round2(pay.amount));
-      }
-    }
-    // 2. whatever is left settles the oldest bills first
-    for (const b of rawBills) {
-      if (pool <= 0) break;
-      const room = round2(b.total - b.paid);
-      if (room <= 0) continue;
-      const used = Math.min(room, pool);
-      b.paid = round2(b.paid + used);
-      pool = round2(pool - used);
-    }
+    const { rawBills, pool, advance } = allocateParty(
+      p.id, billsBy.get(p.id), paysBy.get(p.id), opensBy.get(p.id), src.advanceType);
 
     const aging = emptyAging();
     let outstanding = 0;
@@ -242,8 +322,13 @@ function outstandingDetails(side) {
     const openingOutstanding = round2(openingReceivable - advance);
     const totalBills = rawBills.filter(b => !b.opening)
       .reduce((s2, b) => round2(s2 + b.total), 0);
-    const totalPaid = (paysBy.get(p.id) || [])
-      .reduce((s2, x) => round2(s2 + round2(x.amount)), 0);
+    /* Received = payments recorded later PLUS what was taken at the counter
+       when each bill was made, so Opening + Bills − Received comes out at
+       the balance instead of overstating it by every cash sale. */
+    const takenAtBill = (billsBy.get(p.id) || []).reduce((s2, b) =>
+      round2(s2 + Math.min(round2(b.total), Math.max(0, round2(b.paid_at_bill || 0)))), 0);
+    const totalPaid = round2((paysBy.get(p.id) || [])
+      .reduce((s2, x) => round2(s2 + round2(x.amount)), 0) + takenAtBill);
 
     parties.push({
       id: p.id, name: p.name, phone: p.phone || "",
@@ -278,4 +363,4 @@ function outstandingDetails(side) {
   return { side, parties: withDues, partyCount: withDues.length, totals };
 }
 
-module.exports = { outstandingDetails, challanOutstanding, daysOld, agingBucket };
+module.exports = { outstandingDetails, challanOutstanding, daysOld, agingBucket, billStatus, allocateParty };

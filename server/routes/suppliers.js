@@ -1,6 +1,6 @@
 const express = require("express");
 const db = require("../db");
-const { uid, logAction, round2, todayStr, localDate, bindId } = require("../util");
+const { uid, logAction, round2, todayStr, localDate, bindId, isRealDate, cleanKey } = require("../util");
 const { requireRole } = require("../auth");
 const { saveAttachment } = require("../attachments");
 const { postPaymentToLedger, voidLinkedLedgerEntry } = require("../bankLink");
@@ -228,6 +228,20 @@ router.post("/:id/payments", (req, res) => {
   const upiId = (req.body.upiId || "").trim();
   const bankAccountId = req.body.bankAccountId || null;
   const paymentDate = (req.body.date || "").trim() || todayStr();
+  if (!isRealDate(paymentDate)) return res.status(400).json({ error: "That payment date is not a real date." });
+  if (amount > 1e10) return res.status(400).json({ error: "That amount is too large to be a real payment." });
+
+  /* One payment per save — the same rule as a customer receipt (see
+     routes/customers.js). A retry with the same key is answered with what
+     was already recorded. */
+  const idempotencyKey = cleanKey(req.body.idempotencyKey);
+  if (idempotencyKey) {
+    const already = db.prepare("SELECT supplier_id FROM purchase_payments WHERE idempotency_key = ?").get(idempotencyKey);
+    if (already) {
+      if (already.supplier_id !== s.id) return res.status(409).json({ error: "That payment key belongs to another supplier's payment." });
+      return res.status(200).json({ ...db.prepare("SELECT * FROM suppliers WHERE id = ?").get(s.id), duplicate: true });
+    }
+  }
 
   let stockInId = null;
   if (req.body.stockInId) {
@@ -244,9 +258,9 @@ router.post("/:id/payments", (req, res) => {
   try {
     db.transaction(() => {
       db.prepare(`
-        INSERT INTO purchase_payments (id, supplier_id, stock_in_id, amount, method, reference_no, bank_name, upi_id, bank_account_id, attachment_path, attachment_name, note, payment_date, voided, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
-      `).run(id, s.id, stockInId, amount, method, referenceNo, bankName, upiId, bankAccountId, attachment ? attachment.path : "", attachment ? attachment.name : "", note, paymentDate, Date.now());
+        INSERT INTO purchase_payments (id, supplier_id, stock_in_id, amount, method, reference_no, bank_name, upi_id, bank_account_id, attachment_path, attachment_name, note, payment_date, voided, created_at, idempotency_key)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+      `).run(id, s.id, stockInId, amount, method, referenceNo, bankName, upiId, bankAccountId, attachment ? attachment.path : "", attachment ? attachment.name : "", note, paymentDate, Date.now(), idempotencyKey || null);
       db.prepare("UPDATE suppliers SET due = MAX(0, ROUND(due - ?, 2)) WHERE id = ?").run(amount, s.id);
       postPaymentToLedger({
         bankAccountId, method, amount, date: paymentDate,
@@ -255,7 +269,13 @@ router.post("/:id/payments", (req, res) => {
         sourceType: "purchase_payment", sourceId: id, direction: "out"
       });
     })();
-  } catch (err) { return res.status(400).json({ error: err.message }); }
+  } catch (err) {
+    if (idempotencyKey && /UNIQUE/i.test(String(err && err.message)) &&
+        db.prepare("SELECT 1 FROM purchase_payments WHERE idempotency_key = ? AND supplier_id = ?").get(idempotencyKey, s.id)) {
+      return res.status(200).json({ ...db.prepare("SELECT * FROM suppliers WHERE id = ?").get(s.id), duplicate: true });
+    }
+    return res.status(400).json({ error: err.message });
+  }
 
   /* Money OUT to a supplier is a Payment in Tally. */
   {

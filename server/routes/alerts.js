@@ -76,16 +76,23 @@ function buildAlerts(req) {
     }));
 
   /* ---- money owed to the shop, past its due date ----------------------- */
-  const overdueIn = db.prepare(`
-    SELECT i.id, i.challan_no, i.due_date, i.balance_due, c.name AS party
+  /* WHAT IS STILL OWED, not what was owed on the day of the bill.
+     balance_due is fixed when the bill is raised and never moves when the
+     customer pays later, so filtering on it kept a paid bill on this list
+     for ever. The amount shown and the decision to show it now come from
+     the same allocation the Outstanding screen uses. */
+  const pastDue = db.prepare(`
+    SELECT i.id, i.challan_no, i.due_date, i.total, i.advance, i.customer_id, c.name AS party
       FROM invoices i LEFT JOIN customers c ON c.id = i.customer_id
      WHERE i.voided = 0 AND i.doc_type = 'invoice'
-       AND COALESCE(i.balance_due, 0) > 0
        AND i.due_date IS NOT NULL AND i.due_date <> '' AND i.due_date < ?
-     ORDER BY i.due_date ASC LIMIT 50`).all(today);
+     ORDER BY i.due_date ASC LIMIT 500`).all(today);
+  const owed = require("../outstanding").billStatus("customer", pastDue.map(r => ({
+    id: r.id, party_id: r.customer_id, total: r.total, paid_at_bill: r.advance, due_date: r.due_date })));
+  const overdueIn = pastDue.filter(r => (owed.get(r.id) || {}).balance > 0).slice(0, 50);
   add("receivable-overdue", "Payments overdue from customers", "bad",
     overdueIn.map(r => ({ id: r.id,
-      line: `${r.party || "—"} · ${money(r.balance_due)}`,
+      line: `${r.party || "—"} · ${money(owed.get(r.id).balance)}`,
       sub: `${r.challan_no} · ${daysOverdue(r.due_date)} day(s) past due`, goto: "outstanding" })));
 
   /* ---- money the shop owes, past its due date -------------------------- */

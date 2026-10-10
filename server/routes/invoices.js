@@ -5,6 +5,7 @@ const { requireRole } = require("../auth");
 const inventory = require("../inventory");
 const ledger = require("../stockLedger");
 const docNumber = require("../docNumber");
+const { billStatus } = require("../outstanding");
 // Same module the browser loads — see public/js/pricing.js for why it is shared.
 const Pricing = require("../../public/js/pricing.js");
 
@@ -243,17 +244,38 @@ function computeTotals({ items, discountType, discountValue, advance, taxType, t
  * never apply here — every invoice/challan starts life already "approved";
  * what's actually tracked is what happens to it afterward.
  */
-function deriveDocStatus(inv) {
+function deriveDocStatus(inv, pay) {
   if (inv.voided) return "Cancelled";
   // Pending until a real Tax Invoice is raised against it via "Convert to
   // Invoice"; Billed once that's happened. No such stage on a Tax Invoice
   // itself — it's already the billed document.
   if (inv.doc_type === "challan") return inv.converted_invoice_id ? "Billed" : "Pending";
+  /* From what has actually been paid against it, not the balance stored on
+     the day it was raised. balance_due is that day's figure and never moves
+     when a payment comes in later, so judging by it left a bill the
+     customer had since paid showing as Pending for ever. */
+  if (pay) return pay.state === "paid" ? "Completed" : pay.state === "partial" ? "Partially Completed" : "Pending";
   if (inv.balance_due <= 0) return "Completed";
   if (inv.advance > 0) return "Partially Completed";
   return "Pending";
 }
-function withStatus(inv) { return { ...inv, status: deriveDocStatus(inv) }; }
+
+/* PAYMENT STATUS, worked out by the one allocation engine (outstanding.js):
+   money taken at the counter, payments that name this bill, then the
+   customer's other payments oldest-bill-first. Attached as `payment` —
+   { total, paid, balance, state: unpaid|partial|paid, label, overdue } — on
+   every tax invoice; a challan carries no demand for money and gets none. */
+function paymentsFor(rows) {
+  const bills = rows.filter(r => r && r.doc_type === "invoice" && !r.voided).map(r => ({
+    id: r.id, party_id: r.customer_id, total: r.total, paid_at_bill: r.advance, due_date: r.due_date
+  }));
+  return bills.length ? billStatus("customer", bills) : new Map();
+}
+function withStatus(inv, pays) {
+  const map = pays || paymentsFor([inv]);
+  const payment = map.get(inv.id) || null;
+  return { ...inv, payment, status: deriveDocStatus(inv, payment) };
+}
 
 router.get("/", (req, res) => {
   const { date, customerId, includeVoided } = req.query;
@@ -268,7 +290,8 @@ router.get("/", (req, res) => {
   if (customerId) { sql += " AND customer_id = ?"; params.push(customerId); }
   sql += " ORDER BY created_at DESC";
   const invoices = db.prepare(sql).all(...params);
-  res.json(invoices.map(withStatus));
+  const pays = paymentsFor(invoices);
+  res.json(invoices.map(inv => withStatus(inv, pays)));
 });
 
 /**
@@ -315,6 +338,7 @@ router.get("/search", (req, res) => {
 
   if (String(q.no || "").trim())       { where.push("i.challan_no LIKE ?");   args.push(like(q.no)); }
   if (String(q.customer || "").trim()) { where.push("c.name LIKE ?");          args.push(like(q.customer)); }
+  if (String(q.customerId || "").trim()) { where.push("i.customer_id = ?");    args.push(String(q.customerId).trim()); }
   if (String(q.from || "").trim())     { where.push("i.date >= ?");            args.push(String(q.from).trim()); }
   if (String(q.to || "").trim())       { where.push("i.date <= ?");            args.push(String(q.to).trim()); }
   if (q.docType === "invoice" || q.docType === "challan") {
@@ -344,7 +368,7 @@ router.get("/search", (req, res) => {
   try {
     const rows = db.prepare(`
       SELECT i.id, i.challan_no, i.date, i.total, i.doc_type, i.voided,
-             i.payment_method, i.balance_due,
+             i.payment_method, i.balance_due, i.customer_id, i.advance, i.due_date,
              c.name AS customer_name,
              COALESCE(NULLIF(TRIM(s.salesman_name), ''), i.created_by) AS salesman,
              (SELECT so.so_no FROM sales_orders so
@@ -358,7 +382,15 @@ router.get("/search", (req, res) => {
        ORDER BY i.date DESC, i.created_at DESC
        LIMIT ?
     `).all(...args, limit);
-    res.json({ rows, truncated: rows.length >= limit });
+    const pays = paymentsFor(rows);
+    let out = rows.map(r => ({ ...r, payment: pays.get(r.id) || null }));
+    /* Filtered by what is actually owed, after the engine has worked it out
+       — a stored column cannot answer "overdue" truthfully. */
+    const st = String(q.status || "").trim();
+    if (["paid", "partial", "unpaid"].includes(st)) out = out.filter(r => r.payment && r.payment.state === st);
+    else if (st === "overdue") out = out.filter(r => r.payment && r.payment.overdue);
+    else if (st === "outstanding") out = out.filter(r => r.payment && r.payment.balance > 0);
+    res.json({ rows: out, truncated: rows.length >= limit });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -378,7 +410,13 @@ router.get("/:id", (req, res) => {
     "SELECT quotation_no, date FROM quotations WHERE converted_invoice_id = ? LIMIT 1"
   ).get(inv.id) || null;
 
-  res.json({ ...withStatus(inv), items, estimate });
+  /* Payments recorded against THIS bill by name. Payments the customer
+     made without naming a bill are applied oldest-first and show up in
+     payment.paid, not here — this list is the receipts that cite it. */
+  const linkedPayments = db.prepare(`SELECT id, amount, method, payment_date, reference_no, note, created_at
+      FROM payments WHERE invoice_id = ? AND voided = 0 ORDER BY created_at`).all(inv.id);
+
+  res.json({ ...withStatus(inv), items, estimate, linkedPayments });
 });
 
 /* The name to record against a document.

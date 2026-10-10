@@ -522,13 +522,28 @@ router.get("/orders", (req, res) => {
 router.get("/tax-invoices", (req, res) => {
   const range = dateRange(req);
   const rows = db.prepare(`
-    SELECT i.id, i.challan_no, i.date, c.name AS customer_name, i.payment_method, i.total, i.balance_due
+    SELECT i.id, i.challan_no, i.date, c.name AS customer_name, i.payment_method, i.total, i.balance_due,
+           i.customer_id, i.advance, i.due_date
     FROM invoices i LEFT JOIN customers c ON c.id = i.customer_id
     WHERE i.voided = 0 AND i.doc_type = 'invoice'${range.sql("i.date")}
     ORDER BY i.created_at DESC
   `).all(...range.params());
-  res.json(rows);
+  res.json(withLiveBalance(rows));
 });
+
+/* balance_due is what was left on the day of the bill — what the paper
+   bill says, and kept as such. What is owed NOW comes from the allocation
+   engine (outstanding.js), after every payment since. Both are reported,
+   named for what they are. */
+function withLiveBalance(rows) {
+  const st = require("../outstanding").billStatus("customer", rows.map(r => ({
+    id: r.id, party_id: r.customer_id, total: r.total, paid_at_bill: r.advance, due_date: r.due_date })));
+  return rows.map(r => {
+    const p = st.get(r.id);
+    return { ...r, outstanding: p ? p.balance : r.balance_due,
+             payment_status: p ? (p.overdue ? "Overdue" : p.label) : "", overdue: !!(p && p.overdue) };
+  });
+}
 
 /** Every Purchase Bill, newest first — one row per bill, unlike /purchases'
  *  per-line breakdown. Merges the older single-line stock_ins (each row IS
@@ -1238,12 +1253,13 @@ function buildReportRows(req) {
     `).all(...range.params()).forEach(r => rows.push([r.challan_no, r.date, r.customer_name || "Walk-in", r.item_count, r.total_pieces, r.transport, r.loading]));
   } else if (type === "TaxInvoice") {
     filename = "tax-invoice-report";
-    rows = [["Estimate No", "Date", "Customer", "Payment Method", "Total", "Balance Due"]];
-    db.prepare(`
-      SELECT i.challan_no, i.date, c.name AS customer_name, i.payment_method, i.total, i.balance_due
+    rows = [["Estimate No", "Date", "Customer", "Payment Method", "Total", "Balance Due at billing", "Still Owed", "Status"]];
+    withLiveBalance(db.prepare(`
+      SELECT i.id, i.challan_no, i.date, c.name AS customer_name, i.payment_method, i.total, i.balance_due,
+             i.customer_id, i.advance, i.due_date
       FROM invoices i LEFT JOIN customers c ON c.id = i.customer_id
       WHERE i.voided = 0 AND i.doc_type = 'invoice'${range.sql("i.date")} ORDER BY i.created_at DESC
-    `).all(...range.params()).forEach(r => rows.push([r.challan_no, r.date, r.customer_name || "Walk-in", r.payment_method, r.total, r.balance_due]));
+    `).all(...range.params())).forEach(r => rows.push([r.challan_no, r.date, r.customer_name || "Walk-in", r.payment_method, r.total, r.balance_due, r.outstanding, r.payment_status]));
   } else if (type === "PurchaseBill") {
     filename = "purchase-bill-report";
     rows = [["Bill No", "Date", "Supplier", "Items", "Grand Total"]];

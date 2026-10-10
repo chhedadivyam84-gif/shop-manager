@@ -241,6 +241,16 @@
             <label><span>Order No.</span><input type="text" id="bf-order" autocomplete="off"></label>
             <label><span>Delivery / Challan No.</span><input type="text" id="bf-delivery" autocomplete="off"></label>
             <label><span>Amount</span><input type="number" id="bf-amount" step="0.01" placeholder="e.g. 9440"></label>
+            <!-- Worked out from the payments actually recorded, not the
+                 balance stored on the day the bill was made. -->
+            <label><span>Payment status</span><select id="bf-status">
+              <option value="">Any</option>
+              <option value="outstanding">Still owed</option>
+              <option value="unpaid">Unpaid</option>
+              <option value="partial">Partly paid</option>
+              <option value="paid">Paid</option>
+              <option value="overdue">Overdue</option>
+            </select></label>
           </div>
           <div class="acts" style="margin-top:10px;">
             <button type="button" class="btn btn-gold" id="bf-search">Search</button>

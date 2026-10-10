@@ -202,8 +202,13 @@
         <div class="section-title">Top Customers</div>
         <div class="card" id="top-customers"></div>
 
-        <div class="section-title">Recent Invoices</div>
-        <div class="card" id="recent-invoices"></div>
+        <!-- Hidden from Home at the owner's request (Oct 2026). Kept, not
+             removed: delete the `hidden` attribute to bring it back. The
+             invoices themselves are untouched and still open from Billing. -->
+        <div id="recent-invoices-block" hidden>
+          <div class="section-title">Recent Invoices</div>
+          <div class="card" id="recent-invoices"></div>
+        </div>
       </div>
 
       <!-- BILLING -->

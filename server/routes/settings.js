@@ -312,7 +312,9 @@ router.put("/po-wa-template", requireRole("owner"), (req, res) => {
    Validated against the list rather than stored as free text. An
    unrecognised value would reach the page as a class that matches
    nothing, and the app would come up unstyled. */
-const APP_THEMES = ["navy-gold", "forest-brass", "maroon-gold", "teal-copper",
+/* Blank means the default, Clean Blue; it is listed so a stored name is
+   accepted too. */
+const APP_THEMES = ["clean-blue", "navy-gold", "forest-brass", "maroon-gold", "teal-copper",
                     "indigo-amber", "charcoal-gold", "plum-rose"];
 
 function updateAppTheme(req, res) {

@@ -20,10 +20,14 @@
    on another colour watched their app change under them. The splash below
    would have done it most visibly of all. Duplicated here on purpose:
    four lines in the head are the only way to be right on the first frame. */
+/* Clean Blue unless this device remembers another choice — the same
+   default app.js uses. Navy & Gold is the bare :root, so it sets nothing. */
+document.documentElement.setAttribute("data-theme", "clean-blue");
 try {
   var t = localStorage.getItem("shopManagerAppTheme");
-  if (t && t !== "navy-gold") document.documentElement.setAttribute("data-theme", t);
-} catch (e) { /* private mode — the default is already correct */ }
+  if (t === "navy-gold") document.documentElement.removeAttribute("data-theme");
+  else if (t) document.documentElement.setAttribute("data-theme", t);
+} catch (e) { /* private mode — the default is already set */ }
 
 /* THE SPLASH COMES DOWN NO MATTER WHAT.
 

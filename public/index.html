@@ -8,6 +8,9 @@
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/css/style.css">
+<!-- The new look, layered over style.css. Remove this one line and the app
+     is exactly as it was before. -->
+<link rel="stylesheet" href="/css/look.css">
 <style id="page-size-style"></style>
 <script src="/js/boot.js"></script>
 </head>
@@ -118,7 +121,7 @@
         <!-- Every screen has a route from here. The bottom bar carries the
              seven used all day; this carries the rest, which otherwise exist
              only as tiles on Home. -->
-        <button id="menu-btn" class="menu-btn" title="Menu" aria-label="Menu">&#9776;</button>
+        <button id="menu-btn" class="menu-btn" title="Menu — every screen" aria-label="Menu"><svg class="hdr-ic" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
         <div style="flex:1;min-width:0;">
           <div class="greet-sub" id="hdr-sub">Owner Dashboard</div>
           <div class="greet-main" id="hdr-main">Namaste</div>
@@ -132,9 +135,9 @@
           <!-- What is still waiting, on every screen rather than only on Home:
                an unbilled challan is worth seeing while you are billing. -->
           <button id="bell-btn" class="bell" title="Notifications and reminders" aria-label="Notifications and reminders">
-            &#128276;<span id="bell-count" class="bell-count" style="display:none;">0</span>
+            <svg class="hdr-ic" viewBox="0 0 24 24"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 8 3 8H3s3-1 3-8"/><path d="M10 20a2 2 0 0 0 4 0"/></svg><span id="bell-count" class="bell-count" style="display:none;">0</span>
           </button>
-          <button id="refresh-btn" title="Refresh">&#8635;</button>
+          <button id="refresh-btn" title="Refresh" aria-label="Refresh"><svg class="hdr-ic" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v5h-5"/></svg></button>
           <button class="avatar" id="avatar-btn">SP</button>
         </div>
       </div>
@@ -1475,14 +1478,18 @@
       </div>
     </main>
 
-    <nav class="bottom">
-      <button class="tab active" data-tab="home"><span class="ic">&#127968;</span>Home</button>
-      <button class="tab" data-tab="billing"><span class="ic">&#128220;</span>Billing</button>
-      <button class="tab" data-tab="inventory"><span class="ic">&#128230;</span>Inventory</button>
-      <button class="tab" data-tab="customers"><span class="ic">&#128100;</span>Customers</button>
-      <button class="tab" data-tab="reports"><span class="ic">&#128202;</span>Reports</button>
-      <button class="tab" data-tab="cashbook"><span class="ic">&#128181;</span>Cash Book</button>
-      <button class="tab" data-tab="delivery"><span class="ic">&#128666;</span>Delivery</button>
+    <!-- The same seven tabs as always. A bar along the bottom of a phone; a
+         sidebar on a tablet (icons) and a laptop (icons and names) — see
+         css/look.css. The brand only shows in the sidebar. -->
+    <nav class="bottom" aria-label="Main screens">
+      <div class="nav-brand" aria-hidden="true"><span class="nav-brand-mark">SM</span><span class="nav-brand-name">Shop Manager</span></div>
+      <button class="tab active" data-tab="home" title="Home"><span class="ic"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg></span><span class="lbl">Home</span></button>
+      <button class="tab" data-tab="billing" title="Billing"><span class="ic"><svg viewBox="0 0 24 24"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/></svg></span><span class="lbl">Billing</span></button>
+      <button class="tab" data-tab="inventory" title="Inventory"><span class="ic"><svg viewBox="0 0 24 24"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/></svg></span><span class="lbl">Inventory</span></button>
+      <button class="tab" data-tab="customers" title="Customers"><span class="ic"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.5 3.5-5.5 6.5-5.5s5.7 2 6.5 5.5"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.8c2 .8 3.2 2.6 3.6 5.2"/></svg></span><span class="lbl">Customers</span></button>
+      <button class="tab" data-tab="reports" title="Reports"><span class="ic"><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M21 20H3"/></svg></span><span class="lbl">Reports</span></button>
+      <button class="tab" data-tab="cashbook" title="Cash Book"><span class="ic"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/></svg></span><span class="lbl">Cash Book</span></button>
+      <button class="tab" data-tab="delivery" title="Delivery"><span class="ic"><svg viewBox="0 0 24 24"><path d="M3 6h11v9H3zM14 9h4l3 3v3h-7"/><circle cx="7" cy="17.5" r="1.8"/><circle cx="17" cy="17.5" r="1.8"/></svg></span><span class="lbl">Delivery</span></button>
     </nav>
 
     <!-- The assistant, on every screen. Hidden until the app knows this shop

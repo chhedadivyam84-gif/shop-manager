@@ -21,6 +21,14 @@ Every finding below was reproduced, not assumed. Every fix has a test, and each 
 | 8 | Medium | Panel had **no lockfile**. Render installed whatever versions matched `^4`, while this PC had **Express 5**, so every panel test ran on a different Express from production. | No `package-lock.json`; `node_modules/express` 5.2.1 vs `^4.21.2` | **Fixed** — lockfile added (Express 4.22.3); all panel suites re-run on Express 4 |
 | 9 | Low (not exploitable here) | `proxy-addr` 2.0.7 (critical advisory GHSA-jqcg-44mw-7w3h, IP spoofing via an IPv4-mapped trust subnet). The panel trusts one proxy hop, not a subnet. | `npm audit` once a lockfile existed | **Fixed** — 2.0.8 in the lockfile; `npm audit`: 0 |
 
+### Second pass — same day
+
+| # | Severity | Finding | Status |
+|---|---|---|---|
+| 10 | **High** | WRITES the gate did not yet cover were open to any staff login with any permission: creating and editing products, correcting stock by hand, stock-in, opening stock, stock transfers, sales and purchase returns, cheques, e-way-bill and e-invoice filing (which uses the shop's GST portal credentials), Bill Scanner (paid per scan), and exports. | **Fixed** — 15 more areas in `permissionGate.js`, each needing its own module (e.g. hand stock corrections need Stock with Edit). Test: a salesman's stock correction is refused and the stock does not move; stock staff can still do it |
+| 11 | Low | The sync address check did not resolve names, so a public name pointing at a private address got through. | **Fixed** — every address the name resolves to must be public, checked before connecting |
+| — | (verified) | Owner actions are refused to staff, **even a staff login given every permission**: adding logins, promoting itself, changing the owner's PIN, editing permissions, preview, colour, backups, data reset, new business, staff pay, activity log, delete, shop-wide notices, licence activation. | `test/admin-actions.test.js` against the real server: 22/22 |
+
 ## Checked and found sound
 
 - **Shop isolation:** one SQLite file per business, bound from the session. A shared-installation shop is pinned to its own business twice, staff cannot switch business, and an invoice id from another business gives 404 (tested).
@@ -44,8 +52,8 @@ Every finding below was reproduced, not assumed. Every fix has a test, and each 
 
 ## Not fixed — needs your decision or more work
 
-1. **"Own data only" scopes are not enforced on the server.** A salesman set to "Own Only" can still list every salesman's bills through the API. The gate enforces *which screens*, not *whose rows*. Fixing it means filtering each list query by salesman. It's a larger change that needs testing against real staff set-ups.
-2. **Sync host check does not resolve DNS.** A public name pointed at a private address would pass. Low risk, since https is required and the owner sets it.
+1. **"Own data only" scopes are not enforced anywhere — on screen OR on the server.** A salesman set to "Own Only" sees every salesman's bills. This needs **your decision, not just a fix**: a staff member with no scope set counts as "Own Only", so turning it on would immediately hide colleagues' bills from everyone at the counter who looks them up or reprints them. Once you decide what each login should see, it's a filter on the invoice, quotation and order lists.
+2. **Sync names are checked once, before connecting.** A name that changes its address between the check and the connection is not covered. Low risk: https is required and only the owner sets it.
 3. **Backups are not encrypted by the app.** Cloudflare R2 encrypts at rest, and the bucket is private. Anyone holding the R2 keys can read every shop's books.
 4. **No restore drill against the live bucket from here.** This PC has no cloud credentials. Restores are proven on every deploy, in the Render logs, and in tests against a stand-in.
 5. **The deploy catch-up** keeps reporting "work already entered" after deploys (a separate investigation is running).

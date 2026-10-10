@@ -77,6 +77,20 @@ const PDF = Buffer.from("%PDF-1.4\n%fake but well-formed header\n");
     db.prepare("UPDATE settings SET sync_cloud_url = ?, sync_cloud_key = 'k' WHERE id = 1").run("https://169.254.169.254");
     const r = await sync.askCloud("/api/sync/peek");
     ok("an address saved BEFORE this check is refused when used", r.ok === false && /private network/.test(r.error), r);
+
+    /* A public-looking NAME that points at a private address. The lookup is
+       stood in for here, so nothing leaves this machine. */
+    const dns = require("dns");
+    const realLookup = dns.promises.lookup;
+    dns.promises.lookup = async (host) => host === "rebind.example.com"
+      ? [{ address: "10.1.2.3", family: 4 }] : [{ address: "93.184.215.14", family: 4 }];
+    try {
+      db.prepare("UPDATE settings SET sync_cloud_url = ?, sync_cloud_key = 'k' WHERE id = 1").run("https://rebind.example.com");
+      const r2 = await sync.askCloud("/api/sync/peek");
+      ok("a public name that RESOLVES to a private address is refused before connecting", r2.ok === false && /points inside a private network/.test(r2.error), r2);
+      const p2 = await sync.push({ staff: "test" });
+      ok("...for a push too", p2.ok === false && /points inside a private network/.test(p2.error), p2);
+    } finally { dns.promises.lookup = realLookup; }
   });
 
   console.log(`\n${pass} passed, ${fail} failed`);

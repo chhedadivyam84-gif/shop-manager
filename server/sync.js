@@ -120,6 +120,23 @@ function checkTarget(clean, atSave) {
   if (!testing && isPrivateHost(u.hostname)) throw new Error("That address is inside a private network. Use the cloud copy's public https address.");
 }
 
+/* The name, looked up. A public-looking name can be pointed at a private
+   address, so before the server connects, every address the name resolves
+   to must be public too. A name that changes between this lookup and the
+   connection is not covered; https and the owner-only setting keep that
+   narrow. */
+async function checkResolved(clean) {
+  if (process.env.SYNC_ALLOW_PRIVATE_TARGET === "1") return;
+  let host;
+  try { host = new URL(clean).hostname.replace(/^\[|\]$/g, ""); } catch (e) { throw new Error("That is not a web address."); }
+  let addrs;
+  try { addrs = await require("dns").promises.lookup(host, { all: true }); }
+  catch (e) { return; }   // unresolvable: the request itself will fail and say so
+  if (addrs.some(a => isPrivateHost(a.address))) {
+    throw new Error("That address points inside a private network. Use the cloud copy's public https address.");
+  }
+}
+
 function setTarget(url, key) {
   const clean = String(url || "").trim().replace(/\/+$/, "");
   checkTarget(clean, true);
@@ -174,7 +191,7 @@ async function askCloud(pathname) {
   if (!s.sync_cloud_url || !s.sync_cloud_key) {
     return { ok: false, error: "No cloud address has been set." };
   }
-  try { checkTarget(s.sync_cloud_url); } catch (e) { return { ok: false, error: e.message }; }
+  try { checkTarget(s.sync_cloud_url); await checkResolved(s.sync_cloud_url); } catch (e) { return { ok: false, error: e.message }; }
   try {
     const r = await fetch(s.sync_cloud_url + pathname, {
       headers: { "x-sync-key": s.sync_cloud_key },
@@ -213,7 +230,7 @@ async function push(opts) {
     log({ direction: "push", staff, target, ok: false, error });
     return { ok: false, error };
   }
-  try { checkTarget(target); }
+  try { checkTarget(target); await checkResolved(target); }
   catch (e) { log({ direction: "push", staff, target, ok: false, error: e.message }); return { ok: false, error: e.message }; }
 
   let snap;

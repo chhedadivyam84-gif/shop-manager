@@ -47,6 +47,9 @@ const SALES_SIDE = ["sales", "sales_order", "sales_challan", "selection_slip", "
    here either: its screen reads /accounting, not the supplier list. */
 const BUY_SIDE = ["purchase", "purchase_order", "payment", "supplier", "ledger", "stock:add"];
 
+/* Any module at all — for lists every screen draws from. */
+const ANY = permissions.MODULES.map(m => m.key);
+
 /* [path prefix (under /api), { view, add, edit }]. First match wins, so
    the narrower prefixes come first. */
 const RULES = [
@@ -75,7 +78,30 @@ const RULES = [
   ["/reports/tax-invoices", { view: ["reports", "sales"] }],
   ["/reports/challans", { view: ["reports", "sales", "sales_challan"] }],
   ["/reports/dashboard", { view: ["dashboard", "reports"] }],
-  ["/reports", { view: ["reports", "salesman_report"] }]
+  ["/reports", { view: ["reports", "salesman_report"] }],
+
+  /* Added 10 Oct 2026, second pass: areas whose WRITES were open to any
+     staff login with any permission at all — products and stock, returns,
+     transfers, cheques, e-way bills. Reading the product list stays open to
+     every screen that sells or buys; changing it does not. */
+  ["/products", { view: ANY, add: ["product", "purchase", "stock:add"], edit: ["product", "stock:edit", "stock_transfer", "purchase"] }],
+  ["/stock-ins", { view: BUY_SIDE, add: ["purchase", "stock:add"], edit: ["purchase", "stock:edit"] }],
+  ["/opening-stock", { view: ["stock", "product"], add: ["stock:edit"], edit: ["stock:edit"] }],
+  ["/transfers", { view: ["stock_transfer", "stock"], add: ["stock_transfer"], edit: ["stock_transfer"] }],
+  ["/stock-history", { view: ["stock", "stock_transfer", "product", "reports"] }],
+  ["/material-flow", { view: ["sales", "sales_challan", "purchase", "dispatch", "stock", "reports"] }],
+  ["/sales-returns", { view: SALES_SIDE.concat("reports"), add: ["sales"], edit: ["sales"] }],
+  ["/purchase-returns", { view: BUY_SIDE.concat("reports"), add: ["purchase"], edit: ["purchase"] }],
+  ["/cheques", { view: ["payment", "bank"], add: ["payment", "bank"], edit: ["payment", "bank"] }],
+  ["/dispatch", { view: ["dispatch", "sales", "sales_challan"], add: ["dispatch", "sales", "sales_challan"], edit: ["dispatch", "sales", "sales_challan"] }],
+  ["/delivery", { view: ["dispatch", "sales", "sales_challan"], add: ["dispatch", "sales", "sales_challan"], edit: ["dispatch", "sales", "sales_challan"] }],
+  /* E-way bills and e-invoices file with the GST portal using the shop's
+     own credentials — not something any login may trigger. */
+  ["/ewaybill", { view: ["sales", "dispatch", "gst"], add: ["sales", "dispatch", "gst"], edit: ["sales", "dispatch", "gst"] }],
+  ["/ewb", { view: ["sales", "dispatch", "gst"], add: ["sales", "dispatch", "gst"], edit: ["sales", "dispatch", "gst"] }],
+  /* Costs the shop money per scan. */
+  ["/bill-scan", { view: ["purchase"], add: ["purchase:add"], edit: ["purchase:edit"] }],
+  ["/export", { view: ["reports"], add: ["reports:view"] }]
 ];
 
 /* Reachable by any signed-in person, including one with no permissions:

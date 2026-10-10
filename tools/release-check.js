@@ -62,7 +62,7 @@ const CRITICAL_SUITES = [
   "sales",
   /* A staff login reaches what its permissions say and no more; one shop
      never opens another's receipts. */
-  "permissions-gate", "audit",
+  "permissions-gate", "audit", "admin-actions",
 ];
 
 /* IN CI THESE CANNOT RUN, BY DESIGN, and that is not the same as skipped.

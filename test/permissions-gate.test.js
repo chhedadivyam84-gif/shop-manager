@@ -47,7 +47,9 @@ app.use("/api", require(path.join(ROOT, "server/permissionGate.js")).gate());
 for (const [mount, file] of [["customers", "customers"], ["suppliers", "suppliers"], ["invoices", "invoices"],
                              ["products", "products"], ["reports", "reports"], ["accounting", "accounting"],
                              ["bank-accounts", "bankAccounts"], ["bankbook", "bankbook"], ["purchases", "purchases"],
-                             ["settings", "settings"], ["permissions", "permissions"]]) {
+                             ["settings", "settings"], ["permissions", "permissions"],
+                             ["transfers", "transfers"], ["sales-returns", "salesReturns"],
+                             ["purchase-returns", "purchaseReturns"], ["cheques", "cheques"]]) {
   app.use("/api/" + mount, require(path.join(ROOT, "server/routes/" + file + ".js")));
 }
 app.use((err, req, res, next) => { console.error("[test]", err && err.message); res.status(500).json({ error: "server" }); });
@@ -77,7 +79,7 @@ const asOwner = () => { WHO = { role: "owner", staffId: "STAFF_owner", staffName
   inShop(() => {
     const loc = inventory.getLocationByCode("shop").id;
     const ins = db.prepare("INSERT INTO staff (id,name,pin_hash,role,active,created_at) VALUES (?,?,'x','staff',1,?)");
-    for (const id of ["ST-NONE", "ST-SALES", "ST-ACCTS", "ST-BUY"]) ins.run(id, id, Date.now());
+    for (const id of ["ST-NONE", "ST-SALES", "ST-ACCTS", "ST-BUY", "ST-STOCK"]) ins.run(id, id, Date.now());
     db.prepare("INSERT INTO customers (id,name,phone,due,created_at,active) VALUES ('C1','Gate Customer','9000000001',500,?,1)").run(Date.now());
     db.prepare("INSERT INTO suppliers (id,name,phone,due,created_at) VALUES ('S1','Gate Supplier','9000000002',900,?)").run(Date.now());
     db.prepare("INSERT INTO products (id,name,unit,gst_rate,stock,created_at,active) VALUES ('P1','Gate Ply','Sheet',18,0,?,1)").run(Date.now());
@@ -87,6 +89,7 @@ const asOwner = () => { WHO = { role: "owner", staffId: "STAFF_owner", staffName
   grantRole("ST-SALES", "Sales Staff");
   grantRole("ST-ACCTS", "Accounts Staff");
   grantRole("ST-BUY", "Purchase Staff");
+  grantRole("ST-STOCK", "Stock Staff");
 
   const srv = app.listen(0);
   BASE = "http://127.0.0.1:" + srv.address().port + "/api";
@@ -163,6 +166,25 @@ const asOwner = () => { WHO = { role: "owner", staffId: "STAFF_owner", staffName
   ok("cannot pay a supplier without Payment permission", (await call("POST", "/suppliers/S1/payments", { amount: 5, method: "Cash" })).status === 403);
 
   /* ---------------------------------------------------------------- */
+  console.log("\n--- second pass: stock, returns, transfers, cheques ---\n");
+  as("ST-SALES", "Salesman");
+  const shopLoc = () => inShop(() => inventory.getLocationByCode("shop").id);
+  const stockBefore = inShop(() => inventory.getStock(1, shopLoc()));
+  ok("a salesman cannot correct stock by hand (403)",
+     (await call("PATCH", "/products/P1/sizes/1/stock", { delta: 500 })).status === 403);
+  ok("...and the stock did not move", inShop(() => inventory.getStock(1, shopLoc())) === stockBefore);
+  ok("a salesman cannot create a product (403)", (await call("POST", "/products", { name: "Fake", sizes: [] })).status === 403);
+  ok("a salesman cannot edit a product (403)", (await call("PUT", "/products/P1", { name: "Gate Ply" })).status === 403);
+  ok("a salesman cannot move stock between locations (403)", (await call("POST", "/transfers", {})).status === 403);
+  ok("a salesman cannot raise a cheque (403)", (await call("POST", "/cheques", {})).status === 403);
+  ok("a salesman can see sales returns", (await call("GET", "/sales-returns")).status === 200);
+  ok("...but not purchase returns (403)", (await call("GET", "/purchase-returns")).status === 403);
+  as("ST-STOCK", "Stock keeper");
+  ok("stock staff CAN correct stock", (await call("PATCH", "/products/P1/sizes/1/stock", { delta: 1 })).status === 200);
+  ok("...and reach stock transfers", (await call("POST", "/transfers", {})).status !== 403);
+  ok("...but cannot raise a sales return (403)", (await call("POST", "/sales-returns", {})).status === 403);
+  ok("...nor record a customer receipt (403)", (await call("POST", "/customers/C1/payments", { amount: 5, method: "Cash" })).status === 403);
+
   console.log("\n--- the owner is untouched; an owner previewing a staff login is not ---\n");
   asOwner();
   ok("the owner reads everything", (await call("GET", "/suppliers")).status === 200 && (await call("GET", "/bankbook")).status === 200);

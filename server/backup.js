@@ -211,8 +211,15 @@ function hasSomethingWorthKeeping() {
   return false;
 }
 
-async function runBackup(trigger = "manual") {
-  if (!hasSomethingWorthKeeping()) {
+/* `allowEmpty` is for ONE caller: the owner's own "Wipe All Shop Data",
+   straight after it has succeeded. The empty-database refusal below exists
+   so that a failed restore can never overwrite good backups with nothing —
+   but after a deliberate wipe, empty IS the shop's real state, and refusing
+   to save it left the pre-wipe backup as the newest. On Render every
+   restart restores the newest backup, so the wiped data came back the next
+   time the shop woke up. */
+async function runBackup(trigger = "manual", opts) {
+  if (!(opts && opts.allowEmpty) && !hasSomethingWorthKeeping()) {
     const why =
       "refused: no business has any products, customers, suppliers, invoices, " +
       "purchases or cash entries. Backing this up would make an empty database " +

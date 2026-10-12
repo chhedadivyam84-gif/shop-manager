@@ -54,6 +54,15 @@ const RESET_LOG_PATH = path.join(__dirname, "..", "..", "data", "reset-log.txt")
    too: eleven document tables survived a full reset, measured on a real
    database. */
 const DOC_TABLES = [
+  /* E-WAY BILLS AND E-INVOICES FIRST. They point at invoices with no
+     cascade, so while one exists the invoice cannot be deleted — and on
+     12 Oct 2026 that made "Wipe All Shop Data" fail on the live shop with
+     "FOREIGN KEY constraint failed" every time. The transaction rolled back,
+     so nothing was lost; nothing was cleared either. These are records OF
+     those bills, held here; the filings on the GST portal are untouched. */
+  "ewb_items", "ewb_requests", "ewb_bills", "einvoices",
+  /* Selection slips are documents like quotations, and were never on the list. */
+  "selection_slip_items", "selection_slips",
   /* children */
   "invoice_items", "purchase_items", "purchase_order_items", "quotation_items",
   "sales_order_items", "sales_return_items", "purchase_return_items",
@@ -75,9 +84,24 @@ const DOC_TABLES = [
    the same request as "set this shop up from scratch". */
 const BILL_TABLES = DOC_TABLES;
 
-/* EVERYTHING: the documents above, plus the masters. */
+/* EVERYTHING: the documents above, the money and stock records, plus the
+   masters. What stays is how the shop is SET UP — settings, staff logins
+   and their permissions, locations, bank account names, categories, areas,
+   numbering, print templates, financial years, transporters — and staff
+   pay, which is its own owner-only book and is not "shop data" to wipe by
+   accident. Measured on 12 Oct 2026: a full wipe used to leave the cash
+   book, bank book, cheques, stock history, price lists, opening balances
+   and imported history standing, pointing at parties that were gone. */
 const WIPE_TABLES = [
   ...DOC_TABLES,
+  "cash_entries", "bank_entries", "cheques", "deposits", "capital_entries", "loans",
+  "fixed_assets", "outstanding_liabilities",
+  "stock_transfers", "stock_ledger", "price_list", "price_list_log",
+  "customer_opening_balances", "supplier_opening_balances",
+  "customer_wa_groups", "wa_send_log", "inquiries",
+  "hist_sales", "hist_purchases", "hist_cash_entries", "hist_gst_records",
+  "import_rows", "import_batches", "gst_filings", "gst_validation_logs",
+  "tally_map", "dismissed_reminders", "doc_number_log", "doc_print_log",
   "product_sizes", "customers", "suppliers", "products", "counters", "audit_log"
 ];
 
@@ -107,7 +131,14 @@ router.post("/", requireRole("owner"), async (req, res) => {
     return res.status(500).json({ error: "Could not take a safety backup before resetting, so nothing was touched: " + err.message });
   }
 
+  try {
   db.transaction(() => {
+    /* Links between tables are checked once, when the clear commits, not
+       after each table — so the ORDER above can never make it fail, and a
+       table added next year that points at a bill cannot break it the way
+       the e-way bills did. If anything is still left pointing at a deleted
+       row when it commits, the whole clear is undone. */
+    db.exec("PRAGMA defer_foreign_keys = ON");
     /* A table this build does not have is skipped rather than fatal — an
        older database that never grew dispatches must still be resettable. */
     tables.forEach(t => {
@@ -115,6 +146,17 @@ router.post("/", requireRole("owner"), async (req, res) => {
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?").get(t);
       if (exists) db.exec(`DELETE FROM ${t}`);
     });
+
+    /* The cash and bank book lines a PAYMENT posted go with the payment.
+       Left behind, the books would show money received against bills that
+       no longer exist. Lines typed into the books by hand are not touched
+       on this path; the full wipe empties both books anyway. */
+    if (billsOnly) {
+      for (const t of ["cash_entries", "bank_entries"]) {
+        const exists = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?").get(t);
+        if (exists) db.exec(`DELETE FROM ${t} WHERE source_type IN ('payment', 'purchase_payment')`);
+      }
+    }
 
     /* THE DUES HAVE TO GO WITH THE BILLS.
        A customer's balance is a running total the bills built up. Delete the
@@ -127,6 +169,16 @@ router.post("/", requireRole("owner"), async (req, res) => {
       db.exec("UPDATE suppliers SET due = 0");
     }
   })();
+  } catch (err) {
+    /* The whole clear is one transaction, so a failure part-way means
+       NOTHING was cleared. Said plainly, instead of the generic server
+       error the screen showed before — which read like a lost connection. */
+    console.error(`[reset] ${billsOnly ? "clear bills" : "full wipe"} refused by the database — nothing was deleted: ${err.message}`);
+    return res.status(500).json({
+      error: "The reset could not finish, so nothing was deleted. The safety backup was still saved: " + backupResult.file,
+      backupFile: backupResult.file
+    });
+  }
 
   const logLine = `${new Date().toISOString()} | ${billsOnly ? "bills cleared" : "reset"} by ${staff.name} (${staff.id}) | pre-reset backup: ${backupResult.file}\n`;
   try { fs.appendFileSync(RESET_LOG_PATH, logLine); } catch (_) { /* best effort — the backup itself is the real safety net */ }
@@ -154,7 +206,25 @@ router.post("/", requireRole("owner"), async (req, res) => {
     link: "backups"
   });
 
-  res.json({ ok: true, scope: billsOnly ? "bills" : "all", backupFile: backupResult.file });
+  /* MAKE THE CLEAR STICK. Every restart on a host like Render restores the
+     NEWEST backup, and until now the newest was the safety copy taken just
+     above — the shop as it was BEFORE the clear. So the data came back the
+     next time the shop woke up. A backup of the cleared state is taken now,
+     and becomes the newest. Waits past the second first: backup names are
+     stamped to the second, and the safety copy has this second's name.
+     The older backups are left exactly where they are. */
+  let afterFile = "", afterError = "";
+  try {
+    await new Promise(r => setTimeout(r, 1100 - (Date.now() % 1000)));
+    const after = await backup.runBackup(billsOnly ? "post-clear-bills" : "post-reset", { allowEmpty: !billsOnly });
+    afterFile = after && after.file || "";
+    if (after && after.cloud && after.cloud.attempted && !after.cloud.ok) afterError = after.cloud.error || "cloud upload failed";
+  } catch (err) { afterError = err.message; }
+  if (afterError) console.error(`[reset] the backup of the cleared shop did not save: ${afterError} — a restart may bring back the old data`);
+
+  res.json({ ok: true, scope: billsOnly ? "bills" : "all", backupFile: backupResult.file,
+             clearedBackupFile: afterFile, clearedBackupSaved: !afterError,
+             ...(afterError ? { warning: "Cleared — but the backup of the cleared shop did not save, so a restart could bring the old data back. Press Backups → Back up now." } : {}) });
 });
 
 module.exports = router;

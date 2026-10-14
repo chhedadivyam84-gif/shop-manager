@@ -27,6 +27,7 @@ router.post("/", (req, res) => {
   `).run(id, name.trim(), hashPin(String(pin)), finalRole, Date.now());
 
   logAction(req, "staff.create", `Added ${finalRole} "${name.trim()}"`);
+  try { require("../backup").backupSoon("staff added"); } catch (e) { /* the login is still added */ }
   require("../notify").create({
     category: "security", severity: finalRole === "owner" ? "warning" : "info", audience: "owner",
     key: "security:staff-added:" + id,

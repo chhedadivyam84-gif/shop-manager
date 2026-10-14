@@ -334,6 +334,9 @@ router.post("/shop-login", async (req, res) => {
        plaintext exists on this machine, and it is not kept. */
     password
   });
+  /* A shop that has just signed up exists only in this container until it
+     is backed up — not in fifteen minutes, now. */
+  try { require("../backup").backupSoon("new shop sign-in"); } catch (e) { /* the sign-in still stands */ }
 
   return finish(req, res, row);
 });

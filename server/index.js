@@ -411,6 +411,7 @@ app.use(session({
 app.get("/api/health", (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   const r = release.healthReport(() => db.prepare("SELECT 1 AS ok").get());
+  try { r.body.lastBackup = require("./backup").backupState(); } catch (e) { /* health must answer regardless */ }
   res.status(r.status).json(r.body);
 });
 

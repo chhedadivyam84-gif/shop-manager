@@ -75,6 +75,11 @@ const KEEP_LOCAL = 30;
 // persisted — a restart simply shows "no backup yet this session" until the
 // next scheduled run, and the files on disk are the real source of truth.
 let lastRun = null;
+/* What the last attempt came to, for /api/health: "saved", "local-only",
+   "cloud-failed", "refused" or "failed", and when. No file names, no
+   errors — it is public, and a state and a time are enough to see that
+   backups have stopped. */
+let lastState = null;
 
 function stamp(d = new Date()) {
   const p = n => String(n).padStart(2, "0");
@@ -247,6 +252,7 @@ async function runBackup(trigger = "manual", opts) {
       "purchases or cash entries. Backing this up would make an empty database " +
       "the newest snapshot, and that is what a restore would bring back.";
     console.error(`[backup] REFUSED (${trigger}) — ${why}`);
+    lastState = { state: "refused", at: Date.now() };
     return { refused: true, reason: why, local: { ok: false }, cloud: { ok: false } };
   }
 
@@ -311,8 +317,37 @@ async function runBackup(trigger = "manual", opts) {
     cloudRotatedAway: cloudRemoved,
     cloud
   };
+  lastState = { state: cloud.ok ? "saved" : (cloud.attempted ? "cloud-failed" : "local-only"), at: lastRun.at };
   return lastRun;
 }
+
+/* A NEW SIGN-IN MUST NOT WAIT FOR THE CLOCK.
+
+   The scheduled backup runs every fifteen minutes, and a free host can
+   be stopped inside that window. A shop that has just signed up exists
+   nowhere but this container until the next run, so a sign-up or a new
+   staff login asks for a backup a few seconds later instead. Several in
+   a row make one backup, not several. */
+let soonTimer = null;
+function backupSoon(reason) {
+  if (soonTimer) return;
+  soonTimer = setTimeout(async () => {
+    soonTimer = null;
+    try {
+      const r = await runBackup(reason || "change");
+      if (!r.refused) {
+        const where = r.cloud.ok ? " + cloud" : (r.cloud.attempted ? " (cloud failed: " + r.cloud.error + ")" : "");
+        console.log(`[backup] ${reason} snapshot ${r.file} (${r.size} bytes)${where}`);
+      }
+    } catch (err) {
+      lastState = { state: "failed", at: Date.now() };
+      console.error(`[backup] FAILED after ${reason}: ${err.message}`);
+    }
+  }, 5000);
+  if (soonTimer.unref) soonTimer.unref();
+}
+
+function backupState() { return lastState; }
 
 /* ------------------------------------------------------------
    CLEARING OLD BACKUPS OUT OF THE BUCKET
@@ -601,7 +636,7 @@ async function deleteCloudRuns(stamps) {
 }
 
 module.exports = {
-  runBackup, status, cloudUsage, rotateCloud, snapshotForDownload, startSchedule, listCloud, deleteCloudRuns,
+  runBackup, backupSoon, backupState, status, cloudUsage, rotateCloud, snapshotForDownload, startSchedule, listCloud, deleteCloudRuns,
   _health: health,
   cloudConfig, uploadToCloud, listLocal, BACKUP_DIR
 };

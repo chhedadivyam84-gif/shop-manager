@@ -188,7 +188,29 @@ const LIVELIHOOD_TABLES = [
 ];
 
 function hasSomethingWorthKeeping() {
+  /* WHO CAN SIGN IN IS WORTH KEEPING TOO. On the hosted copy a shop signs
+     up and sets its staff long before it enters a product. Counting only
+     the books called that shop "empty", so every backup was refused, and
+     each time the free host slept the shop's sign-in and staff were gone
+     (seen live on 14 Oct 2026: "no backups found in bucket yet" at every
+     boot). A fresh install has no tenant, one business and only the
+     seeded owner, so a database that really is empty is still refused. */
+  try {
+    /* Only if the sign-ins file exists: opening it would create one, and a
+       single-shop install has none. */
+    const T = require("./tenants");
+    if (fs.existsSync(T.file()) && T.count() > 0) return true;
+  } catch (err) {
+    return true;   /* cannot tell — back it up */
+  }
+  if (C.list().length > 1) return true;
+
   const countIn = () => {
+    try {
+      if (db.prepare("SELECT COUNT(*) AS n FROM staff WHERE id <> 'STAFF_owner'").get().n > 0) return true;
+    } catch (err) {
+      return true;
+    }
     for (const table of LIVELIHOOD_TABLES) {
       try {
         if (db.prepare(`SELECT COUNT(*) AS n FROM "${table}"`).get().n > 0) return true;

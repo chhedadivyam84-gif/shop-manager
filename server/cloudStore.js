@@ -198,7 +198,41 @@ function decodeXml(s) {
           .replace(/&quot;/g, '"').replace(/&apos;/g, "'");
 }
 
-async function upload(name, buffer) {
+/* THE BUCKET MAY NOT EXIST.
+
+   On 18 Oct 2026 the hosted copy's Supabase project had no bucket at all.
+   Listing a missing bucket answers with an empty list, so every boot said
+   "no backups found in bucket yet" as if all were well, and every upload
+   failed with "Bucket not found". A shop signed in, was backed up locally,
+   and was lost at the next restart.
+
+   So the bucket is created when it is missing — private, never public.
+   Already-exists is the normal answer, not a failure. R2 buckets are not
+   created from here: an R2 token scoped to one bucket cannot create one,
+   and the bucket is made in the Cloudflare dashboard. */
+async function ensureBucket() {
+  const p = provider();
+  if (p !== "supabase") return { ok: !!p, skipped: true };
+  const cfg = supabaseConfig();
+  try {
+    const res = await fetch(`${cfg.url}/storage/v1/bucket`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${cfg.key}`, apikey: cfg.key, "Content-Type": "application/json" },
+      body: JSON.stringify({ id: cfg.bucket, name: cfg.bucket, public: false }),
+      signal: AbortSignal.timeout(TIMEOUT_MS)
+    });
+    if (res.ok) return { ok: true, created: true };
+    const text = await res.text().catch(() => "");
+    if (res.status === 409 || /already exists|duplicate/i.test(text)) return { ok: true, created: false };
+    return { ok: false, error: `Supabase ${res.status}: ${text.slice(0, 200)}` };
+  } catch (err) {
+    return { ok: false, error: String(err.message || err) };
+  }
+}
+
+const BUCKET_MISSING = /bucket not found|NoSuchBucket/i;
+
+async function upload(name, buffer, retried) {
   const p = provider();
   if (!p) return { attempted: false };
 
@@ -217,6 +251,14 @@ async function upload(name, buffer) {
       });
       if (!res.ok) {
         const text = await res.text().catch(() => "");
+        /* Once, not forever: make the missing bucket and try again. */
+        if (!retried && BUCKET_MISSING.test(text)) {
+          const made = await ensureBucket();
+          if (made.ok) {
+            console.warn(`[cloud] the bucket "${cfg.bucket}" was missing${made.created ? " and has been created (private)" : ""}`);
+            return upload(name, buffer, true);
+          }
+        }
         return { attempted: true, ok: false, error: `Supabase ${res.status}: ${text.slice(0, 200)}` };
       }
       return { attempted: true, ok: true, object: name };
@@ -327,4 +369,4 @@ function forProvider(name) {
   };
 }
 
-module.exports = { provider, describe, list, upload, download, remove, forProvider, configured: () => !!provider() };
+module.exports = { provider, describe, list, upload, download, remove, forProvider, ensureBucket, configured: () => !!provider() };

@@ -373,6 +373,30 @@ function backupState() { return lastState; }
  * restart, not enough to survive a night. */
 const KEEP_CLOUD = 96;
 
+/* AND A LONGER TAIL, THINNED OUT.
+
+   A day of fifteen-minute copies covers a mistake noticed the next
+   morning. It does not cover one noticed on Friday — a bill deleted on
+   Monday, a wrong price that ran all week — and before this every copy
+   older than a day was deleted. Beyond the last ninety-six runs, the
+   newest run of each of the last thirty days is kept, and the newest run
+   of each of the last twelve months. About 140 copies in all, so the
+   bucket grows by tens of runs, not thousands. */
+const KEEP_DAILY = 30;
+const KEEP_MONTHLY = 12;
+
+/** Which run stamps to keep, newest first in. Stamps are YYYYMMDD-HHMMSS. */
+function keptStamps(stampsNewestFirst) {
+  const keep = new Set(stampsNewestFirst.slice(0, KEEP_CLOUD));
+  const days = new Set(), months = new Set();
+  for (const s of stampsNewestFirst) {
+    const day = s.slice(0, 8), month = s.slice(0, 6);
+    if (!days.has(day) && days.size < KEEP_DAILY) { days.add(day); keep.add(s); }
+    if (!months.has(month) && months.size < KEEP_MONTHLY) { months.add(month); keep.add(s); }
+  }
+  return keep;
+}
+
 /* What the off-site store is holding, measured whenever rotation runs anyway.
  *
  * Cached rather than fetched on demand: the Reminders screen reads this, and
@@ -413,7 +437,8 @@ async function rotateCloud(deleteStale) {
 
     const names = all.map(f => f.name).filter(n => n.startsWith("shop-"));
     const stamps = [...new Set(names.map(stampOf).filter(Boolean))].sort().reverse();
-    const stale = stamps.slice(KEEP_CLOUD);
+    const kept = keptStamps(stamps);
+    const stale = stamps.filter(s => !kept.has(s));
     if (!stale.length) return 0;
 
     const doomed = names.filter(n => stale.includes(stampOf(n)));
@@ -636,7 +661,7 @@ async function deleteCloudRuns(stamps) {
 }
 
 module.exports = {
-  runBackup, backupSoon, backupState, status, cloudUsage, rotateCloud, snapshotForDownload, startSchedule, listCloud, deleteCloudRuns,
+  runBackup, backupSoon, backupState, keptStamps, status, cloudUsage, rotateCloud, snapshotForDownload, startSchedule, listCloud, deleteCloudRuns,
   _health: health,
   cloudConfig, uploadToCloud, listLocal, BACKUP_DIR
 };

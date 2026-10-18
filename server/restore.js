@@ -62,13 +62,22 @@ async function doRestore() {
 
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
+  /* A missing bucket lists as empty. Made first, so the answer below can
+     tell "nothing has been saved yet" from "there was nowhere to save it". */
+  let bucketNote = "";
+  if (cloudStore.ensureBucket) {
+    const b = await cloudStore.ensureBucket().catch(e => ({ ok: false, error: e.message }));
+    if (b.created) bucketNote = " (the bucket did not exist, so nothing could ever have been saved; it has now been created)";
+    else if (!b.ok && !b.skipped) bucketNote = ` (could not check the bucket: ${b.error})`;
+  }
+
   const all = (await cloudStore.list()).map(f => f.name).filter(n => n.startsWith("shop-"));
 
   /* The first business's file identifies a run; "--" marks the other parts. */
   const primaries = all
     .filter(n => n.endsWith(".db") && !n.includes("--"))
     .sort((a, b) => b.localeCompare(a));   // filenames are timestamp-sortable
-  if (!primaries.length) return { restored: false, reason: "no backups found in bucket yet" };
+  if (!primaries.length) return { restored: false, reason: "no backups found in bucket yet" + bucketNote };
 
   const latest = primaries[0];
   const stamp = /^shop-(.+).db$/.exec(latest)[1];

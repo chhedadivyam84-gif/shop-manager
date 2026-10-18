@@ -40,7 +40,26 @@ function keyPath() {
 
 let cachedKey = null;
 
+/* ON A HOST WITH NO DISK THE KEY FILE DOES NOT SURVIVE.
+
+   Render's free plan starts every container on a fresh disk, so a new
+   key file was made at every restart and everything sealed under the old
+   one — the AI key, GST and e-way bill credentials — opened to nothing.
+   The shop saw them "forgotten" and typed them again, every time.
+
+   CREDENTIAL_KEY, when set on the host, is the key instead (any long
+   random text; it is hashed to the 32 bytes AES needs). It lives in the
+   host's settings, not in the database or its backups, so the separation
+   above still holds. The key file is still tried when opening, so values
+   sealed before the variable was set are not lost. */
+function envKey() {
+  const raw = String(process.env.CREDENTIAL_KEY || "").trim();
+  return raw.length >= 16 ? crypto.createHash("sha256").update(raw).digest() : null;
+}
+
 function key() {
+  const fromEnv = envKey();
+  if (fromEnv) return fromEnv;
   if (cachedKey) return cachedKey;
   const p = keyPath();
   try {
@@ -79,12 +98,23 @@ function seal(plain) {
 function open(stored) {
   const s = stored == null ? "" : String(stored);
   if (!s.startsWith(PREFIX)) return s;          /* pre-encryption value */
-  try {
-    const [ivB, tagB, dataB] = s.slice(PREFIX.length).split(":");
-    const d = crypto.createDecipheriv("aes-256-gcm", key(), Buffer.from(ivB, "base64"));
+  const [ivB, tagB, dataB] = s.slice(PREFIX.length).split(":");
+  const tryKey = k => {
+    const d = crypto.createDecipheriv("aes-256-gcm", k, Buffer.from(ivB, "base64"));
     d.setAuthTag(Buffer.from(tagB, "base64"));
     return Buffer.concat([d.update(Buffer.from(dataB, "base64")), d.final()]).toString("utf8");
+  };
+  try {
+    return tryKey(key());
   } catch (e) {
+    /* Sealed under the key file before CREDENTIAL_KEY was set. */
+    if (envKey()) {
+      try {
+        const p = keyPath();
+        const fileKey = fs.existsSync(p) ? Buffer.from(fs.readFileSync(p, "utf8").trim(), "hex") : null;
+        if (fileKey && fileKey.length === 32) return tryKey(fileKey);
+      } catch (x) { /* fall through */ }
+    }
     /* Wrong key, or tampering. Returning "" means the app reports the
        credential as missing and asks for it again — which is recoverable.
        Returning the ciphertext would send gibberish to a portal. */

@@ -1,7 +1,7 @@
 const express = require("express");
 const db = require("../db");
 const { requireRole } = require("../auth");
-const { logAction } = require("../util");
+const { logAction, todayStr } = require("../util");
 const license = require("../license");
 const checkin = require("../licenseCheckin");
 
@@ -15,8 +15,28 @@ function currentKey() {
 }
 
 /** Current subscription state — drives the banner and the renew screen. */
-/** Current subscription state — drives the banner and the renew screen. */
 router.get("/", (req, res) => {
+  /* A SHOP SIGNED IN WITH A USER ID IS JUDGED BY ITS TENANT ROW — the same
+     thing the write gate in index.js reads. Asking the activation check
+     instead put "Enter the activation code… Read-only" across every
+     screen of a hosted shop that could save perfectly well (seen
+     21 Oct 2026). One answer, from one place, for both. */
+  const t = req.session && req.session.tenant;
+  if (t && t.username) {
+    let row = null;
+    try { row = require("../tenants").get(t.username); } catch (e) { /* the session copy stands */ }
+    const until = (row && row.expires_on) || t.expiresOn || "";
+    const plan = (row && row.plan) || t.plan || "paid";
+    const ended = !!until && until < todayStr();
+    return res.json({
+      enforced: true, mode: "tenant", plan, expiresOn: until,
+      status: ended ? "expired" : "active", blocked: ended, expired: ended,
+      message: ended
+        ? (plan === "demo" ? "Demo License Expired – Please Contact Admin" : "This subscription has ended. Please contact your supplier.")
+        : ""
+    });
+  }
+
   /* A copy sold under the licence server reports what the server last
      said; an older one reports what its key says. The screen does not
      need to know which — it reads `mode` if it wants to word things

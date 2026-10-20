@@ -486,6 +486,8 @@ async function boot(){
       state.me = { staffName: sess.staffName, role: sess.role };
       document.getElementById("login").style.display="none";
       document.getElementById("app").style.display="block";
+      /* The splash would sit over the box; it only goes once, so going now is safe. */
+      if(sess.mustChangePin){ hideSplash(); await chooseOwnPin(sess.staffId); }
       applyFeatureAccess();
       await initApp();
     } else {
@@ -665,6 +667,60 @@ function renderDots(){
   const dots = document.querySelectorAll("#pin-dots span");
   dots.forEach((d,i)=> d.classList.toggle("filled", i < pinEntry.length));
 }
+/* AN OWNER STILL ON 1234 CHOOSES THEIR OWN BEFORE ANYTHING ELSE.
+   The server refuses everything else until they do (index.js), so this
+   is not a nag that can be closed: it resolves only once a new PIN is
+   saved. Signing out is the other way out. Four digits, like the pad. */
+function chooseOwnPin(staffId){
+  return new Promise(resolve => {
+    const wrap = document.createElement("div");
+    wrap.id = "choose-pin";
+    wrap.setAttribute("role", "dialog");
+    wrap.setAttribute("aria-modal", "true");
+    wrap.setAttribute("aria-labelledby", "choose-pin-title");
+    wrap.style.cssText = "position:fixed;inset:0;z-index:10001;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(0,0,0,.55);";
+    wrap.innerHTML = `
+      <div class="card" style="width:100%;max-width:360px;margin:0;">
+        <div class="row-title" id="choose-pin-title" style="font-size:18px;">Choose your own PIN</div>
+        <p class="row-sub" style="margin:6px 0 14px;">This copy still uses <b>1234</b>, which every new copy starts with.
+          Pick four digits only you know. You'll use them from now on.</p>
+        <label class="field-label" for="cp-new">New PIN</label>
+        <input id="cp-new" type="password" inputmode="numeric" autocomplete="new-password" maxlength="4" pattern="[0-9]*">
+        <label class="field-label" for="cp-again" style="margin-top:10px;">Type it again</label>
+        <input id="cp-again" type="password" inputmode="numeric" autocomplete="new-password" maxlength="4" pattern="[0-9]*">
+        <div id="cp-err" class="row-sub" role="alert" style="color:var(--danger,#c62828);min-height:20px;margin-top:8px;"></div>
+        <button type="button" id="cp-save" class="btn btn-primary" style="width:100%;margin-top:6px;">Save PIN</button>
+        <button type="button" id="cp-out" class="btn btn-outline" style="width:100%;margin-top:8px;">Sign out</button>
+      </div>`;
+    document.body.appendChild(wrap);
+    const $ = id => wrap.querySelector("#" + id);
+    const err = t => { $("cp-err").textContent = t; };
+    setTimeout(() => $("cp-new").focus(), 50);
+    $("cp-out").onclick = async () => { wrap.remove(); await logOutOfThisDevice(); };
+    const save = async () => {
+      const a = $("cp-new").value.trim(), b = $("cp-again").value.trim();
+      if (!/^\d{4}$/.test(a)) return err("Use exactly four digits.");
+      if (a === "1234") return err("Choose something other than 1234.");
+      if (a !== b) return err("The two PINs are not the same.");
+      $("cp-save").disabled = true; err("");
+      try {
+        const res = await fetch("/api/staff/" + encodeURIComponent(staffId), {
+          method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pin: a })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) { $("cp-save").disabled = false; return err(data.error || "Could not save the PIN. Try again."); }
+        wrap.remove();
+        resolve();
+      } catch (e) {
+        $("cp-save").disabled = false;
+        err("Couldn't reach the server. Check your connection and try again.");
+      }
+    };
+    $("cp-save").onclick = save;
+    $("cp-again").addEventListener("keydown", e => { if (e.key === "Enter") save(); });
+  });
+}
+
 async function handleKey(k){
   const errEl = document.getElementById("login-error");
   if(k==="⌫"){ pinEntry = pinEntry.slice(0,-1); errEl.textContent=""; renderDots(); return; }
@@ -690,6 +746,7 @@ async function handleKey(k){
           const sess = await fetch("/api/auth/session").then(r=>r.json());
           FEATURES_OFF = Array.isArray(sess.featuresOff) ? sess.featuresOff : []; syncAssistantFab();
         }catch(e){ /* keep what boot() had */ }
+        if(data.mustChangePin) await chooseOwnPin(data.staffId || selectedStaff.id);
         applyFeatureAccess();
         await initApp();
       } else {

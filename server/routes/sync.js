@@ -25,6 +25,9 @@ const { logAction } = require("../util");
 const { requireRole } = require("../auth");
 
 const router = express.Router();
+/* None of sync belongs on a server shared by many shops: receive replaces
+   the DEFAULT business, and push is for a shop PC. See sharedServer.js. */
+router.use(require("../sharedServer").notOnSharedServer);
 const ownerOnly = requireRole("owner");
 
 /* ------------------------------------------------------------------

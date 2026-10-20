@@ -25,6 +25,10 @@ router.post("/", (req, res) => {
   db.prepare(`
     INSERT INTO staff (id, name, pin_hash, role, active, created_at) VALUES (?, ?, ?, ?, 1, ?)
   `).run(id, name.trim(), hashPin(String(pin)), finalRole, Date.now());
+  /* Permissions are enforced on the server, so a new member of staff with
+     none could do nothing at all. They start with the Sales Staff set; the
+     owner changes it in Staff -> Permissions. See starterAccess.js. */
+  if (finalRole !== "owner") require("../starterAccess").grant(id);
 
   logAction(req, "staff.create", `Added ${finalRole} "${name.trim()}"`);
   try { require("../backup").backupSoon("staff added"); } catch (e) { /* the login is still added */ }
@@ -53,6 +57,9 @@ router.put("/:id", (req, res) => {
   let pinHash = s.pin_hash;
   if (pin) {
     if (!/^\d{4,6}$/.test(String(pin))) return res.status(400).json({ error: "PIN must be 4-6 digits." });
+    /* The PIN every copy starts with. Choosing it again would undo the
+       one thing the first sign-in asks for. */
+    if (String(pin) === "1234") return res.status(400).json({ error: "Choose a PIN other than 1234 — every new copy starts with that one." });
     pinHash = hashPin(String(pin));
   }
 
@@ -64,6 +71,8 @@ router.put("/:id", (req, res) => {
   );
 
   logAction(req, "staff.update", `Updated "${s.name}"${pin ? " (PIN changed)" : ""}${active === false ? " — deactivated" : ""}`);
+  /* An owner who was held at "choose your own PIN" has now done it. */
+  if (pin && s.id === req.session.staffId) req.session.mustChangePin = false;
 
   /* ACCOUNT CHANGES ARE TOLD TO THE PEOPLE THEY ARE ABOUT.
      A changed PIN is told to its holder, so somebody whose PIN was changed

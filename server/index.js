@@ -142,6 +142,11 @@ async function start() {
   const backup = require("./backup");
   const { requireAuth, requireRole } = require("./auth");
 
+  /* Staff who existed before permissions were enforced, with nothing saved,
+     are given the starter set once per business. See starterAccess.js. */
+  try { require("./starterAccess").backfillEverywhere(); }
+  catch (e) { console.error("[permissions] starter access check failed:", e.message); }
+
   /* Keeps the shop's delivery rounds identical on every machine it runs on.
      Insert-only, and limited to this shop by name — see seed-areas.js. */
   try {
@@ -553,6 +558,17 @@ app.use("/api", (req, res, next) => {
     || (req.session && req.session.businessId)
     || db.companies.defaultId();
   db.companies.runAs(id, next);
+});
+
+/* AN OWNER STILL ON PIN 1234 MUST CHOOSE THEIR OWN FIRST.
+   Set at sign-in (routes/auth.js). Until they do, the only things that
+   answer are signing in or out and saving their own new PIN, so the shop's
+   books cannot be read or changed by whoever guessed the starting PIN. */
+app.use("/api", (req, res, next) => {
+  if (!req.session || !req.session.mustChangePin) return next();
+  if (req.path.startsWith("/auth/") || req.path === "/health") return next();
+  if (req.method === "PUT" && req.path === "/staff/" + req.session.staffId) return next();
+  res.status(403).json({ error: "Choose your own PIN first — 1234 is the same on every new copy.", mustChangePin: true });
 });
 
 app.use("/api/auth", require("./routes/auth"));

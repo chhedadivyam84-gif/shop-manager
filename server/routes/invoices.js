@@ -171,6 +171,13 @@ function applyLineDiscount(calc, rawPct) {
   return { ...calc, discountPct: pct, grossAmount: gross, lineDiscount, amount: round2(gross - lineDiscount) };
 }
 
+/* No shop that runs on this software bills a hundred crore rupees in one
+   go. A total above that is a typo — an extra row of zeros in a rate —
+   and on a GST invoice it cannot be taken back quietly. Found 20 Oct 2026:
+   a rate of 10^15 was accepted. */
+const MAX_BILL_TOTAL = 1e9;
+const TOO_BIG = "This bill comes to more than ₹100 crore, which is almost certainly a typing mistake. Check the rates and quantities.";
+
 function computeTotals({ items, discountType, discountValue, advance, taxType, transport, loading, roundOff, gstOnCharges, gstEnabled }) {
   // `it.amount` is already (rounded billed qty × rate) from the shared pricing
   // module — summing that rather than recomputing keeps the invoice's line
@@ -559,6 +566,7 @@ router.post("/", (req, res) => {
   const totals = isChallan
     ? challanTotals
     : computeTotals({ items, discountType, discountValue, advance, taxType, transport, loading, roundOff, gstOnCharges, gstEnabled });
+  if (!(Math.abs(totals.total) <= MAX_BILL_TOTAL)) return res.status(400).json({ error: TOO_BIG });
   const id = uid(isChallan ? "DC" : "INV");
   /* Auto ON hands out the next number in the series; auto OFF makes the
      operator type one, which is checked for a clash before anything is
@@ -892,6 +900,7 @@ router.put("/:id", (req, res) => {
     const totals = isChallan
       ? challanTotals
       : computeTotals({ items, discountType, discountValue, advance, taxType, transport, loading, roundOff, gstOnCharges, gstEnabled });
+    if (!(Math.abs(totals.total) <= MAX_BILL_TOTAL)) throw { status: 400, error: TOO_BIG };
 
     // 3. Reverse the OLD customer's due (whoever it was originally billed to).
     if (inv.customer_id && inv.balance_due > 0) {

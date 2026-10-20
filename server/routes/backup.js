@@ -7,6 +7,9 @@ const restoreFile = require("../restoreFile");
 const db = require("../db");
 const { logAction } = require("../util");
 const { requireRole } = require("../auth");
+/* Cloud list/delete and restore act on every shop at once on a shared
+   server; see sharedServer.js. */
+const { notOnSharedServer } = require("../sharedServer");
 
 const router = express.Router();
 
@@ -101,7 +104,7 @@ function writeTemp(fileB64) {
 }
 
 /** Look at a backup without touching anything. */
-router.post("/restore/preview", requireRole("owner"), (req, res) => {
+router.post("/restore/preview", requireRole("owner"), notOnSharedServer, (req, res) => {
   let tmp;
   try {
     tmp = writeTemp(req.body && req.body.file);
@@ -123,7 +126,7 @@ router.post("/restore/preview", requireRole("owner"), (req, res) => {
  * first, then exiting a moment later, so the screen is told what is about
  * to happen rather than losing the connection mid-request.
  */
-router.post("/restore/apply", requireRole("owner"), (req, res) => {
+router.post("/restore/apply", requireRole("owner"), notOnSharedServer, (req, res) => {
   let tmp;
   try {
     tmp = writeTemp(req.body && req.body.file);
@@ -153,11 +156,11 @@ router.post("/restore/apply", requireRole("owner"), (req, res) => {
 });
 
 /** Is one waiting? Lets the screen say so after a restart that did not happen. */
-router.get("/restore/pending", requireRole("owner"), (req, res) => {
+router.get("/restore/pending", requireRole("owner"), notOnSharedServer, (req, res) => {
   res.json({ pending: restoreFile.pending() });
 });
 
-router.post("/restore/cancel", requireRole("owner"), (req, res) => {
+router.post("/restore/cancel", requireRole("owner"), notOnSharedServer, (req, res) => {
   const had = restoreFile.cancelPending();
   if (had) logAction(req, "backup.restore.cancel", "A waiting restore was cancelled");
   res.json({ ok: true, cancelled: had });
@@ -170,7 +173,7 @@ router.post("/restore/cancel", requireRole("owner"), (req, res) => {
    its own disk these copies are the only thing standing between a restart and
    an empty shop.
    ------------------------------------------------------------ */
-router.get("/cloud", requireRole("owner"), async (req, res) => {
+router.get("/cloud", requireRole("owner"), notOnSharedServer, async (req, res) => {
   try {
     res.json(await backup.listCloud());
   } catch (e) {
@@ -178,7 +181,7 @@ router.get("/cloud", requireRole("owner"), async (req, res) => {
   }
 });
 
-router.post("/cloud/delete", requireRole("owner"), async (req, res) => {
+router.post("/cloud/delete", requireRole("owner"), notOnSharedServer, async (req, res) => {
   const stamps = Array.isArray(req.body.stamps) ? req.body.stamps : [];
   if (!stamps.length) return res.status(400).json({ error: "Choose at least one backup." });
   try {

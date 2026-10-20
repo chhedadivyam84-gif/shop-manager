@@ -38,7 +38,9 @@ function jar() {
 (async () => {
   for (let i = 0; i < 120 && !/running on port/.test(out); i++) await sleep(250);
   const owner = jar(), staff = jar();
-  await owner("POST", "/auth/login", { staffId: "STAFF_owner", pin: "1234" });
+  const first = await owner("POST", "/auth/login", { staffId: "STAFF_owner", pin: "1234" });
+  /* An owner on the starting PIN must choose their own before anything else. */
+  if (first.j && first.j.mustChangePin) await owner("PUT", "/staff/STAFF_owner", { pin: "9753" });
   const cust = (await owner("POST", "/customers", { name: "Admin Test Customer", phone: "9000044444", type: "Retail Customer" })).j;
   const s = (await owner("POST", "/staff", { name: "Everything Staff", pin: "2468", role: "staff" })).j;
   const meta = (await owner("GET", "/permissions/catalogue")).j || {};
@@ -76,7 +78,7 @@ function jar() {
   const staffList = (await owner("GET", "/staff")).j || [];
   ok("no login was added", !staffList.some(x => x.name === "Made By Staff"));
   ok("it is still staff, not owner", (staffList.find(x => x.id === s.id) || {}).role === "staff");
-  ok("the owner can still sign in with the old PIN", (await jar()("POST", "/auth/login", { staffId: "STAFF_owner", pin: "1234" })).status === 200);
+  ok("the owner can still sign in with their PIN", (await jar()("POST", "/auth/login", { staffId: "STAFF_owner", pin: "9753" })).status === 200);
   ok("the customer still exists", (await owner("GET", `/customers/${cust.id}`)).status === 200);
   ok("no second business was created", ((await owner("GET", "/businesses")).j.businesses || []).length === 1);
 

@@ -62,7 +62,9 @@ function jar() {
   });
 
   const owner = jar();
-  await owner("POST", "/auth/login", { staffId: "STAFF_owner", pin: "1234" });
+  const firstLogin = await owner("POST", "/auth/login", { staffId: "STAFF_owner", pin: "1234" });
+  /* An owner on the starting PIN must choose their own before anything else. */
+  if (firstLogin.j && firstLogin.j.mustChangePin) await owner("PUT", "/staff/STAFF_owner", { pin: "9753" });
   const seedShop = async (tag) => {
     const c = (await owner("POST", "/customers", { name: "Reset Customer " + tag, phone: "90000" + String(10000 + tag).slice(-5), type: "Retail Customer" })).j;
     const p = (await owner("POST", "/products", { name: "Reset Ply " + tag, unit: "Sheet", gst: 18, category: "Plywood",
@@ -85,11 +87,11 @@ function jar() {
   console.log("\n--- refused without the owner, the PIN and the words ---\n");
   const before = count("invoices");
   ok("a wrong PIN is refused", (await owner("POST", "/reset", { pin: "0000", confirmText: "DELETE ALL DATA" })).status === 401);
-  ok("the wrong words are refused", (await owner("POST", "/reset", { pin: "1234", confirmText: "delete" })).status === 400);
+  ok("the wrong words are refused", (await owner("POST", "/reset", { pin: "9753", confirmText: "delete" })).status === 400);
   ok("...and nothing was deleted", count("invoices") === before);
 
   console.log("\n--- Clear All Bills ---\n");
-  let r = await owner("POST", "/reset", { pin: "1234", confirmText: "DELETE ALL BILLS", scope: "bills" });
+  let r = await owner("POST", "/reset", { pin: "9753", confirmText: "DELETE ALL BILLS", scope: "bills" });
   ok("IT FINISHES (it failed with FOREIGN KEY before)", r.status === 200 && r.j && r.j.ok, [r.status, r.t.slice(0, 200)]);
   ok("bills, e-way bills and e-invoices are gone", count("invoices") === 0 && count("ewb_bills") === 0 && count("einvoices") === 0);
   ok("payments are gone", count("payments") === 0);
@@ -105,7 +107,7 @@ function jar() {
   await sleep(1100);   // safety-backup names are stamped to the second
   await seedShop(2);
   insertRow("selection_slips", { id: "SS_1", slip_no: "SS-1", date: "2026-10-12", created_at: Date.now() });
-  r = await owner("POST", "/reset", { pin: "1234", confirmText: "DELETE ALL DATA" });
+  r = await owner("POST", "/reset", { pin: "9753", confirmText: "DELETE ALL DATA" });
   ok("IT FINISHES", r.status === 200 && r.j && r.j.ok, [r.status, r.t.slice(0, 200)]);
   for (const t of ["invoices", "ewb_bills", "einvoices", "payments", "customers", "suppliers", "products", "product_sizes",
                    "cash_entries", "selection_slips", "size_location_stock", "stock_ledger", "audit_log"]) {
@@ -135,7 +137,7 @@ function jar() {
     b.close();
   }
   ok("no row is left pointing at a deleted one", inDb(() => db.prepare("PRAGMA foreign_key_check").all().length) === 0);
-  ok("the owner can still sign in", (await jar()("POST", "/auth/login", { staffId: "STAFF_owner", pin: "1234" })).status === 200);
+  ok("the owner can still sign in", (await jar()("POST", "/auth/login", { staffId: "STAFF_owner", pin: "9753" })).status === 200);
 
   srv.kill(); await sleep(300);
   console.log(`\n${pass} passed, ${fail} failed`);

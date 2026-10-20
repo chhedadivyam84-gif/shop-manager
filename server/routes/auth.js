@@ -468,8 +468,15 @@ router.post("/login", (req, res) => {
   const ip = req.ip;
   /* Paired with the account being tried, so a stranger guessing at one
      person's PIN cannot lock the whole shop out of the till. See the
-     note in auth.js. */
-  const lock = loginLockStatus(ip, req.body && req.body.staffId);
+     note in auth.js.
+
+     AND WITH THE SHOP. Every shop's owner has the same id, STAFF_owner,
+     and on a host every visitor arrives from the proxy's address — so
+     keyed on address and id alone, five wrong PINs at ANY shop locked the
+     owner of EVERY shop out for fifteen minutes (measured 20 Oct 2026).
+     The shop being signed in to is part of the key now. */
+  const pinKey = db.companies.currentId() + ":" + String((req.body && req.body.staffId) || "");
+  const lock = loginLockStatus(ip, pinKey);
   if (lock.locked) {
     return res.status(429).json({ error: `Too many wrong PINs. Try again in ${Math.ceil(lock.retryAfterSec / 60)} minute(s).` });
   }
@@ -477,7 +484,7 @@ router.post("/login", (req, res) => {
   const { staffId, pin } = req.body;
   const staff = staffId && db.prepare("SELECT * FROM staff WHERE id = ? AND active = 1").get(staffId);
   if (!staff || !pin || !verifyPin(String(pin), staff.pin_hash)) {
-    const r = recordLoginFailure(ip, staffId);
+    const r = recordLoginFailure(ip, pinKey);
     /* Five wrong PINs for a real account is worth the owner knowing about.
        Not the PINs, not the address — just whose account and that it is
        paused. One notice per account per six hours, however many rounds
@@ -494,7 +501,7 @@ router.post("/login", (req, res) => {
     return res.status(401).json({ error: "Incorrect PIN." });
   }
 
-  clearLoginFailures(ip, staffId);
+  clearLoginFailures(ip, pinKey);
 
   /* A NEW SESSION ID, before anything is written into it.
    *
@@ -510,16 +517,39 @@ router.post("/login", (req, res) => {
    * The fields are set INSIDE the callback because regenerate replaces
    * req.session wholesale — setting them before would write them into
    * the session that is about to be thrown away. */
+  /* WHICH SHOP THIS IS, carried across the new session.
+   *
+   * regenerate() replaces the session wholesale, and the shop the person
+   * signed in to lives in it: `tenant` from the shop sign-in, `businessId`
+   * from it or from choosing a business. Dropped, every request after the
+   * PIN fell back to the DEFAULT business — on 20 Oct 2026, measured with
+   * two shops, both landed in the same "My Shop" and every save was
+   * refused. Carried, they are back in their own books.
+   *
+   * Carrying them does not undo the fixation fix: they were set by an
+   * earlier step that checked a password, and the session id is still new. */
+  const carried = {
+    tenant: req.session.tenant || null,
+    businessId: req.session.businessId || null
+  };
+
   req.session.regenerate(err => {
     if (err) {
       console.error("[auth] could not start a new session:", err.message);
       return res.status(500).json({ error: "Could not sign you in. Please try again." });
     }
 
+    if (carried.tenant) req.session.tenant = carried.tenant;
+    if (carried.businessId) req.session.businessId = carried.businessId;
     req.session.loggedIn = true;
     req.session.staffId = staff.id;
     req.session.staffName = staff.name;
     req.session.role = staff.role;
+    /* STILL ON 1234. Every new copy and every new hosted shop starts its
+       owner on that PIN, so anyone who learns the shop's sign-in is one
+       guess from being its owner. Until an owner picks their own, nothing
+       but picking it is allowed (index.js). */
+    req.session.mustChangePin = staff.role === "owner" && verifyPin("1234", staff.pin_hash);
 
     /* Whether this person may open the admin panel, and as what.
      *
@@ -550,7 +580,8 @@ router.post("/login", (req, res) => {
       const settings = db.prepare("SELECT business_name FROM settings WHERE id = 1").get();
       logAction(req, "login", "");
       res.json({ ok: true, businessName: settings.business_name,
-                 staffName: staff.name, role: staff.role });
+                 staffName: staff.name, role: staff.role, staffId: staff.id,
+                 mustChangePin: !!req.session.mustChangePin });
     });
   });
 });
@@ -571,6 +602,8 @@ router.get("/session", (req, res) => {
     logo: settings.logo_data || "",
     staffName: loggedIn ? req.session.staffName : null,
     role: loggedIn ? req.session.role : null,
+    staffId: loggedIn ? req.session.staffId : null,
+    mustChangePin: loggedIn ? !!req.session.mustChangePin : false,
     /* WHAT THIS SHOP HAS NOT PAID FOR.
 
        Read fresh from the tenant map rather than the session copy, so a

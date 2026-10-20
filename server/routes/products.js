@@ -159,6 +159,29 @@ function openingDate(v) {
 }
 
 /** Non-negative number, defaulting to 0 for blank/invalid input. */
+/* WHAT A PRICE, A STOCK COUNT AND A GST RATE MAY BE.
+   Found 20 Oct 2026: a price of -100, a GST rate of 999% and a stock of -50
+   were all accepted — the stock silently saved as 0, so the person who
+   typed it never knew. Refused now, with the reason, on create and edit.
+   GST runs from 0 to 40%: every Indian slab, old and new, is inside it. */
+function sizeProblem(sizes) {
+  for (const s of sizes || []) {
+    if (!s) continue;
+    const label = String(s.label || "").trim() || "a size";
+    if (s.price !== "" && s.price != null && Number(s.price) < 0) return `The price for ${label} cannot be negative.`;
+    if (s.stock !== "" && s.stock != null && Number.isFinite(Number(s.stock)) && Number(s.stock) < 0) {
+      return `The stock for ${label} cannot be negative. To record goods going out, use a sale or a stock adjustment.`;
+    }
+  }
+  return null;
+}
+function gstProblem(gst) {
+  if (gst === undefined || gst === null || gst === "") return null;
+  const n = Number(gst);
+  if (!Number.isFinite(n) || n < 0 || n > 40) return "GST rate must be between 0 and 40%.";
+  return null;
+}
+
 function stockNum(v) {
   const n = Number(v);
   return Number.isFinite(n) && n >= 0 ? n : 0;
@@ -304,6 +327,8 @@ router.post("/", (req, res) => {
   if (!validSizes.length) {
     return res.status(400).json({ error: "Add at least one size/variant with a price." });
   }
+  const badSize = sizeProblem(validSizes) || gstProblem(gst);
+  if (badSize) return res.status(400).json({ error: badSize });
   const id = uid("P");
   const sku = "SKU-" + Math.random().toString(36).slice(2, 8).toUpperCase();
   const gstRate = gst !== undefined && gst !== null && gst !== "" ? Number(gst) : 18;
@@ -385,7 +410,10 @@ function updateProduct(req, res) {
     if (!valid.length) {
       return res.status(400).json({ error: "Keep at least one size/variant with a price." });
     }
+    const badSize = sizeProblem(valid);
+    if (badSize) return res.status(400).json({ error: badSize });
   }
+  { const badGst = gstProblem(gst); if (badGst) return res.status(400).json({ error: badGst }); }
 
   const update = db.prepare(`
     UPDATE products SET name=?, brand=?, category=?, unit=?, hsn_code=?, code=?, gst_rate=?, godown=?, rack=?,

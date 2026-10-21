@@ -88,4 +88,32 @@ function attachmentFilePath(storedName) {
   return fs.existsSync(full) ? full : null;
 }
 
-module.exports = { saveAttachment, attachmentFilePath, UPLOAD_DIR };
+/* BACK FROM THE BACKUP STORE.
+   Every attachment is copied to the backup store as uploads/<name> when it
+   is saved. A host that wipes its disk on every restart (Render's free
+   plan) then showed the receipt as "unavailable" for good, although the
+   copy was sitting in the bucket the whole time (found 20 Oct 2026). So a
+   missing file is fetched back, checked, put in place, and served.
+
+   Checked like an upload: the first bytes must match the type its name
+   says, so a bucket file that is not the image or PDF it claims to be is
+   never written or served. The caller decides whose file it is FIRST; this
+   only answers "is there a copy". Never throws. */
+async function restoreFromCloud(storedName) {
+  if (!storedName || storedName.includes("/") || storedName.includes("\\") || storedName.includes("..")) return null;
+  const mime = Object.keys(ALLOWED).find(m => storedName.toLowerCase().endsWith(ALLOWED[m]));
+  if (!mime) return null;
+  try {
+    const cloudStore = require("./cloudStore");
+    if (!cloudStore.configured()) return null;
+    const buf = await cloudStore.download("uploads/" + storedName);
+    if (!buf || !buf.length || buf.length > MAX_BYTES || !looksLike(mime, buf)) return null;
+    const full = path.join(UPLOAD_DIR, storedName);
+    fs.writeFileSync(full, buf);
+    return full;
+  } catch (e) {
+    return null;
+  }
+}
+
+module.exports = { saveAttachment, attachmentFilePath, restoreFromCloud, UPLOAD_DIR };

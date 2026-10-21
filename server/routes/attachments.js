@@ -1,6 +1,6 @@
 const express = require("express");
 const db = require("../db");
-const { attachmentFilePath } = require("../attachments");
+const { attachmentFilePath, restoreFromCloud } = require("../attachments");
 
 const router = express.Router();
 
@@ -30,11 +30,16 @@ function ownedHere(storedName) {
 
 // Auth only (no role check) — any logged-in staff can view a payment they
 // can already see on a customer/supplier ledger.
-router.get("/:filename", (req, res) => {
-  const full = attachmentFilePath(req.params.filename);
-  /* The same answer either way, so asking does not reveal whether some
-     other shop has a file by that name. */
-  if (!full || !ownedHere(req.params.filename)) return res.status(404).json({ error: "Attachment not found." });
+router.get("/:filename", async (req, res) => {
+  const name = req.params.filename;
+  /* Whose it is, before anything else — including before asking the backup
+     store for it — and the same answer either way, so asking does not
+     reveal whether some other shop has a file by that name. */
+  if (!ownedHere(name)) return res.status(404).json({ error: "Attachment not found." });
+  /* On a host that wipes its disk the file may be gone while its backed-up
+     copy is not; fetch it back rather than showing it as unavailable. */
+  const full = attachmentFilePath(name) || await restoreFromCloud(name);
+  if (!full) return res.status(404).json({ error: "Attachment not found." });
   res.sendFile(full);
 });
 

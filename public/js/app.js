@@ -42,10 +42,49 @@ function stateWithCode(s){
 /* ============================================================
    API HELPER
    ============================================================ */
+/* SLOW AND DROPPED CONNECTIONS.
+   Before this a request that never came back left the screen spinning for
+   good, and a dropped connection said only "Failed to fetch".
+
+   The time limit is long on purpose: on a free host a sleeping server takes
+   about fifty seconds to answer its first request, and that must not read
+   as a failure. So: a notice after eight seconds that it is still working,
+   and a plain error only after ninety. A save that timed out may still have
+   reached the server, so the message says to check before trying again —
+   and bills and payments carry a key, so trying again cannot make two. */
+const API_SLOW_MS = 8000;
+const API_GIVE_UP_MS = 90000;
 async function api(method, path, body){
   const opts = { method, headers:{}, credentials:"same-origin" };
   if(body !== undefined){ opts.headers["Content-Type"]="application/json"; opts.body = JSON.stringify(body); }
-  const res = await fetch("/api"+path, opts);
+  const saving = method !== "GET" && method !== "HEAD";
+  const ctrl = typeof AbortController === "function" ? new AbortController() : null;
+  if(ctrl) opts.signal = ctrl.signal;
+  const slowTimer = setTimeout(() => {
+    toast(navigator.onLine === false ? "You're offline — waiting for the connection…" : "Still working — the connection is slow…");
+  }, API_SLOW_MS);
+  const giveUpTimer = ctrl ? setTimeout(() => ctrl.abort(), API_GIVE_UP_MS) : null;
+  let res;
+  try {
+    res = await fetch("/api"+path, opts);
+  } catch (e) {
+    const timedOut = e && e.name === "AbortError";
+    const offline = navigator.onLine === false;
+    const err = new Error(
+      timedOut
+        ? (saving
+            ? "The server didn't answer in time. Your change may or may not have been saved — check before trying again."
+            : "The server didn't answer in time. Check your internet connection and try again.")
+        : offline
+          ? (saving ? "You're offline, so this was not saved. Try again when the connection is back."
+                    : "You're offline. Try again when the connection is back.")
+          : "Couldn't reach the server. Check your internet connection and try again.");
+    err.network = true; err.timedOut = timedOut; err.offline = offline;
+    throw err;
+  } finally {
+    clearTimeout(slowTimer);
+    if(giveUpTimer) clearTimeout(giveUpTimer);
+  }
   if(res.status === 401){ showLogin(); throw new Error("Session expired. Please log in again."); }
   let data = null;
   const ct = res.headers.get("content-type")||"";
@@ -60,6 +99,24 @@ async function api(method, path, body){
   }
   return data;
 }
+/* A steady banner while the device has no connection, so nobody types a
+   whole bill into a screen that cannot save it. Cleared the moment the
+   connection is back. */
+function syncOfflineBanner(){
+  let bar = document.getElementById("offline-bar");
+  if(navigator.onLine !== false){ if(bar) bar.remove(); return; }
+  if(bar) return;
+  bar = document.createElement("div");
+  bar.id = "offline-bar";
+  bar.setAttribute("role", "status");
+  bar.textContent = "You're offline. Nothing can be saved until the connection is back.";
+  bar.style.cssText = "position:fixed;left:0;right:0;top:0;z-index:10000;padding:8px 16px;text-align:center;" +
+    "font-size:13px;font-weight:600;background:#b45309;color:#fff;";
+  document.body.appendChild(bar);
+}
+window.addEventListener("offline", syncOfflineBanner);
+window.addEventListener("online", () => { syncOfflineBanner(); toast("Back online.", "ok"); });
+
 function toast(msg, kind){
   const el = document.getElementById("toast");
   el.textContent = msg;

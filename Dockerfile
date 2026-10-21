@@ -24,9 +24,13 @@ ENV NODE_ENV=production
 ENV PORT=3000
 EXPOSE 3000
 
-# Everything that must survive a redeploy lives here. On Fly this is the
-# mount point for the persistent volume; on plain Docker it becomes a named
-# volume. Losing it means falling back to the last cloud backup.
-VOLUME ["/app/data"]
+# Everything that must survive a redeploy lives in /app/data. Mount a
+# persistent disk there: a Railway Volume at /app/data, a Fly volume, or
+# `docker run -v shopdata:/app/data`. Without one, the app falls back to
+# the last cloud backup at every restart.
+#
+# No VOLUME line: Railway refuses to build a Dockerfile that has one
+# ("docker VOLUME is not supported, use Railway Volumes"), and the disk is
+# attached in the host's settings instead.
 
 CMD ["node", "--no-warnings", "server/index.js"]

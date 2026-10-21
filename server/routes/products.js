@@ -1,6 +1,7 @@
 const express = require("express");
 const db = require("../db");
 const { uid, logAction, todayStr, round2 } = require("../util");
+const dupes = require("../duplicates");
 const { requireRole } = require("../auth");
 const inventory = require("../inventory");
 const Pricing = require("../../public/js/pricing.js");
@@ -321,6 +322,13 @@ router.post("/", (req, res) => {
   if (!name || typeof name !== "string" || !name.trim()) {
     return res.status(400).json({ error: "Product name is required." });
   }
+  { const tooLong = dupes.nameProblem(name, "Product"); if (tooLong) return res.status(400).json({ error: tooLong }); }
+  /* A second product with the same name means two stock counts for one
+     item. Asked about, not refused — see duplicates.js. */
+  if (req.body.allowDuplicate !== true) {
+    const found = dupes.sameProduct(name);
+    if (found) return dupes.askAboutDuplicate(res, found);
+  }
   const validSizes = Array.isArray(sizes)
     ? sizes.filter(s => s && s.label && s.price !== "" && s.price != null && !isNaN(parseFloat(s.price)))
     : [];
@@ -386,6 +394,13 @@ router.post("/", (req, res) => {
 function updateProduct(req, res) {
   const p = db.prepare("SELECT * FROM products WHERE id = ?").get(req.params.id);
   if (!p) return res.status(404).json({ error: "Product not found." });
+  { const tooLong = dupes.nameProblem(req.body.name, "Product"); if (tooLong) return res.status(400).json({ error: tooLong }); }
+  /* Renaming to the name another product already has is asked about too. */
+  if (req.body.name && String(req.body.name).trim().toLowerCase() !== String(p.name || "").trim().toLowerCase()
+      && req.body.allowDuplicate !== true) {
+    const found = dupes.sameProduct(req.body.name, p.id);
+    if (found) return dupes.askAboutDuplicate(res, found);
+  }
 
   /* The prices as they stand, read BEFORE the size rows are rewritten
      below — afterwards the old figures are gone and "what was it

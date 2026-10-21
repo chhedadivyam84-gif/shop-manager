@@ -95,6 +95,7 @@ async function api(method, path, body){
     const err = new Error((data && data.error) || "Request failed.");
     err.status = res.status;
     err.permission = !!(data && data.permission);
+    err.duplicate = (data && data.duplicate) || null;
     throw err;
   }
   return data;
@@ -116,6 +117,25 @@ function syncOfflineBanner(){
 }
 window.addEventListener("offline", syncOfflineBanner);
 window.addEventListener("online", () => { syncOfflineBanner(); toast("Back online.", "ok"); });
+
+/* SAVE, AND ASK BEFORE MAKING A DUPLICATE.
+   The server answers 409 when a customer with the same mobile, a supplier
+   with the same phone or GSTIN, or a product with the same name already
+   exists (server/duplicates.js). The person decides: yes saves it anyway,
+   no keeps the one already there and saves nothing. */
+async function saveAskingAboutDuplicate(method, path, payload){
+  try {
+    return await api(method, path, payload);
+  } catch (e) {
+    if (!(e && e.status === 409 && e.duplicate)) throw e;
+    if (!confirm(e.message + " Save this one anyway?")) {
+      const kept = new Error("Not saved — " + e.duplicate.name + " is already there.");
+      kept.cancelled = true;
+      throw kept;
+    }
+    return await api(method, path, Object.assign({}, payload, { allowDuplicate: true }));
+  }
+}
 
 function toast(msg, kind){
   const el = document.getElementById("toast");
@@ -9524,8 +9544,8 @@ function openAddSupplier(editing){
       payload.openingRemarks = document.getElementById("ns-opening-remarks").value.trim();
     }
     try{
-      if(editing) await api("PUT", `/suppliers/${editing.id}`, payload);
-      else await api("POST","/suppliers", payload);
+      if(editing) await saveAskingAboutDuplicate("PUT", `/suppliers/${editing.id}`, payload);
+      else await saveAskingAboutDuplicate("POST","/suppliers", payload);
       await loadSuppliers();
       closeAllSheets(); renderSuppliersList();
       toast(editing ? "Supplier updated." : "Supplier added.", "ok");
@@ -9847,8 +9867,8 @@ function renderAddProductSheet(context){
          product that did save — "the product is saved but the picture is
          not" is a state somebody can act on; a silent half-save is not. */
       let saved;
-      if(editing){ await api("PUT", `/products/${editing.id}`, payload); saved = editing; }
-      else saved = await api("POST","/products", payload);
+      if(editing){ await saveAskingAboutDuplicate("PUT", `/products/${editing.id}`, payload); saved = editing; }
+      else saved = await saveAskingAboutDuplicate("POST","/products", payload);
       try{ await saveArtworkFor(saved.id); }
       catch(artErr){ toast("Product saved, but the artwork was not: " + artErr.message); }
       await loadProducts();
@@ -9979,8 +9999,8 @@ function openAddCustomer(editing){
       payload.openingRemarks = document.getElementById("nc-opening-remarks").value.trim();
     }
     try{
-      if(editing) await api("PUT", `/customers/${editing.id}`, payload);
-      else await api("POST","/customers", payload);
+      if(editing) await saveAskingAboutDuplicate("PUT", `/customers/${editing.id}`, payload);
+      else await saveAskingAboutDuplicate("POST","/customers", payload);
       await loadCustomers();
       closeAllSheets(); renderCustomersList(); renderBillingCustomers();
       toast(editing ? "Customer updated." : "Customer added.", "ok");

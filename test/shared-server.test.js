@@ -71,6 +71,17 @@ const waitUp = async port => { for (let i = 0; i < 240; i++) { try { await fetch
   };
 
   console.log("\n--- 1. after the PIN, each shop is in its OWN books ---\n");
+  /* Before any shop has signed in there is no staff list to show: it used
+     to hand anyone the default business's staff names. */
+  const nobody = client(SHOP_PORT);
+  const before = await nobody("GET", "/auth/staff-list");
+  ok("before a shop signs in, no staff names are given out", before.s === 200 && Array.isArray(before.j) && before.j.length === 0, before.j);
+  const justShop = client(SHOP_PORT);
+  await justShop("POST", "/auth/shop-login", { username: A.user, password: A.pw });
+  const listed = await justShop("GET", "/auth/staff-list");
+  ok("...and after the shop sign-in, that shop's staff are listed to pick from",
+     Array.isArray(listed.j) && listed.j.some(s => s.id === "STAFF_owner"), listed.j);
+
   const a = await signIn(A), b = await signIn(B);
   ok("shop A's owner signs in", a.pin.s === 200, a.pin.t);
   ok("shop B's owner signs in", b.pin.s === 200, b.pin.t);

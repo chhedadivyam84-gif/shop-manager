@@ -1,6 +1,7 @@
 const express = require("express");
 const db = require("../db");
 const { uid, logAction, round2, todayStr, localDate, bindId, isRealDate, cleanKey } = require("../util");
+const dupes = require("../duplicates");
 const { requireRole } = require("../auth");
 const { saveAttachment } = require("../attachments");
 const { postPaymentToLedger, voidLinkedLedgerEntry } = require("../bankLink");
@@ -393,6 +394,13 @@ router.post("/", (req, res) => {
   if (!name || !String(name).trim() || !phone || !String(phone).trim()) {
     return res.status(400).json({ error: "Name and phone are required." });
   }
+  { const tooLong = dupes.nameProblem(name, "Customer"); if (tooLong) return res.status(400).json({ error: tooLong }); }
+  /* The same mobile number is asked about, not saved twice without a word.
+     See duplicates.js. */
+  if (req.body.allowDuplicate !== true) {
+    const found = dupes.sameCustomer(phone);
+    if (found) return dupes.askAboutDuplicate(res, found);
+  }
   /* Kept apart from phone on purpose: for most shops they are the same
      number, for some they are not — an office landline against the owner's
      mobile. Blank is normal and means "same as phone", which the send
@@ -449,6 +457,12 @@ function updateCustomer(req, res) {
   const c = db.prepare("SELECT * FROM customers WHERE id = ?").get(req.params.id);
   if (!c) return res.status(404).json({ error: "Customer not found." });
   const { name, type, phone, address, gst, state, creditLimit, gstType, areaId, pinCode } = req.body;
+  { const tooLong = dupes.nameProblem(name, "Customer"); if (tooLong) return res.status(400).json({ error: tooLong }); }
+  /* Changing the number to one another customer already has is asked about too. */
+  if (phone && dupes.phoneKey(phone) !== dupes.phoneKey(c.phone) && req.body.allowDuplicate !== true) {
+    const found = dupes.sameCustomer(phone, c.id);
+    if (found) return dupes.askAboutDuplicate(res, found);
+  }
   db.prepare(`
     UPDATE customers SET name=?, type=?, phone=?, address=?, gst=?, state=?, credit_limit=?, gst_type=?, area_id=?,
                          whatsapp=?, wa_contact_type=?, pin_code=? WHERE id=?

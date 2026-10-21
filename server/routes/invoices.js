@@ -1,6 +1,11 @@
 const express = require("express");
 const db = require("../db");
-const { uid, todayStr, round2, logAction, bindId } = require("../util");
+const { uid, todayStr, round2, logAction, bindId, isRealDate } = require("../util");
+/* A date that was sent but is not a real day — "2026-02-30", "not-a-date"
+   — used to be swapped silently for today (or, on an edit, for the bill's
+   old date), so the bill landed on a day nobody chose (found 20 Oct 2026).
+   It is refused instead, with the reason. No date at all still means today. */
+const BAD_DATE = "The bill date is not a real date. Pick it from the calendar and try again.";
 const { requireRole } = require("../auth");
 const inventory = require("../inventory");
 const ledger = require("../stockLedger");
@@ -488,6 +493,7 @@ router.post("/", (req, res) => {
   if (!Array.isArray(rawItems) || !rawItems.length) {
     return res.status(400).json({ error: `Add at least one item to the ${isChallan ? "challan" : "invoice"}.` });
   }
+  if (date && !isRealDate(date)) return res.status(400).json({ error: BAD_DATE });
 
   const settings = getSettingsRow();
   let customer = null;
@@ -817,6 +823,7 @@ router.put("/:id", (req, res) => {
   if (!Array.isArray(rawItems) || !rawItems.length) {
     return res.status(400).json({ error: `Add at least one item to the ${isChallan ? "challan" : "invoice"}.` });
   }
+  if (date && !isRealDate(date)) return res.status(400).json({ error: BAD_DATE });
 
   const settings = getSettingsRow();
   let customer = null;

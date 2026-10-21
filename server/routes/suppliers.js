@@ -1,6 +1,7 @@
 const express = require("express");
 const db = require("../db");
 const { uid, logAction, round2, todayStr, localDate, bindId, isRealDate, cleanKey } = require("../util");
+const dupes = require("../duplicates");
 const { requireRole } = require("../auth");
 const { saveAttachment } = require("../attachments");
 const { postPaymentToLedger, voidLinkedLedgerEntry } = require("../bankLink");
@@ -371,6 +372,12 @@ router.post("/", (req, res) => {
   if (!name || !String(name).trim()) {
     return res.status(400).json({ error: "Supplier name is required." });
   }
+  { const tooLong = dupes.nameProblem(name, "Supplier"); if (tooLong) return res.status(400).json({ error: tooLong }); }
+  /* The same phone or GSTIN is asked about. See duplicates.js. */
+  if (req.body.allowDuplicate !== true) {
+    const found = dupes.sameSupplier(phone, gst);
+    if (found) return dupes.askAboutDuplicate(res, found);
+  }
   // Opening Outstanding is entered at the same moment the supplier is
   // created (the natural, one-time entry point per the Opening Outstanding
   // spec) — owner-only, same as the standalone opening-balance route below.
@@ -407,6 +414,13 @@ router.put("/:id", (req, res) => {
   const s = db.prepare("SELECT * FROM suppliers WHERE id = ?").get(req.params.id);
   if (!s) return res.status(404).json({ error: "Supplier not found." });
   const { name, phone, address, gst, state, gstType, areaId } = req.body;
+  { const tooLong = dupes.nameProblem(name, "Supplier"); if (tooLong) return res.status(400).json({ error: tooLong }); }
+  const phoneMoved = phone && dupes.phoneKey(phone) !== dupes.phoneKey(s.phone);
+  const gstMoved = gst && String(gst).trim().toUpperCase() !== String(s.gst || "").trim().toUpperCase();
+  if ((phoneMoved || gstMoved) && req.body.allowDuplicate !== true) {
+    const found = dupes.sameSupplier(phoneMoved ? phone : "", gstMoved ? gst : "", s.id);
+    if (found) return dupes.askAboutDuplicate(res, found);
+  }
   db.prepare(`
     UPDATE suppliers SET name=?, phone=?, address=?, gst=?, state=?, gst_type=?, area_id=? WHERE id=?
   `).run(

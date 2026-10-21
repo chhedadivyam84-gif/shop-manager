@@ -460,6 +460,12 @@ router.post("/shop-logout", (req, res) => {
 // Names only, no PIN hashes — lets the login screen show "who are you"
 // before asking for a PIN, without requiring a session yet.
 router.get("/staff-list", (req, res) => {
+  /* On a server shared by many shops, nobody has said which shop they are
+     until the shop sign-in, so there is no staff list to show — before
+     this, anyone could read the default business's staff names without
+     signing in at all (found 20 Oct 2026). A shop's own machine still
+     shows its list straight away: that is how staff pick themselves. */
+  if (tenants.multiTenant() && !(req.session && req.session.tenant)) return res.json([]);
   const staff = db.prepare("SELECT id, name, role FROM staff WHERE active = 1 ORDER BY role DESC, name ASC").all();
   res.json(staff);
 });

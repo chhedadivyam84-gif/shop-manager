@@ -154,6 +154,14 @@ function updateSettings(req, res) {
      built, which names only the fields that actually moved and redacts
      anything whose name looks like a credential. */
   const after = publicSettings();
+  /* ONE NAME FOR A BUSINESS. The switcher lists businesses by the name in
+     the registry; Settings and every bill use settings.business_name. A
+     rename in the switcher already wrote both, but a rename here wrote only
+     this one, so the two drifted apart. Now this writes both too. */
+  if (after.business_name && after.business_name !== current.business_name) {
+    try { db.companies.update(db.companies.currentId(), { name: after.business_name }); }
+    catch (e) { /* the bills already have the new name; the list catches up when next opened */ }
+  }
   logAction(req, "settings.update", changedSummary(current, after), {
     resourceType: "settings", resourceId: "1",
     before: current, after,

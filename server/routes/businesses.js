@@ -67,8 +67,24 @@ function canAddBusiness() {
  *  not theirs to read. Narrowing the list here is what enforces that: the
  *  switch below refuses anything this function did not return, so hiding the
  *  chip in the browser is a courtesy, not the lock. */
+/* Names that drifted apart before Settings kept them in step — a business
+   renamed in Settings showed its old name in the switcher. Matched up when
+   the list is read, to the name in Settings: that is the one printed on
+   every bill. Only an actual difference is written; a business whose
+   settings cannot be read keeps its listed name. */
+function syncNamesFromSettings(list) {
+  return list.map(b => {
+    try {
+      const row = C.runAs(b.id, () => db.prepare("SELECT business_name FROM settings WHERE id = 1").get());
+      const name = row && String(row.business_name || "").trim();
+      if (name && name !== b.name) return { ...b, ...C.update(b.id, { name }) };
+    } catch (e) { /* keep the listed name */ }
+    return b;
+  });
+}
+
 function visibleTo(req) {
-  const active = C.list().filter(b => b.active);
+  const active = syncNamesFromSettings(C.list().filter(b => b.active));
 
   /* A SHOP THAT SIGNED IN AS A TENANT SEES ONLY ITS OWN BOOKS, whatever role
      it holds inside them.

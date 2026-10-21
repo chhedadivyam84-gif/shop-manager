@@ -10309,6 +10309,10 @@ function openSettings(){
       });
       setBrandMark(document.getElementById("avatar-btn"), state.settings.logo_data, state.settings.business_name);
       closeAllSheets();
+      /* The business name is also the name in the switcher; the server
+         renamed it there too, so the header picks it up now. */
+      document.title = state.settings.business_name + " — Shop Manager";
+      await loadBusinesses();
       toast("Settings saved.", "ok");
     }catch(err){ toast(err.message); }
   });

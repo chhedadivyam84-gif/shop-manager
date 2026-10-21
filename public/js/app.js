@@ -5336,8 +5336,7 @@ function openBusinesses(){
         /* Everything on screen belongs to the business we just left, so it is
            all reloaded rather than patched — a stale product list here would
            be a sale booked against the wrong company. */
-        await loadBusinesses();
-        await renderAll();
+        await afterBusinessSwitch();
       }catch(e){ toast(e.message); }
     });
   });
@@ -5352,14 +5351,47 @@ function openBusinesses(){
       await api("POST", "/businesses/switch", { businessId: made.id });
       closeAllSheets();
       toast(`${made.name} created. You are now working in it.`, "ok");
-      await loadBusinesses();
-      await renderAll();
+      await afterBusinessSwitch();
     }catch(e){ toast(e.message); add.disabled = false; }
   });
 
   showSheet("sheet-businesses");
 }
 
+
+/* AFTER SWITCHING BUSINESS, RELOAD WHAT BELONGS TO A BUSINESS.
+   renderAll() reloads the lists — products, customers and the rest — but
+   not the business's own details: name, address, phone, GSTIN, email,
+   logo, colours. Those were read once at sign-in, so after switching to a
+   second business its Settings still showed the first one's, and so did
+   every bill printed there: the wrong name and GSTIN on a tax invoice
+   (reported 21 Oct 2026). initApp() reads them again when it runs a second
+   time and then calls renderAll(), so it is the one call that refreshes
+   everything. A bill half-made in the business just left is cleared: its
+   lines and customer belong to that business, not this one. */
+async function afterBusinessSwitch(){
+  resetBillDraftForSwitch();
+  await loadBusinesses();
+  await initApp();
+}
+
+/* Everything a half-made or half-edited bill holds — the same fields the
+   "cancel editing" and "bill saved" steps clear, together. */
+function resetBillDraftForSwitch(){
+  state.cart = []; state.selectedCustomerId = null; state.taxTypeOverride = null;
+  state.advance = 0; state.discountValue = 0; state.advanceTouched = false;
+  state.transport = 0; state.loading = 0; state.deliveryMan = "";
+  state.vehicleNumber = ""; state.deliveryAddress = ""; state.remarks = "";
+  state.transportMode = ""; state.dueDate = ""; state.areaId = null;
+  state.challanShowRate = false;
+  state.editingInvoiceId = null; state.docNo = null; state.billSubmissionKey = null;
+  const set = (id, val) => { const inp = document.getElementById(id); if(inp) inp.value = val; };
+  set("advance-input", 0); set("discount-value", 0); set("transport-input", 0); set("loading-input", 0);
+  set("delivery-man-input", ""); set("vehicle-number-input", ""); set("delivery-address-input", ""); set("remarks-input", "");
+  set("transport-mode-input", ""); set("due-date-input", "");
+  state.deliverySameAsBilling = true;
+  try { syncDeliveryAddress(); resetComplianceSwitches(); renderEditModeBanner(); } catch (e) { /* billing screen not built yet */ }
+}
 
 function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));

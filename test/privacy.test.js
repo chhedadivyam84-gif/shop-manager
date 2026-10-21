@@ -130,10 +130,27 @@ const page = n => read(`public/legal/${n}.html`);
     const keepCloud = (/const KEEP_CLOUD = (\d+)/.exec(bk) || [])[1];
     ok(`local backups kept: ${keepLocal} in the code, the same in the policy`,
        keepLocal && ret.includes(`most recent ${keepLocal}<`), keepLocal);
-    ok(`off-site backups kept: ${keepCloud} in the code, the same in the policy`,
-       keepCloud && ret.includes(`most recent ${keepCloud} runs`), keepCloud);
+    const keepDaily = (/const KEEP_DAILY = (\d+)/.exec(bk) || [])[1];
+    const keepMonthly = (/const KEEP_MONTHLY = (\d+)/.exec(bk) || [])[1];
+    ok(`off-site backups kept: ${keepCloud} runs, ${keepDaily} daily, ${keepMonthly} monthly in the code, the same in the policy`,
+       !!(keepCloud && keepDaily && keepMonthly) &&
+       ret.replace(/\s+/g, " ").includes(`(${keepCloud} runs)`) &&
+       ret.replace(/\s+/g, " ").includes(`last ${keepDaily} days and of each of the last ${keepMonthly} months`) &&
+       ret.replace(/\s+/g, " ").includes(`<strong>${keepMonthly} months</strong>`),
+       [keepCloud, keepDaily, keepMonthly]);
     ok("payment attachments really are copied to the backup store, as the policy says",
-       /uploadToCloud\(/.test(code("server/attachments.js")) && /also copied to off-site backup/.test(ret));
+       /uploadToCloud\(/.test(code("server/attachments.js")) && /A copy is also sent\s+to off-site backup/.test(ret));
+    /* The policy says the off-site copy of an attachment is NOT removed by
+       itself. True only while rotation leaves uploads/ alone. */
+    /* The policy says permissions are checked ON THE SERVER. On 18 Oct 2026
+       that was untrue in production: a staff login with every permission
+       removed could still read customers, bills and the cash balance. True
+       only while the gate is mounted. */
+    ok("permissions are checked on the server, as the policy says (the gate is mounted)",
+       /app\.use\("\/api", require\("\.\/permissionGate"\)\.gate\(\)\)/.test(code("server/index.js")) &&
+       /checked on the server/.test(priv));
+    ok("...and rotation really leaves those copies alone, as the policy says",
+       /filter\(n => n\.startsWith\("shop-"\)\)/.test(bk) && /not removed automatically/.test(ret));
 
     /* AI */
     const tools = read("server/assistant/tools.js");
@@ -206,6 +223,9 @@ const page = n => read(`public/legal/${n}.html`);
     ok("...give the verified DPDP dates", /13 Nov 2025/.test(doc) && /13 May 2027/.test(doc));
     ok("...list what the operator must supply", /\[GRIEVANCE OFFICER EMAIL\]/.test(doc) && /\[GRIEVANCE OFFICER NAME\]/.test(doc));
     ok("...and what needs a lawyer", /For a qualified lawyer/.test(doc));
+    ok("...with a procedure for privacy requests", /Handling a privacy request/.test(doc) && /90 days/.test(doc));
+    ok("...and a breach response with the CERT-In 6 hours and the DPDP 72 hours",
+       /breach response/i.test(doc) && /within 6 hours/.test(doc) && /72 hours/.test(doc) && /incident@cert-in\.org\.in/.test(doc));
     const placeholders = PAGES.flatMap(n => page(n).match(/\[[A-Z][A-Z ,.()0-9-]+\]/g) || []);
     const unique = [...new Set(placeholders.map(p => p.replace(/, e\.g\..*\]/, "]")))];
     const listed = unique.filter(p => !doc.includes(p.split(",")[0].replace(/\]$/, "")));

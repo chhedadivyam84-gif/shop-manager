@@ -56,12 +56,15 @@
       <tr><td>Sign-in sessions</td><td>Up to 30 days, or until sign-out</td><td>Expire automatically</td></tr>
       <tr><td>Automatic backups, on the server</td><td>The most recent 30</td><td>Older ones removed
         automatically</td></tr>
-      <tr><td>Automatic backups, off-site</td><td>The most recent 96 runs; the newest can never be removed</td>
+      <tr><td>Automatic backups, off-site</td><td>Every backup from about the last day (96 runs), then the
+        newest backup of each of the last 30 days and of each of the last 12 months — so up to about
+        <strong>12 months</strong>. The newest can never be removed</td>
         <td>Older ones removed automatically</td></tr>
       <tr><td>Copies kept when a backup is restored</td><td>Kept on the server until removed by hand</td>
         <td>Removed by the operator</td></tr>
-      <tr><td>Payment attachments</td><td>Until the business removes them; also copied to off-site backup</td>
-        <td>Removed by the business</td></tr>
+      <tr><td>Payment attachments</td><td>On the server, until the business removes them. A copy is also sent
+        to off-site backup storage, and <strong>that copy is not removed automatically</strong></td>
+        <td>The server copy by the business; the off-site copy by the operator, on request</td></tr>
       <tr><td>Copies of printed documents</td><td>Kept on the server; on hosted copies, cleared whenever the
         software is updated</td><td>Removed by the operator</td></tr>
       <tr><td>Licence check-ins, on the licence server</td><td>90 days</td><td>Removed automatically</td></tr>
@@ -89,8 +92,9 @@
   <h3>A business’s account</h3>
   <p>A business that stops using Shop Manager can ask for its data to be exported and then removed, using the
   details on the <a href="/legal/contact.html">Contact</a> page. Removal from the live service and from off-site
-  backups is done by the operator <span class="ph">[WITHIN HOW MANY DAYS]</span>. Copies already in backups are
-  removed as those backups expire.</p>
+  backups is done by the operator within <span class="ph">[DELETION DAYS]</span> days. Copies already in backups are
+  removed as those backups expire, which can take up to 12 months; payment attachments copied off-site are
+  removed by the operator as part of the request.</p>
   <aside class="review">How long the operator may, or must, keep a former business’s data — and who keeps GST
     records once a business has left the service.</aside>
 

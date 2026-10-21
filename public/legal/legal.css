@@ -73,6 +73,18 @@ table{ border-collapse:collapse; width:100%; min-width:560px; font-size:14px; }
 th, td{ text-align:left; padding:9px 12px; border-bottom:1px solid var(--border); vertical-align:top; }
 th{ background:var(--bg); font-weight:700; }
 tr:last-child td{ border-bottom:none; }
+/* On a phone the tables become stacked blocks: a shop owner reading on a
+   phone should not have to swipe sideways inside a box to read a row. The
+   first cell of each row is its heading. */
+@media (max-width:600px){
+  table{ min-width:0; }
+  thead{ display:none; }
+  table, tbody, tr, td{ display:block; width:100%; }
+  tr{ padding:10px 12px; border-bottom:1px solid var(--border); }
+  tr:last-child{ border-bottom:none; }
+  td{ padding:2px 0; border-bottom:none; }
+  td:first-child{ font-weight:700; color:var(--navy); padding-bottom:4px; }
+}
 
 .hub{ display:grid; gap:12px; margin-top:18px; }
 .hub a{ display:block; background:var(--bg); border:1px solid var(--border); border-radius:12px; padding:14px 16px; text-decoration:none; }

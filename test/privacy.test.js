@@ -204,7 +204,7 @@ const page = n => read(`public/legal/${n}.html`);
     const doc = read("PRIVACY-COMPLIANCE.md");
     ok("the compliance notes exist", doc.length > 2000);
     ok("...give the verified DPDP dates", /13 Nov 2025/.test(doc) && /13 May 2027/.test(doc));
-    ok("...list what the operator must supply", /\[PRIVACY EMAIL\]/.test(doc) && /\[GRIEVANCE OFFICER NAME\]/.test(doc));
+    ok("...list what the operator must supply", /\[GRIEVANCE OFFICER EMAIL\]/.test(doc) && /\[GRIEVANCE OFFICER NAME\]/.test(doc));
     ok("...and what needs a lawyer", /For a qualified lawyer/.test(doc));
     const placeholders = PAGES.flatMap(n => page(n).match(/\[[A-Z][A-Z ,.()0-9-]+\]/g) || []);
     const unique = [...new Set(placeholders.map(p => p.replace(/, e\.g\..*\]/, "]")))];

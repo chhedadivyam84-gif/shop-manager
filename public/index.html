@@ -108,8 +108,8 @@
     <!-- Reachable before signing in, which is when somebody deciding whether
          to trust this with their customers' details actually reads it. -->
     <nav class="login-legal" aria-label="Policies">
-      <a href="/legal/privacy.html">Privacy</a> ·
-      <a href="/legal/terms.html">Terms</a> ·
+      <a href="/legal/terms.html">Terms of Service</a> ·
+      <a href="/legal/privacy.html">Privacy Policy</a> ·
       <a href="/legal/ai.html">AI &amp; voice</a>
     </nav>
   </div>
@@ -1486,6 +1486,16 @@
           <button class="btn btn-outline" id="so-save-draft-btn">Save as Draft</button>
         </div>
       </div>
+
+      <!-- The policies, at the foot of every screen once signed in, as they
+           are on the sign-in page. Plain links: the pages need no sign-in. -->
+      <footer class="app-legal" aria-label="Policies">
+        <a href="/legal/terms.html" target="_blank" rel="noopener">Terms of Service</a>
+        <span aria-hidden="true">·</span>
+        <a href="/legal/privacy.html" target="_blank" rel="noopener">Privacy Policy</a>
+        <span aria-hidden="true">·</span>
+        <a href="/legal/contact.html" target="_blank" rel="noopener">Contact</a>
+      </footer>
     </main>
 
     <!-- The same seven tabs as always. A bar along the bottom of a phone; a

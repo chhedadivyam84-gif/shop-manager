@@ -29,15 +29,18 @@ Every category below was confirmed in the code, not assumed.
 | Suppliers | as customers | purchasing | `shop.db` | staff with `supplier` permission | as customers | hosting, backups |
 | Products and stock | names, sizes, prices, quantities | selling, stock | `shop.db` | staff with `product`/`stock` | until deleted (force-delete keeps invoice line names) | hosting, backups, AI |
 | Sales, purchases, money | invoices, payments, cash, bank, cheques | accounts, GST | `shop.db` | per permission | **≥ 72 months (GST)** | hosting, backups, AI (totals), GSP (e-way bill) |
-| Employees and pay | attendance, salary, advances | payroll | `shop.db` | **owner only** | while in use | hosting, backups |
-| Payment attachments | photos, documents | proof of payment | `data/uploads/payments/` | per permission | until removed | hosting, **backup store** |
+| Employees and pay | name, mobile, job role, joining date, attendance, salary, advances | payroll | `shop.db` | **owner only** | while in use | hosting, backups |
+| Payment attachments | photos, documents | proof of payment | `data/uploads/payments/` | per permission | until removed; **the off-site copy is never removed automatically** | hosting, **backup store** |
 | Supplier bill photos | the photo | purchase entry | sent, not kept | the user scanning | not kept by the app | **Google** |
 | Printed copies | PDFs | reprinting | `data/print-archive/` | operator | on hosted copies, cleared each deploy | hosting |
 | Activity record | who did what, names | accountability | `audit_log` | owner | **permanent — append-only by trigger** | hosting, backups |
 | Sessions | random id cookie | staying signed in | `sessions.db` | — | 30 days | hosting |
 | IP addresses | request IP | rate limit, PIN lockout | memory | — | not persisted | hosting logs |
 | Licence check-in | activation code, install id, version, IP | subscription | **licence panel** | operator | 90 days | the operator's panel |
-| Hosted shop sign-in | user ID, password (hashed at the panel) | multi-shop sign-in | panel `customers` | operator | until account removed | the operator's panel |
+| Hosted shop sign-in | user ID, password (hashed at the panel) | multi-shop sign-in | panel `customers`; shop `tenants.db` | operator | until account removed | the operator's panel, **backup store** |
+| Business account | shop name, contact name, phone, email, city, GSTIN, plan and dates | subscription, support | licence panel `customers` | operator | until removed by the operator | the panel's backup store |
+| Email alerts | the alert text | owner notifications | not stored | the owner | not kept | **Resend**, only if `EMAIL_API_KEY` is set; only to the business's own address |
+| Backups | complete database copies | recovery | R2 / Supabase | operator | **96 runs + newest per day for 30 days + newest per month for 12 months** (since 18 Oct 2026) | backup store |
 | Assistant | question, up to 25 matching records | answers | **not stored** | per permission | not kept | **Google** |
 | Voice | audio → text | spoken questions | **never recorded** | — | not kept | **the browser's speech service** (Chrome: Google) |
 | E-way bill | invoice details | GST e-way bill | — | per permission | — | **GSP**, only if configured |
@@ -45,7 +48,8 @@ Every category below was confirmed in the code, not assumed.
 
 **Not present, confirmed:** analytics, advertising, trackers, any third-party
 script (the Content-Security-Policy allows `script-src 'self'` only), server-
-sent WhatsApp, email sending, selling or sharing of data.
+sent WhatsApp, selling or sharing of data. Email sending exists but is **off**
+until the operator sets a provider key, and only ever mails the business's own address.
 
 ---
 
@@ -87,14 +91,29 @@ sent WhatsApp, email sending, selling or sharing of data.
 
 ---
 
-## 3. Indian law — the position as of 9 October 2026
+## 3. Indian law — the position as of 18 October 2026
 
-Verified by search on that date. Check again before relying on it.
+Re-checked on 18 Oct 2026 against the **official texts**, not commentary:
+
+- DPDP Rules, 2025 — Gazette of India, G.S.R. 846(E), 13 Nov 2025:
+  https://egazette.gov.in/WriteReadData/2025/267650.pdf (rule 1, commencement;
+  rule 6, security safeguards; rule 7, breach intimation; rule 14, rights and
+  grievances — read from the PDF itself)
+- CERT-In Directions under s.70B(6), 28 Apr 2022, with FAQs (May 2022) and the
+  MSME extension (27 Jun 2022): https://www.cert-in.org.in/Directions70B.jsp
+  (the directions were read from the PDF itself)
+
+MeitY's site (meity.gov.in) refused automated reading (HTTP 403), so it was
+not read. **No amendment changing the commencement dates was found.** A
+proposal to bring the main duties forward to 13 Nov 2026 is reported in
+commentary but was **not found notified**. Check the eGazette again before
+13 Nov 2026.
 
 ### Digital Personal Data Protection Act, 2023 and Rules, 2025
 
-The Rules were notified on **13 November 2025** (G.S.R. 846(E)) and commence
-in three stages:
+The Rules were notified on **13 November 2025** (G.S.R. 846(E)). Rule 1 reads:
+rules 1, 2 and 17–21 on publication; rule 4 one year after; rules 3, 5–16, 22
+and 23 eighteen months after. That gives three stages:
 
 | From | What |
 |---|---|
@@ -121,9 +140,32 @@ while proceedings are open. This is why sold-on customers cannot be deleted.
 
 ### CERT-In Directions, 28 April 2022
 
-Report certain cyber incidents within **6 hours**; keep logs for **180 days,
-in India**. Applies to body corporates among others. Render's log retention
-and location have **not** been checked against this.
+Read from the directions themselves:
+
+- **(ii)** report the incidents in Annexure I to CERT-In **within 6 hours** of
+  noticing them: incident@cert-in.org.in, phone 1800-11-4949, fax 1800-11-6969
+- **(iii)** designate a **Point of Contact** and send CERT-In its details (Annexure II)
+- **(iv)** keep logs of all ICT systems for a rolling **180 days, within Indian
+  jurisdiction**
+- **(i)** synchronise clocks to NIC/NPL NTP, or to a source that does not deviate
+  from them
+
+They apply to "service providers, intermediaries, data centres, body corporate
+and Government organisations". The operator, as a business providing an online
+service, is likely to be covered, but that needs confirming. Enforcement for
+MSMEs was extended on 27 Jun 2022, and the extension's terms were not read.
+**Render runs these services in Singapore, so its logs are outside India**, and
+how long it keeps them was not verified. (iv) is therefore **not met** today.
+
+### DPDP Rules — what applies to this app from 13 May 2027
+
+- **Rule 6(1)(e):** keep logs and personal data needed to detect and
+  investigate unauthorised access for **one year**. Render's logs do not; the
+  app's `audit_log` covers application actions, not access to the server.
+- **Rule 7:** tell affected people **without delay**; tell the Board without
+  delay **and in full within 72 hours**.
+- **Rule 14(3):** publish how to exercise rights, and answer grievances within a
+  period that is **at most 90 days**.
 
 ---
 
@@ -131,13 +173,25 @@ and location have **not** been checked against this.
 
 ### Details to supply (placeholders on the pages)
 
-`[OPERATOR LEGAL NAME]` · `[REGISTERED ADDRESS]` · `[PRIVACY EMAIL]` ·
-`[SUPPORT EMAIL]` · `[SUPPORT PHONE]` · `[GRIEVANCE OFFICER NAME]` ·
-`[GRIEVANCE OFFICER EMAIL]` · `[ACKNOWLEDGEMENT TIME]` · `[RESOLUTION TIME]` ·
-`[EFFECTIVE DATE]` · `[HOSTING REGION]` · `[CITY]` · `[NOTICE PERIOD]` ·
-`[FEES, BILLING CYCLE AND RENEWAL TERMS]` · `[GRACE DAYS]` ·
-`[WITHIN HOW MANY DAYS]` · `[HOW CHANGES ARE NOTIFIED]` ·
-`[WARRANTY DISCLAIMER AND LIMITATION OF LIABILITY]`
+One name per detail, used the same way on every page (renamed 21 Oct 2026):
+
+| Placeholder | What to put |
+|---|---|
+| `[BUSINESS NAME]` | the legal name of the business selling Shop Manager |
+| `[BUSINESS ADDRESS]` | its registered address |
+| `[CITY]` | the city whose courts hear disputes |
+| `[SUPPORT EMAIL]` · `[SUPPORT PHONE]` | support contacts |
+| `[GRIEVANCE OFFICER NAME]` · `[GRIEVANCE OFFICER EMAIL]` | the named grievance officer (SPDI Rules now; DPDP from May 2027) |
+| `[RESPONSE DAYS]` | days to answer a request or complaint; at most 90 (DPDP Rules, rule 14(3)) |
+| `[EFFECTIVE DATE]` | the date the policies take effect |
+| `[PRICE]` · `[BILLING PERIOD]` · `[PAYMENT METHODS]` · `[RENEWAL TERMS]` | the subscription |
+| `[TRIAL DAYS]` · `[GRACE DAYS]` | free-trial length; days of late payment before read-only |
+| `[REFUND POLICY]` · `[REFUND DAYS]` | when a refund is given; days to pay it |
+| `[NOTICE DAYS]` | notice before a price change, a removed feature, ending the service, or a policy change |
+| `[HOW WE NOTIFY]` | e.g. email and a notice in the app |
+| `[EXPORT DAYS]` · `[DELETION DAYS]` | after a subscription ends: days to export; then days to delete |
+| `[LIABILITY CAP]` | the most you are liable for; a lawyer should set this |
+| `[BACKUP STORAGE REGION]` | the Supabase project's region, and R2's |
 
 Then remove the "Draft — not yet in force" banner from each page.
 
@@ -175,7 +229,82 @@ Marked on the pages as **"For legal review"**:
 
 ---
 
-## 6. Keeping the pages honest
+## 6. Handling a privacy request
+
+Two kinds of request, with different owners. Answer within the time the
+Contact page promises, and **never later than 90 days** (rule 14(3), from 13 May
+2027; the SPDI Rules apply now). Keep a record of every request: date, who,
+what was asked, what was done, and when it was answered.
+
+**A person in a shop's records** (a customer, supplier or employee of a shop):
+the shop decides. Point them to the shop. Where the shop asks for help, these
+are the tools that exist today:
+
+| They ask to | How, in the app | Limit |
+|---|---|---|
+| see their data | the customer record (`GET /api/customers/:id`) and the ledger export (`/api/customers/:id/ledger/export`) | owner or permitted staff |
+| correct it | edit the customer (`PUT /api/customers/:id`) | — |
+| delete it | delete (`DELETE /api/customers/:id`) **only if no transactions**; otherwise mark inactive (`PATCH /:id/active`) | GST records stay 72 months; the name stays in `audit_log` and in backups until they expire (up to 12 months) |
+
+**A business or shop user** (the operator holds their data): verify who is
+asking from the email or phone number on the panel record, never from what
+the request says. Then:
+
+1. **See:** send them what the panel holds about them (the customer row,
+   without the password hash) and, if asked, an owner backup of their books.
+2. **Correct:** edit it in the panel.
+3. **Delete, after they leave:** export their books for them first. Then cancel
+   the customer in the panel (the row is kept for billing history, which is a
+   question for the lawyer) and remove their company from the hosted copy.
+   Backups expire within 12 months. Payment attachments copied off-site are
+   **not** removed automatically and must be removed by hand.
+
+## 7. If personal data is exposed — breach response
+
+Run this whenever data may have been seen, changed or lost by someone who
+should not have it: a leaked key, a stolen phone with a shop signed in, a
+wrong-permission bug, a public bucket, a lost backup.
+
+1. **Contain (first hour).** Rotate whatever leaked:
+   - on Render: `SESSION_SECRET` (signs everyone out), the storage keys,
+     `ASSISTANT_API_KEY`/the AI key, and `ADMIN_PASSWORD` for the panel
+   - change the affected staff PINs
+   - check that buckets are still **private**
+2. **Report to CERT-In within 6 hours of noticing**, if the incident is of an
+   Annexure I type (for example a data breach, data leak, or unauthorised
+   access): incident@cert-in.org.in, 1800-11-4949. Ask a lawyer whether it
+   applies if unsure, but do not let the 6 hours pass while asking.
+3. **Keep the evidence.** Do not redeploy or wipe until the Render logs, the
+   app's `audit_log` and the relevant backups have been saved. A redeploy
+   destroys the container's own logs.
+4. **Tell the shops affected**, plainly: what happened, what data, when, what
+   was done, and what they should do. From 13 May 2027: tell affected people
+   without delay, and the Data Protection Board without delay and in full
+   within 72 hours (rule 7). Where the operator is a processor for a shop's
+   data, tell the shop at once so it can meet its own duty.
+5. **Write it up:** timeline, cause, data involved, people told and when, and
+   the fix. Keep it.
+
+**Contacts to fill in before launch:** CERT-In Point of Contact
+`[GRIEVANCE OFFICER NAME]` (or another named person), the operator's phone,
+and the lawyer to call.
+
+## 8. Found in production on 18 Oct 2026
+
+- **Permissions were not enforced on the server on the live copies.** On the
+  code running on Swagat Ply and on the sold copy, a staff login with **every
+  permission removed** could read all customers (with phone numbers),
+  invoices, suppliers, bank accounts and the dashboard cash balance. Probed
+  with dummy accounts on a throwaway copy. The fix, `server/permissionGate.js`,
+  is on `cashbook-explore` (the security audit commits) and refuses all of
+  those (403). The privacy page's claim "checked on the server" is **false in
+  production until that is deployed**, and `test/privacy.test.js` now fails
+  on any build without the gate.
+- **Saved credentials died with Render's disk.** Fixed by `CREDENTIAL_KEY`
+  (deployed); it still has to be set on each Render service.
+- **The sold copy's backup bucket did not exist.** Fixed and deployed.
+
+## 9. Keeping the pages honest
 
 `test/privacy.test.js` reads the code and the pages together, and fails if
 they disagree on the numbers that can be checked: backup counts, session

@@ -3350,6 +3350,14 @@ a.chip{display:inline-flex;align-items:center;gap:5px;text-decoration:none;}
 .login-legal{ margin-top:22px; font-size:12px; color:rgba(255,255,255,.62); text-align:center; }
 .login-legal a{ color:rgba(255,255,255,.82); text-decoration:none; }
 .login-legal a:hover, .login-legal a:focus-visible{ color:#fff; text-decoration:underline; }
+/* The same links inside the app, quiet, at the end of each screen. */
+.app-legal{ margin:28px 0 4px; padding-top:14px; border-top:1px solid var(--border, #e5e5e5);
+  display:flex; flex-wrap:wrap; justify-content:center; gap:6px 10px; font-size:12px; color:var(--muted, #6b7280); }
+.app-legal a{ color:inherit; text-decoration:none; }
+.app-legal a:hover, .app-legal a:focus-visible{ color:var(--text, #111); text-decoration:underline; }
+/* The assistant and WhatsApp buttons float over the bottom-right corner of
+   the screen; at the end of a page the links must rest above them. */
+.app-legal{ margin-bottom:140px; }
 
 /* What the assistant sends, said where the person is about to type. */
 .ai-privacy{ font-size:12px; color:var(--muted); margin:6px 0 0; }

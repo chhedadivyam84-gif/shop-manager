@@ -31,11 +31,11 @@ const ok = (n, c, x) => {
 const C = db.companies;
 const first = C.defaultId();
 const second = C.create({ name: "Creative creation" }).id;
-let current = first;
+let current = first, role = "owner";
 const app = express();
 app.use(express.json());
 app.use((req, _res, next) => {
-  req.session = { loggedIn: true, role: "owner", staffId: "STAFF_owner", staffName: "Owner", businessId: current };
+  req.session = { loggedIn: true, role, staffId: "STAFF_owner", staffName: "Owner", businessId: current };
   C.runAs(current, next);
 });
 app.use("/api/settings", require(path.join(ROOT, "server/routes/settings.js")));
@@ -75,6 +75,15 @@ const server = app.listen(0, async () => {
     await listed();
     ok("...and reading the list again writes nothing when the names agree",
        fs.statSync(path.join(DATA_DIR, "companies.json")).mtimeMs === before);
+
+    console.log("\n--- only the businesses the caller can see are looked at ---\n");
+    C.runAs(second, () => db.prepare("UPDATE settings SET business_name = ? WHERE id = 1").run("Drifted Again"));
+    role = "staff";
+    const staffSees = await listed();
+    ok("a staff login sees only its own business", Object.keys(staffSees).join() === first, staffSees);
+    ok("...and the OTHER business, which it cannot see, is not touched",
+       C.list().find(b => b.id === second).name === "Creative Creation (Malad)", C.list());
+    role = "owner";
 
     console.log("\n--- an empty name changes nothing ---\n");
     r = await call("PUT", "/api/settings", { businessName: "" });

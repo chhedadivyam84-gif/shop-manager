@@ -71,7 +71,9 @@ function canAddBusiness() {
    renamed in Settings showed its old name in the switcher. Matched up when
    the list is read, to the name in Settings: that is the one printed on
    every bill. Only an actual difference is written; a business whose
-   settings cannot be read keeps its listed name. */
+   settings cannot be read keeps its listed name. Only the businesses the
+   caller can already see are looked at: on a server shared by many shops,
+   one shop opening its list must not reach into any other shop's books. */
 function syncNamesFromSettings(list) {
   return list.map(b => {
     try {
@@ -84,7 +86,7 @@ function syncNamesFromSettings(list) {
 }
 
 function visibleTo(req) {
-  const active = syncNamesFromSettings(C.list().filter(b => b.active));
+  const active = C.list().filter(b => b.active);
 
   /* A SHOP THAT SIGNED IN AS A TENANT SEES ONLY ITS OWN BOOKS, whatever role
      it holds inside them.
@@ -111,7 +113,7 @@ router.get("/", (req, res) => {
   const gate = canAddBusiness();
   res.json({
     current,
-    businesses: visibleTo(req).map(b => ({ ...b, isCurrent: b.id === current })),
+    businesses: syncNamesFromSettings(visibleTo(req)).map(b => ({ ...b, isCurrent: b.id === current })),
     /* The browser uses these to word the Add panel. It is not the control —
        the POST below re-checks, so a forged request gains nothing. */
     canAdd: gate.ok,
